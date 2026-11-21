@@ -7,6 +7,9 @@ import com.elepay.common.OpsQueue;
 import com.elepay.common.References;
 import com.elepay.identity.Actor;
 import com.elepay.ledger.Ledger;
+import com.elepay.payout.Payouts;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import com.elepay.rails.NameVerification;
 import com.elepay.rails.NameVerifications;
 import jakarta.validation.Valid;
@@ -47,13 +50,15 @@ class RecipientConfirmations {
     private final Idempotency idempotency;
     private final Audit audit;
     private final OpsQueue ops;
+    private final Payouts payouts;
+    private final TransactionTemplate tx;
     private final Duration ttl;
     private final int perMinute;
     private final int perDay;
     private final int misses;
 
     RecipientConfirmations(JdbcClient db, Wallets wallets, NameVerifications verifications, Idempotency idempotency,
-                           Audit audit, OpsQueue ops,
+                           Audit audit, OpsQueue ops, Payouts payouts, PlatformTransactionManager tm,
                            @Value("${elepay.recipient-lookup.ttl-seconds:300}") long ttlSeconds,
                            @Value("${elepay.recipient-lookup.per-minute:10}") int perMinute,
                            @Value("${elepay.recipient-lookup.per-day:100}") int perDay,
@@ -64,6 +69,8 @@ class RecipientConfirmations {
         this.idempotency = idempotency;
         this.audit = audit;
         this.ops = ops;
+        this.payouts = payouts;
+        this.tx = new TransactionTemplate(tm);
         this.ttl = Duration.ofSeconds(ttlSeconds);
         this.perMinute = perMinute;
         this.perDay = perDay;
@@ -86,8 +93,9 @@ class RecipientConfirmations {
     record Preview(UUID confirmationId, String rail, String destination, String verifiedName, long amount, long fee,
                    long total, String currency, OffsetDateTime expiresAt) {}
 
+    /** {@code status}: completed for wallet transfers; submitted, succeeded or failed for MoMo and bank payouts. */
     record ConfirmedReceipt(UUID transactionId, String reference, long amount, long fee, long total, String currency,
-                            String verifiedName, String destination) {}
+                            String verifiedName, String destination, String status, UUID payoutBatch) {}
 
     private record Confirmation(UUID id, UUID sender, String rail, String destination, String network,
                                 UUID recipient, String recipientAccount, String name, String status,
@@ -240,24 +248,49 @@ class RecipientConfirmations {
     }
 
     @PostMapping("/transfers/confirmed")
-    @Transactional
     public ConfirmedReceipt transfer(@RequestHeader("Idempotency-Key") String key,
                                      @Valid @RequestBody ConfirmedTransfer request) {
         UUID sender = wallets.customer(Actor.current());
         String scope = "confirmed-transfer:" + sender;
-        return idempotency.execute(scope, key, request, ConfirmedReceipt.class, () -> {
+        ConfirmedReceipt receipt = tx.execute(s -> idempotency.execute(scope, key, request, ConfirmedReceipt.class, () -> {
             Confirmation c = validate(sender, request.confirmationId(), true);
-            if (!c.rail().equals("wallet")) {
-                throw ApiException.unprocessable("rail_not_connected",
-                        "Transfers to " + c.rail() + " are sent as payouts once a " + c.rail() + " connection is live");
-            }
-            Wallets.Receipt receipt = wallets.send(sender, scope, key, c.recipient(), request.amount());
-            db.sql("UPDATE recipient_confirmation SET status = 'used', used_at = now(), used_by_tx = :tx WHERE id = :id")
-                    .param("tx", receipt.transactionId()).param("id", c.id()).update();
             long fee = fee(c.rail(), request.amount());
-            return new ConfirmedReceipt(receipt.transactionId(), receipt.reference(), receipt.amount(), fee,
-                    receipt.amount() + fee, receipt.currency(), c.name(), display(c));
-        });
+            if (c.rail().equals("wallet")) {
+                Wallets.Receipt r = wallets.send(sender, scope, key, c.recipient(), request.amount());
+                markUsed(c.id(), r.transactionId());
+                return new ConfirmedReceipt(r.transactionId(), r.reference(), r.amount(), fee, r.amount() + fee,
+                        r.currency(), c.name(), display(c), "completed", null);
+            }
+            // MoMo and bank transfers leave ELEPAY as a payout to the confirmed account.
+            var batch = payouts.create("customer", sender, java.util.List.of(new Payouts.Item("transfer-" + key,
+                    request.amount(), new Payouts.Destination(c.rail(), c.network(), c.destination(), c.name()), null,
+                    c.name())), "Transfer to " + c.name(), Actor.current().subject());
+            var item = batch.items().getFirst();
+            UUID reservation = db.sql("SELECT reservation_tx FROM payout WHERE id = :id").param("id", item.id())
+                    .query(UUID.class).single();
+            markUsed(c.id(), reservation);
+            db.sql("""
+                    INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status, counterparty, journal_tx, related_id)
+                    VALUES (:id, :ref, :c, 'withdrawal', :amount, 'pending', :cp, :tx, :payout)""")
+                    .param("id", UUID.randomUUID()).param("ref", item.reference()).param("c", sender)
+                    .param("amount", request.amount()).param("cp", c.name() + " " + display(c))
+                    .param("tx", reservation).param("payout", item.id()).update();
+            return new ConfirmedReceipt(reservation, item.reference(), request.amount(), fee, request.amount() + fee,
+                    Ledger.GHS, c.name(), display(c), "submitted", batch.id());
+        }));
+        if (receipt != null && receipt.payoutBatch() != null) {
+            payouts.submit(receipt.payoutBatch());
+            String status = payouts.batch(receipt.payoutBatch()).items().getFirst().status();
+            return new ConfirmedReceipt(receipt.transactionId(), receipt.reference(), receipt.amount(), receipt.fee(),
+                    receipt.total(), receipt.currency(), receipt.verifiedName(), receipt.destination(),
+                    status.equals("reserved") ? "submitted" : status, receipt.payoutBatch());
+        }
+        return receipt;
+    }
+
+    private void markUsed(UUID confirmation, UUID tx) {
+        db.sql("UPDATE recipient_confirmation SET status = 'used', used_at = now(), used_by_tx = :tx WHERE id = :id")
+                .param("tx", tx).param("id", confirmation).update();
     }
 
     private Confirmation validate(UUID sender, UUID id, boolean lock) {

@@ -14,4 +14,8 @@ public final class RailEvents {
 
     public record Failed(UUID railTxId, String rail, String direction, String purpose, UUID purposeId,
                          long amount, String reason) {}
+
+    /** A previously succeeded payout or refund came back from the receiving network. */
+    public record Returned(UUID railTxId, String rail, String direction, String purpose, UUID purposeId,
+                           long amount, String reason) {}
 }

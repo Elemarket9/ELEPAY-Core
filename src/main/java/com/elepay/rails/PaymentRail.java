@@ -16,7 +16,8 @@ import java.util.Map;
  */
 public interface PaymentRail {
 
-    enum Status { PENDING, SUCCEEDED, FAILED, UNKNOWN, NOT_FOUND }
+    /** {@code RETURNED}: a completed payout or refund that the receiving network sent back. */
+    enum Status { PENDING, SUCCEEDED, FAILED, UNKNOWN, NOT_FOUND, RETURNED }
 
     record Charge(String reference, long amount, String currency, String channel, String msisdn,
                   String network, String email, String customerName, String description, String returnUrl) {}

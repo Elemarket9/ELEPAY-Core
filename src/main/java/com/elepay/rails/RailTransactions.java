@@ -168,8 +168,21 @@ public class RailTransactions {
     private void applyLocked(UUID id, Result result, String source) {
         RailTx t = db.sql("SELECT * FROM rail_transaction WHERE id = :id FOR UPDATE")
                 .param("id", id).query(RailTransactions::map).single();
-        boolean terminal = Set.of("succeeded", "failed", "mismatch").contains(t.status());
+        boolean terminal = Set.of("succeeded", "failed", "mismatch", "returned").contains(t.status());
         Status status = result.status();
+        if (status == Status.RETURNED) {
+            if (t.status().equals("succeeded") && !t.direction().equals("charge")) {
+                db.sql("""
+                        UPDATE rail_transaction SET status = 'returned', updated_at = now(), failure_reason = :reason
+                        WHERE id = :id""").param("id", id).param("reason", result.message()).update();
+                events.publishEvent(new RailEvents.Returned(id, t.rail(), t.direction(), t.purpose(), t.purposeId(),
+                        t.amount(), result.message()));
+            } else if (!t.status().equals("returned")) {
+                ops.raise("rail_unexpected_return", "high", "rail_tx:" + t.reference(), Map.of(
+                        "recorded", t.status(), "source", source, "rail", t.rail(), "amount", t.amount()));
+            }
+            return;
+        }
         if (terminal) {
             boolean same = (status == Status.SUCCEEDED && t.status().equals("succeeded"))
                     || (status == Status.FAILED && t.status().equals("failed"));

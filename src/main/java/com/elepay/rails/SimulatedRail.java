@@ -99,6 +99,7 @@ public class SimulatedRail implements PaymentRail {
                 .query((rs, i) -> switch (rs.getString(1)) {
                     case "succeeded" -> new Result(Status.SUCCEEDED, "SIM-" + reference, rs.getLong(2), "GHS", 0L, null, null);
                     case "failed" -> new Result(Status.FAILED, "SIM-" + reference, rs.getLong(2), "GHS", 0L, null, "Declined");
+                    case "returned" -> new Result(Status.RETURNED, "SIM-" + reference, rs.getLong(2), "GHS", 0L, null, "Returned by receiving network");
                     default -> new Result(Status.PENDING, "SIM-" + reference, null, null, null, null, null);
                 })
                 .optional().orElse(new Result(Status.NOT_FOUND, null, null, null, null, null, "Unknown reference"));
@@ -108,6 +109,12 @@ public class SimulatedRail implements PaymentRail {
     public void settle(String reference, boolean success) {
         db.sql("UPDATE simulated_rail_txn SET status = :s WHERE reference = :r AND status = 'pending'")
                 .param("s", success ? "succeeded" : "failed").param("r", reference).update();
+    }
+
+    /** Simulates the receiving network sending back a completed payout. */
+    public void returnPayout(String reference) {
+        db.sql("UPDATE simulated_rail_txn SET status = 'returned' WHERE reference = :r AND status = 'succeeded'")
+                .param("r", reference).update();
     }
 
     /** Builds a signed callback body for the given reference, as the rail would send it. */
@@ -143,6 +150,7 @@ public class SimulatedRail implements PaymentRail {
         Status mapped = switch (status) {
             case "succeeded", "success" -> Status.SUCCEEDED;
             case "failed" -> Status.FAILED;
+            case "returned" -> Status.RETURNED;
             default -> Status.PENDING;
         };
         String reference = data.path("reference").asString();

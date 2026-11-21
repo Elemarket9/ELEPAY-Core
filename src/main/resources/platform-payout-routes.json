@@ -1,0 +1,22 @@
+[
+  {"platform": "bolt", "category": "driver_courier", "route": "direct_partner_interface", "status": "not_verified",
+   "markets": [], "destinations": [], "operations": [],
+   "evidence": null,
+   "notes": "No partner agreement, documentation or test credentials available to ELEPAY. Drivers can be paid through ELEPAY batch payouts once Bolt sends payout instructions or funds ELEPAY."},
+  {"platform": "bolt", "category": "driver_courier", "route": "eligible_bank_destination", "status": "not_verified",
+   "markets": ["GH"], "destinations": ["bank"], "operations": [],
+   "evidence": null,
+   "notes": "Requires confirmation that Bolt pays Ghana drivers to a bank account ELEPAY can receive into (an ELEPAY-held account linked to the driver)."},
+  {"platform": "yango", "category": "driver_courier", "route": "direct_partner_interface", "status": "not_verified",
+   "markets": [], "destinations": [], "operations": [], "evidence": null,
+   "notes": "No partner interface access available."},
+  {"platform": "yango", "category": "driver_courier", "route": "eligible_bank_destination", "status": "not_verified",
+   "markets": ["GH"], "destinations": ["bank"], "operations": [], "evidence": null,
+   "notes": "Requires confirmation of Yango's supported payout destinations in Ghana."},
+  {"platform": "x", "category": "creator", "route": "eligible_bank_destination", "status": "not_verified",
+   "markets": [], "destinations": [], "operations": [], "evidence": null,
+   "notes": "Creator payouts depend on the platform's payout processor and the countries it supports; Ghana eligibility not verified."},
+  {"platform": "tiktok", "category": "creator", "route": "eligible_bank_destination", "status": "not_verified",
+   "markets": [], "destinations": [], "operations": [], "evidence": null,
+   "notes": "Creator payouts depend on the platform's supported payout methods and regions; Ghana eligibility not verified."}
+]
