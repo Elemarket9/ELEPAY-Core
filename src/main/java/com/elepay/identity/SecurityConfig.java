@@ -44,6 +44,7 @@ class SecurityConfig {
                         .requestMatchers("/actuator/health/**", "/actuator/health", "/actuator/info").permitAll()
                         .requestMatchers("/v1/public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/v1/rails/*/callbacks/**").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/v1/fx/partners/*/callbacks", "/v1/fx/partners/*/inbound").permitAll()
                         .requestMatchers(HttpMethod.POST, "/v1/ussd/**").permitAll()
                         .requestMatchers("/dev/token").permitAll()
                         .requestMatchers("/", "/index.html", "/assets/**", "/pay/**", "/favicon.svg").permitAll()

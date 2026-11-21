@@ -39,9 +39,14 @@ class MigrationIT {
         assertThat(flyway(url, null).validateWithResult().validationSuccessful).isTrue();
         try (Connection c = DriverManager.getConnection(url, PostgresTestBase.DATABASE.username(),
                 PostgresTestBase.DATABASE.password()); Statement s = c.createStatement();
-             ResultSet rs = s.executeQuery("SELECT count(*) FROM ledger_account WHERE owner_type = 'system'")) {
-            rs.next();
-            assertThat(rs.getInt(1)).isEqualTo(5);
+             ResultSet rs = s.executeQuery("SELECT code FROM ledger_account WHERE owner_type = 'system'")) {
+            var codes = new java.util.ArrayList<String>();
+            while (rs.next()) codes.add(rs.getString(1));
+            assertThat(codes).containsExactlyInAnyOrder(
+                    "system:revenue:GHS", "system:suspense:GHS", "system:refunds_in_flight:GHS",
+                    "system:clearing:sandbox:GHS", "system:rail_fees:GHS", "system:revenue:USD",
+                    "system:fx_clearing:GHS", "system:fx_clearing:USD", "system:fx_in_flight:USD",
+                    "system:fx_in_flight:GHS");
         }
     }
 
