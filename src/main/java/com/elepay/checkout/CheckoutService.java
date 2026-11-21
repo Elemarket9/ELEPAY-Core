@@ -4,6 +4,7 @@ import com.elepay.common.ApiException;
 import com.elepay.common.Audit;
 import com.elepay.common.OpsQueue;
 import com.elepay.common.References;
+import com.elepay.fees.FeeSchedule;
 import com.elepay.ledger.Ledger;
 import com.elepay.ledger.Ledger.Leg;
 import com.elepay.merchant.MerchantAccess;
@@ -38,7 +39,7 @@ class CheckoutService {
     private final Outbox outbox;
     private final Audit audit;
     private final OpsQueue ops;
-    private final Map<String, int[]> customerFees;
+    private final Map<String, FeeSchedule.Plan> customerFees;
     private final boolean jobsEnabled;
 
     CheckoutService(JdbcClient db, Ledger ledger, MerchantAccess merchants, RailTransactions rails, Outbox outbox,
@@ -49,6 +50,12 @@ class CheckoutService {
                     @Value("${elepay.fees.customer.momo-fixed:0}") int momoFixed,
                     @Value("${elepay.fees.customer.card-bps:0}") int cardBps,
                     @Value("${elepay.fees.customer.card-fixed:0}") int cardFixed,
+                    @Value("${elepay.fees.customer.wallet-tiers:}") String walletTiers,
+                    @Value("${elepay.fees.customer.momo-tiers:}") String momoTiers,
+                    @Value("${elepay.fees.customer.card-tiers:}") String cardTiers,
+                    @Value("${elepay.fees.customer.wallet-cap:9223372036854775807}") long walletCap,
+                    @Value("${elepay.fees.customer.momo-cap:9223372036854775807}") long momoCap,
+                    @Value("${elepay.fees.customer.card-cap:9223372036854775807}") long cardCap,
                     @Value("${elepay.checkout.jobs-enabled:true}") boolean jobsEnabled) {
         this.db = db;
         this.ledger = ledger;
@@ -57,8 +64,10 @@ class CheckoutService {
         this.outbox = outbox;
         this.audit = audit;
         this.ops = ops;
-        this.customerFees = Map.of("wallet", new int[]{walletBps, walletFixed},
-                "momo", new int[]{momoBps, momoFixed}, "card", new int[]{cardBps, cardFixed});
+        this.customerFees = Map.of(
+                "wallet", FeeSchedule.configured("wallet", walletFixed, walletCap, walletBps, walletTiers),
+                "momo", FeeSchedule.configured("momo", momoFixed, momoCap, momoBps, momoTiers),
+                "card", FeeSchedule.configured("card", cardFixed, cardCap, cardBps, cardTiers));
         this.jobsEnabled = jobsEnabled;
     }
 
@@ -121,9 +130,12 @@ class CheckoutService {
     }
 
     long customerFee(String method, long subtotal) {
-        int[] f = customerFees.get(method);
+        FeeSchedule.Plan f = customerFees.get(method);
         if (f == null) throw ApiException.badRequest("invalid_method", "Choose wallet, momo or card");
-        return Math.addExact(Math.multiplyExact(subtotal, f[0]) / 10_000, f[1]);
+        if (subtotal <= 0 || subtotal > MAX_TOTAL) throw ApiException.badRequest("invalid_amount", "Amount is outside checkout limits");
+        long fee = FeeSchedule.calculateFloor(f, subtotal);
+        if (fee > Long.MAX_VALUE - subtotal) throw ApiException.badRequest("invalid_fee", "Payment total exceeds limits");
+        return fee;
     }
 
     // ---- creation ---------------------------------------------------------------------------
@@ -294,7 +306,7 @@ class CheckoutService {
             redirect = tx.status().equals("pending") ? tx.redirectUrl() : null;
         }
         String method = c.paymentMethod() != null ? c.paymentMethod() : attempt.map(Attempt::method).orElse(null);
-        long fee = method == null ? 0 : (c.totalPaid() != null ? c.customerFee() : customerFee(method, c.subtotal()));
+        long fee = method == null ? 0 : (c.paymentMethod() != null ? c.customerFee() : customerFee(method, c.subtotal()));
         String message = switch (c.status()) {
             case "paid" -> "Payment received";
             case "processing" -> "Waiting for payment confirmation. You can safely reopen this link with reference " + c.reference();

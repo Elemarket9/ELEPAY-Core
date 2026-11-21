@@ -12,10 +12,10 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 4 | Ledger and money | integer proportional split | Partial | Claimed by master specification; runtime verification pending | — |
 | 5 | Ledger and money | linked reversal | Partial | Claimed by master specification; runtime verification pending | — |
 | 6 | Ledger and money | per-currency FX clearing | Partial | Claimed by master specification; runtime verification pending | — |
-| 7 | Ledger and money | fee schedule engine | Missing | No verified implementation evidence | — |
+| 7 | Ledger and money | fee schedule engine | Partial | FeeSchedule, CheckoutService, MerchantAccess, FeeScheduleTest; checkout tiers/caps wired; standalone Java 21 source blob e3a34e3d0cb33a5605c46cba492565f1e8741507 passed 20,006 assertions (10,000 randomized inputs); Java 25 integration CI pending | engineering/readiness-money-recovery |
 | 8 | Ledger and money | interest and yield accrual | Missing | No verified implementation evidence | — |
 | 9 | Ledger and money | revenue recognition | Missing | No verified implementation evidence | — |
-| 10 | Ledger and money | balance snapshots | Missing | No verified implementation evidence | — |
+| 10 | Ledger and money | balance snapshots | Partial | V13, BalanceSnapshots, BalanceSnapshotsIT; CI pending | engineering/readiness-money-recovery |
 | 11 | Payment processing | exactly-once rail submission | Partial | Claimed by master specification; runtime verification pending | — |
 | 12 | Payment processing | unknown-outcome recovery | Partial | Claimed by master specification; runtime verification pending | — |
 | 13 | Payment processing | callback state machine | Partial | Claimed by master specification; runtime verification pending | — |
@@ -85,14 +85,14 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 77 | Security | request signing | Missing | No verified implementation evidence | — |
 | 78 | Security | JWKS rollover | Missing | No verified implementation evidence | — |
 | 79 | Security | maker-checker | Missing | No verified implementation evidence | — |
-| 80 | Security | hash-chained audit | Missing | No verified implementation evidence | — |
+| 80 | Security | hash-chained audit | Partial | V14 separate SHA-256 sealing, scheduled verification, AuditSealerIT, alert gauges; PostgreSQL CI pending; signed external anchoring not implemented | engineering/readiness-money-recovery |
 | 81 | Security | admin anomaly detection | Missing | No verified implementation evidence | — |
 | 82 | Security | device binding | Missing | No verified implementation evidence | — |
 | 83 | Security | certificate pinning | Missing | No verified implementation evidence | — |
 | 84 | Security | CI secret scanning | Missing | No verified implementation evidence | — |
 | 85 | Reliability | outbox and inbox dedupe | Partial | Claimed by master specification; runtime verification pending | — |
 | 86 | Reliability | circuit breaker | Missing | No verified implementation evidence | — |
-| 87 | Reliability | backoff and jitter | Missing | No verified implementation evidence | — |
+| 87 | Reliability | backoff and jitter | Partial | V13 retry function, rail query and webhook scheduling, BalanceSnapshotsIT; CI pending | engineering/readiness-money-recovery |
 | 88 | Reliability | token-bucket limiting | Missing | No verified implementation evidence | — |
 | 89 | Reliability | load shedding | Missing | No verified implementation evidence | — |
 | 90 | Reliability | SLO burn alerts | Missing | No verified implementation evidence | — |
