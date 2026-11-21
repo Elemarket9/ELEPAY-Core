@@ -59,7 +59,7 @@ class PaymentIntents {
         if (stored.status().equals("paid")) return new Payment(id, "paid");
         if (!stored.status().equals("pending")) throw conflict();
         Checkout checkout = json.readValue(stored.checkout(), Checkout.class);
-        ledger.post(id, new SandboxLedger.Command("checkout", checkout.customer(), 0,
+        ledger.post(id, new SandboxLedger.Command("checkout", checkout.customer(), 0L,
                 checkout.allocations(), null, null));
         return transition(id, "paid");
     }
