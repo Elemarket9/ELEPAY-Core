@@ -47,7 +47,8 @@ class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/v1/fx/partners/*/callbacks", "/v1/fx/partners/*/inbound").permitAll()
                         .requestMatchers(HttpMethod.POST, "/v1/ussd/**").permitAll()
                         .requestMatchers("/dev/token").permitAll()
-                        .requestMatchers("/", "/index.html", "/assets/**", "/pay/**", "/favicon.svg").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**", "/pay/**", "/favicon.svg",
+                                "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter())))
                 .addFilterBefore(new ApiKeyFilter(apiKeys), BearerTokenAuthenticationFilter.class);
