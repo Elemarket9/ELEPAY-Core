@@ -71,6 +71,10 @@ ELEPAY customers can keep funds in a wallet, and merchants can hold proceeds in 
 
 Merchant proceeds can move through pending, available and paid-out states. Wallet top-ups, payouts and external refunds require provider confirmation or reconciliation evidence before ELEPAY reports a final result. For a pending payment, customers and merchants use the same receipt reference to check status and request help.
 
+## Domestic transfer and withdrawal pricing
+
+Starter has no monthly subscription. The Business subscription is GH₵200 per month. Both plans carry zero ELEPAY fees for internal wallet transfers, domestic transfers to bank or MoMo, and withdrawals to verified accounts. Merchant checkout fees and international transfer and FX pricing are governed by their own rules.
+
 ## Access and affordability
 
 Customers should be able to pay through a lightweight link without installing an app. The product targets Android, iOS and partner-supported USSD for basic phones. Show the merchant name, total amount and applicable fees before approval. Measure fees on small purchases such as GH₵5 and GH₵10. Give users a short receipt reference and an accessible support route when connectivity drops or a transaction stays pending.

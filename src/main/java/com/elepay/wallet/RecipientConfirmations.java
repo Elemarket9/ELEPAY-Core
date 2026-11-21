@@ -246,7 +246,7 @@ class RecipientConfirmations {
     public Preview preview(@Valid @RequestBody ConfirmedTransfer request) {
         UUID sender = wallets.customer(Actor.current());
         Confirmation c = validate(sender, request.confirmationId(), false);
-        long fee = fee(c.rail(), request.amount());
+        long fee = DOMESTIC_TRANSFER_FEE;
         return new Preview(c.id(), c.rail(), display(c), c.name(), request.amount(), fee,
                 Math.addExact(request.amount(), fee), Ledger.GHS, c.expiresAt());
     }
@@ -262,7 +262,7 @@ class RecipientConfirmations {
         String scope = "confirmed-transfer:" + sender;
         ConfirmedReceipt receipt = tx.execute(s -> idempotency.execute(scope, key, request, ConfirmedReceipt.class, () -> {
             Confirmation c = validate(sender, request.confirmationId(), true);
-            long fee = fee(c.rail(), request.amount());
+            long fee = DOMESTIC_TRANSFER_FEE;
             if (c.rail().equals("wallet")) {
                 Wallets.Receipt r = wallets.send(sender, scope, key, c.recipient(), request.amount());
                 markUsed(c.id(), r.transactionId());
@@ -279,7 +279,7 @@ class RecipientConfirmations {
             markUsed(c.id(), reservation);
             db.sql("""
                     INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status, counterparty, journal_tx, related_id)
-                    VALUES (:id, :ref, :c, 'withdrawal', :amount, 'pending', :cp, :tx, :payout)""")
+                    VALUES (:id, :ref, :c, 'transfer_out', :amount, 'pending', :cp, :tx, :payout)""")
                     .param("id", UUID.randomUUID()).param("ref", item.reference()).param("c", sender)
                     .param("amount", request.amount()).param("cp", c.name() + " " + display(c))
                     .param("tx", reservation).param("payout", item.id()).update();
@@ -330,9 +330,7 @@ class RecipientConfirmations {
         return c;
     }
 
-    private static long fee(String rail, long amount) {
-        return 0; // Wallet-to-wallet transfers are free; external rail fees are quoted by payouts.
-    }
+    private static final long DOMESTIC_TRANSFER_FEE = 0;
 
     private static String display(Confirmation c) {
         return switch (c.rail()) {
