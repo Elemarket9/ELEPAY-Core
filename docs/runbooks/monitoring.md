@@ -13,3 +13,10 @@ Scrape `/actuator/prometheus` on the management port. Gauges refresh every 30 se
 | `http_server_requests_seconds` (5xx, p99) | 5xx rate > 1% or p99 > 2 s |
 
 Probes: `/actuator/health/liveness` and `/actuator/health/readiness`. Logs are structured (ECS JSON) in the prod profile.
+
+
+## Daily ledger snapshots and retry jitter
+
+The V13 snapshot job captures the current UTC day's committed balance projection and journal reconstruction once, atomically across accounts. The database rejects updates and deletes. It is an observation, not a replacement for journal reconciliation. Alert when elepay.ledger.snapshot_age_seconds is -1 or exceeds 90000, or elepay.ledger.snapshot_drift is positive. Investigate drift using the reconciliation runbook; never edit snapshot or journal data. Missing days cannot be backdated as current balances. The recovery poll uses bounded exponential jitter for status queries and webhook retries only; it does not resubmit ambiguous financial requests.
+
+Checkout fee configuration: for each wallet/momo/card method optionally set elepay.fees.customer.<method>-tiers (e.g. 10000:100,*:50) and -cap in minor units. Absent tiers preserve existing basis-point/fixed-fee rounding down. Active attempts retain their recorded fee. Domestic transfers are unchanged. Validate pricing against agreed fee policy before deployment.

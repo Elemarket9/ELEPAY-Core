@@ -2,6 +2,7 @@ package com.elepay.merchant;
 
 import com.elepay.common.ApiException;
 import com.elepay.identity.Actor;
+import com.elepay.fees.FeeSchedule;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -124,7 +125,7 @@ public class MerchantAccess {
 
     /** Fee agreed with the merchant: basis points plus a fixed amount, capped at the allocation. */
     public static long fee(Merchant merchant, long amount) {
-        long fee = Math.addExact(Math.multiplyExact(amount, merchant.feeBps()) / 10_000, merchant.feeFixed());
-        return Math.min(fee, amount);
+        return FeeSchedule.calculateFloor(FeeSchedule.configured("merchant", merchant.feeFixed(), amount,
+                merchant.feeBps(), ""), amount);
     }
 }

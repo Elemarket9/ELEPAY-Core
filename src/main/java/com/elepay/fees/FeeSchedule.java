@@ -35,8 +35,30 @@ public final class FeeSchedule {
         }
     }
 
+    /** Parse ascending inclusive-upper-bound:bps tiers, with * for the final unbounded tier. */
+    public static Plan configured(String name, long fixed, long cap, int fallbackBps, String tiers) {
+        if (tiers == null || tiers.isBlank()) return new Plan(name, fixed, cap, List.of(new Tier(Long.MAX_VALUE, fallbackBps)));
+        var parsed = new java.util.ArrayList<Tier>();
+        for (String segment : tiers.split(",", -1)) {
+            String[] fields = segment.trim().split(":", -1);
+            if (fields.length != 2) throw new IllegalArgumentException("Invalid fee tier: " + segment);
+            long upper = fields[0].trim().equals("*") ? Long.MAX_VALUE : Long.parseLong(fields[0].trim());
+            parsed.add(new Tier(upper, Integer.parseInt(fields[1].trim())));
+        }
+        return new Plan(name, fixed, cap, parsed);
+    }
+
     /** Progressive tiers; basis points rounded half-up once at the total level. */
     public static long calculate(Plan plan, long amountMinor) {
+        return calculate(plan, amountMinor, true);
+    }
+
+    /** Legacy checkout rounds down; this overload preserves existing contractual pricing. */
+    public static long calculateFloor(Plan plan, long amountMinor) {
+        return calculate(plan, amountMinor, false);
+    }
+
+    private static long calculate(Plan plan, long amountMinor, boolean halfUp) {
         Objects.requireNonNull(plan);
         if (amountMinor < 0) throw new IllegalArgumentException("Negative amount");
         BigInteger weighted = BigInteger.ZERO;
@@ -48,7 +70,7 @@ public final class FeeSchedule {
                     .multiply(BigInteger.valueOf(tier.basisPoints())));
             lower = tier.upperInclusive();
         }
-        BigInteger variable = weighted.add(BigInteger.valueOf(5_000))
+        BigInteger variable = weighted.add(BigInteger.valueOf(halfUp ? 5_000 : 0))
                 .divide(BigInteger.valueOf(10_000));
         BigInteger total = variable.add(BigInteger.valueOf(plan.fixedMinor()));
         return total.min(BigInteger.valueOf(plan.capMinor())).longValueExact();

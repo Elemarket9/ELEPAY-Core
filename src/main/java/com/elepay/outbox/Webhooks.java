@@ -115,11 +115,11 @@ public class Webhooks implements OutboxConsumer {
             db.sql("""
                     UPDATE webhook_delivery SET status = :status, attempts = attempts + 1, last_status = :code,
                            last_error = :err, delivered_at = CASE WHEN :ok THEN now() END,
-                           next_attempt_at = now() + make_interval(secs => least(3600, 5 * power(2, attempts)))
+                           next_attempt_at = now() + make_interval(secs => elepay_retry_seconds(5, 3600, attempts, random()))
                     WHERE event_id = :e AND endpoint_id = :w""")
                     .param("status", next).param("code", status).param("err", error).param("ok", ok)
                     .param("e", p.event()).param("w", p.endpoint()).update();
-            if (!ok) log.info("Webhook {} to {} failed: {} {}", p.event(), p.url(), status, error);
+            if (!ok) log.info("Webhook {} endpoint {} failed: status {}", p.event(), p.endpoint(), status);
         }
         return delivered;
     }

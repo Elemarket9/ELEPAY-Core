@@ -68,7 +68,7 @@ class PublicCheckouts {
     public PublicCheckout view(@PathVariable String reference) {
         var c = checkouts.load(reference, false);
         List<MethodTotal> methods = List.of("wallet", "momo", "card").stream().map(m -> {
-            long fee = checkouts.customerFee(m, c.subtotal());
+            long fee = m.equals(c.paymentMethod()) ? c.customerFee() : checkouts.customerFee(m, c.subtotal());
             return new MethodTotal(m, fee, c.subtotal() + fee);
         }).toList();
         return new PublicCheckout(c.reference(), c.collectorName(), c.description(), c.status(), "GHS",

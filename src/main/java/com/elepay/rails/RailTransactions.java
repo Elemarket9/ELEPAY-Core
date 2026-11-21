@@ -241,13 +241,13 @@ public class RailTransactions {
                     UPDATE rail_transaction SET status = 'pending', updated_at = now(),
                            rail_reference = coalesce(:pref, rail_reference),
                            redirect_url = coalesce(:url, redirect_url),
-                           next_check_at = now() + make_interval(secs => least(600, 15 * power(2, check_attempts)))
+                           next_check_at = now() + make_interval(secs => elepay_retry_seconds(15, 600, check_attempts, random()))
                     WHERE id = :id""")
                     .param("id", id).param("pref", result.railReference()).param("url", result.redirectUrl()).update();
             case UNKNOWN -> {
                 db.sql("""
                         UPDATE rail_transaction SET status = 'unknown', updated_at = now(),
-                               next_check_at = now() + make_interval(secs => least(1800, 30 * power(2, check_attempts)))
+                               next_check_at = now() + make_interval(secs => elepay_retry_seconds(30, 1800, check_attempts, random()))
                         WHERE id = :id""").param("id", id).update();
                 if (!"submit".equals(source) && checkAttempts(id) >= MAX_UNKNOWN_CHECKS) {
                     ops.raise("rail_result_unknown", "high", "rail_tx:" + t.reference(), Map.of(

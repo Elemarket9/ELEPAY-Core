@@ -28,7 +28,11 @@ class OperationalMetrics implements MeterBinder {
                     "SELECT count(*) FROM rail_transaction WHERE status IN ('created', 'pending', 'unknown') AND created_at < now() - interval '1 hour'"),
             Map.entry("elepay.ops.open_high", "SELECT count(*) FROM ops_item WHERE status = 'open' AND severity = 'high'"),
             Map.entry("elepay.ops.open_total", "SELECT count(*) FROM ops_item WHERE status = 'open'"),
-            Map.entry("elepay.disputes.open", "SELECT count(*) FROM dispute WHERE status = 'open'"));
+            Map.entry("elepay.disputes.open", "SELECT count(*) FROM dispute WHERE status = 'open'"),
+            Map.entry("elepay.ledger.snapshot_age_seconds",
+                    "SELECT coalesce(extract(epoch FROM now() - max(captured_at)), -1) FROM ledger_snapshot_run"),
+            Map.entry("elepay.ledger.snapshot_drift",
+                    "SELECT count(*) FROM ledger_balance_snapshot s WHERE s.snapshot_day = (SELECT max(snapshot_day) FROM ledger_snapshot_run) AND s.balance <> s.journal_balance"));
 
     private final JdbcClient db;
     private final Map<String, Double> values = new ConcurrentHashMap<>();
