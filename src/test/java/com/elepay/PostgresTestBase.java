@@ -1,32 +1,35 @@
 package com.elepay;
 
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /** Shared PostgreSQL 18 container for all integration tests in the JVM. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import(PostgresTestBase.Containers.class)
 public abstract class PostgresTestBase {
 
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:18")
-            .withDatabaseName("elepay_test").withUsername("elepay").withPassword("elepay");
+    record Database(String url, String username, String password) {}
 
-    static {
-        POSTGRES.start();
+    static final Database DATABASE = database();
+
+    private static Database database() {
+        String url = System.getenv("ELEPAY_TEST_DB_URL");
+        if (url != null && !url.isBlank()) {
+            return new Database(url, System.getenv("ELEPAY_TEST_DB_USER"), System.getenv("ELEPAY_TEST_DB_PASSWORD"));
+        }
+        var postgres = new PostgreSQLContainer("postgres:18")
+                .withDatabaseName("elepay_test").withUsername("elepay").withPassword("elepay");
+        postgres.start();
+        return new Database(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
     }
 
-    @TestConfiguration(proxyBeanMethods = false)
-    public static class Containers {
-        @Bean
-        @ServiceConnection
-        PostgreSQLContainer postgres() {
-            return POSTGRES;
-        }
+    @DynamicPropertySource
+    static void databaseProperties(DynamicPropertyRegistry properties) {
+        properties.add("spring.datasource.url", DATABASE::url);
+        properties.add("spring.datasource.username", DATABASE::username);
+        properties.add("spring.datasource.password", DATABASE::password);
     }
 }

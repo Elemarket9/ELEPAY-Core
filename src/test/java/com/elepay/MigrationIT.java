@@ -14,18 +14,18 @@ import org.junit.jupiter.api.Test;
 class MigrationIT {
 
     private static String createDatabase(String name) throws Exception {
-        var pg = PostgresTestBase.POSTGRES;
-        try (Connection c = DriverManager.getConnection(pg.getJdbcUrl(), pg.getUsername(), pg.getPassword());
+        name += "_" + java.util.UUID.randomUUID().toString().replace("-", "");
+        var pg = PostgresTestBase.DATABASE;
+        try (Connection c = DriverManager.getConnection(pg.url(), pg.username(), pg.password());
              Statement s = c.createStatement()) {
-            s.execute("DROP DATABASE IF EXISTS " + name);
             s.execute("CREATE DATABASE " + name);
         }
-        return pg.getJdbcUrl().replace("/" + pg.getDatabaseName(), "/" + name);
+        return pg.url().substring(0, pg.url().lastIndexOf('/') + 1) + name;
     }
 
     private static Flyway flyway(String url, String target) {
-        var pg = PostgresTestBase.POSTGRES;
-        var config = Flyway.configure().dataSource(url, pg.getUsername(), pg.getPassword())
+        var pg = PostgresTestBase.DATABASE;
+        var config = Flyway.configure().dataSource(url, pg.username(), pg.password())
                 .locations("classpath:db/migration");
         if (target != null) config.target(MigrationVersion.fromVersion(target));
         return config.load();
@@ -37,8 +37,8 @@ class MigrationIT {
         var result = flyway(url, null).migrate();
         assertThat(result.success).isTrue();
         assertThat(flyway(url, null).validateWithResult().validationSuccessful).isTrue();
-        try (Connection c = DriverManager.getConnection(url, PostgresTestBase.POSTGRES.getUsername(),
-                PostgresTestBase.POSTGRES.getPassword()); Statement s = c.createStatement();
+        try (Connection c = DriverManager.getConnection(url, PostgresTestBase.DATABASE.username(),
+                PostgresTestBase.DATABASE.password()); Statement s = c.createStatement();
              ResultSet rs = s.executeQuery("SELECT count(*) FROM ledger_account WHERE owner_type = 'system'")) {
             rs.next();
             assertThat(rs.getInt(1)).isEqualTo(5);
@@ -49,8 +49,8 @@ class MigrationIT {
     void upgradeFromSandboxSchemaPreservesExistingData() throws Exception {
         String url = createDatabase("migration_upgrade");
         flyway(url, "3").migrate();
-        var pg = PostgresTestBase.POSTGRES;
-        try (Connection c = DriverManager.getConnection(url, pg.getUsername(), pg.getPassword());
+        var pg = PostgresTestBase.DATABASE;
+        try (Connection c = DriverManager.getConnection(url, pg.username(), pg.password());
              Statement s = c.createStatement()) {
             s.execute("""
                     INSERT INTO ledger_operation VALUES ('00000000-0000-0000-0000-000000000001', '{"type":"topup"}');
@@ -63,7 +63,7 @@ class MigrationIT {
         var result = flyway(url, null).migrate();
         assertThat(result.success).isTrue();
         assertThat(result.migrationsExecuted).isGreaterThan(0);
-        try (Connection c = DriverManager.getConnection(url, pg.getUsername(), pg.getPassword());
+        try (Connection c = DriverManager.getConnection(url, pg.username(), pg.password());
              Statement s = c.createStatement()) {
             try (ResultSet rs = s.executeQuery("SELECT pesewas FROM ledger_balance WHERE account = 'customer:legacy'")) {
                 assertThat(rs.next()).isTrue();
