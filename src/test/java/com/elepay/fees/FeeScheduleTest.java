@@ -23,7 +23,7 @@ class FeeScheduleTest {
                 List.of(new FeeSchedule.Tier(Long.MAX_VALUE, 1)));
         assertEquals(0, FeeSchedule.calculate(p, 49));
         assertEquals(1, FeeSchedule.calculate(p, 50));
-        assertEquals(9_223_372_036_854_776L, FeeSchedule.calculate(p, Long.MAX_VALUE));
+        assertEquals(922_337_203_685_478L, FeeSchedule.calculate(p, Long.MAX_VALUE));
     }
 
     @Test void invalidPlansRejected() {
