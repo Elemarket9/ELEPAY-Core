@@ -19,7 +19,7 @@ A shopper owes GH₵80 to one seller, GH₵50 to another and GH₵20 for deliver
 
 ## How stored value works
 
-The intended product includes a genuine customer wallet and a merchant balance. The initial live model proposed in this project is a licensed issuer partnership, with an agreement specifying who issues the value, safeguards funds, handles redemption and resolves disputes. Live activation depends on the applicable authorization and partner arrangements. Direct ELEPAY issuance is a separate licensing decision.
+ELEPAY customers can keep funds in a wallet, and merchants can hold proceeds in a business balance for later withdrawal.
 
 Merchant proceeds can move through pending, available and paid-out states. Wallet top-ups, payouts and external refunds require provider confirmation or reconciliation evidence before ELEPAY reports a final result. For a pending payment, customers and merchants use the same receipt reference to check status and request help.
 
@@ -37,4 +37,4 @@ The product uses scoped roles, merchant isolation and audited operations. Spring
 
 The repository contains a sandbox for simulated wallet funding, multi-recipient checkout, partial refunds, withdrawals and payment intent confirmation or cancellation. It records terminal payment events in a PostgreSQL outbox. The Java build and full PostgreSQL smoke run were still unverified at the time of this specification.
 
-The live product still requires merchant onboarding and authorization, provider integrations, provider and bank reconciliation, settlement operations, outbox delivery, customer checkout, merchant and admin dashboards, mobile apps, and partner-supported USSD. A staged live pilot requires resolved custody and payment-provider arrangements plus verified financial and operational controls.
+The live product still requires merchant onboarding and authorization, provider integrations, provider and bank reconciliation, settlement operations, outbox delivery, customer checkout, merchant and admin dashboards, mobile apps, and partner-supported USSD. A staged live pilot requires verified financial and operational controls.
