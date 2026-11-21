@@ -79,11 +79,12 @@ class Wallets {
     public Receipt transfer(@RequestHeader("Idempotency-Key") String key, @Valid @RequestBody Transfer request) {
         UUID sender = customer(Actor.current());
         String scope = "wallet-transfer:" + sender;
-        return idempotency.execute(scope, key, request, Receipt.class, () -> send(sender, scope, key, request));
+        return idempotency.execute(scope, key, request, Receipt.class,
+                () -> send(sender, scope, key, request.recipient(), request.amount()));
     }
 
-    private Receipt send(UUID sender, String scope, String key, Transfer request) {
-        UUID recipient = request.recipient();
+    /** Posts a wallet-to-wallet transfer; callers own idempotency and authorization. */
+    Receipt send(UUID sender, String scope, String key, UUID recipient, long amount) {
         if (sender.equals(recipient)) throw ApiException.badRequest("same_wallet", "Choose a different wallet");
         // Lock both customer rows in the same order before checking their status.
         List<UUID> active = db.sql("""
@@ -94,14 +95,14 @@ class Wallets {
         if (active.size() != 2) throw ApiException.conflict("wallet_unavailable", "A wallet is unavailable");
         String reference = References.next("WLT");
         UUID transaction = ledger.post(Ledger.Posting.of(scope, key, "wallet_transfer", List.of(
-                Ledger.Leg.debit(available(sender), request.amount()),
-                Ledger.Leg.credit(available(recipient), request.amount())
+                Ledger.Leg.debit(available(sender), amount),
+                Ledger.Leg.credit(available(recipient), amount)
         )).describedAs(reference)).transactionId();
         UUID outgoing = UUID.randomUUID();
         UUID incoming = UUID.randomUUID();
-        recordTransfer(outgoing, reference, sender, "transfer_out", request.amount(), transaction, incoming);
-        recordTransfer(incoming, References.next("WLT"), recipient, "transfer_in", request.amount(), transaction, outgoing);
-        return new Receipt(transaction, reference, request.amount(), Ledger.GHS);
+        recordTransfer(outgoing, reference, sender, "transfer_out", amount, transaction, incoming);
+        recordTransfer(incoming, References.next("WLT"), recipient, "transfer_in", amount, transaction, outgoing);
+        return new Receipt(transaction, reference, amount, Ledger.GHS);
     }
 
     private void recordTransfer(UUID id, String reference, UUID customer, String kind, long amount,
@@ -114,7 +115,7 @@ class Wallets {
                 .param("related", related).update();
     }
 
-    private UUID customer(Actor actor) {
+    UUID customer(Actor actor) {
         actor.requireUser();
         return db.sql("SELECT id FROM customer WHERE subject = :subject AND status = 'active'")
                 .param("subject", actor.subject()).query(UUID.class).optional()
