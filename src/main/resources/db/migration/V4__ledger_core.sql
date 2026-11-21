@@ -172,6 +172,4 @@ INSERT INTO ledger_account (code, owner_type, bucket, currency, allow_negative) 
     ('system:revenue:GHS',              'system', 'revenue',           'GHS', false),
     ('system:suspense:GHS',             'system', 'suspense',          'GHS', true),
     ('system:refunds_in_flight:GHS',    'system', 'refunds_in_flight', 'GHS', false),
-    ('system:clearing:sandbox:GHS',     'system', 'clearing',          'GHS', true),
-    ('system:clearing:paystack:GHS',    'system', 'clearing',          'GHS', true),
-    ('system:clearing:hubtel:GHS',      'system', 'clearing',          'GHS', true);
+    ('system:clearing:sandbox:GHS',     'system', 'clearing',          'GHS', true);

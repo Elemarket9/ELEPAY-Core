@@ -1,0 +1,36 @@
+package com.elepay.common;
+
+import java.security.SecureRandom;
+
+/**
+ * Short human-readable references for receipts and support. Crockford-style
+ * alphabet without ambiguous characters; 8 symbols give ~40 bits.
+ */
+public final class References {
+    private static final char[] ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ".toCharArray();
+    private static final SecureRandom RANDOM = new SecureRandom();
+
+    private References() {}
+
+    public static String next(String prefix) {
+        StringBuilder sb = new StringBuilder(prefix).append('-');
+        for (int i = 0; i < 8; i++) sb.append(ALPHABET[RANDOM.nextInt(ALPHABET.length)]);
+        return sb.toString();
+    }
+
+    public static String digits(int length) {
+        StringBuilder sb = new StringBuilder();
+        sb.append((char) ('1' + RANDOM.nextInt(9)));
+        for (int i = 1; i < length; i++) sb.append((char) ('0' + RANDOM.nextInt(10)));
+        return sb.toString();
+    }
+
+    /** Normalises Ghana phone numbers to 233XXXXXXXXX. */
+    public static String msisdn(String phone) {
+        if (phone == null) throw ApiException.badRequest("invalid_phone", "Phone number is required");
+        String digits = phone.replaceAll("[^0-9]", "");
+        if (digits.startsWith("0") && digits.length() == 10) digits = "233" + digits.substring(1);
+        if (!digits.matches("233[0-9]{9}")) throw ApiException.badRequest("invalid_phone", "Use a Ghana phone number such as 0241234567");
+        return digits;
+    }
+}

@@ -41,7 +41,7 @@ class MigrationIT {
                 PostgresTestBase.POSTGRES.getPassword()); Statement s = c.createStatement();
              ResultSet rs = s.executeQuery("SELECT count(*) FROM ledger_account WHERE owner_type = 'system'")) {
             rs.next();
-            assertThat(rs.getInt(1)).isGreaterThanOrEqualTo(6);
+            assertThat(rs.getInt(1)).isEqualTo(5);
         }
     }
 
