@@ -16,7 +16,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Polls unpublished outbox rows and delivers them to every consumer.
  * Multiple instances can run concurrently: rows are claimed with
- * {@code FOR UPDATE SKIP LOCKED}. A crash after a consumer commits but before
+ * {@code FOR NO KEY UPDATE SKIP LOCKED}, which still lets consumers insert
+ * rows that reference the event (foreign keys take a key-share lock). A crash after a consumer commits but before
  * the row is marked published causes redelivery, which the inbox absorbs.
  */
 @Component
@@ -51,7 +52,7 @@ public class OutboxDispatcher {
                     SELECT id, sequence, aggregate_type, aggregate_id, event_type, payload::text, merchant_ids
                     FROM outbox_event
                     WHERE published_at IS NULL AND next_attempt_at <= now()
-                    ORDER BY sequence LIMIT :limit FOR UPDATE SKIP LOCKED""")
+                    ORDER BY sequence LIMIT :limit FOR NO KEY UPDATE SKIP LOCKED""")
                     .param("limit", limit)
                     .query((rs, i) -> {
                         Array array = rs.getArray(7);
