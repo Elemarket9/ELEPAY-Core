@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 @SpringBootApplication
+@org.springframework.scheduling.annotation.EnableScheduling
 public class SandboxApplication {
     public static void main(String[] args) {
         SpringApplication.run(SandboxApplication.class, args);
