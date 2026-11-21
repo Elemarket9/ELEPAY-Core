@@ -85,7 +85,7 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 77 | Security | request signing | Missing | No verified implementation evidence | — |
 | 78 | Security | JWKS rollover | Missing | No verified implementation evidence | — |
 | 79 | Security | maker-checker | Missing | No verified implementation evidence | — |
-| 80 | Security | hash-chained audit | Missing | No verified implementation evidence | — |
+| 80 | Security | hash-chained audit | Partial | V14 separate SHA-256 sealing, scheduled verification, AuditSealerIT, alert gauges; PostgreSQL CI pending; signed external anchoring not implemented | engineering/readiness-money-recovery |
 | 81 | Security | admin anomaly detection | Missing | No verified implementation evidence | — |
 | 82 | Security | device binding | Missing | No verified implementation evidence | — |
 | 83 | Security | certificate pinning | Missing | No verified implementation evidence | — |

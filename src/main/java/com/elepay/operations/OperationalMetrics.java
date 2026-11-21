@@ -29,6 +29,8 @@ class OperationalMetrics implements MeterBinder {
             Map.entry("elepay.ops.open_high", "SELECT count(*) FROM ops_item WHERE status = 'open' AND severity = 'high'"),
             Map.entry("elepay.ops.open_total", "SELECT count(*) FROM ops_item WHERE status = 'open'"),
             Map.entry("elepay.disputes.open", "SELECT count(*) FROM dispute WHERE status = 'open'"),
+            Map.entry("elepay.audit.unsealed_over_60s",
+                    "SELECT count(*) FROM audit_log a WHERE a.created_at < now() - interval '60 seconds' AND NOT EXISTS (SELECT 1 FROM audit_chain c WHERE c.audit_id = a.id)"),
             Map.entry("elepay.ledger.snapshot_age_seconds",
                     "SELECT coalesce(extract(epoch FROM now() - max(captured_at)), -1) FROM ledger_snapshot_run"),
             Map.entry("elepay.ledger.snapshot_drift",
