@@ -23,6 +23,16 @@ Support Ghanaian bank accounts for verified payout destinations, bank-to-wallet 
 
 Give each payout a unique reference and track pending, completed, failed and returned outcomes. For batch payouts, track each recipient separately, including partial failures. Reconcile platform records, bank or provider records, and ledger entries. Surface unmatched or returned payouts for operations review.
 
+## International payments and remittances
+
+Support inbound remittances to Ghana, outbound transfers from Ghana where supported, international creator and contractor payouts, and cross-border merchant collections and settlements. Start with USD/GHS and design for GBP, EUR and other currencies as supported corridors become available.
+
+Target Western Union and evaluate MoneyGram, Remitly, Wise and Payoneer for the corridors and products each can support. Connect through contracted provider or bank interfaces. Model each corridor by sending country, receiving country, source currency, destination currency and delivery method. Delivery methods may include a bank account, mobile money, an ELEPAY wallet or cash pickup where the partner supports it.
+
+Before confirmation, show the amount sent, fees, exchange rate, amount the recipient will receive, quote expiration and expected arrival. Use a provider-confirmed quote and require a fresh confirmation if the quote expires. Record the source and destination amounts, rate and fees separately. Store amounts in currency-specific minor units and balance journal entries within each currency using linked FX clearing entries.
+
+Give each transfer a traceable reference and show pending, paid, failed or returned status. Reconcile the funding, conversion and delivery records against the partner and bank statements. Support currency-specific statements and balances where the underlying account or provider explicitly supports holding that currency.
+
 ## How a marketplace payment works
 
 A shopper owes GH₵80 to one seller, GH₵50 to another and GH₵20 for delivery. They approve GH₵150 once. ELEPAY records the three allocations under one receipt and tracks each recipient's funds through settlement. If the second seller cancels, ELEPAY can reverse that GH₵50 allocation and refund the buyer while preserving the other two allocations. Each seller can see their own transactions and settlement status.
