@@ -47,6 +47,12 @@ Provide signed webhooks for payment, refund, payout and settlement events. Use s
 
 An ELEMARKET order can create one ELEPAY payment order covering several sellers and ELESEND delivery. ELEPAY confirms the payment and reports each allocation. The marketplace uses that confirmation to release the order for fulfillment and can later refund one seller's item through the API.
 
+### Withdrawal requests through the API
+
+Authorized platforms can request a withdrawal from their own ELEPAY balance to a verified bank or MoMo account owned by the same account holder. A platform acting for another merchant requires explicit delegated withdrawal permission for that merchant. Use a withdrawal-specific credential scope and a registered destination ID. Sending to another party is a separate transfer or payout operation.
+
+Require an idempotency key, validate available funds and reserve the amount atomically. Return a withdrawal reference and initial status. Expose status lookup, withdrawal history, and signed webhooks for completion, failure and returns. Finalize on verified confirmation, release reserved funds on definitive failure and reconcile returns. Keep ambiguous outcomes pending while checking the network instead of sending another withdrawal. Charge zero ELEPAY withdrawal fees on Starter and Business.
+
 ## How a marketplace payment works
 
 A shopper owes GH₵80 to one seller, GH₵50 to another and GH₵20 for delivery. They approve GH₵150 once. ELEPAY records the three allocations under one receipt and tracks each recipient's funds through settlement. If the second seller cancels, ELEPAY can reverse that GH₵50 allocation and refund the buyer while preserving the other two allocations. Each seller can see their own transactions and settlement status.
