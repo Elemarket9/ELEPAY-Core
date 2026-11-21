@@ -13,6 +13,16 @@ ELEPAY is a Ghana-first fintech for collecting, allocating, storing and moving m
 | Marketplaces | A single checkout across multiple merchants, per-seller accounting, delivery allocations, order-level and item-level refund support, settlement reports and developer APIs. ELEMARKET and ELESEND are intended early integrations. |
 | Operations teams | Tools to review onboarding, investigate disputed payments, manage limits and fees, reconcile provider statements, and audit sensitive actions. |
 
+## Platform payouts and banking
+
+ELEPAY should support earnings payouts for ride-hailing and delivery platforms such as Bolt and Yango, and creator platforms such as X and TikTok. These are target integrations. Each platform connection requires a supported payout interface and has its own countries, currencies and eligible destinations.
+
+Support two payout flows. Platforms that integrate directly can send single or batch payouts to recipients. Drivers and creators can also receive earnings through an eligible bank account or other payout destination that their platform supports and that ELEPAY can connect to. Track an incoming payout using a confirmed provider or bank reference before making the funds available.
+
+Support Ghanaian bank accounts for verified payout destinations, bank-to-wallet funding where supported, wallet-to-bank withdrawals, and merchant settlements. Use bank or payment-provider adapters so ELEPAY can add institutions without changing the ledger. Treat foreign-currency earnings as a separate flow with explicit currency, conversion rate, fees and settlement amounts wherever the provider supports conversion.
+
+Give each payout a unique reference and track pending, completed, failed and returned outcomes. For batch payouts, track each recipient separately, including partial failures. Reconcile platform records, bank or provider records, and ledger entries. Surface unmatched or returned payouts for operations review.
+
 ## How a marketplace payment works
 
 A shopper owes GH₵80 to one seller, GH₵50 to another and GH₵20 for delivery. They approve GH₵150 once. ELEPAY records the three allocations under one receipt and tracks each recipient's funds through settlement. If the second seller cancels, ELEPAY can reverse that GH₵50 allocation and refund the buyer while preserving the other two allocations. Each seller can see their own transactions and settlement status.
