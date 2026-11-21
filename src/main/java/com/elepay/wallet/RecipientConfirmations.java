@@ -107,7 +107,11 @@ class RecipientConfirmations {
     @Transactional(noRollbackFor = ApiException.class)
     public LookupResult lookup(@Valid @RequestBody LookupRequest request) {
         Actor actor = Actor.current();
-        UUID sender = wallets.customer(actor);
+        return lookupFor(actor.subject(), wallets.customer(actor), request);
+    }
+
+    /** Lookup on behalf of an authenticated sender (web/app token or a PIN-verified USSD session). */
+    LookupResult lookupFor(String actorSubject, UUID sender, LookupRequest request) {
         String rail = request.rail().toLowerCase();
         if (!RAILS.contains(rail)) throw ApiException.badRequest("invalid_rail", "Choose wallet, momo or bank");
         String destination;
@@ -131,7 +135,7 @@ class RecipientConfirmations {
             }
         }
         String hash = Idempotency.sha256(rail + ":" + network + ":" + destination);
-        enforceLimits(actor, sender, rail, hash);
+        enforceLimits(actorSubject, sender, rail, hash);
 
         return switch (rail) {
             case "wallet" -> lookupWallet(sender, destination, hash);
@@ -201,7 +205,7 @@ class RecipientConfirmations {
         return new LookupResult("verified", rail, shown, name, id, expires, null);
     }
 
-    private void enforceLimits(Actor actor, UUID sender, String rail, String hash) {
+    private void enforceLimits(String actorSubject, UUID sender, String rail, String hash) {
         record Counts(long minute, long day, long misses) {}
         Counts c = db.sql("""
                 SELECT count(*) FILTER (WHERE created_at > now() - interval '1 minute' AND outcome <> 'rate_limited'),
@@ -211,7 +215,7 @@ class RecipientConfirmations {
                 .param("s", sender).query((rs, i) -> new Counts(rs.getLong(1), rs.getLong(2), rs.getLong(3))).single();
         if (c.minute() >= perMinute || c.day() >= perDay || c.misses() >= misses) {
             log(sender, rail, hash, "rate_limited");
-            audit.record(actor.subject(), "recipient_lookup.rate_limited", "customer:" + sender,
+            audit.record(actorSubject, "recipient_lookup.rate_limited", "customer:" + sender,
                     Map.of("minute", c.minute(), "day", c.day(), "misses", c.misses()));
             long blocked = db.sql("""
                     SELECT count(*) FROM recipient_lookup WHERE sender_customer_id = :s
@@ -250,7 +254,11 @@ class RecipientConfirmations {
     @PostMapping("/transfers/confirmed")
     public ConfirmedReceipt transfer(@RequestHeader("Idempotency-Key") String key,
                                      @Valid @RequestBody ConfirmedTransfer request) {
-        UUID sender = wallets.customer(Actor.current());
+        Actor actor = Actor.current();
+        return transferFor(actor.subject(), wallets.customer(actor), key, request);
+    }
+
+    ConfirmedReceipt transferFor(String actorSubject, UUID sender, String key, ConfirmedTransfer request) {
         String scope = "confirmed-transfer:" + sender;
         ConfirmedReceipt receipt = tx.execute(s -> idempotency.execute(scope, key, request, ConfirmedReceipt.class, () -> {
             Confirmation c = validate(sender, request.confirmationId(), true);
@@ -264,7 +272,7 @@ class RecipientConfirmations {
             // MoMo and bank transfers leave ELEPAY as a payout to the confirmed account.
             var batch = payouts.create("customer", sender, java.util.List.of(new Payouts.Item("transfer-" + key,
                     request.amount(), new Payouts.Destination(c.rail(), c.network(), c.destination(), c.name()), null,
-                    c.name())), "Transfer to " + c.name(), Actor.current().subject());
+                    c.name())), "Transfer to " + c.name(), actorSubject);
             var item = batch.items().getFirst();
             UUID reservation = db.sql("SELECT reservation_tx FROM payout WHERE id = :id").param("id", item.id())
                     .query(UUID.class).single();
