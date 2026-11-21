@@ -72,3 +72,35 @@ assert sorted(results) == [False, True]
 assert balance(customer) == 0
 assert balance(merchant_a) + balance(merchant_b) == 15000
 print("Concurrent checkouts cannot spend the same wallet balance twice")
+
+
+def payment_request(path, body=None, method="PUT"):
+    request = Request(
+        f"{BASE}/payments/{path}",
+        data=None if body is None else json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    with urlopen(request, timeout=10) as response:
+        return json.load(response)["status"]
+
+
+post(funding)
+intent = str(uuid4())
+payload = dict(customer=customer, allocations=[dict(recipient=merchant_a, pesewas=15000)])
+assert payment_request(intent, payload) == "pending"
+assert payment_request(intent, method="GET") == "pending"
+assert balance(customer) == 15000
+assert payment_request(f"{intent}/confirm") == "paid"
+assert payment_request(f"{intent}/confirm") == "paid"
+assert balance(customer) == 0
+cancelled = str(uuid4())
+assert payment_request(cancelled, payload) == "pending"
+assert payment_request(f"{cancelled}/cancel") == "cancelled"
+try:
+    payment_request(f"{cancelled}/confirm")
+except HTTPError as error:
+    assert error.code == 409
+else:
+    raise AssertionError("A cancelled payment was confirmed")
+print("Payment creation, confirmation replay and cancellation passed")
