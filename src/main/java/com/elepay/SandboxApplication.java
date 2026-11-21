@@ -1,7 +1,6 @@
 package com.elepay;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
@@ -41,8 +40,7 @@ class SandboxLedger {
 
     @PutMapping("/operations/{id}")
     @Transactional
-    public Map<String, UUID> post(@PathVariable UUID id, @RequestBody Command command)
-            throws JsonProcessingException {
+    public Map<String, UUID> post(@PathVariable UUID id, @RequestBody Command command) {
         // Serialize sandbox writers so balance and refund checks see committed history.
         db.sql("LOCK TABLE ledger_operation IN SHARE ROW EXCLUSIVE MODE").update();
         String body = json.writeValueAsString(command);
