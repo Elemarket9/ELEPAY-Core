@@ -51,6 +51,7 @@ class RecipientConfirmations {
     private final Audit audit;
     private final OpsQueue ops;
     private final Payouts payouts;
+    private final TransferLimits limits;
     private final TransactionTemplate tx;
     private final Duration ttl;
     private final int perMinute;
@@ -58,7 +59,7 @@ class RecipientConfirmations {
     private final int misses;
 
     RecipientConfirmations(JdbcClient db, Wallets wallets, NameVerifications verifications, Idempotency idempotency,
-                           Audit audit, OpsQueue ops, Payouts payouts, PlatformTransactionManager tm,
+                           Audit audit, OpsQueue ops, Payouts payouts, TransferLimits limits, PlatformTransactionManager tm,
                            @Value("${elepay.recipient-lookup.ttl-seconds:300}") long ttlSeconds,
                            @Value("${elepay.recipient-lookup.per-minute:10}") int perMinute,
                            @Value("${elepay.recipient-lookup.per-day:100}") int perDay,
@@ -70,6 +71,7 @@ class RecipientConfirmations {
         this.audit = audit;
         this.ops = ops;
         this.payouts = payouts;
+        this.limits = limits;
         this.tx = new TransactionTemplate(tm);
         this.ttl = Duration.ofSeconds(ttlSeconds);
         this.perMinute = perMinute;
@@ -269,6 +271,7 @@ class RecipientConfirmations {
                 return new ConfirmedReceipt(r.transactionId(), r.reference(), r.amount(), fee, r.amount() + fee,
                         r.currency(), c.name(), display(c), "completed", null);
             }
+            limits.check(sender, request.amount());
             // MoMo and bank transfers leave ELEPAY as a payout to the confirmed account.
             var batch = payouts.create("customer", sender, java.util.List.of(new Payouts.Item("transfer-" + key,
                     request.amount(), new Payouts.Destination(c.rail(), c.network(), c.destination(), c.name()), null,

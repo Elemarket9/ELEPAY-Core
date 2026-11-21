@@ -28,12 +28,14 @@ class Wallets {
     private final Ledger ledger;
     private final Idempotency idempotency;
     private final Audit audit;
+    private final TransferLimits limits;
 
-    Wallets(JdbcClient db, Ledger ledger, Idempotency idempotency, Audit audit) {
+    Wallets(JdbcClient db, Ledger ledger, Idempotency idempotency, Audit audit, TransferLimits limits) {
         this.db = db;
         this.ledger = ledger;
         this.idempotency = idempotency;
         this.audit = audit;
+        this.limits = limits;
     }
 
     record Enrollment(@NotBlank @Size(max = 255) String subject,
@@ -93,6 +95,7 @@ class Wallets {
                 ORDER BY id FOR UPDATE
                 """).param("sender", sender).param("recipient", recipient).query(UUID.class).list();
         if (active.size() != 2) throw ApiException.conflict("wallet_unavailable", "A wallet is unavailable");
+        limits.check(sender, amount);
         String reference = References.next("WLT");
         UUID transaction = ledger.post(Ledger.Posting.of(scope, key, "wallet_transfer", List.of(
                 Ledger.Leg.debit(available(sender), amount),
