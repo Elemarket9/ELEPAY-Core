@@ -1,0 +1,36 @@
+# Local sandbox stack: PostgreSQL 18 and ELEPAY with simulated rails and development tokens.
+# Never use these profiles or credentials with real money.
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: elepay
+      POSTGRES_USER: elepay
+      POSTGRES_PASSWORD: ${ELEPAY_DB_PASSWORD:-local-sandbox-only}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U elepay -d elepay"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  elepay:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: sandbox,dev
+      ELEPAY_BIND_ADDRESS: 0.0.0.0
+      ELEPAY_DB_URL: jdbc:postgresql://postgres:5432/elepay
+      ELEPAY_DB_USER: elepay
+      ELEPAY_DB_PASSWORD: ${ELEPAY_DB_PASSWORD:-local-sandbox-only}
+      ELEPAY_PUBLIC_BASE_URL: http://localhost:8080
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  pgdata:

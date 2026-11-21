@@ -42,7 +42,10 @@ class SecurityConfig {
                         // The legacy sandbox only runs under the sandbox profile and binds to loopback.
                         .requestMatchers("/sandbox/**").permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/health", "/actuator/info").permitAll()
+                        // In production the management endpoints listen on a separate internal port.
+                        .requestMatchers("/actuator/prometheus").permitAll()
                         .requestMatchers("/v1/public/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/v3/api-docs", "/v3/api-docs/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/v1/rails/*/callbacks/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/v1/fx/partners/*/callbacks", "/v1/fx/partners/*/inbound").permitAll()
                         .requestMatchers(HttpMethod.POST, "/v1/ussd/**").permitAll()

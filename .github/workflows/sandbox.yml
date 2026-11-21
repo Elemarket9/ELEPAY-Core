@@ -3,6 +3,23 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
   smoke:
     runs-on: ubuntu-latest
     services:
@@ -24,17 +41,19 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
+      # Unit tests, Spring Modulith verification and the Testcontainers PostgreSQL 18 integration suite.
       - run: mvn -B verify
       - name: Verify wallet flow
         env:
           ELEPAY_DB_PASSWORD: sandbox-ci-only
         run: |
-          java -jar target/elepay-core-0.1.0-SNAPSHOT.jar --spring.profiles.active=sandbox > sandbox.log 2>&1 &
+          java -jar target/elepay-core-0.1.0-SNAPSHOT.jar --spring.profiles.active=sandbox,dev > sandbox.log 2>&1 &
           pid=$!
           trap 'cat sandbox.log; kill "$pid" 2>/dev/null || true' EXIT
-          for attempt in {1..30}; do
+          for attempt in {1..60}; do
             if curl -fsS http://127.0.0.1:8080/sandbox/balances/customer:readiness >/dev/null 2>&1; then
               python3 scripts/smoke.py
+              python3 scripts/acceptance.py
               exit
             fi
             kill -0 "$pid" || exit 1
