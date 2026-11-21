@@ -49,11 +49,13 @@ class Checkouts {
 
     record CreateCheckout(@Positive Long amount, @Size(max = MAX) List<@Valid AllocationInput> allocations,
                           @Size(max = 500) String description, UUID branchId,
-                          @Min(1) @Max(10080) Integer expiresInMinutes) {
+                          @Min(1) @Max(10080) Integer expiresInMinutes,
+                          @Size(max = 100) @Pattern(regexp = "[A-Za-z0-9._:-]+") String orderReference) {
         static final int MAX = CheckoutService.MAX_ALLOCATIONS;
     }
 
-    record CheckoutCreated(String reference, String status, long subtotal, String payUrl, OffsetDateTime expiresAt) {}
+    record CheckoutCreated(String reference, String orderReference, String status, long subtotal, String payUrl,
+                           OffsetDateTime expiresAt) {}
 
     record RefundRequest(@Positive long amount, @NotBlank @Size(max = 500) String reason) {}
 
@@ -87,9 +89,30 @@ class Checkouts {
             }
             UUID branch = branchFor(a, request.branchId());
             var c = checkouts.create(merchantId, branch, null, allocations, request.description(),
-                    request.expiresInMinutes() == null ? 60 : request.expiresInMinutes(), a.actor().subject());
-            return new CheckoutCreated(c.reference(), c.status(), c.subtotal(), publicBaseUrl + "/pay/" + c.reference(), c.expiresAt());
+                    request.expiresInMinutes() == null ? 60 : request.expiresInMinutes(), a.actor().subject(),
+                    request.orderReference());
+            return new CheckoutCreated(c.reference(), request.orderReference(), c.status(), c.subtotal(),
+                    publicBaseUrl + "/pay/" + c.reference(), c.expiresAt());
         });
+    }
+
+    /** Platform order lookup by the platform's own order reference. */
+    @GetMapping("/orders/{orderReference}")
+    public CheckoutSummary byOrder(@PathVariable UUID merchantId, @PathVariable String orderReference) {
+        var a = access.require(merchantId, VIEW);
+        UUID id = db.sql("SELECT id FROM checkout WHERE collector_id = :m AND order_reference = :o")
+                .param("m", merchantId).param("o", orderReference).query(UUID.class).optional()
+                .orElseThrow(() -> ApiException.notFound("Order not found"));
+        var c = checkouts.load(id, false);
+        if (a.branchScoped() && !a.branchId().equals(c.branchId())) throw ApiException.notFound("Order not found");
+        return summary(c, null);
+    }
+
+    /** Cancels an unpaid order. A payment in flight must finish or fail first. */
+    @PostMapping("/checkouts/{reference}/cancel")
+    public CheckoutSummary cancel(@PathVariable UUID merchantId, @PathVariable String reference) {
+        var a = access.require(merchantId, COLLECT);
+        return summary(checkouts.cancel(merchantId, a.branchId(), reference, a.actor().subject()), null);
     }
 
     private UUID branchFor(MerchantAccess.Access a, UUID requested) {

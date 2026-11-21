@@ -12,7 +12,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
  * The authenticated caller. Either an OIDC user (subject from the JWT) or a
  * merchant API credential scoped to exactly one merchant.
  */
-public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant) {
+public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<String> scopes) {
 
     public static final String OPS = "ops";
     public static final String OPS_ADMIN = "ops_admin";
@@ -23,14 +23,14 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant) {
     public static Actor current() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth instanceof ApiKeyAuthentication key) {
-            return new Actor("apikey:" + key.credentialId(), Set.of(), key.merchantId());
+            return new Actor("apikey:" + key.credentialId(), Set.of(), key.merchantId(), key.scopes());
         }
         if (auth instanceof JwtAuthenticationToken jwt) {
             Set<String> roles = new java.util.HashSet<>();
             for (GrantedAuthority authority : jwt.getAuthorities()) {
                 if (authority.getAuthority().startsWith("ROLE_")) roles.add(authority.getAuthority().substring(5));
             }
-            return new Actor(jwt.getToken().getSubject(), Set.copyOf(roles), null);
+            return new Actor(jwt.getToken().getSubject(), Set.copyOf(roles), null, Set.of());
         }
         throw new ApiException(org.springframework.http.HttpStatus.UNAUTHORIZED, "unauthenticated", "Authentication required");
     }

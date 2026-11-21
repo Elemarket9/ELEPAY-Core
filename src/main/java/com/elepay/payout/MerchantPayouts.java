@@ -50,18 +50,24 @@ class MerchantPayouts {
     public Payouts.Batch withdraw(@PathVariable UUID merchantId, @RequestHeader("Idempotency-Key") String key,
                                   @Valid @RequestBody Withdrawal request) {
         var a = access.require(merchantId, WITHDRAW);
-        a.actor().requireUser();
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("merchant-withdrawal:" + merchantId, key, request,
                 Payouts.Batch.class, () -> {
                     var d = db.sql("""
-                            SELECT type, network, account_number, account_name FROM settlement_destination
+                            SELECT type, network, account_number, account_name, verification, verified_name
+                            FROM settlement_destination
                             WHERE id = :id AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'""")
                             .param("id", request.destinationId()).param("m", merchantId)
-                            .query((rs, i) -> new Payouts.Destination(rs.getString(1), rs.getString(2), rs.getString(3),
-                                    rs.getString(4))).optional()
+                            .query((rs, i) -> new Object[]{new Payouts.Destination(rs.getString(1), rs.getString(2),
+                                    rs.getString(3), rs.getString(4)), rs.getString(5), rs.getString(6)}).optional()
                             .orElseThrow(() -> ApiException.notFound("Settlement destination not found"));
+                    if (!"verified".equals(d[1])) {
+                        throw ApiException.conflict("destination_unverified",
+                                "Withdrawals go only to a verified destination owned by this merchant");
+                    }
+                    // Withdrawals carry no ELEPAY fee.
                     return payouts.create("merchant", merchantId, List.of(new Payouts.Item(
-                            "withdrawal-" + key, request.amount(), d, null, null)), null, a.actor().subject());
+                            "withdrawal-" + key, request.amount(), (Payouts.Destination) d[0], null, (String) d[2])),
+                            null, a.actor().subject());
                 }));
         payouts.submit(batch.id());
         return payouts.batch(batch.id());
@@ -70,7 +76,7 @@ class MerchantPayouts {
     @PostMapping("/payout-batches")
     public Payouts.Batch batch(@PathVariable UUID merchantId, @RequestHeader("Idempotency-Key") String key,
                                @Valid @RequestBody BatchInput request) {
-        var a = access.require(merchantId, WITHDRAW);
+        var a = access.require(merchantId, PAYOUT);
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("payout-batch:" + merchantId, key, request,
                 Payouts.Batch.class, () -> payouts.create("merchant", merchantId, request.items().stream()
                         .map(i -> new Payouts.Item(i.reference(), i.amount(),
@@ -93,10 +99,26 @@ class MerchantPayouts {
         return payouts.forOwner("merchant", merchantId, limit);
     }
 
+    @GetMapping({"/payouts/{reference}", "/withdrawals/{reference}"})
+    public Payouts.Payout one(@PathVariable UUID merchantId, @PathVariable String reference) {
+        access.require(merchantId, FINANCE_VIEW);
+        return payouts.forOwner("merchant", merchantId, 500).stream().filter(p -> p.reference().equals(reference))
+                .findFirst().orElseThrow(() -> ApiException.notFound("Payout not found"));
+    }
+
+    @GetMapping("/withdrawals")
+    public List<Payouts.Payout> withdrawals(@PathVariable UUID merchantId) {
+        access.require(merchantId, FINANCE_VIEW);
+        return payouts.forOwner("merchant", merchantId, 500).stream()
+                .filter(p -> p.clientReference() != null && p.clientReference().startsWith("withdrawal-")).toList();
+    }
+
     @PostMapping("/payouts/{reference}/retry")
     public Payouts.Batch retry(@PathVariable UUID merchantId, @PathVariable String reference,
                                @RequestHeader("Idempotency-Key") String key) {
-        var a = access.require(merchantId, WITHDRAW);
+        String clientRef = db.sql("SELECT client_reference FROM payout WHERE reference = :r AND owner_type = 'merchant' AND owner_id = :m")
+                .param("r", reference).param("m", merchantId).query(String.class).optional().orElse("");
+        var a = access.require(merchantId, clientRef.startsWith("withdrawal-") ? WITHDRAW : PAYOUT);
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("payout-retry:" + merchantId, key,
                 java.util.Map.of("reference", reference), Payouts.Batch.class,
                 () -> payouts.retry("merchant", merchantId, reference, a.actor().subject())));

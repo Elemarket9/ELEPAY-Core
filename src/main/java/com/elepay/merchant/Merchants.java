@@ -32,14 +32,19 @@ class Merchants {
     private final Audit audit;
     private final ApiKeys apiKeys;
     private final Webhooks webhooks;
+    private final com.elepay.rails.NameVerifications verifications;
+    private final tools.jackson.databind.ObjectMapper json;
 
-    Merchants(JdbcClient db, MerchantAccess access, Ledger ledger, Audit audit, ApiKeys apiKeys, Webhooks webhooks) {
+    Merchants(JdbcClient db, MerchantAccess access, Ledger ledger, Audit audit, ApiKeys apiKeys, Webhooks webhooks,
+              com.elepay.rails.NameVerifications verifications, tools.jackson.databind.ObjectMapper json) {
         this.db = db;
         this.access = access;
         this.ledger = ledger;
         this.audit = audit;
         this.apiKeys = apiKeys;
         this.webhooks = webhooks;
+        this.verifications = verifications;
+        this.json = json;
     }
 
     record Application(@NotBlank @Size(max = 200) String legalName, @NotBlank @Size(max = 100) String tradingName,
@@ -62,9 +67,11 @@ class Merchants {
 
     record MemberView(String subject, String role, UUID branchId) {}
 
-    record Destination(UUID id, @NotBlank @Pattern(regexp = "momo|bank") String type, @NotBlank @Size(max = 20) String network,
-                       @NotBlank @Size(max = 34) String accountNumber, @NotBlank @Size(max = 150) String accountName,
-                       String status) {}
+    record DestinationRequest(@NotBlank @Pattern(regexp = "momo|bank") String type, @NotBlank @Size(max = 20) String network,
+                              @NotBlank @Size(max = 34) String accountNumber, @NotBlank @Size(max = 150) String accountName) {}
+
+    record Destination(UUID id, String type, String network, String accountNumber, String accountName,
+                       String status, String verification, String verifiedName) {}
 
     record SellerInvite(@NotBlank @Pattern(regexp = "[0-9]{6}") String merchantCode) {}
 
@@ -72,7 +79,14 @@ class Merchants {
 
     record Balances(UUID merchantId, String currency, long pending, long available, long reserved) {}
 
-    record Label(@Size(max = 100) String label) {}
+    record KeyRequest(@Size(max = 100) String label, List<@Pattern(regexp = "view|collect|refund|withdraw|payouts") String> scopes) {}
+
+    record Delegation(@NotEmpty List<@Pattern(regexp = "view|collect|refund|withdraw|payouts") String> permissions) {}
+
+    record DelegationView(UUID merchantId, UUID delegateId, String delegateName, List<String> permissions) {}
+
+    record Event(UUID eventId, long sequence, String type, String aggregateId, java.time.OffsetDateTime createdAt,
+                 tools.jackson.databind.JsonNode payload) {}
 
     record WebhookRequest(@NotBlank @Pattern(regexp = "https?://.+") @Size(max = 500) String url) {}
 
@@ -224,7 +238,7 @@ class Merchants {
 
     @PostMapping("/merchants/{id}/settlement-destinations")
     @Transactional
-    public Destination addDestination(@PathVariable UUID id, @Valid @RequestBody Destination request) {
+    public Destination addDestination(@PathVariable UUID id, @Valid @RequestBody DestinationRequest request) {
         var a = access.require(id, MANAGE);
         String account = request.accountNumber();
         if (request.type().equals("momo")) {
@@ -233,16 +247,25 @@ class Merchants {
         } else if (!account.matches("[0-9]{6,34}")) {
             throw ApiException.badRequest("invalid_account", "Enter the full bank account number");
         }
+        var check = verifications.verify(request.type(), request.network(), account);
+        if (check.outcome() == com.elepay.rails.NameVerification.Outcome.NOT_FOUND) {
+            throw ApiException.unprocessable("account_not_found", "The receiving network did not find this account");
+        }
+        boolean verified = check.outcome() == com.elepay.rails.NameVerification.Outcome.VERIFIED;
         UUID dest = UUID.randomUUID();
         db.sql("""
-                INSERT INTO settlement_destination (id, owner_type, owner_id, type, network, account_number, account_name, created_by)
-                VALUES (:id, 'merchant', :m, :type, :network, :account, :name, :by)""")
+                INSERT INTO settlement_destination (id, owner_type, owner_id, type, network, account_number, account_name,
+                    created_by, verification, verified_name, verified_by)
+                VALUES (:id, 'merchant', :m, :type, :network, :account, :name, :by, :v, :vname, :vby)""")
                 .param("id", dest).param("m", id).param("type", request.type()).param("network", request.network())
-                .param("account", account).param("name", request.accountName()).param("by", a.actor().subject()).update();
+                .param("account", account).param("name", request.accountName()).param("by", a.actor().subject())
+                .param("v", verified ? "verified" : "unverified").param("vname", check.name())
+                .param("vby", verified ? "network:" + check.source() : null).update();
         audit.record(a.actor().subject(), "merchant.destination_added", "merchant:" + id,
                 Map.of("destination", dest.toString(), "type", request.type(), "network", request.network(),
                         "accountLast4", account.substring(account.length() - 4)));
-        return new Destination(dest, request.type(), request.network(), account, request.accountName(), "active");
+        return new Destination(dest, request.type(), request.network(), account, request.accountName(), "active",
+                verified ? "verified" : "unverified", check.name());
     }
 
     @DeleteMapping("/merchants/{id}/settlement-destinations/{destination}")
@@ -263,10 +286,28 @@ class Merchants {
     public List<Destination> destinations(@PathVariable UUID id) {
         access.require(id, FINANCE_VIEW);
         return db.sql("""
-                SELECT id, type, network, account_number, account_name, status FROM settlement_destination
+                SELECT id, type, network, account_number, account_name, status, verification, verified_name
+                FROM settlement_destination
                 WHERE owner_type = 'merchant' AND owner_id = :m AND status = 'active' ORDER BY created_at""")
                 .param("m", id).query((rs, i) -> new Destination(rs.getObject(1, UUID.class), rs.getString(2),
-                        rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6))).list();
+                        rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7),
+                        rs.getString(8))).list();
+    }
+
+    /** Operations verify a destination from documents when no network name enquiry is available. */
+    @PostMapping("/ops/merchants/{id}/settlement-destinations/{destination}/verify")
+    @Transactional
+    public Map<String, String> verifyDestination(@PathVariable UUID id, @PathVariable UUID destination) {
+        Actor actor = Actor.current();
+        actor.requireOps();
+        int updated = db.sql("""
+                UPDATE settlement_destination SET verification = 'verified', verified_by = :by,
+                       verified_name = coalesce(verified_name, account_name)
+                WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'""")
+                .param("by", "ops:" + actor.subject()).param("d", destination).param("m", id).update();
+        if (updated == 0) throw ApiException.notFound("Destination not found");
+        audit.record(actor.subject(), "merchant.destination_verified", "merchant:" + id, Map.of("destination", destination.toString()));
+        return Map.of("verification", "verified");
     }
 
     // ---- marketplaces ---------------------------------------------------------------------
@@ -325,11 +366,12 @@ class Merchants {
     }
 
     @PostMapping("/merchants/{id}/api-keys")
-    public ApiKeys.Created createKey(@PathVariable UUID id, @Valid @RequestBody Label request) {
+    public ApiKeys.Created createKey(@PathVariable UUID id, @Valid @RequestBody KeyRequest request) {
         var a = access.require(id, MANAGE);
         a.actor().requireUser();
-        var created = apiKeys.create(id, request.label(), a.actor().subject());
-        audit.record(a.actor().subject(), "merchant.api_key_created", "merchant:" + id, Map.of("prefix", created.prefix()));
+        var created = apiKeys.create(id, request.label(), request.scopes(), a.actor().subject());
+        audit.record(a.actor().subject(), "merchant.api_key_created", "merchant:" + id,
+                Map.of("prefix", created.prefix(), "scopes", String.join(",", created.scopes())));
         return created;
     }
 
@@ -359,5 +401,50 @@ class Merchants {
     public List<Webhooks.Endpoint> listWebhooks(@PathVariable UUID id) {
         access.require(id, MANAGE);
         return webhooks.list(id);
+    }
+
+    // ---- delegation and event recovery ------------------------------------------------------
+
+    @PutMapping("/merchants/{id}/delegations/{delegate}")
+    @Transactional
+    public DelegationView delegate(@PathVariable UUID id, @PathVariable UUID delegate, @Valid @RequestBody Delegation request) {
+        var a = access.require(id, MANAGE);
+        a.actor().requireUser();
+        var target = access.find(delegate).orElseThrow(() -> ApiException.notFound("Delegate merchant not found"));
+        if (delegate.equals(id)) throw ApiException.badRequest("self", "A merchant cannot delegate to itself");
+        db.sql("DELETE FROM merchant_delegation WHERE merchant_id = :m AND delegate_id = :d").param("m", id).param("d", delegate).update();
+        for (String permission : request.permissions().stream().distinct().toList()) {
+            db.sql("INSERT INTO merchant_delegation (merchant_id, delegate_id, permission, granted_by) VALUES (:m, :d, :p, :by)")
+                    .param("m", id).param("d", delegate).param("p", permission).param("by", a.actor().subject()).update();
+        }
+        audit.record(a.actor().subject(), "merchant.delegation_set", "merchant:" + id,
+                Map.of("delegate", delegate.toString(), "permissions", String.join(",", request.permissions())));
+        return new DelegationView(id, delegate, target.tradingName(), request.permissions().stream().distinct().sorted().toList());
+    }
+
+    @DeleteMapping("/merchants/{id}/delegations/{delegate}")
+    @Transactional
+    public Map<String, String> revokeDelegation(@PathVariable UUID id, @PathVariable UUID delegate) {
+        var a = access.require(id, MANAGE);
+        db.sql("DELETE FROM merchant_delegation WHERE merchant_id = :m AND delegate_id = :d").param("m", id).param("d", delegate).update();
+        audit.record(a.actor().subject(), "merchant.delegation_revoked", "merchant:" + id, Map.of("delegate", delegate.toString()));
+        return Map.of("status", "revoked");
+    }
+
+    /**
+     * Event recovery: every outbox event that concerns this merchant, in
+     * delivery order, after {@code after} (a sequence number). Integrations
+     * page through this to recover missed webhooks.
+     */
+    @GetMapping("/merchants/{id}/events")
+    public List<Event> events(@PathVariable UUID id, @RequestParam(defaultValue = "0") long after,
+                              @RequestParam(defaultValue = "100") int limit) {
+        access.require(id, VIEW);
+        return db.sql("""
+                SELECT id, sequence, event_type, aggregate_id, created_at, payload::text FROM outbox_event
+                WHERE :m = ANY(merchant_ids) AND sequence > :after ORDER BY sequence LIMIT :limit""")
+                .param("m", id).param("after", after).param("limit", Math.min(Math.max(limit, 1), 500))
+                .query((rs, i) -> new Event(rs.getObject(1, UUID.class), rs.getLong(2), rs.getString(3), rs.getString(4),
+                        rs.getObject(5, java.time.OffsetDateTime.class), json.readTree(rs.getString(6)))).list();
     }
 }

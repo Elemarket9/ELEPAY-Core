@@ -19,15 +19,18 @@ import org.springframework.stereotype.Service;
 @Service
 public class MerchantAccess {
 
-    public enum Permission { VIEW, FINANCE_VIEW, COLLECT, REFUND, WITHDRAW, MANAGE }
+    /** WITHDRAW sends to the merchant's own registered destination; PAYOUT pays other parties. */
+    public enum Permission { VIEW, FINANCE_VIEW, COLLECT, REFUND, WITHDRAW, PAYOUT, MANAGE }
 
     private static final Map<String, Set<Permission>> ROLES = Map.of(
             "owner", EnumSet.allOf(Permission.class),
             "admin", EnumSet.allOf(Permission.class),
-            "finance", EnumSet.of(Permission.VIEW, Permission.FINANCE_VIEW, Permission.REFUND, Permission.WITHDRAW, Permission.COLLECT),
+            "finance", EnumSet.of(Permission.VIEW, Permission.FINANCE_VIEW, Permission.REFUND, Permission.WITHDRAW,
+                    Permission.PAYOUT, Permission.COLLECT),
             "cashier", EnumSet.of(Permission.VIEW, Permission.COLLECT));
-    private static final Set<Permission> API_KEY = EnumSet.of(
-            Permission.VIEW, Permission.FINANCE_VIEW, Permission.COLLECT, Permission.REFUND);
+    private static final Map<Permission, String> SCOPE = Map.of(
+            Permission.VIEW, "view", Permission.FINANCE_VIEW, "view", Permission.COLLECT, "collect",
+            Permission.REFUND, "refund", Permission.WITHDRAW, "withdraw", Permission.PAYOUT, "payouts");
     private static final Set<Permission> OPS_READ = EnumSet.of(Permission.VIEW, Permission.FINANCE_VIEW);
     private static final Set<Permission> REQUIRE_ACTIVE = EnumSet.of(Permission.COLLECT, Permission.WITHDRAW);
 
@@ -50,8 +53,19 @@ public class MerchantAccess {
         Merchant merchant = find(merchantId).orElseThrow(() -> ApiException.notFound("Merchant not found"));
         Access access;
         if (actor.isApiKey()) {
-            if (!actor.apiKeyMerchant().equals(merchantId)) throw ApiException.notFound("Merchant not found");
-            if (!API_KEY.contains(permission)) throw ApiException.forbidden("API keys cannot perform this action");
+            String scope = SCOPE.get(permission);
+            if (!actor.apiKeyMerchant().equals(merchantId)) {
+                // A platform credential may act for another merchant only with that merchant's delegation.
+                boolean delegated = scope != null && db.sql("""
+                        SELECT count(*) FROM merchant_delegation
+                        WHERE merchant_id = :m AND delegate_id = :d AND permission = :p""")
+                        .param("m", merchantId).param("d", actor.apiKeyMerchant()).param("p", scope)
+                        .query(Long.class).single() > 0;
+                if (!delegated) throw ApiException.notFound("Merchant not found");
+            }
+            if (scope == null || !actor.scopes().contains(scope)) {
+                throw ApiException.forbidden("This API key is not scoped for " + permission.name().toLowerCase());
+            }
             access = new Access(merchantId, "api_key", null, actor);
         } else {
             var membership = db.sql("SELECT role, branch_id FROM merchant_member WHERE merchant_id = :m AND subject = :s")

@@ -45,3 +45,21 @@ Amounts are integer pesewas (GHS). Merchant routes accept an ELEPAY user token o
 ## Money flow
 
 Payment debits the customer's wallet, or the rail clearing account, once for the total. It credits each allocation's net to the merchant's pending balance and the fees to ELEPAY revenue, in one journal transaction. A refund debits the merchant (pending first, then available) and ELEPAY revenue for the returned fee. It credits the customer's wallet, or refunds-in-flight when the payment came through a rail. Settlement moves pending to available. Every movement is a balanced journal transaction linked to the checkout.
+
+## Platform API
+
+| Endpoint | Purpose |
+| --- | --- |
+| POST /v1/merchants/{id}/api-keys | `label`, `scopes` from `view`, `collect`, `refund`, `withdraw`, `payouts` (default `view`, `collect`, `refund`). The secret is shown once. |
+| PUT/DELETE /v1/merchants/{id}/delegations/{platformMerchantId} | A merchant grants or revokes a platform's credentials specific permissions (for example `withdraw`) to act for it. Without a delegation, a platform key receives 404 for that merchant. |
+| POST /v1/merchants/{id}/checkouts with `orderReference` | Creates a payment order bound to the platform's order reference (unique per collector). |
+| GET /v1/merchants/{id}/orders/{orderReference} | Order status by the platform's reference. |
+| POST /v1/merchants/{id}/checkouts/{reference}/cancel | Cancel an unpaid order. An order with a payment in flight must finish or fail first. |
+| GET /v1/merchants/{id}/events?after={sequence} | Event recovery: every event concerning the merchant, in order, with stable `eventId`. Use it to fetch webhooks you missed. |
+| POST /v1/merchants/{id}/withdrawals | Requires the `withdraw` scope (or an owner, admin or finance user). The destination must be a registered, verified destination of the same merchant. The amount is reserved atomically and the response carries the withdrawal reference and initial status. ELEPAY charges no withdrawal fee. |
+| GET /v1/merchants/{id}/withdrawals, GET /v1/merchants/{id}/withdrawals/{reference} | History and status. Signed webhooks report `payout.succeeded`, `payout.failed` and `payout.returned`. |
+| POST /v1/merchants/{id}/payout-batches | Requires the `payouts` scope. Paying other parties is separate from withdrawals. |
+
+Settlement destinations are verified through the network's name enquiry when one is connected. Otherwise operations verify them from documents (`POST /v1/ops/merchants/{id}/settlement-destinations/{d}/verify`). A destination the network reports as not found is rejected.
+
+Recurring or off-session payments need a customer mandate that the payment method supports. Mandates are not implemented yet; every payment needs explicit customer approval.

@@ -9,16 +9,19 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 public final class ApiKeyAuthentication extends AbstractAuthenticationToken {
     private final UUID credentialId;
     private final UUID merchantId;
+    private final java.util.Set<String> scopes;
 
-    ApiKeyAuthentication(UUID credentialId, UUID merchantId) {
+    ApiKeyAuthentication(UUID credentialId, UUID merchantId, java.util.Set<String> scopes) {
         super(List.of(new SimpleGrantedAuthority("ROLE_merchant_api")));
         this.credentialId = credentialId;
         this.merchantId = merchantId;
+        this.scopes = java.util.Set.copyOf(scopes);
         setAuthenticated(true);
     }
 
     public UUID credentialId() { return credentialId; }
     public UUID merchantId() { return merchantId; }
+    public java.util.Set<String> scopes() { return scopes; }
 
     @Override public Object getCredentials() { return ""; }
     @Override public Object getPrincipal() { return credentialId; }

@@ -131,6 +131,16 @@ class CheckoutService {
     @Transactional
     Checkout create(UUID collectorId, UUID branchId, UUID paymentLink, List<AllocationRequest> requested,
                     String description, int expiresInMinutes, String createdBy) {
+        return create(collectorId, branchId, paymentLink, requested, description, expiresInMinutes, createdBy, null);
+    }
+
+    @Transactional
+    Checkout create(UUID collectorId, UUID branchId, UUID paymentLink, List<AllocationRequest> requested,
+                    String description, int expiresInMinutes, String createdBy, String orderReference) {
+        if (orderReference != null && db.sql("SELECT count(*) FROM checkout WHERE collector_id = :m AND order_reference = :o")
+                .param("m", collectorId).param("o", orderReference).query(Long.class).single() > 0) {
+            throw ApiException.conflict("order_exists", "A payment order already exists for this order reference");
+        }
         var collector = merchants.find(collectorId).orElseThrow();
         if (!collector.status().equals("active")) throw ApiException.conflict("merchant_not_active", "Merchant is not active");
         if (requested == null || requested.isEmpty() || requested.size() > MAX_ALLOCATIONS) {
@@ -168,12 +178,12 @@ class CheckoutService {
         String reference = References.next("EP");
         db.sql("""
                 INSERT INTO checkout (id, reference, collector_id, branch_id, payment_link_id, subtotal, description,
-                    expires_at, created_by)
+                    expires_at, created_by, order_reference)
                 VALUES (:id, :ref, :collector, :branch, :link, :subtotal, :description,
-                    now() + make_interval(mins => :mins), :by)""")
+                    now() + make_interval(mins => :mins), :by, :order)""")
                 .param("id", id).param("ref", reference).param("collector", collectorId).param("branch", branchId)
                 .param("link", paymentLink).param("subtotal", subtotal).param("description", description)
-                .param("mins", expiresInMinutes).param("by", createdBy).update();
+                .param("mins", expiresInMinutes).param("by", createdBy).param("order", orderReference).update();
         for (int line = 0; line < requested.size(); line++) {
             AllocationRequest a = requested.get(line);
             db.sql("""
@@ -184,6 +194,22 @@ class CheckoutService {
                     .param("amount", a.amount()).param("fee", fees.get(line)[0]).update();
         }
         return load(id, false);
+    }
+
+    @Transactional
+    Checkout cancel(UUID collector, UUID branch, String reference, String actor) {
+        Checkout c = load(reference, true);
+        if (!c.collectorId().equals(collector) || (branch != null && !branch.equals(c.branchId()))) {
+            throw ApiException.notFound("Checkout not found");
+        }
+        if (c.status().equals("cancelled")) return c;
+        if (!c.status().equals("open") && !c.status().equals("expired")) {
+            throw ApiException.conflict("not_cancellable", "A " + c.status() + " checkout cannot be cancelled");
+        }
+        db.sql("UPDATE checkout SET status = 'cancelled' WHERE id = :id").param("id", c.id()).update();
+        audit.record(actor, "checkout.cancelled", "checkout:" + reference, Map.of());
+        outbox.publish("checkout", reference, "checkout.cancelled", Map.of("reference", reference), recipients(c));
+        return load(c.id(), false);
     }
 
     // ---- payment ----------------------------------------------------------------------------
