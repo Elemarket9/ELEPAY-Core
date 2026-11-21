@@ -35,8 +35,12 @@ class SandboxLedger {
     }
 
     record Allocation(String recipient, long pesewas) {}
-    record Command(String type, String account, long pesewas, List<Allocation> allocations,
-                   UUID checkout, Integer line) {}
+    record Command(String type, String account, Long pesewas, List<Allocation> allocations,
+                   UUID checkout, Integer line) {
+        Command {
+            if (pesewas == null) pesewas = 0L;
+        }
+    }
 
     @PutMapping("/operations/{id}")
     @Transactional
@@ -108,7 +112,7 @@ class SandboxLedger {
         if (!source.equals(CLEARING) && balance(source).compareTo(BigInteger.valueOf(amount)) < 0) {
             throw conflict("Insufficient balance");
         }
-        db.sql("INSERT INTO ledger_move VALUES (:id, :line, :source, :destination, :amount)")
+        db.sql("INSERT INTO ledger_move (operation_id, line, source, destination, pesewas) VALUES (:id, :line, :source, :destination, :amount)")
                 .param("id", id).param("line", line).param("source", source)
                 .param("destination", destination).param("amount", amount).update();
     }
