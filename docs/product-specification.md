@@ -43,6 +43,14 @@ Implementation should prioritize the bank, mobile-money and acquiring connection
 
 A shopper owes GH₵80 to one seller, GH₵50 to another and GH₵20 for delivery. They approve GH₵150 once. ELEPAY records the three allocations under one receipt and tracks each recipient's funds through settlement. If the second seller cancels, ELEPAY can reverse that GH₵50 allocation and refund the buyer while preserving the other two allocations. Each seller can see their own transactions and settlement status.
 
+## Recipient name confirmation
+
+When a signed-in customer enters a phone number to send money, normalize it and perform an exact recipient lookup after the complete number is entered. For an active ELEPAY wallet, show the registered recipient name on the confirmation screen before the sender authorizes the transfer. For a mobile-money number or bank account, use the name returned by the connected payment network when its verification interface supports it.
+
+Bind the confirmed recipient to the transfer request. Any edit to the number or destination invalidates the confirmation and requires a fresh lookup. If verification is unavailable, show that the name could not be verified. Require a verified recipient before completing a phone-number transfer.
+
+Limit lookup to authenticated payment flows. Rate-limit by sender and audit abuse without exposing a searchable customer directory. Return only the name needed for confirmation, with no balance, identity documents or other profile fields.
+
 ## How stored value works
 
 ELEPAY customers can keep funds in a wallet, and merchants can hold proceeds in a business balance for later withdrawal.
