@@ -2,7 +2,7 @@
 
 ## What we are building
 
-ELEPAY is a Ghana-first fintech for collecting, allocating, storing and moving money. It serves individuals, independent merchants and marketplaces. Its defining capability is one customer payment that can fund several independent sellers and a delivery partner, with a traceable share for each recipient.
+ELEPAY is a Ghana-first payment provider for collecting, allocating, storing and moving money. It serves individuals, independent merchants and marketplaces. Its defining capability is one customer payment that can fund several independent sellers and a delivery partner, with a traceable share for each recipient.
 
 ## Customers and products
 
@@ -32,6 +32,12 @@ Target Western Union and evaluate MoneyGram, Remitly, Wise and Payoneer for the 
 Before confirmation, show the amount sent, fees, exchange rate, amount the recipient will receive, quote expiration and expected arrival. Use a provider-confirmed quote and require a fresh confirmation if the quote expires. Record the source and destination amounts, rate and fees separately. Store amounts in currency-specific minor units and balance journal entries within each currency using linked FX clearing entries.
 
 Give each transfer a traceable reference and show pending, paid, failed or returned status. Reconcile the funding, conversion and delivery records against the partner and bank statements. Support currency-specific statements and balances where the underlying account or provider explicitly supports holding that currency.
+
+## Payment processing and network connections
+
+ELEPAY owns the merchant relationship, checkout and payment APIs, transaction routing, wallets, ledger, refunds, payout instructions, reconciliation and settlement reporting. Connect through the interfaces available to ELEPAY for banks, mobile-money operators, card acquiring partners or processors, and international remittance partners.
+
+Implementation should prioritize the bank, mobile-money and acquiring connections ELEPAY can obtain. Paystack and Hubtel are outside the required processing path. Keep network adapters independent so a new connection can be added without moving merchant balances or changing checkout rules.
 
 ## How a marketplace payment works
 
