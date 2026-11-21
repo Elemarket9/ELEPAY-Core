@@ -39,6 +39,14 @@ ELEPAY operates customer and merchant accounts, checkout and payment APIs, payme
 
 Implementation should prioritize the bank, mobile-money and acquiring connections ELEPAY can obtain. Paystack and Hubtel are outside the required processing path. Keep network adapters independent so a new connection can be added without moving merchant balances or changing checkout rules.
 
+## Platform API orders
+
+Platforms can integrate ELEPAY into their own order lifecycle. An authenticated platform creates a payment order with its order reference, currency, amount and authorized merchant allocations. ELEPAY returns an order ID and any customer approval instructions. The platform can query status, cancel an unpaid order, request full or allocation-level refunds, submit eligible payout batches and retrieve settlement and reconciliation records.
+
+Provide signed webhooks for payment, refund, payout and settlement events. Use stable event IDs, retry delivery and expose a status API so integrations can recover missed events. Require idempotency keys for financial requests and scope credentials to authorized merchants and actions. Keep authorization of customer funds explicit. For recurring or off-session payments, require a valid customer mandate supported by the payment method.
+
+An ELEMARKET order can create one ELEPAY payment order covering several sellers and ELESEND delivery. ELEPAY confirms the payment and reports each allocation. The marketplace uses that confirmation to release the order for fulfillment and can later refund one seller's item through the API.
+
 ## How a marketplace payment works
 
 A shopper owes GH₵80 to one seller, GH₵50 to another and GH₵20 for delivery. They approve GH₵150 once. ELEPAY records the three allocations under one receipt and tracks each recipient's funds through settlement. If the second seller cancels, ELEPAY can reverse that GH₵50 allocation and refund the buyer while preserving the other two allocations. Each seller can see their own transactions and settlement status.
