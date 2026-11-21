@@ -19,7 +19,7 @@ class BalanceSnapshotsIT extends PostgresTestBase {
         String account = ledger.open("customer", UUID.randomUUID(), "available", "GHS");
         ledger.post(Ledger.Posting.of("snapshot-test", UUID.randomUUID().toString(), "topup",
                 List.of(Ledger.Leg.debit(Ledger.clearing("sandbox"), 100), Ledger.Leg.credit(account, 100))));
-        LocalDate day = LocalDate.ofEpochDay(30000 + new java.util.Random().nextInt(1000000));
+        LocalDate day = LocalDate.ofEpochDay(-1_200_000L + new java.util.Random().nextInt(1_000_000));
         long id = ledger.account(account).orElseThrow().id();
         assertThat(snapshots.capture(day)).isPositive();
         assertThat(snapshots.capture(day)).isZero();

@@ -12,7 +12,7 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 4 | Ledger and money | integer proportional split | Partial | Claimed by master specification; runtime verification pending | — |
 | 5 | Ledger and money | linked reversal | Partial | Claimed by master specification; runtime verification pending | — |
 | 6 | Ledger and money | per-currency FX clearing | Partial | Claimed by master specification; runtime verification pending | — |
-| 7 | Ledger and money | fee schedule engine | Partial | FeeSchedule, CheckoutService, MerchantAccess, FeeScheduleTest; checkout tiers/caps wired, CI pending | engineering/readiness-money-recovery |
+| 7 | Ledger and money | fee schedule engine | Partial | FeeSchedule, CheckoutService, MerchantAccess, FeeScheduleTest; checkout tiers/caps wired; standalone Java 21 source blob e3a34e3d0cb33a5605c46cba492565f1e8741507 passed 20,006 assertions (10,000 randomized inputs); Java 25 integration CI pending | engineering/readiness-money-recovery |
 | 8 | Ledger and money | interest and yield accrual | Missing | No verified implementation evidence | — |
 | 9 | Ledger and money | revenue recognition | Missing | No verified implementation evidence | — |
 | 10 | Ledger and money | balance snapshots | Partial | V13, BalanceSnapshots, BalanceSnapshotsIT; CI pending | engineering/readiness-money-recovery |
