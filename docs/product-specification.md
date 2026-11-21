@@ -2,7 +2,7 @@
 
 ## What we are building
 
-ELEPAY is a Ghana-first payment provider for collecting, allocating, storing and moving money. It serves individuals, independent merchants and marketplaces. Its defining capability is one customer payment that can fund several independent sellers and a delivery partner, with a traceable share for each recipient.
+ELEPAY is a Ghana-first, full-service fintech with its own customer wallets, merchant payment processing, transfers, payouts, foreign exchange workflows and settlement operations. It serves individuals, independent merchants and marketplaces. Its defining capability is one customer payment that can fund several independent sellers and a delivery partner, with a traceable share for each recipient.
 
 ## Customers and products
 
@@ -35,7 +35,7 @@ Give each transfer a traceable reference and show pending, paid, failed or retur
 
 ## Payment processing and network connections
 
-ELEPAY owns the merchant relationship, checkout and payment APIs, transaction routing, wallets, ledger, refunds, payout instructions, reconciliation and settlement reporting. Connect through the interfaces available to ELEPAY for banks, mobile-money operators, card acquiring partners or processors, and international remittance partners.
+ELEPAY operates customer and merchant accounts, checkout and payment APIs, payment processing, wallets, the authoritative ledger, refunds, disputes, payout instructions, reconciliation and settlement reporting. ELEPAY processes internal wallet transfers and wallet-funded merchant payments on its own ledger. Its multi-merchant checkout allocates one payment across sellers, delivery partners and fees, with traceable settlement and refunds for each allocation. Connect through the interfaces available to ELEPAY for banks, mobile-money operators, card acquiring partners or processors, and international remittance partners.
 
 Implementation should prioritize the bank, mobile-money and acquiring connections ELEPAY can obtain. Paystack and Hubtel are outside the required processing path. Keep network adapters independent so a new connection can be added without moving merchant balances or changing checkout rules.
 
