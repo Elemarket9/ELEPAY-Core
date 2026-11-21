@@ -1,0 +1,40 @@
+# ELEPAY product specification
+
+## What we are building
+
+ELEPAY is a Ghana-first fintech for collecting, allocating, storing and moving money. It serves individuals, independent merchants and marketplaces. Its defining capability is one customer payment that can fund several independent sellers and a delivery partner, with a traceable share for each recipient.
+
+## Customers and products
+
+| User | Product |
+| --- | --- |
+| Individuals | An ELEPAY wallet for receiving, keeping, sending and spending funds, with top-ups and withdrawals through supported channels. Customers can also pay a merchant directly using supported MoMo or card methods. |
+| Independent merchants | Payment links, QR codes, merchant codes and checkout integrations. A merchant dashboard shows sales, fees, refunds, pending funds, available balances and withdrawals. Branch and cashier permissions limit who can collect, refund or withdraw. |
+| Marketplaces | A single checkout across multiple merchants, per-seller accounting, delivery allocations, order-level and item-level refund support, settlement reports and developer APIs. ELEMARKET and ELESEND are intended early integrations. |
+| Operations teams | Tools to review onboarding, investigate disputed payments, manage limits and fees, reconcile provider statements, and audit sensitive actions. |
+
+## How a marketplace payment works
+
+A shopper owes GH₵80 to one seller, GH₵50 to another and GH₵20 for delivery. They approve GH₵150 once. ELEPAY records the three allocations under one receipt and tracks each recipient's funds through settlement. If the second seller cancels, ELEPAY can reverse that GH₵50 allocation and refund the buyer while preserving the other two allocations. Each seller can see their own transactions and settlement status.
+
+## How stored value works
+
+The intended product includes a genuine customer wallet and a merchant balance. The initial live model proposed in this project is a licensed issuer partnership, with an agreement specifying who issues the value, safeguards funds, handles redemption and resolves disputes. Live activation depends on the applicable authorization and partner arrangements. Direct ELEPAY issuance is a separate licensing decision.
+
+Merchant proceeds can move through pending, available and paid-out states. Wallet top-ups, payouts and external refunds require provider confirmation or reconciliation evidence before ELEPAY reports a final result. For a pending payment, customers and merchants use the same receipt reference to check status and request help.
+
+## Access and affordability
+
+Customers should be able to pay through a lightweight link without installing an app. The product targets Android, iOS and partner-supported USSD for basic phones. Show the merchant name, total amount and applicable fees before approval. Measure fees on small purchases such as GH₵5 and GH₵10. Give users a short receipt reference and an accessible support route when connectivity drops or a transaction stays pending.
+
+## Engineering direction
+
+Java 25 and Spring Boot power the core modules. PostgreSQL is the authoritative store for the ledger, with Flyway migrations and integer minor units. Financial postings must be atomic, balanced, append-only and idempotent. Refunds use linked reversals. Provider callbacks require verification, and money that passes through external providers must reconcile to provider records.
+
+The product uses scoped roles, merchant isolation and audited operations. Spring Security with OAuth 2.0/OIDC is the target identity stack. Merchant and admin dashboards target React and TypeScript. Native apps target Kotlin and Swift. The engineering directive defines the detailed technology choices, security requirements and verification criteria.
+
+## Implementation status
+
+The repository contains a sandbox for simulated wallet funding, multi-recipient checkout, partial refunds, withdrawals and payment intent confirmation or cancellation. It records terminal payment events in a PostgreSQL outbox. The Java build and full PostgreSQL smoke run were still unverified at the time of this specification.
+
+The live product still requires merchant onboarding and authorization, provider integrations, provider and bank reconciliation, settlement operations, outbox delivery, customer checkout, merchant and admin dashboards, mobile apps, and partner-supported USSD. A staged live pilot requires resolved custody and payment-provider arrangements plus verified financial and operational controls.
