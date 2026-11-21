@@ -1,0 +1,115 @@
+package com.elepay.wallet;
+
+import com.elepay.common.ApiException;
+import com.elepay.common.Audit;
+import com.elepay.identity.Actor;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
+import java.time.OffsetDateTime;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Wallet operations for channels that authenticate a customer by phone and
+ * PIN (USSD). Uses the same lookup limits, name confirmation and transfer
+ * rules as the web and mobile entry points.
+ */
+@Service
+@RestController
+public class WalletChannel {
+    private static final int MAX_PIN_FAILURES = 3;
+    private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
+    private final JdbcClient db;
+    private final RecipientConfirmations confirmations;
+    private final Wallets wallets;
+    private final Audit audit;
+
+    WalletChannel(JdbcClient db, RecipientConfirmations confirmations, Wallets wallets, Audit audit) {
+        this.db = db;
+        this.confirmations = confirmations;
+        this.wallets = wallets;
+        this.audit = audit;
+    }
+
+    public record Customer(UUID id, String subject, String displayName, boolean hasPin) {}
+
+    public record Recipient(String status, String verifiedName, String destination, UUID confirmationId, String message) {}
+
+    public record Sent(String reference, String status, long amount, long fee, long total) {}
+
+    public enum PinCheck { OK, WRONG, LOCKED, NOT_SET }
+
+    record PinRequest(@Pattern(regexp = "[0-9]{4,6}") String pin) {}
+
+    /** Sets or changes the USSD PIN from a signed-in web or app session. */
+    @PutMapping("/v1/wallet/ussd-pin")
+    @Transactional
+    public Map<String, String> setPin(@Valid @RequestBody PinRequest request) {
+        if (request.pin() == null) throw ApiException.badRequest("invalid_pin", "Use 4 to 6 digits");
+        if (request.pin().chars().distinct().count() == 1 || "123456".startsWith(request.pin())) {
+            throw ApiException.badRequest("weak_pin", "Choose a PIN that is not repeated or sequential digits");
+        }
+        Actor actor = Actor.current();
+        UUID customer = wallets.customer(actor);
+        db.sql("UPDATE customer SET ussd_pin_hash = :h, ussd_pin_failures = 0, ussd_locked_until = NULL WHERE id = :id")
+                .param("h", encoder.encode(request.pin())).param("id", customer).update();
+        audit.record(actor.subject(), "customer.ussd_pin_set", "customer:" + customer, Map.of());
+        return Map.of("status", "set");
+    }
+
+    public Optional<Customer> activeCustomerByPhone(String msisdn) {
+        return db.sql("SELECT id, subject, display_name, ussd_pin_hash IS NOT NULL FROM customer WHERE phone = :p AND status = 'active'")
+                .param("p", msisdn).query((rs, i) -> new Customer(rs.getObject(1, UUID.class), rs.getString(2),
+                        rs.getString(3), rs.getBoolean(4))).optional();
+    }
+
+    /** Checks a PIN; three consecutive failures lock the channel for 30 minutes. */
+    @Transactional
+    public PinCheck checkPin(UUID customer, String pin) {
+        var row = db.sql("SELECT ussd_pin_hash, ussd_locked_until FROM customer WHERE id = :id FOR UPDATE")
+                .param("id", customer).query((rs, i) -> new Object[]{rs.getString(1), rs.getObject(2, OffsetDateTime.class)})
+                .single();
+        if (row[0] == null) return PinCheck.NOT_SET;
+        if (row[1] != null && ((OffsetDateTime) row[1]).isAfter(OffsetDateTime.now())) return PinCheck.LOCKED;
+        if (pin != null && pin.matches("[0-9]{4,6}") && encoder.matches(pin, (String) row[0])) {
+            db.sql("UPDATE customer SET ussd_pin_failures = 0, ussd_locked_until = NULL WHERE id = :id").param("id", customer).update();
+            return PinCheck.OK;
+        }
+        int failures = db.sql("""
+                UPDATE customer SET ussd_pin_failures = ussd_pin_failures + 1,
+                       ussd_locked_until = CASE WHEN ussd_pin_failures + 1 >= :max THEN now() + interval '30 minutes' END
+                WHERE id = :id RETURNING ussd_pin_failures""")
+                .param("max", MAX_PIN_FAILURES).param("id", customer).query(Integer.class).single();
+        audit.record("ussd", "customer.ussd_pin_failed", "customer:" + customer, Map.of("failures", failures));
+        if (failures >= MAX_PIN_FAILURES) {
+            db.sql("UPDATE customer SET ussd_pin_failures = 0 WHERE id = :id").param("id", customer).update();
+            return PinCheck.LOCKED;
+        }
+        return PinCheck.WRONG;
+    }
+
+    public long availableBalance(UUID customer) {
+        return db.sql("SELECT balance FROM ledger_account WHERE code = :c").param("c", CustomerDirectory.available(customer))
+                .query(Long.class).optional().orElse(0L);
+    }
+
+    public Recipient lookupWallet(Customer sender, String phone) {
+        var r = confirmations.lookupFor("ussd:" + sender.subject(), sender.id(),
+                new RecipientConfirmations.LookupRequest("wallet", phone, null, null, null));
+        return new Recipient(r.status(), r.verifiedName(), r.destination(), r.confirmationId(), r.message());
+    }
+
+    public Sent send(Customer sender, UUID confirmationId, long amount, String idempotencyKey) {
+        var r = confirmations.transferFor("ussd:" + sender.subject(), sender.id(), idempotencyKey,
+                new RecipientConfirmations.ConfirmedTransfer(confirmationId, amount));
+        return new Sent(r.reference(), r.status(), r.amount(), r.fee(), r.total());
+    }
+}
