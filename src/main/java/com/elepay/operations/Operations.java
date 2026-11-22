@@ -78,8 +78,13 @@ class Operations {
     @GetMapping("/audit")
     public List<Map<String, Object>> audit(@RequestParam String subject) {
         Actor.current().requireOps();
-        return db.sql("SELECT actor, action, subject, details::text AS details, created_at FROM audit_log WHERE subject = :s ORDER BY id DESC LIMIT 200")
-                .param("s", subject).query().listOfRows();
+        String normalized = subject.startsWith("customer:") ? subject.substring("customer:".length()) : subject;
+        return db.sql("""
+                SELECT actor, action, subject, details::text AS details, created_at
+                FROM audit_log
+                WHERE subject = :s OR subject = :norm OR subject = ('customer:' || :norm)
+                ORDER BY id DESC LIMIT 200""")
+                .param("s", subject).param("norm", normalized).query().listOfRows();
     }
 
     @GetMapping("/reconciliation/runs")

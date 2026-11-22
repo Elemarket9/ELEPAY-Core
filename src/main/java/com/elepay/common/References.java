@@ -30,7 +30,7 @@ public final class References {
         if (phone == null) throw ApiException.badRequest("invalid_phone", "Phone number is required");
         String digits = phone.replaceAll("[^0-9]", "");
         if (digits.startsWith("0") && digits.length() == 10) digits = "233" + digits.substring(1);
-        if (!digits.matches("233[0-9]{9}")) throw ApiException.badRequest("invalid_phone", "Use a Ghana phone number such as 0241234567");
+        if (!digits.matches("233[1-9][0-9]{8}")) throw ApiException.badRequest("invalid_phone", "Use a Ghana phone number such as 0241234567");
         return digits;
     }
 }

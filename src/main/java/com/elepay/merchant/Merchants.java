@@ -144,8 +144,12 @@ class Merchants {
     }
 
     @GetMapping("/ops/merchants")
-    public List<MerchantView> queue(@RequestParam(defaultValue = "pending_review") String status) {
+    public List<MerchantView> queue(@RequestParam(required = false) String status) {
         Actor.current().requireOps();
+        if (status == null || status.isBlank() || "all".equalsIgnoreCase(status)) {
+            return db.sql("SELECT id FROM merchant ORDER BY created_at")
+                    .query(UUID.class).list().stream().map(id -> view(id, "ops")).toList();
+        }
         return db.sql("SELECT id FROM merchant WHERE status = :s ORDER BY created_at").param("s", status)
                 .query(UUID.class).list().stream().map(id -> view(id, "ops")).toList();
     }

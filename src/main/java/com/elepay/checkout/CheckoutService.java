@@ -440,7 +440,7 @@ class CheckoutService {
                 Map.of("line", line, "amount", amount, "refund", refundRef, "reason", String.valueOf(reason)));
         outbox.publish("refund", refundRef, toWallet ? "refund.completed" : "refund.pending", Map.of(
                 "refund", refundRef, "checkout", c.reference(), "line", line, "amount", amount),
-                Set.of(a.merchantId(), c.collectorId()));
+                setOf(a.merchantId(), c.collectorId()));
         return new Refund(id, refundRef, c.reference(), line, amount, feeReturn, toWallet ? "wallet" : "rail",
                 toWallet ? "completed" : "pending", posted.transactionId());
     }
@@ -489,13 +489,18 @@ class CheckoutService {
         if (amount <= 0 || Math.addExact(Math.addExact(a.refunded(), a.disputed()), amount) > a.amount()) {
             throw ApiException.conflict("dispute_exceeds_allocation", "Dispute exceeds the remaining allocation");
         }
-        long fromPending = Math.min(a.pendingAmount(), amount);
-        long fromAvailable = amount - fromPending;
+        long feeReturn = a.refunded() + a.disputed() + amount == a.amount()
+                ? a.merchantFee() - a.refundedFee()
+                : Math.min(a.merchantFee() - a.refundedFee(), Math.multiplyExact(a.merchantFee(), amount) / a.amount());
+        long merchantDebit = amount - feeReturn;
+        long fromPending = Math.min(a.pendingAmount(), merchantDebit);
+        long fromAvailable = merchantDebit - fromPending;
         String reserved = Ledger.code("merchant", a.merchantId(), "reserved", Ledger.GHS);
         UUID id = UUID.randomUUID();
         List<Leg> legs = new ArrayList<>();
         if (fromPending > 0) legs.add(Leg.debit(Ledger.code("merchant", a.merchantId(), "pending", Ledger.GHS), fromPending));
         if (fromAvailable > 0) legs.add(Leg.debit(Ledger.code("merchant", a.merchantId(), "available", Ledger.GHS), fromAvailable));
+        if (feeReturn > 0) legs.add(Leg.debit(Ledger.REVENUE, feeReturn));
         legs.add(Leg.credit(reserved, amount));
         Ledger.Posted hold;
         try {
@@ -518,19 +523,19 @@ class CheckoutService {
                 .param("tx", hold.transactionId()).param("case", providerCase).param("by", actor).update();
         audit.record(actor, "dispute.opened", "checkout:" + reference, Map.of("line", line, "amount", amount));
         outbox.publish("dispute", id, "dispute.opened", Map.of("dispute", id.toString(), "checkout", reference,
-                "line", line, "amount", amount), Set.of(a.merchantId(), c.collectorId()));
+                "line", line, "amount", amount), setOf(a.merchantId(), c.collectorId()));
         return dispute(id);
     }
 
     @Transactional
     Dispute resolveDispute(String actor, UUID id, String outcome, String note) {
         var d = db.sql("""
-                SELECT d.checkout_id, d.line, d.amount, d.status, c.payment_method, c.customer_id, a.merchant_id, c.reference
+                SELECT d.checkout_id, d.line, d.amount, d.status, c.payment_method, c.customer_id, a.merchant_id, c.reference, d.opened_by
                 FROM dispute d JOIN checkout c ON c.id = d.checkout_id
                 JOIN checkout_allocation a ON a.checkout_id = d.checkout_id AND a.line = d.line
                 WHERE d.id = :id FOR UPDATE OF d, a""").param("id", id)
                 .query((rs, i) -> new Object[]{rs.getObject(1, UUID.class), rs.getInt(2), rs.getLong(3), rs.getString(4),
-                        rs.getString(5), rs.getObject(6, UUID.class), rs.getObject(7, UUID.class), rs.getString(8)})
+                        rs.getString(5), rs.getObject(6, UUID.class), rs.getObject(7, UUID.class), rs.getString(8), rs.getString(9)})
                 .optional().orElseThrow(() -> ApiException.notFound("Dispute not found"));
         if (!d[3].equals("open")) throw ApiException.conflict("dispute_closed", "Dispute is already resolved");
         long amount = (long) d[2];
@@ -540,7 +545,15 @@ class CheckoutService {
         List<Leg> legs;
         if (outcome.equals("merchant_won")) {
             status = "merchant_won";
-            legs = List.of(Leg.debit(reserved, amount), Leg.credit(Ledger.code("merchant", merchant, "available", Ledger.GHS), amount));
+            long feePart = db.sql("SELECT merchant_fee FROM checkout_allocation WHERE checkout_id = :c AND line = :l")
+                    .param("c", d[0]).param("l", d[1]).query(Long.class).optional().orElse(0L);
+            long feeCredit = Math.min(feePart, amount);
+            long merchantCredit = amount - feeCredit;
+            List<Leg> mLegs = new ArrayList<>();
+            mLegs.add(Leg.debit(reserved, amount));
+            mLegs.add(Leg.credit(Ledger.code("merchant", merchant, "available", Ledger.GHS), merchantCredit));
+            if (feeCredit > 0) mLegs.add(Leg.credit(Ledger.REVENUE, feeCredit));
+            legs = mLegs;
             db.sql("UPDATE checkout_allocation SET disputed = disputed - :a WHERE checkout_id = :c AND line = :l")
                     .param("a", amount).param("c", d[0]).param("l", d[1]).update();
         } else if (outcome.equals("customer_won")) {
@@ -604,11 +617,14 @@ class CheckoutService {
         for (var entry : byMerchant.entrySet()) {
             UUID merchant = entry.getKey();
             long total = entry.getValue().stream().mapToLong(Due::pending).sum();
+            if (total <= 0) continue; // Algorithm 051: prevent zero-batch posting
             UUID id = UUID.randomUUID();
             String reference = References.next("ST");
-            var posted = ledger.post(Ledger.Posting.of("settlement", id.toString(), "settlement", List.of(
+            List<Leg> legs = List.of(
                     Leg.debit(Ledger.code("merchant", merchant, "pending", Ledger.GHS), total),
-                    Leg.credit(Ledger.code("merchant", merchant, "available", Ledger.GHS), total))).describedAs(reference));
+                    Leg.credit(Ledger.code("merchant", merchant, "available", Ledger.GHS), total));
+
+            var posted = ledger.post(Ledger.Posting.of("settlement", id.toString(), "settlement", legs).describedAs(reference));
             db.sql("""
                     INSERT INTO settlement_batch (id, reference, merchant_id, amount, lines, journal_tx)
                     VALUES (:id, :ref, :m, :amount, :lines, :tx)""")
@@ -637,10 +653,19 @@ class CheckoutService {
     }
 
     @Scheduled(fixedDelayString = "${elepay.checkout.job-ms:60000}")
+    @Transactional
     void jobs() {
         if (!jobsEnabled) return;
         settleDue(false, null);
         db.sql("""
                 UPDATE checkout SET status = 'expired' WHERE status = 'open' AND expires_at < now()""").update();
+    }
+
+    private static Set<UUID> setOf(UUID... ids) {
+        Set<UUID> set = new LinkedHashSet<>();
+        for (UUID id : ids) {
+            if (id != null) set.add(id);
+        }
+        return Collections.unmodifiableSet(set);
     }
 }

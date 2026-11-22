@@ -34,7 +34,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 class SecurityConfig {
 
     @Bean
-    SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys) throws Exception {
+    SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys, RequestSigningFilter requestSigningFilter) throws Exception {
         http.csrf(csrf -> csrf.disable())
                 .cors(cors -> {})
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -54,6 +54,7 @@ class SecurityConfig {
                                 "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter())))
+                .addFilterBefore(requestSigningFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterBefore(new ApiKeyFilter(apiKeys), BearerTokenAuthenticationFilter.class);
         return http.build();
     }

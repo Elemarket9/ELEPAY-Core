@@ -115,9 +115,16 @@ class MerchantPayouts {
 
     @PostMapping("/payouts/{reference}/retry")
     public Payouts.Batch retry(@PathVariable UUID merchantId, @PathVariable String reference,
-                               @RequestHeader("Idempotency-Key") String key) {
-        String clientRef = db.sql("SELECT client_reference FROM payout WHERE reference = :r AND owner_type = 'merchant' AND owner_id = :m")
-                .param("r", reference).param("m", merchantId).query(String.class).optional().orElse("");
+                               @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        var payoutOpt = db.sql("SELECT client_reference FROM payout WHERE reference = :r AND owner_type = 'merchant' AND owner_id = :m")
+                .param("r", reference).param("m", merchantId).query(String.class).optional();
+        if (payoutOpt.isEmpty()) {
+            throw ApiException.notFound("Payout not found");
+        }
+        if (key == null || key.isBlank()) {
+            throw ApiException.badRequest("missing_idempotency_key", "Idempotency-Key header is required");
+        }
+        String clientRef = payoutOpt.get() == null ? "" : payoutOpt.get();
         var a = access.require(merchantId, clientRef.startsWith("withdrawal-") ? WITHDRAW : PAYOUT);
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("payout-retry:" + merchantId, key,
                 java.util.Map.of("reference", reference), Payouts.Batch.class,

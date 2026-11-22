@@ -306,7 +306,20 @@ public class RailTransactions {
                 .param("payload", json.writeValueAsString(payload)).update() == 1);
         if (!Boolean.TRUE.equals(fresh)) return new CallbackOutcome(true, "duplicate");
 
-        Optional<RailTx> match = callback.reference() == null ? Optional.empty() : findByReference(callback.reference());
+        Optional<RailTx> match = Optional.empty();
+        if (callback.reference() != null) {
+            UUID asUuid = null;
+            try {
+                asUuid = UUID.fromString(callback.reference());
+            } catch (IllegalArgumentException ignored) {}
+            if (asUuid != null) {
+                match = db.sql("SELECT * FROM rail_transaction WHERE reference = :r OR purpose_id = :uuid")
+                        .param("r", callback.reference()).param("uuid", asUuid)
+                        .query(RailTransactions::map).optional();
+            } else {
+                match = findByReference(callback.reference());
+            }
+        }
         if (match.isEmpty() && callback.railReference() != null) {
             match = db.sql("SELECT * FROM rail_transaction WHERE rail = :p AND rail_reference = :r")
                     .param("p", railName).param("r", callback.railReference())

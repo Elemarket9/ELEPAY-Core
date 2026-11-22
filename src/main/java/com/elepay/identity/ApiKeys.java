@@ -23,7 +23,12 @@ public class ApiKeys {
         this.db = db;
     }
 
-    public record Created(UUID id, String prefix, String secret, List<String> scopes) {}
+    public record Created(UUID id, String prefix, String secret, List<String> scopes) {
+        @com.fasterxml.jackson.annotation.JsonProperty("apiKey")
+        public String apiKey() {
+            return secret;
+        }
+    }
     public record Listed(UUID id, String prefix, String label, List<String> scopes,
                          java.time.OffsetDateTime createdAt, java.time.OffsetDateTime revokedAt) {}
 

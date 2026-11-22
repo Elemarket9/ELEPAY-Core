@@ -24,3 +24,16 @@ Enforce all financial correctness, security, compliance, reliability, and code q
 
 Keep your progress.md and BRIEFING.md updated in your state folder (/home/antigravity/Elemarket9/ELEPAY-Core/.agents/teamwork/orchestrator).
 When all milestones and the 100 algorithms are complete, report completion/victory back to Sentinel so the independent Victory Auditor can be dispatched.
+
+## 2026-11-22T03:50:15Z
+From: User / System Directive
+To: Project Orchestrator
+
+CRITICAL USER DIRECTIVE:
+"stop the team test runs, auditing, and always commit instantly code is ready, we will challange and audit it later when all 100 is completed"
+
+Action required:
+1. Immediately skip 5-agent verification waves (Reviewers, Challengers, Forensic Audits) and heavy test runs during milestone implementation.
+2. Commit and push code and migrations immediately to origin/main as soon as implementation is ready.
+3. Commit and push current Milestone 2 ready code now, update docs/readiness-scorecard.md, and immediately advance to Milestone 3 and subsequent milestones.
+4. Comprehensive auditing and challenging will take place at the end after all 100 algorithms are implemented.

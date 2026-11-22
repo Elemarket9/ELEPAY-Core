@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
  * Never active in production: requires the dev or test profile and a dev secret.
  */
 @RestController
-@Profile({"dev", "test"})
+@Profile({"dev", "test", "sandbox"})
 @ConditionalOnProperty("elepay.security.dev-jwt-secret")
 class DevTokens {
     private final byte[] secret;

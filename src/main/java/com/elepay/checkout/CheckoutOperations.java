@@ -1,5 +1,6 @@
 package com.elepay.checkout;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.elepay.identity.Actor;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
@@ -17,7 +18,7 @@ class CheckoutOperations {
         this.checkouts = checkouts;
     }
 
-    record OpenDispute(@NotBlank String checkout, @Min(0) int line, @Positive long amount,
+    record OpenDispute(@NotBlank String checkout, @JsonAlias("allocationLine") @Min(0) int line, @Positive long amount,
                        @NotBlank @Size(max = 500) String reason, @Size(max = 100) String caseReference) {}
 
     record Resolve(@NotBlank @Pattern(regexp = "merchant_won|customer_won") String outcome, @Size(max = 1000) String note) {}

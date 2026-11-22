@@ -263,6 +263,21 @@ class Checkouts {
         access.require(merchantId, VIEW);
         var merchant = access.find(merchantId).orElseThrow();
         String url = link != null ? publicBaseUrl + "/pay/l/" + link : publicBaseUrl + "/pay/m/" + merchant.merchantCode();
-        return Map.of("payload", url, "merchantCode", merchant.merchantCode(), "merchantName", merchant.tradingName());
+        String qrPayload = EmvcoQr.builder()
+                .pointOfInitiation(link != null ? EmvcoQr.POINT_DYNAMIC : EmvcoQr.POINT_STATIC)
+                .merchantId(merchant.id().toString())
+                .merchantCode(merchant.merchantCode())
+                .merchantName(merchant.tradingName())
+                .merchantCity("Accra")
+                .countryCode("GH")
+                .currency(EmvcoQr.DEFAULT_CURRENCY_GHS)
+                .reference(link)
+                .build();
+        return Map.of(
+                "payload", url,
+                "qrPayload", qrPayload,
+                "merchantCode", merchant.merchantCode(),
+                "merchantName", merchant.tradingName()
+        );
     }
 }

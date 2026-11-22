@@ -157,6 +157,24 @@ class PublicCheckouts {
                 "payUrl", publicBaseUrl + "/pay/" + c.reference());
     }
 
+    record QrDecodeRequest(String payload, String qr, String qrPayload) {
+        public String resolvePayload() {
+            if (payload != null && !payload.isBlank()) return payload;
+            if (qrPayload != null && !qrPayload.isBlank()) return qrPayload;
+            if (qr != null && !qr.isBlank()) return qr;
+            return "";
+        }
+    }
+
+    @PostMapping("/v1/public/qr/decode")
+    public EmvcoQr.Decoded decodeQr(@RequestBody(required = false) QrDecodeRequest request) {
+        String raw = request != null ? request.resolvePayload() : "";
+        if (raw.isBlank()) {
+            throw ApiException.badRequest("missing_payload", "QR payload string is required");
+        }
+        return EmvcoQr.decode(raw);
+    }
+
     private static long require(Long amount) {
         if (amount == null || amount <= 0) throw ApiException.badRequest("amount_required", "Enter an amount");
         return amount;

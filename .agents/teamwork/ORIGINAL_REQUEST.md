@@ -651,3 +651,32 @@ Do not describe the platform as production-ready, externally certified or equiva
 START NOW
 
 Inspect the latest main, establish the baseline, verify existing implementations and complete the internal wallet-transfer journey first. Then work through the remaining 100-item checklist in dependency order until all feasible implementation work is complete and every remaining blocker is precisely documented.                                                                                    share everything to the teams, commit and merge to the repo instantly the was a finished work, don't wait for all
+
+## 2026-11-22T03:50:07Z
+CRITICAL USER DIRECTIVE:
+The user has explicitly instructed:
+"stop the team test runs, auditing, and always commit instantly code is ready, we will challange and audit it later when all 100 is completed"
+
+Instructions:
+1. Immediately bypass/halt the 5-agent verification waves (Reviewers, Challengers, Forensic Audits) and extensive test run gates during milestone implementation.
+2. Commit and push finished code, migrations, and scorecard updates to origin/main immediately as soon as an algorithm or batch is ready.
+3. Proceed rapidly through remaining milestones (Milestone 2, 3, 4, 5, 6) to finish implementing all 100 algorithms.
+4. All auditing, challenging, and extensive verification will occur at the very end once all 100 algorithms are complete.
+
+## Follow-up — 2026-11-22T03:50:15Z
+stop the team test runs, auditing, and always commit instantly code is ready, we will challange and audit it later when all 100 is completed
+
+## 2026-11-22T03:52:12Z
+URGENT USER DIRECTIVE:
+The user has ordered:
+"add the 5 subagents to the coding task to complete early"
+
+Action required immediately:
+1. Reallocate/spawn the 5 subagents directly into CODING / IMPLEMENTATION WORKER roles.
+2. Parallelize the coding of the remaining milestones across these 5 coding workers:
+   - Worker 1: Milestone 3 (FX, Cross-Border & Payouts — Algorithms 059-064, 011-016 partner payment processing rails)
+   - Worker 2: Milestone 4 (Direct Partner Rail Adapters & Simulators — Cards, Mobile Money, Banks, excluding Paystack & Hubtel)
+   - Worker 3: Milestone 5A (Fraud & Risk Engine — Algorithms 023-036)
+   - Worker 4: Milestone 5B (Compliance, Sanctions, PEP, AML, BoG Reporting — Algorithms 040-048)
+   - Worker 5: Milestone 6 (Credit, Reliability & Customer Growth — Algorithms 065-072, 081-084, 086-087, 089-094, 096-100)
+3. Each worker must write code and migrations rapidly, commit and push to main as soon as ready without waiting for auditing.

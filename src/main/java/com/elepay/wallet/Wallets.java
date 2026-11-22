@@ -81,12 +81,16 @@ public class Wallets {
     }
 
     @GetMapping("/wallet/statement")
-    public List<Ledger.Entry> statement(@RequestParam Instant from, @RequestParam Instant to) {
+    public List<Ledger.Entry> statement(
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to) {
         UUID id = customer(Actor.current());
-        if (!from.isBefore(to) || Duration.between(from, to).compareTo(Duration.ofDays(31)) > 0) {
+        Instant toVal = to != null ? to : Instant.now();
+        Instant fromVal = from != null ? from : toVal.minus(Duration.ofDays(30));
+        if (!fromVal.isBefore(toVal) || Duration.between(fromVal, toVal).compareTo(Duration.ofDays(31)) > 0) {
             throw ApiException.badRequest("statement_range", "Select a statement range of up to 31 days");
         }
-        return ledger.statement(available(id), from, to);
+        return ledger.statement(available(id), fromVal, toVal);
     }
 
     @PostMapping("/wallet/transfers")
