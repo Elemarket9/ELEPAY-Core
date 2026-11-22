@@ -8,6 +8,9 @@ jobs:
   web:
     name: Frontend Typecheck, Lint & Build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: web
@@ -26,6 +29,10 @@ jobs:
   security-scan:
     name: Security & Vulnerability Scanning
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,6 +55,9 @@ jobs:
   backend-verify:
     name: Backend Test Suite & Modulith Verification
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:18
@@ -87,6 +97,13 @@ jobs:
           ELEPAY_REDIS_PORT: 6379
         run: mvn -B verify
 
+      - name: Upload CycloneDX SBOM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cyclonedx-sbom
+          path: target/bom.json
+          if-no-files-found: error
+
       - name: Verify production artifact contains no test payment implementations
         run: |
           jar tf target/elepay-core-0.1.0-SNAPSHOT.jar > jar-contents.txt
@@ -120,6 +137,9 @@ jobs:
     name: Multi-stage Container Build & Packaging
     needs: [web, backend-verify]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
@@ -128,3 +148,24 @@ jobs:
         run: |
           docker build -t elepay-core:ci-test .
           docker images elepay-core:ci-test
+
+      - name: Validate Container Runs As Non-Root
+        run: |
+          USER_SPEC=$(docker inspect --format='{{.Config.User}}' elepay-core:ci-test)
+          echo "Configured container user: ${USER_SPEC}"
+          if [ "${USER_SPEC}" = "0" ] || [ "${USER_SPEC}" = "root" ] || [ -z "${USER_SPEC}" ]; then
+            echo "SECURITY ERROR: Container is configured to run as root!" >&2
+            exit 1
+          fi
+          RUNNING_UID=$(docker run --rm --entrypoint id elepay-core:ci-test -u)
+          echo "Container runtime UID: ${RUNNING_UID}"
+          if [ "${RUNNING_UID}" = "0" ]; then
+            echo "SECURITY ERROR: Container executes as UID 0 (root)!" >&2
+            exit 1
+          fi
+          echo "Non-root user validation passed (UID: ${RUNNING_UID}, Configured: ${USER_SPEC})"
+
+      - name: Container Build Secret Scan (TruffleHog)
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
