@@ -23,6 +23,7 @@ public class DistributedNonceStore {
         this(null, null);
     }
 
+    @Autowired
     public DistributedNonceStore(JdbcClient db, @Autowired(required = false) StringRedisTemplate redisTemplate) {
         this.db = db;
         this.redisTemplate = redisTemplate;
@@ -37,46 +38,27 @@ public class DistributedNonceStore {
         Instant now = Instant.now();
         Instant expiresAt = now.plus(ttl);
 
-        // 1. Check local memory
-        pruneMemory(now);
-        Instant prev = memoryNonces.putIfAbsent(nonce, expiresAt);
-        if (prev != null && prev.isAfter(now)) {
-            return false; // Replay detected in memory
-        }
-
-        // 2. Check & store in Redis if available
-        if (redisTemplate != null) {
-            try {
-                Boolean set = redisTemplate.opsForValue().setIfAbsent("elepay:nonce:" + nonce, "1", ttl);
-                if (Boolean.FALSE.equals(set)) {
-                    return false; // Replay detected in Redis
-                }
-            } catch (Exception e) {
-                // Redis failure or unreachable: fallback to DB
-            }
-        }
-
-        // 3. Persistent DB fallback
+        // PostgreSQL is authoritative across all instances, including during Redis outages.
+        // A database failure must propagate rather than accept a replay on a different node.
         if (db != null) {
-            try {
-                int inserted = db.sql("INSERT INTO request_nonce (nonce, created_at, expires_at) VALUES (:n, :c, :e) ON CONFLICT (nonce) DO NOTHING")
-                        .param("n", nonce).param("c", now).param("e", expiresAt)
-                        .update();
-                if (inserted == 0) {
-                    return false; // Replay detected in DB
-                }
-            } catch (Exception e) {
-                // Table might not exist in isolated unit test slices
+            int inserted = db.sql("""
+                    INSERT INTO request_nonce (nonce, created_at, expires_at) VALUES (:n, :c, :e)
+                    ON CONFLICT (nonce) DO UPDATE SET created_at = EXCLUDED.created_at,
+                    expires_at = EXCLUDED.expires_at WHERE request_nonce.expires_at <= :c
+                    """).param("n", nonce).param("c", now).param("e", expiresAt).update();
+            return inserted == 1;
+        }
+        // Explicit unit-test instances only; the application constructor requires JdbcClient.
+        if (memoryNonces.size() > 5000) memoryNonces.entrySet().removeIf(e -> !e.getValue().isAfter(now));
+        java.util.concurrent.atomic.AtomicBoolean accepted = new java.util.concurrent.atomic.AtomicBoolean(false);
+        memoryNonces.compute(nonce, (key, previous) -> {
+            if (previous == null || !previous.isAfter(now)) {
+                accepted.set(true);
+                return expiresAt;
             }
-        }
-
-        return true;
-    }
-
-    private void pruneMemory(Instant now) {
-        if (memoryNonces.size() > 5000) {
-            memoryNonces.entrySet().removeIf(e -> e.getValue().isBefore(now));
-        }
+            return previous;
+        });
+        return accepted.get();
     }
 
     public void clear() {

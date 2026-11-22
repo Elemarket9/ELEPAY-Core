@@ -213,6 +213,8 @@ public class PosOrderService {
 
     @Transactional
     public PosOrder addTenderPayment(UUID orderId, TenderType tenderType, long amountPesewas, String reference) {
+        if (amountPesewas <= 0) throw new IllegalArgumentException("Payment amount must be positive");
+        db.sql("SELECT id FROM pos_order WHERE id = :id FOR UPDATE").param("id", orderId).query(UUID.class).optional().orElseThrow();
         PosOrder order = getOrder(orderId).orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));
         if ("PAID".equals(order.status())) {
             throw new IllegalStateException("Order is already fully paid");
@@ -236,7 +238,7 @@ public class PosOrderService {
                     .ifPresent(shift -> cashierService.recordCashTender(shift.id(), amountPesewas));
         }
 
-        long newPaid = order.paidPesewas() + amountPesewas;
+        long newPaid = Math.addExact(order.paidPesewas(), amountPesewas);
         long change = 0;
         String status = "PARTIAL";
 

@@ -24,6 +24,7 @@ import tools.jackson.databind.ObjectMapper;
  * <p><strong>Callbacks:</strong> Verified using HMAC-SHA256 in {@code x-card-signature}.
  */
 @Component
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "elepay.rails.sandbox.enabled", havingValue = "true")
 public class CardAcquirerRail implements PaymentRail {
     private static final Logger log = LoggerFactory.getLogger(CardAcquirerRail.class);
 

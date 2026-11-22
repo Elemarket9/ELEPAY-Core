@@ -23,8 +23,8 @@ public class PosTerminalService {
             UUID branchId,
             String serialNumber,
             String model,
-            String pairingCode,
-            String secretKey,
+            @com.fasterxml.jackson.annotation.JsonIgnore String pairingCode,
+            @com.fasterxml.jackson.annotation.JsonIgnore String secretKey,
             String hardwareFingerprint,
             String status,
             OffsetDateTime pairedAt,
@@ -41,7 +41,7 @@ public class PosTerminalService {
     @Transactional
     public PosTerminal registerTerminal(UUID merchantId, UUID branchId, String serialNumber, String model) {
         UUID id = UUID.randomUUID();
-        String pairingCode = String.format("%06d", ThreadLocalRandom.current().nextInt(1_000_000));
+        String pairingCode = String.format("%06d", new java.security.SecureRandom().nextInt(1_000_000));
         String secretKey = UUID.randomUUID().toString().replace("-", "");
 
         db.sql("""
@@ -107,19 +107,21 @@ public class PosTerminalService {
         PosTerminal terminal = findBySerialNumber(serialNumber)
                 .orElseThrow(() -> new IllegalArgumentException("Terminal not found with serial: " + serialNumber));
 
-        if (!pairingCode.equals(terminal.pairingCode())) {
+        if (!"INACTIVE".equals(terminal.status()) || terminal.createdAt().isBefore(OffsetDateTime.now().minusMinutes(10))
+                || pairingCode == null || !java.security.MessageDigest.isEqual(pairingCode.getBytes(java.nio.charset.StandardCharsets.UTF_8), terminal.pairingCode().getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
             throw new IllegalArgumentException("Invalid pairing code");
         }
 
-        db.sql("""
+        int paired = db.sql("""
             UPDATE pos_terminal
             SET status = 'ACTIVE', hardware_fingerprint = :fp, paired_at = now()
-            WHERE id = :id
+            WHERE id = :id AND status = 'INACTIVE'
             """)
             .param("fp", hardwareFingerprint)
             .param("id", terminal.id())
             .update();
 
+        if (paired != 1) throw new IllegalStateException("Terminal pairing was already used");
         String authToken = "POS_" + UUID.randomUUID().toString().replace("-", "") + "_" + terminal.secretKey().substring(0, 8);
         return new PairingResult(terminal.id(), serialNumber, "ACTIVE", authToken);
     }

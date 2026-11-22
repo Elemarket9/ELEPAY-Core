@@ -52,6 +52,10 @@ public class ProductionSafetyCheck {
         if (!env.getProperty("elepay.rate-limits.enabled", Boolean.class, true)) {
             p.add("elepay.rate-limits.enabled must be true");
         }
+        if (!env.getProperty("elepay.security.request-signing.enforce", Boolean.class, true)
+                || !env.getProperty("elepay.security.request-signing.require-v2", Boolean.class, true)) {
+            p.add("Production merchant API signing and signature version 2 must be enforced");
+        }
         String signing = env.getProperty("elepay.security.signing-secret", "");
         if (!signing.isBlank() && (signing.length() < 32 || KNOWN_SECRETS.contains(signing))) {
             p.add("elepay.security.signing-secret must be at least 32 random characters and not a published value");

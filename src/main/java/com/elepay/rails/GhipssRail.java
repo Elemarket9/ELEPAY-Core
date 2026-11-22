@@ -23,6 +23,7 @@ import tools.jackson.databind.ObjectMapper;
  * <p><strong>Callbacks:</strong> Verified using HMAC-SHA256 in {@code x-ghipss-signature}.
  */
 @Component
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "elepay.rails.sandbox.enabled", havingValue = "true")
 public class GhipssRail implements PaymentRail {
     private static final Logger log = LoggerFactory.getLogger(GhipssRail.class);
     public static final long FLAT_FEE_PESEWAS = 50L;

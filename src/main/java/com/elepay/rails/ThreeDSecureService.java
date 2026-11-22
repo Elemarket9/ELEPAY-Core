@@ -118,7 +118,7 @@ public class ThreeDSecureService {
     /**
      * Completes a 3DS challenge by verifying the customer OTP / ACS response.
      */
-    @Transactional
+    @Transactional(noRollbackFor = ApiException.class)
     public ThreeDSSession completeChallenge(String sessionId, String submittedOtp) {
         var row = db.sql("SELECT * FROM three_d_secure_session WHERE session_id = :sid FOR UPDATE")
                 .param("sid", sessionId)
@@ -136,7 +136,7 @@ public class ThreeDSecureService {
             throw ApiException.badRequest("challenge_exhausted", "Maximum 3DS challenge attempts exceeded");
         }
 
-        boolean valid = row.otpCode() != null && row.otpCode().equals(submittedOtp);
+        boolean valid = row.otpCode() != null && submittedOtp != null && java.security.MessageDigest.isEqual(row.otpCode().getBytes(java.nio.charset.StandardCharsets.UTF_8), submittedOtp.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         if (valid) {
             String eci = "05";
             String cavv = generateCavv(row.reference(), row.dsTransId());

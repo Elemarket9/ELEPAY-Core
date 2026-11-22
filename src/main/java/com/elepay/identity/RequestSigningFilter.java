@@ -41,12 +41,14 @@ public class RequestSigningFilter extends OncePerRequestFilter {
 
     private static final Set<String> MUTATION_METHODS = Set.of("POST", "PUT", "DELETE", "PATCH");
     private static final List<String> PUBLIC_PATH_PREFIXES = List.of(
-            "/sandbox/", "/actuator/", "/v1/public/", "/v1/rails/", "/v1/fx/partners/",
+            "/sandbox/", "/actuator/", "/v1/public/", "/v1/fx/partners/",
             "/v1/ussd/", "/dev/", "/developer/", "/v3/api-docs", "/index.html", "/pay/"
     );
 
     private final String defaultSigningSecret;
     private final boolean enforceSigning;
+    @Value("${elepay.security.request-signing.require-v2:false}")
+    private boolean requireV2;
     private final DistributedNonceStore nonceStore;
     private final ApiKeys apiKeys;
 
@@ -75,7 +77,8 @@ public class RequestSigningFilter extends OncePerRequestFilter {
         boolean isMutation = MUTATION_METHODS.contains(method);
         boolean isPublic = isPublicPath(path);
         boolean enforceHeader = "true".equalsIgnoreCase(request.getHeader(HEADER_ENFORCE));
-        boolean requireSignature = (enforceSigning || enforceHeader) && isMutation && !isPublic;
+        boolean apiCredential = request.getHeader(HEADER_API_KEY) != null;
+        boolean requireSignature = (enforceHeader || (enforceSigning && (!requireV2 || apiCredential))) && isMutation && !isPublic;
 
         String signature = request.getHeader(HEADER_SIGNATURE);
         if (signature == null || signature.isBlank()) {
@@ -107,7 +110,7 @@ public class RequestSigningFilter extends OncePerRequestFilter {
         }
 
         long nowSeconds = Instant.now().getEpochSecond();
-        if (Math.abs(nowSeconds - timestampSeconds) > MAX_SKEW_SECONDS) {
+        if (timestampSeconds < nowSeconds - MAX_SKEW_SECONDS || timestampSeconds > nowSeconds + MAX_SKEW_SECONDS) {
             sendJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "request_expired",
                     "Timestamp outside 300-second window");
             return;
@@ -118,13 +121,6 @@ public class RequestSigningFilter extends OncePerRequestFilter {
         if (nonce == null || nonce.isBlank()) {
             sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "missing_nonce",
                     "X-Elepay-Nonce header required");
-            return;
-        }
-
-        boolean recorded = nonceStore.recordNonceIfAbsent(nonce.trim(), Duration.ofSeconds(MAX_SKEW_SECONDS * 2));
-        if (!recorded) {
-            sendJsonError(response, HttpServletResponse.SC_CONFLICT, "replay_detected",
-                    "Nonce has already been used");
             return;
         }
 
@@ -142,6 +138,20 @@ public class RequestSigningFilter extends OncePerRequestFilter {
         String body = wrappedRequest.getBodyString();
 
         String canonicalPayload = timestampHeader.trim() + "\n" + method + "\n" + path + "\n" + body;
+        String version = request.getHeader("X-Elepay-Signature-Version");
+        boolean v2 = "2".equals(version);
+        if ((requireV2 && !v2) || (version != null && !v2 && !"1".equals(version))) {
+            sendJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "signature_version_required", "Use signature version 2");
+            return;
+        }
+        if (nonce.length() > 128 || !nonce.matches("[A-Za-z0-9._~-]+")) {
+            sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "invalid_nonce", "Invalid nonce");
+            return;
+        }
+        if (v2) {
+            canonicalPayload = canonicalV2(timestampHeader.trim(), method, path, request.getQueryString(),
+                    nonce, request.getHeader("Idempotency-Key"), body);
+        }
         String calculatedSig = hmacSha256(canonicalPayload, signingSecret);
 
         if (!MessageDigest.isEqual(calculatedSig.toLowerCase().getBytes(StandardCharsets.UTF_8),
@@ -151,11 +161,24 @@ public class RequestSigningFilter extends OncePerRequestFilter {
             return;
         }
 
+        // Authenticate first. Legacy signatures are deduplicated even if the unsigned nonce changes.
+        try {
+            String replayKey = com.elepay.common.Idempotency.sha256(v2
+                    ? "v2:" + hmacSha256(nonce, signingSecret) : "v1:" + calculatedSig);
+            if (!nonceStore.recordNonceIfAbsent(replayKey, Duration.ofSeconds(MAX_SKEW_SECONDS * 2 + 1))) {
+                sendJsonError(response, HttpServletResponse.SC_CONFLICT, "replay_detected", "Request has already been used");
+                return;
+            }
+        } catch (RuntimeException unavailable) {
+            sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "replay_store_unavailable", "Retry later with a fresh signed request");
+            return;
+        }
         chain.doFilter(wrappedRequest, response);
     }
 
     private boolean isPublicPath(String path) {
         if (path == null) return false;
+        if (path.matches("/v1/rails/[^/]+/callbacks(?:/.*)?")) return true;
         for (String prefix : PUBLIC_PATH_PREFIXES) {
             if (path.startsWith(prefix)) return true;
         }
@@ -178,7 +201,7 @@ public class RequestSigningFilter extends OncePerRequestFilter {
             }
         }
 
-        return defaultSigningSecret;
+        return apiKeyHeader != null ? null : defaultSigningSecret;
     }
 
     private void sendJsonError(HttpServletResponse response, int status, String code, String message) throws IOException {
@@ -190,6 +213,22 @@ public class RequestSigningFilter extends OncePerRequestFilter {
     public static String computeSignature(String secret, String timestamp, String method, String path, String body) {
         String canonical = timestamp + "\n" + method.toUpperCase() + "\n" + path + "\n" + (body == null ? "" : body);
         return hmacSha256(canonical, secret);
+    }
+
+    public static String computeSignatureV2(String secret, String timestamp, String method, String path,
+                                             String query, String nonce, String idempotencyKey, String body) {
+        return hmacSha256(canonicalV2(timestamp, method.toUpperCase(java.util.Locale.ROOT), path, query,
+                nonce, idempotencyKey, body), secret);
+    }
+
+    static String canonicalV2(String timestamp, String method, String path, String query, String nonce,
+                              String idempotencyKey, String body) {
+        StringBuilder result = new StringBuilder("elepay-request:v2");
+        for (String field : new String[]{timestamp, method, path, query, nonce, idempotencyKey, body}) {
+            String value = field == null ? "" : field;
+            result.append(':').append(value.getBytes(StandardCharsets.UTF_8).length).append(':').append(value);
+        }
+        return result.toString();
     }
 
     public static String hmacSha256(String data, String key) {

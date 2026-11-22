@@ -24,7 +24,7 @@ public class PosCashierService {
             UUID id,
             UUID merchantId,
             String name,
-            String pinHash,
+            @com.fasterxml.jackson.annotation.JsonIgnore String pinHash,
             String badgeNumber,
             boolean isActive,
             OffsetDateTime createdAt

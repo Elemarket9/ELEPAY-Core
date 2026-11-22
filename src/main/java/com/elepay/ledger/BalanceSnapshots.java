@@ -94,14 +94,14 @@ public class BalanceSnapshots {
         long sequenceId = journal.count();
 
         // Version 2: keyed HMAC-SHA-512, so a snapshot cannot be forged without the integrity key.
-        String signature = keys.mac(canonical(snapshotId, acc.id(), acc.currency(), acc.balance(), sequenceId, snapshotAt));
+        String signature = keys.mac(canonicalV3(snapshotId, acc.id(), acc.currency(), acc.balance(), sequenceId, snapshotAt, journal.lastSeq()));
 
         db.sql("""
                 INSERT INTO ledger_account_snapshot
                     (id, account_id, currency, snapshot_balance, journal_entry_sequence_id, snapshot_at, signature,
                      created_at, entry_seq_cutoff, signature_version, signature_key_id)
                 VALUES
-                    (:id, :acc, :curr, :bal, :seq, :at, :sig, :created, :cutoff, 2, :key)""")
+                    (:id, :acc, :curr, :bal, :seq, :at, :sig, :created, :cutoff, 3, :key)""")
                 .param("key", keys.macKeyId())
                 .param("cutoff", journal.lastSeq())
                 .param("id", snapshotId)
@@ -186,8 +186,13 @@ public class BalanceSnapshots {
         record Sig(int version, String keyId) {}
         Sig sigMeta = db.sql("SELECT signature_version, signature_key_id FROM ledger_account_snapshot WHERE id = :id")
                 .param("id", snapshotId).query((rs, i) -> new Sig(rs.getInt(1), rs.getString(2))).single();
+        Long cutoff = db.sql("SELECT entry_seq_cutoff FROM ledger_account_snapshot WHERE id = :id")
+                .param("id", snapshotId).query((rs, i) -> (Long) rs.getObject(1)).single();
         boolean sigMatch;
-        if (sigMeta.version() >= 2) {
+        if (sigMeta.version() == 3) {
+            sigMatch = cutoff != null && keys.verifyMac(sigMeta.keyId(), canonicalV3(row.id(), row.accountId(),
+                    row.currency(), row.snapshotBalance(), row.sequenceId(), row.snapshotAt(), cutoff), row.signature());
+        } else if (sigMeta.version() == 2) {
             sigMatch = keys.verifyMac(sigMeta.keyId(), canonical(row.id(), row.accountId(), row.currency(),
                     row.snapshotBalance(), row.sequenceId(), row.snapshotAt()), row.signature());
         } else {
@@ -202,8 +207,6 @@ public class BalanceSnapshots {
                     "Cryptographic signature mismatch: snapshot was tampered");
         }
 
-        Long cutoff = db.sql("SELECT entry_seq_cutoff FROM ledger_account_snapshot WHERE id = :id")
-                .param("id", snapshotId).query((rs, i) -> (Long) rs.getObject(1)).single();
         // Snapshots taken since V32 carry an exact entry cut-off; older ones fall back to the timestamp.
         long reconstructed = cutoff != null
                 ? db.sql("""
@@ -231,6 +234,12 @@ public class BalanceSnapshots {
                                     OffsetDateTime at) {
         return "elepay-snapshot:v2\n" + id + "\n" + accountId + "\n" + currency.trim() + "\n" + balance + "\n"
                 + sequenceId + "\n" + at.toInstant();
+    }
+
+    private static String canonicalV3(UUID id, long accountId, String currency, long balance, long sequenceId,
+                                      OffsetDateTime at, long cutoff) {
+        return canonical(id, accountId, currency, balance, sequenceId, at).replace("elepay-snapshot:v2", "elepay-snapshot:v3")
+                + "\n" + cutoff;
     }
 
     /** Version 1 (legacy, unkeyed) snapshot signature. */
