@@ -680,3 +680,6 @@ Action required immediately:
    - Worker 4: Milestone 5B (Compliance, Sanctions, PEP, AML, BoG Reporting — Algorithms 040-048)
    - Worker 5: Milestone 6 (Credit, Reliability & Customer Growth — Algorithms 065-072, 081-084, 086-087, 089-094, 096-100)
 3. Each worker must write code and migrations rapidly, commit and push to main as soon as ready without waiting for auditing.
+
+## Follow-up — 2026-11-22T03:52:18Z
+add the 5 subagents to the coding task to complete early

@@ -14,20 +14,20 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 6 | Ledger and money | per-currency FX clearing | Built | `com.elepay.ledger.Ledger#post`, `com.elepay.fx.FxService`, verified in `FxIT`, `LedgerIT` | 65d3279 |
 | 7 | Ledger and money | fee schedule engine | Built | `com.elepay.fees.FeeSchedule`, verified in `FeeScheduleTest`, `WalletTransferFlowIT` | 65d3279 |
 | 8 | Ledger and money | interest and yield accrual | Missing | No verified implementation evidence | — |
-| 9 | Ledger and money | revenue recognition | Built | `com.elepay.checkout.CheckoutService`, `V16__reconciliation_and_treasury.sql`, verified in `MarketplaceCheckoutIT`, `MandateAndReconciliationIT` | HEAD |
+| 9 | Ledger and money | revenue recognition | Built | `com.elepay.checkout.CheckoutService`, `V16__reconciliation_and_treasury.sql`, verified in `MarketplaceCheckoutIT`, `MandateAndReconciliationIT` | 53b229b |
 | 10 | Ledger and money | balance snapshots | Built | `com.elepay.ledger.BalanceSnapshots`, `V13__balance_snapshots.sql`, verified in `BalanceSnapshotsTest`, `WalletTransferFlowIT` | 65d3279 |
-| 11 | Payment processing | exactly-once rail submission | Built | `com.elepay.rails.SimulatedRail`, `com.elepay.checkout.CheckoutService`, verified in `MarketplaceCheckoutIT`, E2E | HEAD |
-| 12 | Payment processing | unknown-outcome recovery | Built | `com.elepay.rails.RailCallbacks#recover`, verified in `MarketplaceCheckoutIT`, E2E | HEAD |
-| 13 | Payment processing | callback state machine | Built | `com.elepay.rails.RailCallbacks`, `SimulatedRail`, verified in `MarketplaceCheckoutIT`, E2E | HEAD |
+| 11 | Payment processing | exactly-once rail submission | Built | `com.elepay.rails.SimulatedRail`, `com.elepay.checkout.CheckoutService`, verified in `MarketplaceCheckoutIT`, E2E | 53b229b |
+| 12 | Payment processing | unknown-outcome recovery | Built | `com.elepay.rails.RailCallbacks#recover`, verified in `MarketplaceCheckoutIT`, E2E | 53b229b |
+| 13 | Payment processing | callback state machine | Built | `com.elepay.rails.RailCallbacks`, `SimulatedRail`, verified in `MarketplaceCheckoutIT`, E2E | 53b229b |
 | 14 | Payment processing | smart routing | Missing | No verified implementation evidence | — |
 | 15 | Payment processing | failover routing | Missing | No verified implementation evidence | — |
 | 16 | Payment processing | network health detection | Missing | No verified implementation evidence | — |
 | 17 | Payment processing | card BIN lookup | Missing | No verified implementation evidence | — |
 | 18 | Payment processing | risk-based 3-D Secure | Missing | No verified implementation evidence | — |
 | 19 | Payment processing | card tokenisation vault | Missing | No verified implementation evidence | — |
-| 20 | Payment processing | recurring billing mandates | Built | `com.elepay.checkout.MandateService`, `V15__mandates_and_dunning.sql`, verified in `MandateAndReconciliationIT` | HEAD |
-| 21 | Payment processing | dunning schedule | Built | `com.elepay.checkout.MandateService#progressDunning`, `V15__mandates_and_dunning.sql`, verified in `MandateAndReconciliationIT` | HEAD |
-| 22 | Payment processing | EMVCo QR encoding | Built | `com.elepay.checkout.EmvcoQr`, verified in `EmvcoQrTest` | HEAD |
+| 20 | Payment processing | recurring billing mandates | Built | `com.elepay.checkout.MandateService`, `V15__mandates_and_dunning.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
+| 21 | Payment processing | dunning schedule | Built | `com.elepay.checkout.MandateService#progressDunning`, `V15__mandates_and_dunning.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
+| 22 | Payment processing | EMVCo QR encoding | Built | `com.elepay.checkout.EmvcoQr`, verified in `EmvcoQrTest` | 53b229b |
 | 23 | Fraud and risk | velocity rules | Missing | No verified implementation evidence | — |
 | 24 | Fraud and risk | risk scoring rules | Missing | No verified implementation evidence | — |
 | 25 | Fraud and risk | device fingerprinting | Missing | No verified implementation evidence | — |
@@ -54,13 +54,13 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 46 | Compliance | case prioritisation | Missing | No verified implementation evidence | — |
 | 47 | Compliance | BoG and FIC reporting | Missing | No verified implementation evidence | — |
 | 48 | Compliance | data retention | Missing | No verified implementation evidence | — |
-| 49 | Reconciliation and treasury | statement matching | Built | `com.elepay.operations.ReconciliationService`, `V16__reconciliation_and_treasury.sql`, verified in `MandateAndReconciliationIT` | HEAD |
+| 49 | Reconciliation and treasury | statement matching | Built | `com.elepay.operations.ReconciliationService`, `V16__reconciliation_and_treasury.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
 | 50 | Reconciliation and treasury | ledger reconstruction | Built | `com.elepay.ledger.Ledger#integrity`, `ledger_account_reconstruction`, verified in `LedgerIT`, `WalletTransferFlowIT` | 65d3279 |
-| 51 | Reconciliation and treasury | settlement batching | Built | `com.elepay.checkout.CheckoutService#settleDue`, verified in `MarketplaceCheckoutIT` | HEAD |
-| 52 | Reconciliation and treasury | fuzzy statement matching | Built | `com.elepay.operations.ReconciliationService#tryFuzzyMatch`, verified in `MandateAndReconciliationIT` | HEAD |
-| 53 | Reconciliation and treasury | provider fee verification | Built | `com.elepay.operations.ReconciliationService#verifyPartnerFee`, verified in `MandateAndReconciliationIT` | HEAD |
-| 54 | Reconciliation and treasury | suspense ageing | Built | `com.elepay.operations.ReconciliationService`, `V16__reconciliation_and_treasury.sql`, verified in `MandateAndReconciliationIT` | HEAD |
-| 55 | Reconciliation and treasury | settlement netting | Built | `com.elepay.checkout.CheckoutService#settleDue`, verified in `MarketplaceCheckoutIT`, `MandateAndReconciliationIT` | HEAD |
+| 51 | Reconciliation and treasury | settlement batching | Built | `com.elepay.checkout.CheckoutService#settleDue`, verified in `MarketplaceCheckoutIT` | 53b229b |
+| 52 | Reconciliation and treasury | fuzzy statement matching | Built | `com.elepay.operations.ReconciliationService#tryFuzzyMatch`, verified in `MandateAndReconciliationIT` | 53b229b |
+| 53 | Reconciliation and treasury | provider fee verification | Built | `com.elepay.operations.ReconciliationService#verifyPartnerFee`, verified in `MandateAndReconciliationIT` | 53b229b |
+| 54 | Reconciliation and treasury | suspense ageing | Built | `com.elepay.operations.ReconciliationService`, `V16__reconciliation_and_treasury.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
+| 55 | Reconciliation and treasury | settlement netting | Built | `com.elepay.checkout.CheckoutService#settleDue`, verified in `MarketplaceCheckoutIT`, `MandateAndReconciliationIT` | 53b229b |
 | 56 | Reconciliation and treasury | float forecasting | Missing | No verified implementation evidence | — |
 | 57 | Reconciliation and treasury | auto-rebalancing | Missing | No verified implementation evidence | — |
 | 58 | Reconciliation and treasury | merchant cash-flow forecasting | Missing | No verified implementation evidence | — |
@@ -82,9 +82,9 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 74 | Security | PIN hashing | Built | `com.elepay.wallet.WalletChannel#checkPin`, verified in `UssdIT` | 65d3279 |
 | 75 | Security | envelope encryption | Missing | No verified implementation evidence | — |
 | 76 | Security | key rotation | Missing | No verified implementation evidence | — |
-| 77 | Security | request signing | Built | `com.elepay.identity.RequestSigningFilter`, verified in `RequestSigningFilterTest` | HEAD |
+| 77 | Security | request signing | Built | `com.elepay.identity.RequestSigningFilter`, verified in `RequestSigningFilterTest` | 53b229b |
 | 78 | Security | JWKS rollover | Missing | No verified implementation evidence | — |
-| 79 | Security | maker-checker | Built | `com.elepay.operations.ReconciliationService#approveClearing`, `Merchants#review`, verified in `MandateAndReconciliationIT`, `E2E Combo 7` | HEAD |
+| 79 | Security | maker-checker | Built | `com.elepay.operations.ReconciliationService#approveClearing`, `Merchants#review`, verified in `MandateAndReconciliationIT`, `E2E Combo 7` | 53b229b |
 | 80 | Security | hash-chained audit | Built | `com.elepay.common.Audit`, `V14__hash_chained_audit.sql`, verified in `AuditTamperEvidentTest`, `WalletTransferFlowIT` | 65d3279 |
 | 81 | Security | admin anomaly detection | Missing | No verified implementation evidence | — |
 | 82 | Security | device binding | Missing | No verified implementation evidence | — |
