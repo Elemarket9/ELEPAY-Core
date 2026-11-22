@@ -1,5 +1,6 @@
 package com.elepay.lending;
 
+import com.elepay.identity.Actor;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
@@ -137,6 +138,8 @@ public class LoanApplicationService {
 
         ScoreCardEvaluation eval = evaluateScoreCard(product, sub);
 
+        // Applicant-supplied turnover is a recommendation, never verified approval.
+        if ("APPROVED".equals(eval.decision())) eval = new ScoreCardEvaluation(eval.score(), eval.riskBand(), eval.maxApprovedPesewas(), "REVIEW_REQUIRED", "Verified turnover and credit review required");
         UUID applicationId = UUID.randomUUID();
         db.sql("""
             INSERT INTO loan_application
@@ -158,6 +161,16 @@ public class LoanApplicationService {
                 eval.score(), eval.maxApprovedPesewas(), eval.riskBand(), eval.reason(),
                 OffsetDateTime.now(), OffsetDateTime.now()
         );
+    }
+
+    @Transactional
+    public LoanApplication approveReviewed(UUID id, String evidenceReference) {
+        Actor actor = Actor.current(); actor.requireOps();
+        if (evidenceReference == null || evidenceReference.isBlank() || evidenceReference.length() > 256) throw new IllegalArgumentException("Verified credit evidence reference required");
+        int changed = db.sql("UPDATE loan_application SET status = 'APPROVED', reviewed_by = ?, review_evidence = ?, decided_at = now() WHERE id = ? AND status = 'REVIEW_REQUIRED' AND max_approved_pesewas > 0")
+                .params(actor.subject(), evidenceReference, id).update();
+        if (changed != 1) throw new IllegalStateException("Application cannot be approved");
+        return getApplication(id).orElseThrow();
     }
 
     public Optional<LoanApplication> getApplication(UUID id) {

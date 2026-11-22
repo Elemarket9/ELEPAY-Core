@@ -1,6 +1,13 @@
 package com.elepay.lending;
 
 import com.elepay.PostgresTestBase;
+import com.elepay.ledger.Ledger;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import java.util.List;
 import java.time.LocalDate;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
@@ -12,6 +19,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class LendingPlatformTest extends PostgresTestBase {
 
+    @Autowired private Ledger ledger;
+    @Autowired private JdbcClient db;
     @Autowired
     private LendingConfigService configService;
 
@@ -54,7 +63,9 @@ public class LendingPlatformTest extends PostgresTestBase {
         );
 
         var app = applicationService.submitAndEvaluate(appSub);
-        assertThat(app.status()).isEqualTo("APPROVED");
+        assertThat(app.status()).isEqualTo("REVIEW_REQUIRED");
+        SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(Jwt.withTokenValue("test").header("alg","none").subject("lending-review-test").build(), List.of(new SimpleGrantedAuthority("ROLE_ops"))));
+        applicationService.approveReviewed(app.id(), "test-verified-turnover");
         assertThat(app.creditScore()).isGreaterThanOrEqualTo(700);
         assertThat(app.riskBand()).isEqualTo("LOW");
         assertThat(app.maxApprovedPesewas()).isEqualTo(1_000_000L);
@@ -88,13 +99,21 @@ public class LendingPlatformTest extends PostgresTestBase {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("LIVE_LENDING_DISABLED");
 
-        // Simulation disbursement succeeds
-        var disbursedContract = contractService.disburse(contract.id(), true);
+        assertThatThrownBy(() -> contractService.disburse(contract.id(), true)).hasMessageContaining("SIMULATIONS_NOT_PERMITTED");
+        ledger.open("merchant", merchantId, "available", Ledger.GHS);
+        ledger.openSystem(LoanContractService.FUNDING, "lending_funding", Ledger.GHS, false);
+        String testSource = ledger.openSystem("system:test_loan_funds:GHS", "clearing", Ledger.GHS, true);
+        ledger.post(Ledger.Posting.of("test-loan-fund", contract.id().toString(), "test_funding",List.of(Ledger.Leg.debit(testSource,1_000_000L),Ledger.Leg.credit(LoanContractService.FUNDING,1_000_000L))));
+        configService.setLiveLendingEnabled(true);
+        var disbursedContract = contractService.disburse(contract.id(), false);
+        configService.setLiveLendingEnabled(false);
+        SecurityContextHolder.clearContext();
         assertThat(disbursedContract.disbursedAt()).isNotNull();
 
         // 5. Automated Sales Sweep Repayments
         // Daily sales batch of 2,000,000 pesewas (20,000 GHS) -> 15% sweep = 300,000 pesewas
-        String batchRef = "SALES-" + UUID.randomUUID().toString().substring(0, 8);
+        db.sql("UPDATE loan_contract SET sweep_mandate = ?, sweep_authorized_by = ? WHERE id = ?").params("fixture-mandate","merchant-owner-fixture",contract.id()).update();
+        String batchRef = ledger.post(Ledger.Posting.of("test-settlement", contract.id().toString(), "settlement", List.of(Ledger.Leg.debit(testSource,2_000_000L),Ledger.Leg.credit(Ledger.code("merchant",merchantId,"available",Ledger.GHS),2_000_000L)))).transactionId().toString();
         var sweepResult = sweepService.executeSweep(contract.id(), 2_000_000L, batchRef);
         assertThat(sweepResult.sweptAmountPesewas()).isEqualTo(300_000L);
         assertThat(sweepResult.remainingTotalDebtPesewas()).isLessThan(contract.totalRepaymentPesewas());

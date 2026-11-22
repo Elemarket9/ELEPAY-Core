@@ -1,5 +1,9 @@
 package com.elepay.lending;
 
+import com.elepay.ledger.Ledger;
+import com.elepay.merchant.MerchantAccess;
+import java.math.BigInteger;
+import java.util.ArrayList;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -12,10 +16,14 @@ public class RepaymentSweepService {
 
     private final JdbcClient db;
     private final LoanContractService contractService;
+    private final Ledger ledger;
+    private final MerchantAccess merchants;
 
-    public RepaymentSweepService(JdbcClient db, LoanContractService contractService) {
+    public RepaymentSweepService(JdbcClient db, LoanContractService contractService, Ledger ledger, MerchantAccess merchants) {
         this.db = db;
         this.contractService = contractService;
+        this.ledger = ledger;
+        this.merchants = merchants;
     }
 
     public record SweepResult(
@@ -32,7 +40,17 @@ public class RepaymentSweepService {
     ) {}
 
     @Transactional
+    public void authorizeSweep(UUID contractId, String acceptedMandateReference) {
+        var contract = contractService.getContract(contractId).orElseThrow();
+        var access = merchants.require(contract.borrowerId(), MerchantAccess.Permission.MANAGE);
+        access.actor().requireUser();
+        if (!"owner".equals(access.role()) || acceptedMandateReference == null || acceptedMandateReference.isBlank() || acceptedMandateReference.length() > 256) throw new IllegalArgumentException("Merchant owner and accepted mandate evidence required");
+        db.sql("UPDATE loan_contract SET sweep_mandate = ?, sweep_authorized_by = ? WHERE id = ?").params(acceptedMandateReference, access.actor().subject(), contractId).update();
+    }
+
+    @Transactional
     public SweepResult executeSweep(UUID contractId, long salesBatchAmountPesewas, String externalReference) {
+        db.sql("SELECT id FROM loan_contract WHERE id = ? FOR UPDATE").param(contractId).query(UUID.class).single();
         var contract = contractService.getContract(contractId)
                 .orElseThrow(() -> new IllegalArgumentException("Contract not found: " + contractId));
 
@@ -44,7 +62,14 @@ public class RepaymentSweepService {
             throw new IllegalStateException("Contract has no daily sweep configured (daily_sweep_bps = 0)");
         }
 
-        long calculatedSweep = Math.round(salesBatchAmountPesewas * (contract.dailySweepBps() / 10000.0));
+        if (contract.disbursedAt() == null || db.sql("SELECT count(*) FROM loan_transaction WHERE contract_id = ? AND transaction_type = 'DISBURSEMENT' AND journal_tx IS NOT NULL").param(contractId).query(Long.class).single() != 1) throw new IllegalStateException("Loan has no verified disbursement");
+        if (db.sql("SELECT count(*) FROM loan_contract WHERE id = ? AND sweep_mandate IS NOT NULL AND sweep_authorized_by IS NOT NULL").param(contractId).query(Long.class).single() != 1) throw new IllegalStateException("Sweep mandate required");
+        UUID settlement = UUID.fromString(externalReference);
+        String borrower = contractService.borrowerAccount(contract);
+        long verifiedSales = ledger.entries(settlement).stream().filter(e -> e.kind().equals("settlement") && e.account().equals(borrower) && e.amount() > 0 && Ledger.GHS.equals(e.currency())).mapToLong(Ledger.Entry::amount).reduce(0L, Math::addExact);
+        if (verifiedSales <= 0 || verifiedSales != salesBatchAmountPesewas) throw new IllegalArgumentException("Settlement evidence does not match sales amount");
+        if (db.sql("SELECT count(*) FROM loan_transaction WHERE settlement_evidence = ?").param(settlement).query(Long.class).single() != 0) throw new IllegalStateException("Settlement already swept");
+        long calculatedSweep = BigInteger.valueOf(verifiedSales).multiply(BigInteger.valueOf(contract.dailySweepBps())).divide(BigInteger.valueOf(10000)).longValueExact();
         long totalDebt = contract.outstandingPenaltiesPesewas() + contract.outstandingFeesPesewas()
                 + contract.outstandingInterestPesewas() + contract.outstandingPrincipalPesewas();
 
@@ -53,7 +78,8 @@ public class RepaymentSweepService {
             return new SweepResult(null, contractId, salesBatchAmountPesewas, 0L, 0L, 0L, 0L, 0L, 0L, "CLOSED");
         }
 
-        long actualSweep = Math.min(totalDebt, calculatedSweep);
+        long actualSweep = Math.min(Math.min(totalDebt, calculatedSweep), ledger.balance(borrower));
+        if (actualSweep <= 0) return new SweepResult(null, contractId, verifiedSales, 0L, 0L, 0L, 0L, 0L, totalDebt, contract.status());
         long remainingSweep = actualSweep;
 
         // 1. Allocate to penalties
@@ -79,6 +105,13 @@ public class RepaymentSweepService {
         long remainingTotal = newPenalties + newFees + newInterest + newPrincipal;
         String newStatus = remainingTotal == 0 ? "CLOSED" : contract.status();
 
+        ledger.openSystem(LoanContractService.FUNDING, "lending_funding", Ledger.GHS, false);
+        List<Ledger.Leg> legs = new ArrayList<>();
+        legs.add(Ledger.Leg.debit(borrower, actualSweep));
+        if (principalAlloc > 0) legs.add(Ledger.Leg.credit(LoanContractService.FUNDING, principalAlloc));
+        long income = Math.addExact(Math.addExact(interestAlloc, feeAlloc), penaltyAlloc);
+        if (income > 0) legs.add(Ledger.Leg.credit(Ledger.REVENUE, income));
+        var posted = ledger.post(Ledger.Posting.of("loan-sweep", settlement.toString(), "loan_repayment", legs).relatedTo(settlement));
         db.sql("""
             UPDATE loan_contract
             SET outstanding_penalties_pesewas = ?,
@@ -100,10 +133,10 @@ public class RepaymentSweepService {
         db.sql("""
             INSERT INTO loan_transaction
             (id, contract_id, transaction_type, amount_pesewas, principal_component_pesewas,
-             interest_component_pesewas, fee_component_pesewas, penalty_component_pesewas, reference, notes)
-            VALUES (?, ?, 'REPAYMENT_SWEEP', ?, ?, ?, ?, ?, ?, ?)
+             interest_component_pesewas, fee_component_pesewas, penalty_component_pesewas, reference, notes, journal_tx, settlement_evidence)
+            VALUES (?, ?, 'REPAYMENT_SWEEP', ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """).params(txnId, contractId, actualSweep, principalAlloc, interestAlloc, feeAlloc, penaltyAlloc, ref,
-                "Automated daily sales sweep: " + contract.dailySweepBps() + " bps on sales batch " + salesBatchAmountPesewas)
+                "Authorized ledger-backed settlement sweep", posted.transactionId(), settlement)
         .update();
 
         return new SweepResult(txnId, contractId, salesBatchAmountPesewas, actualSweep,

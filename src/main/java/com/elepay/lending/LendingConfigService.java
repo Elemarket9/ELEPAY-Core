@@ -27,7 +27,8 @@ public class LendingConfigService {
     }
 
     public void assertPermitted(boolean isSimulation) {
-        if (!isSimulation && !isLiveLendingEnabled()) {
+        if (isSimulation) throw new IllegalStateException("SIMULATIONS_NOT_PERMITTED");
+        if (!isLiveLendingEnabled()) {
             throw new IllegalStateException("LIVE_LENDING_DISABLED: Lending live operations are disabled by policy until regulatory clearance.");
         }
     }

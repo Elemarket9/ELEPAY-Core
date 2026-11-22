@@ -1,5 +1,7 @@
 package com.elepay.lending;
 
+import com.elepay.ledger.Ledger;
+import com.elepay.identity.Actor;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -16,11 +18,15 @@ public class LoanContractService {
     private final JdbcClient db;
     private final LoanProductService productService;
     private final LendingConfigService configService;
+    private final Ledger ledger;
+    public static final String FUNDING = "system:lending_funding:GHS";
 
-    public LoanContractService(JdbcClient db, LoanProductService productService, LendingConfigService configService) {
+
+    public LoanContractService(JdbcClient db, LoanProductService productService, LendingConfigService configService, Ledger ledger) {
         this.db = db;
         this.productService = productService;
         this.configService = configService;
+        this.ledger = ledger;
     }
 
     public record Installment(
@@ -70,7 +76,7 @@ public class LoanContractService {
         var app = db.sql("""
             SELECT id, applicant_id, product_id, max_approved_pesewas, tenor_days, status
             FROM loan_application
-            WHERE id = ?
+            WHERE id = ? FOR UPDATE
         """).param(applicationId)
         .query((rs, rowNum) -> new Object() {
             UUID id = rs.getObject("id", UUID.class);
@@ -85,6 +91,9 @@ public class LoanContractService {
             throw new IllegalStateException("Application is not approved: " + app.status);
         }
 
+        if (db.sql("SELECT count(*) FROM loan_contract WHERE application_id = ?").param(applicationId).query(Long.class).single() != 0) {
+            throw new IllegalStateException("A contract already exists for this application");
+        }
         var product = productService.getProductById(app.productId)
                 .orElseThrow(() -> new IllegalArgumentException("Product not found: " + app.productId));
 
@@ -153,7 +162,8 @@ public class LoanContractService {
     @Transactional
     public LoanContract disburse(UUID contractId, boolean isSimulation) {
         configService.assertPermitted(isSimulation);
-
+        Actor.current().requireOps();
+        db.sql("SELECT id FROM loan_contract WHERE id = ? FOR UPDATE").param(contractId).query(UUID.class).single();
         LoanContract contract = getContract(contractId)
                 .orElseThrow(() -> new IllegalArgumentException("Contract not found: " + contractId));
 
@@ -161,17 +171,25 @@ public class LoanContractService {
             throw new IllegalStateException("Contract already disbursed on " + contract.disbursedAt());
         }
 
-        long netDisbursement = contract.principalPesewas() - contract.originationFeePesewas();
+        if (!"ACTIVE".equals(contract.status())) throw new IllegalStateException("Loan is not active");
+        if (db.sql("SELECT count(*) FROM loan_application WHERE id = ? AND reviewed_by IS NOT NULL AND review_evidence IS NOT NULL AND status = 'APPROVED'")
+                .param(contract.applicationId()).query(Long.class).single() != 1) throw new IllegalStateException("Verified credit review required");
+        String borrower = borrowerAccount(contract);
+        ledger.openSystem(FUNDING, "lending_funding", Ledger.GHS, false);
+        // Origination fee is due on repayment as specified by the schedule; do not deduct it twice.
+        long netDisbursement = contract.principalPesewas();
+        var posted = ledger.post(Ledger.Posting.of("loan-disbursement", contractId.toString(), "loan_disbursement", List.of(
+                Ledger.Leg.debit(FUNDING, netDisbursement), Ledger.Leg.credit(borrower, netDisbursement))));
         UUID txnId = UUID.randomUUID();
         String txnRef = "TXN-DSB-" + contract.contractReference();
 
         db.sql("""
             INSERT INTO loan_transaction
             (id, contract_id, transaction_type, amount_pesewas, principal_component_pesewas,
-             interest_component_pesewas, fee_component_pesewas, penalty_component_pesewas, reference, notes)
-            VALUES (?, ?, 'DISBURSEMENT', ?, ?, 0, ?, 0, ?, ?)
+             interest_component_pesewas, fee_component_pesewas, penalty_component_pesewas, reference, notes, journal_tx)
+            VALUES (?, ?, 'DISBURSEMENT', ?, ?, 0, 0, 0, ?, ?, ?)
         """).params(txnId, contractId, netDisbursement, contract.principalPesewas(),
-                contract.originationFeePesewas(), txnRef, "Loan disbursement net of upfront origination fee")
+                txnRef, "Prefunded loan principal credited to borrower; fee due on repayment", posted.transactionId())
         .update();
 
         db.sql("""
@@ -181,6 +199,14 @@ public class LoanContractService {
         """).param(contractId).update();
 
         return getContract(contractId).orElseThrow();
+    }
+
+    String borrowerAccount(LoanContract contract) {
+        String type = db.sql("SELECT applicant_type FROM loan_application WHERE id = ?").param(contract.applicationId()).query(String.class).single();
+        String owner = switch (type) { case "MERCHANT" -> "merchant"; case "CUSTOMER" -> "customer"; default -> throw new IllegalStateException("Unsupported borrower type"); };
+        String code = Ledger.code(owner, contract.borrowerId(), "available", Ledger.GHS);
+        if (ledger.account(code).isEmpty()) throw new IllegalStateException("Borrower has no enrolled ledger account");
+        return code;
     }
 
     public Optional<LoanContract> getContract(UUID contractId) {
