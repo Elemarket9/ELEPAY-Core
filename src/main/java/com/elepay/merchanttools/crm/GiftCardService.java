@@ -110,7 +110,8 @@ public class GiftCardService {
         }
 
         String providedHash = hashPin(cardCode, rawPin);
-        if (!providedHash.equals(expectedHash)) {
+        if (!java.security.MessageDigest.isEqual(providedHash.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                expectedHash.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
             throw new IllegalArgumentException("Invalid gift card PIN");
         }
 

@@ -34,10 +34,14 @@ public class Webhooks implements OutboxConsumer {
     private final RestClient http;
     private final boolean enabled;
 
-    Webhooks(JdbcClient db, @Value("${elepay.outbox.enabled:true}") boolean enabled) {
+    private final com.elepay.common.OutboundUrlGuard guard;
+
+    Webhooks(JdbcClient db, @Value("${elepay.outbox.enabled:true}") boolean enabled,
+             com.elepay.common.OutboundUrlGuard guard) {
         this.db = db;
         this.enabled = enabled;
-        var factory = new SimpleClientHttpRequestFactory();
+        this.guard = guard;
+        var factory = noRedirects();
         factory.setConnectTimeout(Duration.ofSeconds(5));
         factory.setReadTimeout(Duration.ofSeconds(10));
         this.http = RestClient.builder().requestFactory(factory).build();
@@ -47,6 +51,7 @@ public class Webhooks implements OutboxConsumer {
 
     @Transactional
     public Endpoint register(UUID merchantId, String url) {
+        guard.validate(url);
         byte[] bytes = new byte[24];
         new SecureRandom().nextBytes(bytes);
         var endpoint = new Endpoint(UUID.randomUUID(), url, "whsec_" + HexFormat.of().formatHex(bytes), true);
@@ -63,6 +68,7 @@ public class Webhooks implements OutboxConsumer {
 
     public void registerEndpoint(UUID id, UUID merchantId, String url, String secret, String environment,
                                  String description, List<String> eventTypes) {
+        guard.validate(url);
         db.sql("""
                 INSERT INTO webhook_endpoint (id, merchant_id, url, secret, active, environment, description, event_types)
                 VALUES (:id, :m, :url, :secret, true, :env, :desc, :events)""")
@@ -99,6 +105,7 @@ public class Webhooks implements OutboxConsumer {
 
     public boolean updateEndpoint(UUID merchantId, UUID id, String url, List<String> eventTypes, Boolean active,
                                   String description) {
+        if (url != null) guard.validate(url);
         StringBuilder sql = new StringBuilder("UPDATE webhook_endpoint SET updated_at = now() ");
         if (url != null) sql.append(", url = :url ");
         if (eventTypes != null) sql.append(", event_types = :events ");
@@ -116,6 +123,11 @@ public class Webhooks implements OutboxConsumer {
     public boolean setSecret(UUID merchantId, UUID id, String secret) {
         return db.sql("UPDATE webhook_endpoint SET secret = :secret, updated_at = now() WHERE id = :id AND merchant_id = :m")
                 .param("secret", secret).param("id", id).param("m", merchantId).update() > 0;
+    }
+
+    /** Why ELEPAY refuses to call this URL, or null when it may. */
+    public String destinationProblem(String url) {
+        return guard.problem(url);
     }
 
     /** Health counters shown in the developer portal. */
@@ -169,7 +181,10 @@ public class Webhooks implements OutboxConsumer {
         for (Pending p : batch) {
             Integer status = null;
             String error = null;
-            try {
+            String unsafe = guard.problem(p.url());
+            if (unsafe != null) {
+                error = "Blocked destination: " + unsafe;
+            } else try {
                 long t = System.currentTimeMillis() / 1000;
                 status = http.post().uri(p.url())
                         .header("Content-Type", "application/json")
@@ -193,6 +208,18 @@ public class Webhooks implements OutboxConsumer {
             if (!ok) log.info("Webhook {} to {} failed: {} {}", p.event(), p.url(), status, error);
         }
         return delivered;
+    }
+
+    /** Redirects are never followed: a public URL must not bounce a delivery to an internal address. */
+    public static SimpleClientHttpRequestFactory noRedirects() {
+        return new SimpleClientHttpRequestFactory() {
+            @Override
+            protected void prepareConnection(java.net.HttpURLConnection connection, String httpMethod)
+                    throws java.io.IOException {
+                super.prepareConnection(connection, httpMethod);
+                connection.setInstanceFollowRedirects(false);
+            }
+        };
     }
 
     public static String sign(String secret, String payload) {

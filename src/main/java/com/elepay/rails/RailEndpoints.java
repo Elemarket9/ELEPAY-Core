@@ -60,19 +60,38 @@ public class RailEndpoints {
                 customerId = UUID.fromString(actor.subject());
             } catch (Exception ignored) {}
         }
+        if (actor == null) throw ApiException.forbidden("Sign in to save a card");
         return vault.tokenize(new CardTokenVault.CardInput(
-                req.pan(), req.expiryMonth(), req.expiryYear(), req.cardholderName(), req.cvv(), customerId
+                req.pan(), req.expiryMonth(), req.expiryYear(), req.cardholderName(), req.cvv(), customerId,
+                ownerKey(actor)
         ));
+    }
+
+    /** Who owns a card token: the signed-in user, or the merchant behind an API key. */
+    static String ownerKey(Actor actor) {
+        return actor.isApiKey() ? "merchant:" + actor.apiKeyMerchant() : actor.subject();
+    }
+
+    /** Only the owner (or operations) can see or revoke a card token; others get 404, not a hint it exists. */
+    private void requireOwner(String token) {
+        Actor actor = Actor.current();
+        if (actor.isOps()) return;
+        String owner = vault.ownerOf(token).orElse(null);
+        if (owner == null || !owner.equals(ownerKey(actor))) {
+            throw ApiException.notFound("token_not_found", "Card token not found");
+        }
     }
 
     @GetMapping("/v1/rails/card/tokens/{token}")
     public CardTokenVault.TokenizedCard getToken(@PathVariable String token) {
+        requireOwner(token);
         return vault.findByToken(token)
                 .orElseThrow(() -> ApiException.notFound("token_not_found", "Card token not found"));
     }
 
     @DeleteMapping("/v1/rails/card/tokens/{token}")
     public Map<String, String> revokeToken(@PathVariable String token) {
+        requireOwner(token);
         vault.revoke(token);
         return Map.of("status", "revoked", "token", token);
     }

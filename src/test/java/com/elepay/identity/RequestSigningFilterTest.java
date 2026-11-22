@@ -61,6 +61,27 @@ class RequestSigningFilterTest {
     }
 
     @Test
+    @DisplayName("Without a configured secret, a signed request is refused rather than checked against a known key")
+    void signatureWithoutConfiguredSecretIsRefused() throws ServletException, IOException {
+        var unconfigured = new RequestSigningFilter("", false, nonceStore, apiKeys);
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/checkout/orders");
+        String body = "{}";
+        request.setContent(body.getBytes());
+        String timestamp = String.valueOf(Instant.now().getEpochSecond());
+        // Signed with the secret earlier releases shipped as a default.
+        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, RequestSigningFilter.computeSignature(
+                "elepay-default-signing-secret-key-32b", timestamp, "POST", "/v1/checkout/orders", body));
+        request.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, timestamp);
+        request.addHeader(RequestSigningFilter.HEADER_NONCE, "nonce-" + UUID.randomUUID());
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+        unconfigured.doFilter(request, response, chain);
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+        assertThat(response.getContentAsString()).contains("signing_not_configured");
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
     @DisplayName("Missing timestamp header returns 400 Bad Request")
     void missingTimestampRejected() throws ServletException, IOException {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/checkout/orders");

@@ -189,7 +189,8 @@ public class StepUpAuthService {
         String expectedHash = rec.secretCodeHash;
         String actualHash = hashCode(secretCode);
 
-        if (!expectedHash.equals(actualHash)) {
+        if (!java.security.MessageDigest.isEqual(expectedHash.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                actualHash.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
             int newAttempts = rec.attempts + 1;
             String newStatus = newAttempts >= rec.maxAttempts ? "FAILED" : "PENDING";
             db.sql("UPDATE risk_step_up_challenges SET attempts = :attempts, status = :status WHERE id = :id")
