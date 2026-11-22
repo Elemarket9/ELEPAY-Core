@@ -22,13 +22,6 @@ interface InventoryItem {
   reorderPoint: number; unitCostPesewas: number; location: string; lastRestocked: string;
 }
 
-// Restaurant & KDS
-interface DiningTable { id: number; name: string; seats: number; status: "AVAILABLE" | "OCCUPIED" | "RESERVED" | "BILLING"; server?: string; orderTotal?: number }
-interface KdsTicket {
-  id: string; ticketNumber: number; table: string; items: { name: string; qty: number; notes?: string }[];
-  status: "PENDING" | "COOKING" | "READY" | "SERVED"; elapsedMinutes: number; createdAt: string;
-}
-
 // Invoices & Quotes
 interface Invoice {
   id: string; number: string; customerName: string; customerContact: string;
@@ -50,7 +43,7 @@ interface CustomerProfile {
 }
 
 const TABS = [
-  "Overview", "POS Register", "Orders & Receipts", "Inventory & Stock", "Restaurant & KDS",
+  "Overview", "POS Register", "Orders & Receipts", "Inventory & Stock",
   "Invoices & Quotes", "Payroll & Employees", "Customers & Loyalty", "Business Accounting",
   "Transactions", "Settlements", "Refunds", "Disputes", "Payouts", "Collect"
 ] as const;
@@ -86,7 +79,6 @@ export function MerchantDashboard() {
           {tab === "POS Register" && <PosRegister merchant={merchant} />}
           {tab === "Orders & Receipts" && <OrdersAndReceipts merchantId={merchant.id} />}
           {tab === "Inventory & Stock" && <InventoryAndStock merchantId={merchant.id} />}
-          {tab === "Restaurant & KDS" && <RestaurantAndKds merchantId={merchant.id} />}
           {tab === "Invoices & Quotes" && <InvoicesAndQuotes merchantId={merchant.id} />}
           {tab === "Payroll & Employees" && <PayrollAndEmployees merchantId={merchant.id} />}
           {tab === "Customers & Loyalty" && <CustomersAndLoyalty merchantId={merchant.id} />}
@@ -541,154 +533,6 @@ function InventoryAndStock({ merchantId: _mId }: { merchantId: string }) {
               <button onClick={() => executeRestock()}>Confirm Restock (+{addQty})</button>
               <button className="secondary" onClick={() => setRestockItem(null)}>Cancel</button>
             </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// -------------------------------------------------------------------------------------------------
-// 4. Restaurant Floor & KDS View
-// -------------------------------------------------------------------------------------------------
-const SAMPLE_TABLES: DiningTable[] = [
-  { id: 1, name: "Table 1", seats: 2, status: "OCCUPIED", server: "Kofi", orderTotal: 8500 },
-  { id: 2, name: "Table 2", seats: 4, status: "AVAILABLE" },
-  { id: 3, name: "Table 3", seats: 4, status: "BILLING", server: "Ama", orderTotal: 14500 },
-  { id: 4, name: "Table 4", seats: 6, status: "OCCUPIED", server: "Kofi", orderTotal: 22000 },
-  { id: 5, name: "Table 5", seats: 2, status: "RESERVED" },
-  { id: 6, name: "Table 6", seats: 8, status: "AVAILABLE" },
-];
-
-const SAMPLE_KDS: KdsTicket[] = [
-  {
-    id: "t1", ticketNumber: 104, table: "Table 1", elapsedMinutes: 8, status: "COOKING", createdAt: "12:14 PM",
-    items: [{ name: "Jollof Rice with Grilled Chicken", qty: 2 }, { name: "Sobolo Drink", qty: 2 }]
-  },
-  {
-    id: "t2", ticketNumber: 105, table: "Table 4", elapsedMinutes: 22, status: "PENDING", createdAt: "12:00 PM",
-    items: [{ name: "Grilled Tilapia with Banku", qty: 2, notes: "Extra spicy shito" }, { name: "Crispy Fried Yam", qty: 2 }]
-  },
-  {
-    id: "t3", ticketNumber: 106, table: "Table 3", elapsedMinutes: 5, status: "READY", createdAt: "12:17 PM",
-    items: [{ name: "Kelewele & Peanuts", qty: 3 }]
-  },
-];
-
-function RestaurantAndKds({ merchantId: _mId }: { merchantId: string }) {
-  const [subTab, setSubTab] = useState<"floor" | "kds">("floor");
-  const [tables, setTables] = useState<DiningTable[]>(SAMPLE_TABLES);
-  const [tickets, setTickets] = useState<KdsTicket[]>(SAMPLE_KDS);
-
-  function advanceTicket(id: string) {
-    setTickets((prev) => prev.map((t) => {
-      if (t.id === id) {
-        const nextStatus = t.status === "PENDING" ? "COOKING" : t.status === "COOKING" ? "READY" : "SERVED";
-        return { ...t, status: nextStatus };
-      }
-      return t;
-    }));
-  }
-
-  return (
-    <div>
-      <div className="flex-row" style={{ marginBottom: "1rem" }}>
-        <button className={subTab === "floor" ? "" : "secondary"} onClick={() => setSubTab("floor")}>
-          🍽️ Table Floor Plan
-        </button>
-        <button className={subTab === "kds" ? "" : "secondary"} onClick={() => setSubTab("kds")}>
-          👨‍🍳 Kitchen Display System (KDS)
-        </button>
-      </div>
-
-      {subTab === "floor" && (
-        <div>
-          <h3>Restaurant Dining Floor Layout</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "1rem", marginTop: ".8rem" }}>
-            {tables.map((t) => (
-              <div
-                key={t.id}
-                style={{
-                  border: "1px solid var(--line)", borderRadius: "8px", padding: "1rem",
-                  background: "#fff", borderLeft: `6px solid ${
-                    t.status === "AVAILABLE" ? "#0b5d3b" : t.status === "OCCUPIED" ? "#f5c542" : t.status === "BILLING" ? "#a12a1f" : "#1a73e8"
-                  }`
-                }}
-              >
-                <div className="flex-between">
-                  <strong>{t.name}</strong>
-                  <span className={`tag ${t.status === "AVAILABLE" ? "active" : t.status === "OCCUPIED" ? "pending" : "failed"}`}>
-                    {t.status}
-                  </span>
-                </div>
-                <div className="muted small" style={{ margin: ".4rem 0" }}>Capacity: {t.seats} Guests</div>
-                {t.server && <div className="small">Server: <strong>{t.server}</strong></div>}
-                {t.orderTotal && <div className="big" style={{ fontSize: "1.2rem", marginTop: ".3rem" }}>{formatMoney(t.orderTotal)}</div>}
-                <div style={{ marginTop: ".8rem" }}>
-                  {t.status === "AVAILABLE" ? (
-                    <button className="small" onClick={() => setTables(tables.map((x) => x.id === t.id ? { ...x, status: "OCCUPIED", server: "Kwame" } : x))}>
-                      Seat Guests
-                    </button>
-                  ) : t.status === "OCCUPIED" ? (
-                    <button className="small secondary" onClick={() => setTables(tables.map((x) => x.id === t.id ? { ...x, status: "BILLING" } : x))}>
-                      Request Bill
-                    </button>
-                  ) : (
-                    <button className="small" onClick={() => setTables(tables.map((x) => x.id === t.id ? { ...x, status: "AVAILABLE", server: undefined, orderTotal: undefined } : x))}>
-                      Clear Table
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {subTab === "kds" && (
-        <div>
-          <div className="flex-between">
-            <h3>Kitchen Display System (KDS) Real-Time Tickets</h3>
-            <span className="muted small">Auto-refreshes · Live cooking orders</span>
-          </div>
-
-          <div className="kds-grid">
-            {tickets.map((tk) => {
-              const isUrgent = tk.elapsedMinutes >= 20;
-              return (
-                <div key={tk.id} className={`kds-card ${isUrgent ? "urgent" : tk.status === "COOKING" ? "cooking" : ""}`}>
-                  <div className="flex-between">
-                    <div>
-                      <strong>#{tk.ticketNumber} · {tk.table}</strong>
-                      <div className="small muted">{tk.createdAt}</div>
-                    </div>
-                    <span className={`tag ${isUrgent ? "failed" : "pending"}`}>
-                      ⏱️ {tk.elapsedMinutes} mins
-                    </span>
-                  </div>
-
-                  <hr style={{ border: "0", borderTop: "1px solid var(--line)", margin: ".5rem 0" }} />
-
-                  <ul style={{ paddingLeft: "1.2rem", margin: ".5rem 0" }}>
-                    {tk.items.map((it, i) => (
-                      <li key={i} style={{ margin: ".3rem 0" }}>
-                        <strong>{it.qty}x</strong> {it.name}
-                        {it.notes && <div className="small" style={{ color: "#a12a1f" }}>Note: {it.notes}</div>}
-                      </li>
-                    ))}
-                  </ul>
-
-                  <div className="flex-between" style={{ marginTop: "1rem" }}>
-                    <span className="tag info">{tk.status}</span>
-                    {tk.status !== "SERVED" && (
-                      <button className="small" onClick={() => advanceTicket(tk.id)}>
-                        {tk.status === "PENDING" ? "Start Cooking" : tk.status === "COOKING" ? "Mark Ready" : "Served"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
           </div>
         </div>
       )}

@@ -172,7 +172,7 @@ Extending ELEPAY into a comprehensive, independent financial and business manage
 
 | Stream | Name | Domains Covered | Scope / Package | Migration | Status |
 |---|---|---|---|---|---|
-| S1 | In-Store Commerce & POS | Domains 1, 3, 4: ELEPAY POS, Inventory & Warehouses, Restaurant & KDS | `com.elepay.pos`, `com.elepay.inventory`, `com.elepay.restaurant` | `V22__pos_inventory_restaurant.sql` | IN_PROGRESS |
+| S1 | In-Store Commerce & POS | Domains 1, 3: ELEPAY POS, Inventory & Warehouses (Restaurant & KDS removed in `V27__remove_restaurant.sql`) | `com.elepay.pos`, `com.elepay.inventory` | `V22__pos_inventory_restaurant.sql` | IN_PROGRESS |
 | S2 | Business Accounting, Invoicing, Payroll & CRM | Domains 5, 6, 7: Merchant GL, Invoices, AR/AP, Payroll, Statutory Deductions, CRM, Loyalty, Gift Cards | `com.elepay.accounting`, `com.elepay.payroll`, `com.elepay.crm` | `V23__accounting_payroll_crm.sql` | DONE (commit: e1ff7bc) |
 | S3 | Fintech Expansion | Domains 8, 9, 10, 11: Lending Lifecycle, Bill Payments (Airtime/Utilities), Card Issuing, Agent Banking | `com.elepay.lending`, `com.elepay.bills`, `com.elepay.cards`, `com.elepay.agents` | `V24__fintech_expansion.sql` | DONE (commit: 105d86e) |
 | S4 | Developer Platform & Responsive Web | Domains 2, 12, 13: BackOffice, Developer Portal, Webhook Replay, WooCommerce Plugin, Wallet/Merchant/Ops/Checkout UI | `com.elepay.developer`, `web/src/` | `V25__developer_portal.sql` | COMPLETED |
