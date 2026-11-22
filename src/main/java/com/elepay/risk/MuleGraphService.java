@@ -83,28 +83,33 @@ public class MuleGraphService {
 
     @Transactional
     public MuleNodeAssessment assessAccount(String accountId, boolean incrementRapidDrain, OffsetDateTime now) {
-        // Query in-degree & total inflow
+        // Query in-degree & total inflow within bounded 30-day window
+        OffsetDateTime window30d = now.minusDays(30);
         var inStats = db.sql("""
             SELECT COUNT(DISTINCT source_account_id) AS in_degree,
                    COALESCE(SUM(amount_minor_units), 0) AS total_inflow
             FROM risk_mule_edges
             WHERE destination_account_id = :acc
+              AND transferred_at >= :window
         """)
                 .param("acc", accountId)
+                .param("window", window30d)
                 .query((rs, rowNum) -> new Object() {
                     int inDegree = rs.getInt("in_degree");
                     long totalInflow = rs.getLong("total_inflow");
                 })
                 .single();
 
-        // Query out-degree & total outflow
+        // Query out-degree & total outflow within bounded 30-day window
         var outStats = db.sql("""
             SELECT COUNT(DISTINCT destination_account_id) AS out_degree,
                    COALESCE(SUM(amount_minor_units), 0) AS total_outflow
             FROM risk_mule_edges
             WHERE source_account_id = :acc
+              AND transferred_at >= :window
         """)
                 .param("acc", accountId)
+                .param("window", window30d)
                 .query((rs, rowNum) -> new Object() {
                     int outDegree = rs.getInt("out_degree");
                     long totalOutflow = rs.getLong("total_outflow");
@@ -205,5 +210,66 @@ public class MuleGraphService {
                 isSuspect,
                 factors
         );
+    }
+
+    /**
+     * Lists suspected money mules with bounded pagination to prevent unbounded full-table memory scans.
+     */
+    public List<MuleNodeAssessment> listSuspects(int page, int pageSize) {
+        int boundedPage = Math.max(0, page);
+        int boundedPageSize = Math.min(100, Math.max(1, pageSize));
+        int offset = boundedPage * boundedPageSize;
+
+        return db.sql("""
+            SELECT account_id, in_degree, out_degree, total_inflow_minor_units,
+                   total_outflow_minor_units, drain_ratio, rapid_passthrough_count,
+                   mule_score, is_mule_suspect, last_assessed_at
+            FROM risk_mule_nodes
+            WHERE is_mule_suspect = true
+            ORDER BY mule_score DESC, last_assessed_at DESC
+            LIMIT :limit OFFSET :offset
+        """)
+                .param("limit", boundedPageSize)
+                .param("offset", offset)
+                .query((rs, rowNum) -> new MuleNodeAssessment(
+                        rs.getString("account_id"),
+                        rs.getInt("in_degree"),
+                        rs.getInt("out_degree"),
+                        rs.getLong("total_inflow_minor_units"),
+                        rs.getLong("total_outflow_minor_units"),
+                        rs.getDouble("drain_ratio"),
+                        rs.getInt("rapid_passthrough_count"),
+                        rs.getInt("mule_score"),
+                        rs.getBoolean("is_mule_suspect"),
+                        List.of("FLAGGED_AS_SUSPECT")
+                ))
+                .list();
+    }
+
+    /**
+     * Lists recent transaction flows for an account with bounded limit and offset.
+     */
+    public List<TransactionFlow> listRecentFlows(String accountId, int limit, int offset) {
+        int boundedLimit = Math.min(100, Math.max(1, limit));
+        int boundedOffset = Math.max(0, offset);
+
+        return db.sql("""
+            SELECT source_account_id, destination_account_id, amount_minor_units, currency, transferred_at
+            FROM risk_mule_edges
+            WHERE source_account_id = :acc OR destination_account_id = :acc
+            ORDER BY transferred_at DESC
+            LIMIT :limit OFFSET :offset
+        """)
+                .param("acc", accountId)
+                .param("limit", boundedLimit)
+                .param("offset", boundedOffset)
+                .query((rs, rowNum) -> new TransactionFlow(
+                        rs.getString("source_account_id"),
+                        rs.getString("destination_account_id"),
+                        rs.getLong("amount_minor_units"),
+                        rs.getString("currency"),
+                        rs.getObject("transferred_at", OffsetDateTime.class)
+                ))
+                .list();
     }
 }

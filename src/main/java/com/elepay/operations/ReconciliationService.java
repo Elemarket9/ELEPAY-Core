@@ -16,6 +16,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.*;
@@ -107,12 +109,14 @@ public class ReconciliationService {
     public UploadResult uploadAndReconcile(@Valid @RequestBody StatementUploadRequest request) {
         Actor actor = Actor.current();
         actor.requireOps();
+        UUID actorUuid = resolveActorUuid(actor.subject());
 
         UUID uploadId = UUID.randomUUID();
         db.sql("""
-                INSERT INTO statement_upload (id, rail, filename, uploaded_at)
-                VALUES (:id, :rail, :filename, now())""")
-                .param("id", uploadId).param("rail", request.rail()).param("filename", request.filename()).update();
+                INSERT INTO statement_upload (id, rail, filename, uploaded_at, uploaded_by)
+                VALUES (:id, :rail, :filename, now(), :by)""")
+                .param("id", uploadId).param("rail", request.rail()).param("filename", request.filename())
+                .param("by", actorUuid).update();
 
         int matchedExact = 0;
         int matchedFuzzy = 0;
@@ -155,8 +159,8 @@ public class ReconciliationService {
                 }
             }
 
-            // 3. Algorithm 053: Partner fee verification against contracted schedules
-            if (verifyPartnerFee(lineId, request.rail(), line)) {
+            // 3. Algorithm 053: Partner fee verification against contracted schedules for matched lines
+            if (matched && verifyPartnerFee(lineId, request.rail(), line)) {
                 feeDiscrepancies++;
             }
         }
@@ -208,6 +212,69 @@ public class ReconciliationService {
         return true;
     }
 
+    public record PartnerFeeSchedule(
+            String rail,
+            int feeBps,
+            long fixedFeePesewas,
+            Long capPesewas,
+            int version
+    ) {}
+
+    private static final Map<String, PartnerFeeSchedule> DEFAULT_FEE_SCHEDULES = Map.of(
+            "mtn", new PartnerFeeSchedule("mtn", 100, 0, 1000L, 1),
+            "telecel", new PartnerFeeSchedule("telecel", 75, 0, null, 1),
+            "airteltigo", new PartnerFeeSchedule("airteltigo", 75, 0, null, 1),
+            "ghipss", new PartnerFeeSchedule("ghipss", 0, 50, null, 1)
+    );
+
+    public PartnerFeeSchedule getFeeSchedule(String rail) {
+        String r = rail.toLowerCase();
+        try {
+            Boolean exists = db.sql("SELECT to_regclass('public.partner_fee_schedule') IS NOT NULL")
+                    .query(Boolean.class).single();
+            if (Boolean.TRUE.equals(exists)) {
+                var row = db.sql("""
+                        SELECT rail, fee_bps, fixed_fee_pesewas, cap_pesewas, version
+                        FROM partner_fee_schedule
+                        WHERE lower(rail) = :r OR :r LIKE ('%' || lower(rail) || '%')
+                        ORDER BY version DESC LIMIT 1""")
+                        .param("r", r)
+                        .query((rs, i) -> new PartnerFeeSchedule(
+                                rs.getString(1),
+                                rs.getInt(2),
+                                rs.getLong(3),
+                                rs.getObject(4) != null ? rs.getLong(4) : null,
+                                rs.getInt(5)
+                        )).optional();
+                if (row.isPresent()) {
+                    return row.get();
+                }
+            }
+        } catch (Exception ignored) {
+            // Table check failed, fall back to versioned in-code configuration
+        }
+        for (var entry : DEFAULT_FEE_SCHEDULES.entrySet()) {
+            if (r.contains(entry.getKey())) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    public static long calculateExpectedFee(PartnerFeeSchedule schedule, long amount) {
+        long fee = schedule.fixedFeePesewas();
+        if (schedule.feeBps() > 0) {
+            BigDecimal bpsFee = BigDecimal.valueOf(amount)
+                    .multiply(BigDecimal.valueOf(schedule.feeBps()))
+                    .divide(BigDecimal.valueOf(10000), 0, RoundingMode.HALF_EVEN);
+            fee += bpsFee.longValueExact();
+        }
+        if (schedule.capPesewas() != null && fee > schedule.capPesewas()) {
+            fee = schedule.capPesewas();
+        }
+        return fee;
+    }
+
     private boolean tryFuzzyMatch(UUID lineId, String rail, StatementLineInput line) {
         if (line.externalReference() == null || line.externalReference().isBlank()) return false;
         String ref = line.externalReference().trim();
@@ -236,18 +303,70 @@ public class ReconciliationService {
             boolean amountMatch = Math.abs(candAmount - line.amountPesewas()) <= 200; // within 2 GHS tolerance
             boolean timeMatch = line.transactionTime() == null || Math.abs(Duration.between(line.transactionTime(), candTime).toHours()) <= 24;
 
-            if (refMatch && (amountMatch || timeMatch)) {
+            // Algorithm 052: Both amount and time must match in addition to reference match
+            if (refMatch && amountMatch && timeMatch) {
                 UUID matchId = UUID.randomUUID();
                 db.sql("""
                         INSERT INTO reconciliation_match (id, statement_line_id, internal_reference, match_type, confidence, matched_at)
-                        VALUES (:id, :lid, :ref, 'FUZZY', 85.00, now())""")
+                        VALUES (:id, :lid, :ref, 'PROPOSED_MATCH', 85.00, now())""")
                         .param("id", matchId).param("lid", lineId).param("ref", candRef).update();
 
-                db.sql("UPDATE statement_line SET match_status = 'MATCHED' WHERE id = :id").param("id", lineId).update();
+                db.sql("UPDATE statement_line SET match_status = 'PROPOSED_MATCH' WHERE id = :id").param("id", lineId).update();
+                ops.raise("proposed_match", "medium", "reconciliation:" + lineId,
+                        Map.of("lineId", lineId.toString(), "matchId", matchId.toString(),
+                                "statementRef", ref, "candidateRef", candRef,
+                                "amountPesewas", line.amountPesewas(), "candidateAmount", candAmount,
+                                "status", "PROPOSED_MATCH"));
                 return true;
             }
         }
         return false;
+    }
+
+    @PostMapping("/reconciliation/matches/{matchId}/approve")
+    @Transactional
+    public Map<String, Object> approveFuzzyMatch(@PathVariable UUID matchId) {
+        Actor actor = Actor.current();
+        actor.requireOps();
+
+        var matchOpt = db.sql("""
+                SELECT rm.id, rm.statement_line_id, rm.internal_reference, rm.match_type,
+                       sl.match_status, su.uploaded_by
+                FROM reconciliation_match rm
+                JOIN statement_line sl ON sl.id = rm.statement_line_id
+                JOIN statement_upload su ON su.id = sl.upload_id
+                WHERE rm.id = :id FOR UPDATE""")
+                .param("id", matchId)
+                .query((rs, i) -> Map.of(
+                        "id", rs.getObject(1, UUID.class),
+                        "lineId", rs.getObject(2, UUID.class),
+                        "ref", rs.getString(3),
+                        "matchType", rs.getString(4),
+                        "status", rs.getString(5),
+                        "uploadedBy", rs.getObject(6, UUID.class) != null ? rs.getObject(6, UUID.class) : UUID.randomUUID()
+                )).optional();
+
+        if (matchOpt.isEmpty()) {
+            throw ApiException.notFound("Reconciliation match not found");
+        }
+        var match = matchOpt.get();
+        if (!"PROPOSED_MATCH".equalsIgnoreCase((String) match.get("status"))) {
+            throw ApiException.conflict("match_not_proposed", "Match is not in PROPOSED_MATCH state");
+        }
+
+        UUID actorUuid = resolveActorUuid(actor.subject());
+        if (actorUuid.equals(match.get("uploadedBy"))) {
+            throw ApiException.forbidden("Maker cannot approve their own proposed fuzzy match");
+        }
+
+        UUID lineId = (UUID) match.get("lineId");
+        db.sql("UPDATE statement_line SET match_status = 'MATCHED' WHERE id = :id").param("id", lineId).update();
+        db.sql("UPDATE reconciliation_match SET match_type = 'FUZZY_APPROVED' WHERE id = :id").param("id", matchId).update();
+
+        audit.record(actor.subject(), "reconciliation.fuzzy_approved", "match:" + matchId,
+                Map.of("lineId", lineId.toString(), "approvedBy", actor.subject()));
+
+        return Map.of("matchId", matchId, "status", "MATCHED");
     }
 
     private boolean checkCommercialRecordExists(String purpose, UUID purposeId, UUID railTxId) {
@@ -268,31 +387,29 @@ public class ReconciliationService {
     }
 
     /**
-     * Algorithm 053: Partner fee verification against contracted schedules:
-     * - MTN: 1% capped at 1000 pesewas
-     * - Telecel: 0.75%
-     * - GHIPSS: flat 50 pesewas
+     * Algorithm 053: Partner fee verification against versioned fee matrices.
+     * Computes integer minor units with banker's rounding without truncation.
+     * Detects both overcharges and undercharges.
      */
     private boolean verifyPartnerFee(UUID lineId, String rail, StatementLineInput line) {
-        long amount = line.amountPesewas();
-        long actualFee = line.feePesewas();
-        long expectedFee = 0;
-
-        String r = rail.toLowerCase();
-        if (r.contains("mtn")) {
-            expectedFee = Math.min(1000L, (amount * 100) / 10000);
-        } else if (r.contains("telecel")) {
-            expectedFee = (amount * 75) / 10000;
-        } else if (r.contains("ghipss")) {
-            expectedFee = 50L;
-        } else {
+        PartnerFeeSchedule schedule = getFeeSchedule(rail);
+        if (schedule == null) {
             return false;
         }
+
+        long amount = line.amountPesewas();
+        long actualFee = line.feePesewas();
+        long expectedFee = calculateExpectedFee(schedule, amount);
 
         if (actualFee > expectedFee) {
             ops.raise("partner_fee_overcharge", "medium", "reconciliation:" + lineId,
                     Map.of("rail", rail, "amount", amount, "actualFee", actualFee, "expectedFee", expectedFee,
-                            "overcharge", actualFee - expectedFee));
+                            "discrepancy", actualFee - expectedFee, "type", "overcharge", "version", schedule.version()));
+            return true;
+        } else if (actualFee < expectedFee) {
+            ops.raise("partner_fee_undercharge", "low", "reconciliation:" + lineId,
+                    Map.of("rail", rail, "amount", amount, "actualFee", actualFee, "expectedFee", expectedFee,
+                            "discrepancy", expectedFee - actualFee, "type", "undercharge", "version", schedule.version()));
             return true;
         }
         return false;
@@ -377,7 +494,23 @@ public class ReconciliationService {
         Actor actor = Actor.current();
         actor.requireOps();
 
-        var item = getSuspenseItem(id);
+        var itemOpt = db.sql("""
+                SELECT id, source, amount_pesewas, currency, reason, status, proposed_by,
+                       proposed_action, proposed_target_account, approved_by, created_at, resolved_at,
+                       CASE
+                           WHEN created_at >= now() - interval '30 days' THEN '0-30 days'
+                           WHEN created_at >= now() - interval '60 days' THEN '31-60 days'
+                           WHEN created_at >= now() - interval '90 days' THEN '61-90 days'
+                           ELSE '90+ days'
+                       END AS aging_bucket
+                FROM suspense_item WHERE id = :id FOR UPDATE""")
+                .param("id", id)
+                .query(ReconciliationService::mapSuspense).optional();
+
+        if (itemOpt.isEmpty()) {
+            throw ApiException.notFound("Suspense item not found");
+        }
+        var item = itemOpt.get();
         if (!"PROPOSED".equalsIgnoreCase(item.status())) {
             throw ApiException.conflict("suspense_not_proposed", "Suspense item is not proposed for clearing");
         }
@@ -388,11 +521,14 @@ public class ReconciliationService {
             throw ApiException.forbidden("Maker cannot approve their own suspense resolution proposal");
         }
 
-        // Post clearing entry in double-entry ledger
+        // Post clearing entry in double-entry ledger using currency-specific suspense account
         if (item.proposedTargetAccount() != null && !item.proposedTargetAccount().isBlank()) {
             long amt = item.amountPesewas();
+            String cur = item.currency() != null ? item.currency().toUpperCase() : Ledger.GHS;
+            String suspenseAccount = "platform:suspense:" + cur.toLowerCase();
+            ledger.openSystem(suspenseAccount, "suspense", cur, true);
             ledger.post(Ledger.Posting.of("suspense-clearing", id.toString(), "suspense_clearing", List.of(
-                    Leg.debit(Ledger.SUSPENSE, amt),
+                    Leg.debit(suspenseAccount, amt),
                     Leg.credit(item.proposedTargetAccount(), amt)
             )).describedAs("Suspense clearing for item " + id));
         }

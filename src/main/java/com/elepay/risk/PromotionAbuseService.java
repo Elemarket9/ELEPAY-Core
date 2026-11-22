@@ -63,7 +63,7 @@ public class PromotionAbuseService {
 
         // 2. Cycle detection in referral graph: does refereeId already point back to referrerId?
         if (!circular) {
-            circular = detectsGraphCycle(edge.refereeId(), edge.referrerId(), new HashSet<>());
+            circular = detectsGraphCycle(edge.refereeId(), edge.referrerId());
             if (circular) {
                 abuseScore += 80;
                 anomalies.add("CIRCULAR_REFERRAL_CYCLE_DETECTED");
@@ -161,30 +161,38 @@ public class PromotionAbuseService {
     }
 
     /**
-     * Traverses edges starting from startNode to see if targetNode is reachable (indicating a cycle).
+     * Algorithm 031: Detects referral cycles using a single bounded PostgreSQL WITH RECURSIVE query,
+     * completely eliminating recursive N+1 Java-to-DB roundtrips and stack/heap exhaustion.
      */
-    private boolean detectsGraphCycle(String currentNode, String targetNode, Set<String> visited) {
+    private boolean detectsGraphCycle(String currentNode, String targetNode) {
+        if (currentNode == null || targetNode == null) {
+            return false;
+        }
         if (currentNode.equalsIgnoreCase(targetNode)) {
             return true;
         }
-        if (!visited.add(currentNode)) {
-            return false;
-        }
 
-        List<String> nextNodes = db.sql("""
-            SELECT referee_id FROM risk_referral_graph
-            WHERE referrer_id = :node
-            LIMIT 20
+        Integer cycleFound = db.sql("""
+            WITH RECURSIVE referral_path AS (
+                SELECT referee_id, 1 AS depth
+                FROM risk_referral_graph
+                WHERE lower(referrer_id) = lower(:startNode)
+                UNION
+                SELECT g.referee_id, p.depth + 1
+                FROM risk_referral_graph g
+                JOIN referral_path p ON lower(g.referrer_id) = lower(p.referee_id)
+                WHERE p.depth < 8
+            )
+            SELECT 1 FROM referral_path
+            WHERE lower(referee_id) = lower(:targetNode)
+            LIMIT 1
         """)
-                .param("node", currentNode)
-                .query(String.class)
-                .list();
+                .param("startNode", currentNode)
+                .param("targetNode", targetNode)
+                .query(Integer.class)
+                .optional()
+                .orElse(null);
 
-        for (String next : nextNodes) {
-            if (detectsGraphCycle(next, targetNode, visited)) {
-                return true;
-            }
-        }
-        return false;
+        return cycleFound != null;
     }
 }

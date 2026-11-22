@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.Period;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -100,8 +101,15 @@ public class SyntheticIdentityService {
             inconsistencies.add("PHONE_NUMBER_SHARED: Phone number seen on another national ID");
         }
 
-        // 3. Newly issued ID on older adult profile
-        int ageYears = profile.dateOfBirth() != null ? (LocalDate.now().getYear() - profile.dateOfBirth().getYear()) : 0;
+        // 3. Newly issued ID on older adult profile and invalid birth dates
+        LocalDate today = LocalDate.now();
+        if (profile.dateOfBirth() != null && profile.dateOfBirth().isAfter(today)) {
+            score += 60;
+            inconsistencies.add("FUTURE_DATE_OF_BIRTH: Date of birth is in the future");
+        }
+        int ageYears = profile.dateOfBirth() != null && !profile.dateOfBirth().isAfter(today)
+                ? Period.between(profile.dateOfBirth(), today).getYears()
+                : 0;
         if (profile.isNewNationalIdIssue() && ageYears >= 35) {
             score += 15;
             inconsistencies.add("NEW_ID_ON_MATURE_PROFILE: First-time national ID issuance on mature adult");

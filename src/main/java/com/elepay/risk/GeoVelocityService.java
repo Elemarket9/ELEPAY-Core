@@ -65,6 +65,12 @@ public class GeoVelocityService {
 
     @Transactional
     public GeoVelocityResult checkAndRecord(String actorId, String referenceId, GeoLocation currentLocation) {
+        if (currentLocation.latitude() < -90.0 || currentLocation.latitude() > 90.0 ||
+            currentLocation.longitude() < -180.0 || currentLocation.longitude() > 180.0) {
+            throw new IllegalArgumentException("Invalid geographic coordinates: lat " +
+                    currentLocation.latitude() + ", lon " + currentLocation.longitude());
+        }
+
         OffsetDateTime now = currentLocation.recordedAt() != null ? currentLocation.recordedAt() : OffsetDateTime.now();
 
         // Retrieve latest previous location
@@ -134,15 +140,63 @@ public class GeoVelocityService {
         double acc2 = currentLocation.accuracyRadiusMeters() != null ? currentLocation.accuracyRadiusMeters() / 1000.0 : 0.0;
         double effectiveDistanceKm = Math.max(0.0, distanceKm - (acc1 + acc2));
 
-        long seconds = Math.max(1, Duration.between(prev.recordedAt(), now).getSeconds());
-        double hours = seconds / 3600.0;
-        double speedKmh = effectiveDistanceKm / hours;
+        long deltaMillis = Duration.between(prev.recordedAt(), now).toMillis();
+
+        // 1. Handle negative time deltas (clock skew or out-of-order events)
+        if (deltaMillis < 0) {
+            if (effectiveDistanceKm > 30.0) {
+                return new GeoVelocityResult(
+                        distanceKm,
+                        0.0,
+                        0.0,
+                        true,
+                        currentLocation.isVpn(),
+                        RiskDecision.REJECT,
+                        String.format("Impossible out-of-order travel: location shift of %.1f km with negative time delta (%d ms)",
+                                effectiveDistanceKm, deltaMillis)
+                );
+            }
+            return new GeoVelocityResult(
+                    distanceKm,
+                    0.0,
+                    0.0,
+                    false,
+                    currentLocation.isVpn(),
+                    RiskDecision.ALLOW,
+                    "Simultaneous or local reordered location event"
+            );
+        }
+
+        // 2. Handle subsecond bursts (< 1000 ms) preventing division by zero and false velocity spikes
+        double hours;
+        double speedKmh;
+        if (deltaMillis < 1000L) {
+            if (effectiveDistanceKm > 15.0) {
+                return new GeoVelocityResult(
+                        distanceKm,
+                        Math.max(0.0001, deltaMillis / 3_600_000.0),
+                        9999.0,
+                        true,
+                        currentLocation.isVpn(),
+                        RiskDecision.REJECT,
+                        String.format("Impossible instantaneous travel: %.1f km in %d ms", effectiveDistanceKm, deltaMillis)
+                );
+            }
+            // Cellular jitter / local burst: suppress artificial velocity spike
+            hours = Math.max(0.0001, deltaMillis / 3_600_000.0);
+            speedKmh = 0.0;
+        } else {
+            hours = deltaMillis / 3_600_000.0;
+            speedKmh = effectiveDistanceKm / hours;
+        }
 
         boolean impossible = false;
         RiskDecision decision = RiskDecision.ALLOW;
         String explanation;
 
-        if (currentLocation.isVpn() || prev.isVpn()) {
+        if (speedKmh == 0.0 && deltaMillis < 1000L) {
+            explanation = String.format("Subsecond location update (cellular jitter / burst: %.1f km in %d ms)", effectiveDistanceKm, deltaMillis);
+        } else if (currentLocation.isVpn() || prev.isVpn()) {
             if (speedKmh > MAX_COMMERCIAL_SPEED_KMH) {
                 decision = RiskDecision.STEP_UP;
                 explanation = String.format("Geo-velocity anomaly (%.1f km/h across %.1f km), likely VPN IP shift", speedKmh, distanceKm);

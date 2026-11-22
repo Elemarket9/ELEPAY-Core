@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -15,7 +16,58 @@ import java.util.UUID;
 @Service
 public class ChargebackPredictionService {
 
-    private static final long FIXED_CHARGEBACK_FEE_MINOR_UNITS = 1_500L; // 15.00 GHS partner dispute fee
+    private static final Map<String, Long> CURRENCY_DISPUTE_FEES = Map.of(
+            "GHS", 1_500L,       // 15.00 GHS in pesewas
+            "USD", 1_500L,       // 15.00 USD in cents
+            "EUR", 1_500L,       // 15.00 EUR in cents
+            "GBP", 1_200L,       // 12.00 GBP in pence
+            "NGN", 500_000L,     // 5,000.00 NGN in kobo
+            "KES", 150_000L,     // 1,500.00 KES in cents
+            "ZAR", 25_000L       // 250.00 ZAR in cents
+    );
+
+    public long getDisputeFeeForCurrency(String currency) {
+        if (currency == null || currency.isBlank()) {
+            return 1_500L;
+        }
+        String cur = currency.toUpperCase().trim();
+        Long fee = CURRENCY_DISPUTE_FEES.get(cur);
+        if (fee != null) {
+            return fee;
+        }
+        // Try looking up dynamic FX rate from fx_rate_source (GHS -> target currency)
+        try {
+            Double rate = db.sql("""
+                    SELECT mid_rate FROM fx_rate_source
+                    WHERE source_currency = 'GHS' AND destination_currency = :cur
+                    ORDER BY captured_at DESC LIMIT 1""")
+                    .param("cur", cur)
+                    .query(Double.class)
+                    .optional()
+                    .orElse(null);
+            if (rate != null && rate > 0) {
+                return Math.round(1_500L * rate);
+            }
+        } catch (Exception ignored) {
+            // DB table might not exist or empty
+        }
+        return 1_500L;
+    }
+
+    public long getHighAmountThresholdMinorUnits(String currency) {
+        if (currency == null || currency.isBlank() || "GHS".equalsIgnoreCase(currency)) {
+            return 500_000L; // 5,000 GHS
+        }
+        String cur = currency.toUpperCase().trim();
+        return switch (cur) {
+            case "USD", "EUR" -> 35_000L; // $350.00 in cents
+            case "GBP" -> 30_000L;        // £300.00 in pence
+            case "NGN" -> 50_000_000L;    // 500,000 NGN in kobo
+            case "KES" -> 5_000_000L;     // 50,000 KES in cents
+            case "ZAR" -> 600_000L;       // 6,000 ZAR in cents
+            default -> 500_000L;
+        };
+    }
 
     private final JdbcClient db;
 
@@ -94,8 +146,8 @@ public class ChargebackPredictionService {
             z += 0.7;
         }
 
-        // High amount effect
-        if (profile.amountMinorUnits() > 500_000L) { // > 5,000 GHS
+        // High amount effect calibrated per currency
+        if (profile.amountMinorUnits() > getHighAmountThresholdMinorUnits(profile.currency())) {
             z += 0.5;
         }
 
@@ -104,7 +156,8 @@ public class ChargebackPredictionService {
         probability = Math.max(0.0001, Math.min(0.9999, probability));
 
         // Expected financial loss = P(chargeback) * (Amount + ChargebackFee)
-        long totalExposureMinorUnits = profile.amountMinorUnits() + FIXED_CHARGEBACK_FEE_MINOR_UNITS;
+        long disputeFee = getDisputeFeeForCurrency(profile.currency());
+        long totalExposureMinorUnits = profile.amountMinorUnits() + disputeFee;
         long expectedLoss = Math.round(probability * totalExposureMinorUnits);
 
         SettlementAction action;
@@ -112,12 +165,12 @@ public class ChargebackPredictionService {
 
         if (probability >= 0.15) {
             action = SettlementAction.HOLD_AND_REVIEW;
-            explanation = String.format("Critical dispute probability (%.2f%%). Expected loss: %d minor units. Settlement held pending review",
-                    probability * 100, expectedLoss);
+            explanation = String.format("Critical dispute probability (%.2f%%). Expected loss: %d %s minor units (dispute fee: %d). Settlement held pending review",
+                    probability * 100, expectedLoss, profile.currency(), disputeFee);
         } else if (probability >= 0.06) {
             action = SettlementAction.REQUIRE_RESERVE;
-            explanation = String.format("Elevated dispute probability (%.2f%%). Expected loss: %d minor units. Rolling reserve allocation required",
-                    probability * 100, expectedLoss);
+            explanation = String.format("Elevated dispute probability (%.2f%%). Expected loss: %d %s minor units (dispute fee: %d). Rolling reserve allocation required",
+                    probability * 100, expectedLoss, profile.currency(), disputeFee);
         } else if (probability >= 0.02) {
             action = SettlementAction.DELAY_SETTLEMENT;
             explanation = String.format("Moderate dispute probability (%.2f%%). Delaying settlement payout by 48h observation window",
