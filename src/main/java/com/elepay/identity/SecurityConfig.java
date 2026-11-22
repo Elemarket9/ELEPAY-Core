@@ -51,7 +51,7 @@ class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/v1/ussd/**").permitAll()
                         .requestMatchers("/dev/token").permitAll()
                         .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**", "/pay/**", "/favicon.svg",
-                                "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**").permitAll()
+                                "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**", "/developer", "/developer/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter())))
                 .addFilterBefore(requestSigningFilter, BearerTokenAuthenticationFilter.class)

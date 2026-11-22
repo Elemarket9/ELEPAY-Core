@@ -1,0 +1,122 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 3,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "title": "Ledger Zero-Sum Integrity Status",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "elepay_ledger_integrity_status",
+          "legendFormat": "Integrity (1=Healthy, 0=Drift)"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "id": 2,
+      "title": "Ledger Drift (Minor Units)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "elepay_ledger_drift_minor_units",
+          "legendFormat": "Drift Minor Units"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 3,
+      "title": "Unbalanced Journal Postings",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "elepay_ledger_unbalanced_postings",
+          "legendFormat": "Unbalanced Postings"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "id": 4,
+      "title": "HikariCP Active vs Idle Database Connections",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "hikaricp_connections_active{pool='ElepayHikariPool'}",
+          "legendFormat": "Active Connections"
+        },
+        {
+          "expr": "hikaricp_connections_idle{pool='ElepayHikariPool'}",
+          "legendFormat": "Idle Connections"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "id": 5,
+      "title": "HikariCP Connection Pending Threads & Timeout",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "hikaricp_connections_pending{pool='ElepayHikariPool'}",
+          "legendFormat": "Threads Awaiting Connection"
+        },
+        {
+          "expr": "rate(hikaricp_connections_timeout_total{pool='ElepayHikariPool'}[5m])",
+          "legendFormat": "Connection Timeouts/s"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["elepay", "ledger", "database", "health"],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "title": "ELEPAY - Ledger Health & Database HA",
+  "uid": "elepay-ledger-health",
+  "version": 1
+}

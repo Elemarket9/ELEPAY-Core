@@ -12,7 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Merchant developer API keys. Only a SHA-256 hash of the secret is stored;
- * the plaintext is returned once at creation.
+ * the plaintext is returned once at creation along with its dynamic signing secret.
  */
 @Service
 public class ApiKeys {
@@ -23,12 +23,17 @@ public class ApiKeys {
         this.db = db;
     }
 
-    public record Created(UUID id, String prefix, String secret, List<String> scopes) {
+    public record Created(UUID id, String prefix, String secret, List<String> scopes, String signingSecret) {
+        public Created(UUID id, String prefix, String secret, List<String> scopes) {
+            this(id, prefix, secret, scopes, null);
+        }
+
         @com.fasterxml.jackson.annotation.JsonProperty("apiKey")
         public String apiKey() {
             return secret;
         }
     }
+
     public record Listed(UUID id, String prefix, String label, List<String> scopes,
                          java.time.OffsetDateTime createdAt, java.time.OffsetDateTime revokedAt) {}
 
@@ -44,14 +49,21 @@ public class ApiKeys {
         RANDOM.nextBytes(bytes);
         String prefix = "ek_" + HexFormat.of().formatHex(bytes, 0, 4);
         String secret = prefix + "_" + HexFormat.of().formatHex(bytes, 4, 24);
+
+        // Dynamic Cryptographically Secure Signing Secret (32 bytes = 256 bits of entropy)
+        byte[] signingBytes = new byte[32];
+        RANDOM.nextBytes(signingBytes);
+        String signingSecret = "sec_" + HexFormat.of().formatHex(signingBytes);
+
         UUID id = UUID.randomUUID();
         db.sql("""
-                INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes)
-                VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes)""")
+                INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes, signing_secret)
+                VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes, :signing_secret)""")
                 .param("id", id).param("prefix", prefix).param("hash", Idempotency.sha256(secret))
                 .param("merchant", merchantId).param("label", label).param("by", createdBy)
-                .param("scopes", scopes.stream().distinct().sorted().toArray(String[]::new)).update();
-        return new Created(id, prefix, secret, scopes.stream().distinct().sorted().toList());
+                .param("scopes", scopes.stream().distinct().sorted().toArray(String[]::new))
+                .param("signing_secret", signingSecret).update();
+        return new Created(id, prefix, secret, scopes.stream().distinct().sorted().toList(), signingSecret);
     }
 
     public List<Listed> list(UUID merchantId) {
@@ -69,12 +81,28 @@ public class ApiKeys {
                 .param("id", id).param("m", merchantId).update() == 1;
     }
 
-    Optional<ApiKeyAuthentication> authenticate(String secret) {
+    public Optional<ApiKeyAuthentication> authenticate(String secret) {
         if (secret == null || !secret.startsWith("ek_") || secret.length() > 100) return Optional.empty();
-        return db.sql("SELECT id, merchant_id, scopes FROM api_credential WHERE secret_hash = :hash AND revoked_at IS NULL")
+        return db.sql("SELECT id, merchant_id, scopes, signing_secret FROM api_credential WHERE secret_hash = :hash AND revoked_at IS NULL")
                 .param("hash", Idempotency.sha256(secret))
                 .query((rs, i) -> new ApiKeyAuthentication(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class),
-                        java.util.Set.of((String[]) rs.getArray(3).getArray())))
+                        java.util.Set.of((String[]) rs.getArray(3).getArray()), rs.getString(4)))
+                .optional();
+    }
+
+    public Optional<String> getSigningSecretForCredential(UUID credentialId) {
+        if (credentialId == null) return Optional.empty();
+        return db.sql("SELECT signing_secret FROM api_credential WHERE id = :id AND revoked_at IS NULL")
+                .param("id", credentialId)
+                .query((rs, i) -> rs.getString(1))
+                .optional();
+    }
+
+    public Optional<String> getSigningSecretForApiKey(String apiKey) {
+        if (apiKey == null || !apiKey.startsWith("ek_") || apiKey.length() > 100) return Optional.empty();
+        return db.sql("SELECT signing_secret FROM api_credential WHERE secret_hash = :hash AND revoked_at IS NULL")
+                .param("hash", Idempotency.sha256(apiKey))
+                .query((rs, i) -> rs.getString(1))
                 .optional();
     }
 }

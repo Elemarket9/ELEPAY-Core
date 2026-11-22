@@ -1,0 +1,78 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "title": "Financial Transaction Throughput (req/s)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(elepay_financial_throughput_total[1m])) by (operation, status)",
+          "legendFormat": "{{operation}} - {{status}}"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "title": "Financial Monetary Volume (Minor Units/s)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(elepay_financial_volume_minor_units_total[1m])) by (currency)",
+          "legendFormat": "{{currency}}"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "title": "Transaction Success vs Failure Ratio",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(elepay_financial_throughput_total{status='success'}[5m])) / sum(rate(elepay_financial_throughput_total[5m])) * 100",
+          "legendFormat": "Success Rate %"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["elepay", "finance", "throughput"],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "title": "ELEPAY - Financial Throughput & Volume",
+  "uid": "elepay-financial-throughput",
+  "version": 1
+}

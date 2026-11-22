@@ -2,137 +2,222 @@ package com.elepay.identity;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
-@DisplayName("Algorithm 077: Request Signing & Replay Protection")
 class RequestSigningFilterTest {
 
-    private static final String SECRET = "test-secret-key-for-request-signing-32b!";
+    private DistributedNonceStore nonceStore;
+    private ApiKeys apiKeys;
     private RequestSigningFilter filter;
-    private FilterChain chain;
+    private final String globalSecret = "global-test-signing-secret-32bytes!";
 
     @BeforeEach
-    void setup() {
-        filter = new RequestSigningFilter(SECRET);
-        chain = mock(FilterChain.class);
+    void setUp() {
+        nonceStore = new DistributedNonceStore(null, null);
+        apiKeys = mock(ApiKeys.class);
+        filter = new RequestSigningFilter(globalSecret, false, nonceStore, apiKeys);
     }
 
     @Test
-    @DisplayName("Unsigned request passes through unchanged")
-    void unsignedRequestPasses() throws ServletException, IOException {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v1/merchants");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        filter.doFilter(request, response, chain);
-        verify(chain, times(1)).doFilter(any(), any());
-        assertEquals(200, response.getStatus());
-    }
-
-    @Test
-    @DisplayName("Valid signed request with timestamp and nonce passes verification")
-    void validSignedRequestPasses() throws ServletException, IOException {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/merchants/payouts");
-        String body = "{\"amount\":10000}";
+    @DisplayName("Valid signature with fresh timestamp and unique nonce passes through filter")
+    void validSignaturePasses() throws ServletException, IOException {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/checkout/orders");
+        String body = "{\"amount\":1000,\"currency\":\"GHS\"}";
         request.setContent(body.getBytes());
 
         String timestamp = String.valueOf(Instant.now().getEpochSecond());
-        String nonce = UUID.randomUUID().toString();
-        String sig = RequestSigningFilter.computeSignature(SECRET, timestamp, "POST", "/v1/merchants/payouts", body);
+        String nonce = "nonce-" + UUID.randomUUID();
+        String signature = RequestSigningFilter.computeSignature(globalSecret, timestamp, "POST", "/v1/checkout/orders", body);
 
-        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, sig);
+        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, signature);
         request.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, timestamp);
         request.addHeader(RequestSigningFilter.HEADER_NONCE, nonce);
 
         MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
         filter.doFilter(request, response, chain);
 
-        verify(chain, times(1)).doFilter(any(), any());
-        assertEquals(200, response.getStatus());
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(chain.getRequest()).isNotNull();
     }
 
     @Test
-    @DisplayName("Expired timestamp outside 300s window is rejected with 401")
+    @DisplayName("Missing timestamp header returns 400 Bad Request")
+    void missingTimestampRejected() throws ServletException, IOException {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/checkout/orders");
+        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, "some-signature");
+        request.addHeader(RequestSigningFilter.HEADER_NONCE, "nonce-1");
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_BAD_REQUEST);
+        assertThat(response.getContentAsString()).contains("missing_timestamp");
+    }
+
+    @Test
+    @DisplayName("Timestamp older than 300s window returns 401 Unauthorized")
     void expiredTimestampRejected() throws ServletException, IOException {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/merchants/payouts");
-        String body = "{\"amount\":10000}";
-        request.setContent(body.getBytes());
-
-        // 301 seconds in the past
-        String timestamp = String.valueOf(Instant.now().getEpochSecond() - 301);
-        String nonce = UUID.randomUUID().toString();
-        String sig = RequestSigningFilter.computeSignature(SECRET, timestamp, "POST", "/v1/merchants/payouts", body);
-
-        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, sig);
-        request.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, timestamp);
-        request.addHeader(RequestSigningFilter.HEADER_NONCE, nonce);
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/checkout/orders");
+        long expiredTime = Instant.now().getEpochSecond() - 301;
+        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, "some-signature");
+        request.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, String.valueOf(expiredTime));
+        request.addHeader(RequestSigningFilter.HEADER_NONCE, "nonce-expired");
 
         MockHttpServletResponse response = new MockHttpServletResponse();
-        filter.doFilter(request, response, chain);
+        filter.doFilter(request, response, new MockFilterChain());
 
-        verify(chain, never()).doFilter(any(), any());
-        assertEquals(401, response.getStatus());
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+        assertThat(response.getContentAsString()).contains("request_expired");
     }
 
     @Test
-    @DisplayName("Replayed request with identical nonce is rejected with 409 Conflict")
-    void replayedNonceRejected() throws ServletException, IOException {
+    @DisplayName("Timestamp in future beyond 300s returns 401 Unauthorized")
+    void futureTimestampRejected() throws ServletException, IOException {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/checkout/orders");
+        long futureTime = Instant.now().getEpochSecond() + 305;
+        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, "some-signature");
+        request.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, String.valueOf(futureTime));
+        request.addHeader(RequestSigningFilter.HEADER_NONCE, "nonce-future");
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+        assertThat(response.getContentAsString()).contains("request_expired");
+    }
+
+    @Test
+    @DisplayName("Missing nonce header returns 400 Bad Request")
+    void missingNonceRejected() throws ServletException, IOException {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/checkout/orders");
         String timestamp = String.valueOf(Instant.now().getEpochSecond());
-        String nonce = "fixed-nonce-" + UUID.randomUUID();
-        String body = "{\"amount\":5000}";
-        String sig = RequestSigningFilter.computeSignature(SECRET, timestamp, "POST", "/v1/merchants/payouts", body);
+        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, "some-signature");
+        request.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, timestamp);
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_BAD_REQUEST);
+        assertThat(response.getContentAsString()).contains("missing_nonce");
+    }
+
+    @Test
+    @DisplayName("Replayed nonce returns 409 Conflict")
+    void replayedNonceRejected() throws ServletException, IOException {
+        String body = "{\"amount\":500}";
+        String timestamp = String.valueOf(Instant.now().getEpochSecond());
+        String nonce = "replay-nonce-test";
+        String sig = RequestSigningFilter.computeSignature(globalSecret, timestamp, "POST", "/v1/payouts", body);
 
         // First attempt succeeds
-        MockHttpServletRequest req1 = new MockHttpServletRequest("POST", "/v1/merchants/payouts");
+        MockHttpServletRequest req1 = new MockHttpServletRequest("POST", "/v1/payouts");
         req1.setContent(body.getBytes());
         req1.addHeader(RequestSigningFilter.HEADER_SIGNATURE, sig);
         req1.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, timestamp);
         req1.addHeader(RequestSigningFilter.HEADER_NONCE, nonce);
         MockHttpServletResponse res1 = new MockHttpServletResponse();
-        filter.doFilter(req1, res1, chain);
-        assertEquals(200, res1.getStatus());
+        filter.doFilter(req1, res1, new MockFilterChain());
+        assertThat(res1.getStatus()).isEqualTo(200);
 
-        // Replay attempt with same nonce returns 409
-        MockHttpServletRequest req2 = new MockHttpServletRequest("POST", "/v1/merchants/payouts");
+        // Second attempt with exact same nonce fails with 409 Conflict
+        MockHttpServletRequest req2 = new MockHttpServletRequest("POST", "/v1/payouts");
         req2.setContent(body.getBytes());
         req2.addHeader(RequestSigningFilter.HEADER_SIGNATURE, sig);
         req2.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, timestamp);
         req2.addHeader(RequestSigningFilter.HEADER_NONCE, nonce);
         MockHttpServletResponse res2 = new MockHttpServletResponse();
-        filter.doFilter(req2, res2, chain);
-        assertEquals(409, res2.getStatus());
+        filter.doFilter(req2, res2, new MockFilterChain());
+        assertThat(res2.getStatus()).isEqualTo(HttpServletResponse.SC_CONFLICT);
+        assertThat(res2.getContentAsString()).contains("replay_detected");
     }
 
     @Test
-    @DisplayName("Tampered body causes HMAC signature mismatch and returns 401")
-    void tamperedBodyRejected() throws ServletException, IOException {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/merchants/payouts");
-        String originalBody = "{\"amount\":10000}";
-        String tamperedBody = "{\"amount\":99999}";
-        request.setContent(tamperedBody.getBytes());
-
+    @DisplayName("Signature mismatch returns 401 Unauthorized")
+    void signatureMismatchRejected() throws ServletException, IOException {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/checkout/orders");
+        String body = "{\"amount\":1000}";
+        request.setContent(body.getBytes());
         String timestamp = String.valueOf(Instant.now().getEpochSecond());
-        String nonce = UUID.randomUUID().toString();
-        String sig = RequestSigningFilter.computeSignature(SECRET, timestamp, "POST", "/v1/merchants/payouts", originalBody);
-
-        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, sig);
+        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, "invalid-bad-signature-hex");
         request.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, timestamp);
-        request.addHeader(RequestSigningFilter.HEADER_NONCE, nonce);
+        request.addHeader(RequestSigningFilter.HEADER_NONCE, "nonce-" + UUID.randomUUID());
 
         MockHttpServletResponse response = new MockHttpServletResponse();
-        filter.doFilter(request, response, chain);
+        filter.doFilter(request, response, new MockFilterChain());
 
-        verify(chain, never()).doFilter(any(), any());
-        assertEquals(401, response.getStatus());
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+        assertThat(response.getContentAsString()).contains("invalid_signature");
+    }
+
+    @Test
+    @DisplayName("Dynamic Merchant Signing Secret resolves per API credential")
+    void dynamicMerchantSigningSecretResolution() throws ServletException, IOException {
+        String merchantApiKey = "ek_1234_abcdef1234567890abcdef1234567890";
+        String dynamicMerchantSecret = "sec_merchant_dynamic_secret_key_64hexchars";
+        when(apiKeys.getSigningSecretForApiKey(merchantApiKey)).thenReturn(Optional.of(dynamicMerchantSecret));
+
+        String body = "{\"beneficiary\":\"+233241000001\"}";
+        String timestamp = String.valueOf(Instant.now().getEpochSecond());
+        String nonce = "nonce-" + UUID.randomUUID();
+
+        // Signed using dynamic merchant secret
+        String signature = RequestSigningFilter.computeSignature(dynamicMerchantSecret, timestamp, "POST", "/v1/wallet/transfers", body);
+
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/wallet/transfers");
+        request.setContent(body.getBytes());
+        request.addHeader(RequestSigningFilter.HEADER_SIGNATURE, signature);
+        request.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, timestamp);
+        request.addHeader(RequestSigningFilter.HEADER_NONCE, nonce);
+        request.addHeader(RequestSigningFilter.HEADER_API_KEY, merchantApiKey);
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("Enforced mode rejects non-public mutations without signature")
+    void enforcedModeRejectsUnsignedMutations() throws ServletException, IOException {
+        RequestSigningFilter strictFilter = new RequestSigningFilter(globalSecret, true, nonceStore, apiKeys);
+
+        MockHttpServletRequest mutationReq = new MockHttpServletRequest("POST", "/v1/checkout/orders");
+        MockHttpServletResponse mutationRes = new MockHttpServletResponse();
+        strictFilter.doFilter(mutationReq, mutationRes, new MockFilterChain());
+
+        assertThat(mutationRes.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+        assertThat(mutationRes.getContentAsString()).contains("missing_signature");
+
+        // Public mutation endpoints pass through even in enforced mode
+        MockHttpServletRequest publicReq = new MockHttpServletRequest("POST", "/v1/rails/mtn/callbacks/payment");
+        MockHttpServletResponse publicRes = new MockHttpServletResponse();
+        strictFilter.doFilter(publicReq, publicRes, new MockFilterChain());
+        assertThat(publicRes.getStatus()).isEqualTo(200);
+
+        // GET reads pass through even in enforced mode
+        MockHttpServletRequest getReq = new MockHttpServletRequest("GET", "/v1/checkout/orders/123");
+        MockHttpServletResponse getRes = new MockHttpServletResponse();
+        strictFilter.doFilter(getReq, getRes, new MockFilterChain());
+        assertThat(getRes.getStatus()).isEqualTo(200);
     }
 }
