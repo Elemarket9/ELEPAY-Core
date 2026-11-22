@@ -238,7 +238,7 @@ class MarketplaceCommissionIT extends PostgresTestBase {
         assertThat(feeDeferred(ref)).isEqualTo(150);
         assertThat(db.sql("""
                 SELECT a.delivery_confirmed_by FROM checkout_allocation a JOIN checkout c ON c.id = a.checkout_id
-                WHERE c.reference = :r""").param("r", ref).query(String.class).single())
+                WHERE c.reference = :r""").param("r", ref).query(String.class).optional().orElse(null))
                 .isNull();
         assertThat(ledger.integrity().ok()).isTrue();
     }

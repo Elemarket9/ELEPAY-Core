@@ -8,6 +8,7 @@ import com.elepay.common.ApiException;
 import com.elepay.ledger.Ledger;
 import java.util.List;
 import java.util.UUID;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,8 +27,11 @@ class CheckoutServiceTest extends PostgresTestBase {
     @Autowired JdbcClient db;
 
     @BeforeEach
+    @AfterEach
     void resetConfig() {
-        configService.updateConfig(CheckoutConfigService.KEY_MAX_ALLOCATIONS, "50", "Reset to baseline", "test");
+        configService.updateConfig(CheckoutConfigService.KEY_FEE_MOMO_BPS, "0", "Reset baseline", "test");
+        configService.updateConfig(CheckoutConfigService.KEY_FEE_MOMO_FIXED, "0", "Reset baseline", "test");
+        configService.updateConfig(CheckoutConfigService.KEY_MAX_ALLOCATIONS, "50", "Reset baseline", "test");
     }
 
     @Test

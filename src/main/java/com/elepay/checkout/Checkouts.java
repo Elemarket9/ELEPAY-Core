@@ -5,6 +5,7 @@ import static com.elepay.merchant.MerchantAccess.Permission.*;
 import com.elepay.common.ApiException;
 import com.elepay.common.Idempotency;
 import com.elepay.common.References;
+import com.elepay.common.qr.EmvcoQr;
 import com.elepay.identity.Actor;
 import com.elepay.merchant.MerchantAccess;
 import com.elepay.rails.RailTransactions;
@@ -46,7 +47,9 @@ class Checkouts {
 
     record AllocationInput(@NotNull UUID merchantId, @Pattern(regexp = "sale|delivery") String kind,
                            @Positive long amount, @Size(max = 200) String description,
-                           @Size(max = 64) String category) {}
+                           @Size(max = 64) String category,
+                           @Min(0) @Max(5000) Integer reserveBps,
+                           @Size(max = 64) String releaseCondition) {}
 
     record CreateCheckout(@Positive Long amount, @Size(max = MAX) List<@Valid AllocationInput> allocations,
                           @Size(max = 500) String description, UUID branchId,
@@ -60,6 +63,8 @@ class Checkouts {
 
     record RefundRequest(@Positive long amount, @NotBlank @Size(max = 500) String reason) {}
 
+    record ReserveReleaseRequest(@Positive long amount, @Size(max = 500) String reason) {}
+
     record LinkRequest(@NotBlank @Size(max = 100) String title, @Positive Long amount, UUID branchId) {}
 
     record Link(UUID id, String slug, String title, Long amount, UUID branchId, boolean active, String url) {}
@@ -71,14 +76,17 @@ class Checkouts {
     record Line(String reference, int line, String kind, String description, String category, long amount,
                 long fee, long commission, long processingFee, long net, long refunded, long disputed, long pending,
                 long settled, String status, String method, OffsetDateTime paidAt, OffsetDateTime deliveredAt,
-                String collector) {}
+                String collector, long reserveAmount, long reserveReleased) {}
 
     record DeliveryRequest(List<@Min(0) Integer> lines) {}
 
     record FeeRuleInput(@NotBlank @Size(max = 64) String category, @Min(0) @Max(5000) int commissionBps,
-                        @PositiveOrZero long commissionMin, @PositiveOrZero long processingFee) {}
+                        @PositiveOrZero long commissionMin, @PositiveOrZero long processingFee,
+                        @Min(0) @Max(5000) Integer reserveBps) {}
 
     record FeeScheduleInput(@Min(1) @Max(60) Integer deliveryConfirmDays,
+                            @Min(0) @Max(5000) Integer reserveBps,
+                            String changeReason,
                             @Size(max = 500) List<@Valid FeeRuleInput> rules) {}
 
     record CheckoutSummary(String reference, String status, long subtotal, String method, Long totalPaid,
@@ -99,7 +107,8 @@ class Checkouts {
             } else {
                 if (request.amount() != null) throw ApiException.badRequest("ambiguous_amount", "Provide either amount or allocations");
                 allocations = request.allocations().stream().map(x -> new CheckoutService.AllocationRequest(
-                        x.merchantId(), x.kind(), x.amount(), x.description(), x.category())).toList();
+                        x.merchantId(), x.kind(), x.amount(), x.description(), x.category(),
+                        x.reserveBps(), x.releaseCondition())).toList();
             }
             UUID branch = branchFor(a, request.branchId());
             var c = checkouts.create(merchantId, branch, null, allocations, request.description(),
@@ -178,7 +187,7 @@ class Checkouts {
         return new Line(c.reference(), x.line(), x.kind(), x.description(), x.category(), x.amount(),
                 x.merchantFee(), x.commission(), x.processingFee(), x.net(), x.refunded(), x.disputed(),
                 x.pendingAmount(), x.settledAmount(), x.status(c.status()), c.paymentMethod(), c.paidAt(),
-                x.deliveredAt(), c.collectorName());
+                x.deliveredAt(), c.collectorName(), x.reserveAmount(), x.reserveReleased());
     }
 
     /** Allocations paid to this merchant across all collectors (its own sales ledger). */
@@ -229,10 +238,23 @@ class Checkouts {
                                                        @Valid @RequestBody FeeScheduleInput request) {
         var a = access.require(merchantId, MANAGE);
         List<CheckoutService.FeeRule> rules = request.rules() == null ? List.of() : request.rules().stream()
-                .map(r -> new CheckoutService.FeeRule(r.category(), r.commissionBps(), r.commissionMin(), r.processingFee()))
+                .map(r -> new CheckoutService.FeeRule(r.category(), r.commissionBps(), r.commissionMin(), r.processingFee(),
+                        r.reserveBps() != null ? r.reserveBps() : 0))
                 .toList();
         return checkouts.saveFeeSchedule(merchantId,
-                request.deliveryConfirmDays() == null ? 14 : request.deliveryConfirmDays(), rules, a.actor().subject());
+                request.deliveryConfirmDays() == null ? 14 : request.deliveryConfirmDays(),
+                request.reserveBps() != null ? request.reserveBps() : 0,
+                rules, request.changeReason(), a.actor().subject());
+    }
+
+    /** Releases retained merchant reserves. */
+    @PostMapping("/checkouts/{reference}/allocations/{line}/release-reserve")
+    public CheckoutService.ReserveRelease releaseReserve(@PathVariable UUID merchantId,
+                                                         @PathVariable String reference,
+                                                         @PathVariable int line,
+                                                         @Valid @RequestBody ReserveReleaseRequest request) {
+        var a = access.require(merchantId, MANAGE);
+        return checkouts.releaseReserve(merchantId, reference, line, request.amount(), request.reason(), a.actor().subject());
     }
 
     // ---- refunds ----------------------------------------------------------------------------

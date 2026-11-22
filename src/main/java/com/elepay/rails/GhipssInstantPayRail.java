@@ -1,6 +1,6 @@
 package com.elepay.rails;
 
-import com.elepay.checkout.EmvcoQr;
+import com.elepay.common.qr.EmvcoQr;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.net.URI;

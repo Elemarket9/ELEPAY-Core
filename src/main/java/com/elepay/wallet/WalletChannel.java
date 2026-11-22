@@ -73,14 +73,29 @@ public class WalletChannel {
 
     /**
      * Validates PIN strength (Algorithm 074).
-     * Rejects PINs with repeated digits or sliding-window sequential ascending/descending digits.
+     * Rejects weak PINs including:
+     * - Null, non-digit, or length < 4
+     * - Single-digit repetition (e.g. "1111", "9999")
+     * - 2-digit repetitions (e.g. "9898", "1212")
+     * - 3-digit repetitions (e.g. "123123")
+     * - Consecutive step-1 sequences (e.g. "1234", "4321")
+     * - Consecutive step-2 sequences (e.g. "1357", "2468", "7531", "8642")
      */
     public static boolean isWeakPin(String pin) {
         if (pin == null || pin.length() < 4) {
             return true;
         }
+        if (pin.chars().anyMatch(c -> c < '0' || c > '9')) {
+            return true;
+        }
         if (pin.chars().distinct().count() == 1) {
             return true;
+        }
+        // 3-digit repeated patterns (e.g. "123123")
+        for (int i = 0; i <= pin.length() - 6; i++) {
+            if (pin.substring(i, i + 3).equals(pin.substring(i + 3, i + 6))) {
+                return true;
+            }
         }
         for (int i = 0; i <= pin.length() - 4; i++) {
             char c0 = pin.charAt(i);
@@ -93,13 +108,28 @@ public class WalletChannel {
                 return true;
             }
 
-            // Consecutive ascending digits in window: e.g. "1234", "2345", "6789"
+            // 2-digit repeated pattern: e.g. "9898", "1212"
+            if (c0 == c2 && c1 == c3) {
+                return true;
+            }
+
+            // Consecutive ascending digits in window (step 1): e.g. "1234", "2345", "6789"
             if (c1 - c0 == 1 && c2 - c1 == 1 && c3 - c2 == 1) {
                 return true;
             }
 
-            // Consecutive descending digits in window: e.g. "4321", "6543", "9876"
+            // Consecutive descending digits in window (step 1): e.g. "4321", "6543", "9876"
             if (c0 - c1 == 1 && c1 - c2 == 1 && c2 - c3 == 1) {
+                return true;
+            }
+
+            // Step-2 ascending sequence: e.g. "1357", "2468", "3579"
+            if (c1 - c0 == 2 && c2 - c1 == 2 && c3 - c2 == 2) {
+                return true;
+            }
+
+            // Step-2 descending sequence: e.g. "7531", "8642", "9753"
+            if (c0 - c1 == 2 && c1 - c2 == 2 && c2 - c3 == 2) {
                 return true;
             }
         }

@@ -62,31 +62,30 @@ public class PosReceiptService {
         sb.append("----------------------------------------\n");
 
         for (PosOrderService.PosOrderItem item : items) {
-            double totalGhs = item.totalPesewas() / 100.0;
-            sb.append(String.format("%-20.20s %4s %12.2f\n", item.itemName(), item.quantity().toPlainString(), totalGhs));
+            sb.append(String.format("%-20.20s %4s %12s\n", item.itemName(), item.quantity().toPlainString(), formatMinorUnits(item.totalPesewas())));
         }
 
         sb.append("----------------------------------------\n");
-        sb.append(String.format("%-25s %12.2f\n", "Subtotal:", order.subtotalPesewas() / 100.0));
+        sb.append(String.format("%-25s %12s\n", "Subtotal:", formatMinorUnits(order.subtotalPesewas())));
         if (order.discountPesewas() > 0) {
-            sb.append(String.format("%-25s -%11.2f\n", "Discount:", order.discountPesewas() / 100.0));
+            sb.append(String.format("%-25s -%11s\n", "Discount:", formatMinorUnits(order.discountPesewas())));
         }
         if (order.taxPesewas() > 0) {
-            sb.append(String.format("%-25s %12.2f\n", "Tax/VAT:", order.taxPesewas() / 100.0));
+            sb.append(String.format("%-25s %12s\n", "Tax/VAT:", formatMinorUnits(order.taxPesewas())));
         }
         if (order.tipPesewas() > 0) {
-            sb.append(String.format("%-25s %12.2f\n", "Tip:", order.tipPesewas() / 100.0));
+            sb.append(String.format("%-25s %12s\n", "Tip:", formatMinorUnits(order.tipPesewas())));
         }
         sb.append("========================================\n");
-        sb.append(String.format("%-25s %12.2f GHS\n", "TOTAL DUE:", order.totalPesewas() / 100.0));
+        sb.append(String.format("%-25s %12s GHS\n", "TOTAL DUE:", formatMinorUnits(order.totalPesewas())));
         sb.append("========================================\n");
 
         sb.append("PAYMENTS:\n");
         for (PosOrderService.TenderPayment p : payments) {
-            sb.append(String.format(" - %-10s %10.2f GHS (%s)\n", p.tenderType(), p.amountPesewas() / 100.0, p.reference() == null ? "OK" : p.reference()));
+            sb.append(String.format(" - %-10s %10s GHS (%s)\n", p.tenderType(), formatMinorUnits(p.amountPesewas()), p.reference() == null ? "OK" : p.reference()));
         }
         if (order.changePesewas() > 0) {
-            sb.append(String.format("%-25s %12.2f GHS\n", "CHANGE GIVEN:", order.changePesewas() / 100.0));
+            sb.append(String.format("%-25s %12s GHS\n", "CHANGE GIVEN:", formatMinorUnits(order.changePesewas())));
         }
 
         sb.append("----------------------------------------\n");
@@ -139,5 +138,11 @@ public class PosReceiptService {
             .param("orderId", orderId)
             .query(PosReceipt.class)
             .optional();
+    }
+
+    private static String formatMinorUnits(long pesewas) {
+        long whole = pesewas / 100L;
+        long frac = Math.abs(pesewas % 100L);
+        return String.format("%d.%02d", whole, frac);
     }
 }

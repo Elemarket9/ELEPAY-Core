@@ -1,5 +1,6 @@
 package com.elepay.checkout;
 
+import com.elepay.common.qr.EmvcoQr;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

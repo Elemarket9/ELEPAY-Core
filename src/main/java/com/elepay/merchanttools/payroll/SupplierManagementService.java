@@ -59,9 +59,13 @@ public class SupplierManagementService {
 
     public record BillItemCommand(
             String description,
-            double quantity,
+            java.math.BigDecimal quantity,
             long unitPricePesewas
-    ) {}
+    ) {
+        public BillItemCommand(String description, double quantity, long unitPricePesewas) {
+            this(description, java.math.BigDecimal.valueOf(quantity), unitPricePesewas);
+        }
+    }
 
     public record CreateBillCommand(
             UUID merchantId,
@@ -133,7 +137,10 @@ public class SupplierManagementService {
         long total = 0;
 
         for (BillItemCommand item : cmd.items()) {
-            total += (long) (item.quantity() * item.unitPricePesewas());
+            java.math.BigDecimal qty = item.quantity() != null ? item.quantity() : java.math.BigDecimal.ONE;
+            long lineTotal = qty.multiply(java.math.BigDecimal.valueOf(item.unitPricePesewas()))
+                    .setScale(0, java.math.RoundingMode.HALF_UP).longValueExact();
+            total = Math.addExact(total, lineTotal);
         }
 
         var supplier = db.sql("SELECT name FROM supplier_master WHERE id = ?").param(cmd.supplierId())
@@ -152,12 +159,14 @@ public class SupplierManagementService {
 
         for (BillItemCommand item : cmd.items()) {
             UUID itemId = UUID.randomUUID();
-            long lineTotal = (long) (item.quantity() * item.unitPricePesewas());
+            java.math.BigDecimal qty = item.quantity() != null ? item.quantity() : java.math.BigDecimal.ONE;
+            long lineTotal = qty.multiply(java.math.BigDecimal.valueOf(item.unitPricePesewas()))
+                    .setScale(0, java.math.RoundingMode.HALF_UP).longValueExact();
             db.sql("""
                 INSERT INTO supplier_bill_item
                 (id, bill_id, description, quantity, unit_price_pesewas, total_pesewas)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """).params(itemId, billId, item.description(), item.quantity(), item.unitPricePesewas(), lineTotal)
+            """).params(itemId, billId, item.description(), qty, item.unitPricePesewas(), lineTotal)
             .update();
         }
 

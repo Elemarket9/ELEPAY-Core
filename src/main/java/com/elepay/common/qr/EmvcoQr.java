@@ -1,7 +1,8 @@
-package com.elepay.checkout;
+package com.elepay.common.qr;
 
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import org.springframework.modulith.NamedInterface;
 
 /**
  * Algorithm 022: EMVCo QR Code Encoding & Decoding.
@@ -9,6 +10,7 @@ import java.util.*;
  * - TLV parsing and building
  * - Standard CCITT-FALSE / 0x1021 CRC16 with init 0xFFFF (Tag 63)
  */
+@NamedInterface
 public final class EmvcoQr {
     public static final String TAG_PAYLOAD_FORMAT_INDICATOR = "00";
     public static final String TAG_POINT_OF_INITIATION_METHOD = "01";

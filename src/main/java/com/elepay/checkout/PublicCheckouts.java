@@ -3,6 +3,7 @@ package com.elepay.checkout;
 import com.elepay.common.ApiException;
 import com.elepay.common.Idempotency;
 import com.elepay.common.References;
+import com.elepay.common.qr.EmvcoQr;
 import com.elepay.merchant.MerchantAccess;
 import com.elepay.rails.RailTransactions;
 import com.elepay.wallet.CustomerDirectory;

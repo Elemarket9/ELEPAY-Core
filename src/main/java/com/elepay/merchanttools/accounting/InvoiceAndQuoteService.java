@@ -1,5 +1,7 @@
 package com.elepay.merchanttools.accounting;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -27,11 +29,15 @@ public class InvoiceAndQuoteService {
 
     public record InvoiceItemCommand(
             String description,
-            double quantity,
+            BigDecimal quantity,
             long unitPricePesewas,
             int taxRateBps,
             long discountPesewas
-    ) {}
+    ) {
+        public InvoiceItemCommand(String description, double quantity, long unitPricePesewas, int taxRateBps, long discountPesewas) {
+            this(description, BigDecimal.valueOf(quantity), unitPricePesewas, taxRateBps, discountPesewas);
+        }
+    }
 
     public record CreateInvoiceCommand(
             UUID merchantId,
@@ -102,13 +108,15 @@ public class InvoiceAndQuoteService {
         long totalTax = 0;
 
         for (InvoiceItemCommand item : items) {
-            long lineSubtotal = (long) (item.quantity() * item.unitPricePesewas());
-            long lineTax = (lineSubtotal * item.taxRateBps()) / 10000;
-            subtotal += lineSubtotal;
-            totalTax += lineTax;
+            BigDecimal qty = item.quantity() != null ? item.quantity() : BigDecimal.ONE;
+            long lineSubtotal = qty.multiply(BigDecimal.valueOf(item.unitPricePesewas()))
+                    .setScale(0, RoundingMode.HALF_UP).longValueExact();
+            long lineTax = Math.multiplyExact(lineSubtotal, item.taxRateBps()) / 10000L;
+            subtotal = Math.addExact(subtotal, lineSubtotal);
+            totalTax = Math.addExact(totalTax, lineTax);
         }
 
-        long grandTotal = subtotal + totalTax;
+        long grandTotal = Math.addExact(subtotal, totalTax);
 
         db.sql("""
             INSERT INTO merchant_quote
@@ -117,17 +125,20 @@ public class InvoiceAndQuoteService {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'GHS', ?, ?, ?, 'DRAFT', ?)
         """).params(quoteId, merchantId, quoteNumber, customerId, customerName, customerEmail,
                 customerPhone, issueDate, expiryDate, subtotal, totalTax, grandTotal, notes)
-        .update();
+            .update();
 
         for (InvoiceItemCommand item : items) {
             UUID itemId = UUID.randomUUID();
-            long lineTotal = (long) (item.quantity() * item.unitPricePesewas()) +
-                    ((long) (item.quantity() * item.unitPricePesewas()) * item.taxRateBps() / 10000);
+            BigDecimal qty = item.quantity() != null ? item.quantity() : BigDecimal.ONE;
+            long lineSubtotal = qty.multiply(BigDecimal.valueOf(item.unitPricePesewas()))
+                    .setScale(0, RoundingMode.HALF_UP).longValueExact();
+            long lineTax = Math.multiplyExact(lineSubtotal, item.taxRateBps()) / 10000L;
+            long lineTotal = Math.addExact(lineSubtotal, lineTax);
             db.sql("""
                 INSERT INTO merchant_quote_item
                 (id, quote_id, item_description, quantity, unit_price_pesewas, tax_rate_bps, total_pesewas)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """).params(itemId, quoteId, item.description(), item.quantity(), item.unitPricePesewas(),
+            """).params(itemId, quoteId, item.description(), qty, item.unitPricePesewas(),
                     item.taxRateBps(), lineTotal)
             .update();
         }
@@ -149,17 +160,19 @@ public class InvoiceAndQuoteService {
         long totalDiscount = 0;
 
         for (InvoiceItemCommand item : cmd.items()) {
-            long lineSubtotal = (long) (item.quantity() * item.unitPricePesewas());
+            BigDecimal qty = item.quantity() != null ? item.quantity() : BigDecimal.ONE;
+            long lineSubtotal = qty.multiply(BigDecimal.valueOf(item.unitPricePesewas()))
+                    .setScale(0, RoundingMode.HALF_UP).longValueExact();
             long lineDiscount = item.discountPesewas();
             long lineTaxable = Math.max(0, lineSubtotal - lineDiscount);
-            long lineTax = (lineTaxable * item.taxRateBps()) / 10000;
+            long lineTax = Math.multiplyExact(lineTaxable, item.taxRateBps()) / 10000L;
 
-            subtotal += lineSubtotal;
-            totalDiscount += lineDiscount;
-            totalTax += lineTax;
+            subtotal = Math.addExact(subtotal, lineSubtotal);
+            totalDiscount = Math.addExact(totalDiscount, lineDiscount);
+            totalTax = Math.addExact(totalTax, lineTax);
         }
 
-        long grandTotal = Math.max(0, subtotal - totalDiscount) + totalTax;
+        long grandTotal = Math.addExact(Math.max(0, subtotal - totalDiscount), totalTax);
 
         db.sql("""
             INSERT INTO merchant_invoice
@@ -175,23 +188,25 @@ public class InvoiceAndQuoteService {
 
         for (InvoiceItemCommand item : cmd.items()) {
             UUID itemId = UUID.randomUUID();
-            long lineSubtotal = (long) (item.quantity() * item.unitPricePesewas());
+            BigDecimal qty = item.quantity() != null ? item.quantity() : BigDecimal.ONE;
+            long lineSubtotal = qty.multiply(BigDecimal.valueOf(item.unitPricePesewas()))
+                    .setScale(0, RoundingMode.HALF_UP).longValueExact();
             long lineTaxable = Math.max(0, lineSubtotal - item.discountPesewas());
-            long lineTax = (lineTaxable * item.taxRateBps()) / 10000;
-            long lineTotal = lineTaxable + lineTax;
+            long lineTax = Math.multiplyExact(lineTaxable, item.taxRateBps()) / 10000L;
+            long lineTotal = Math.addExact(lineTaxable, lineTax);
 
             db.sql("""
                 INSERT INTO merchant_invoice_item
                 (id, invoice_id, item_description, quantity, unit_price_pesewas, tax_rate_bps, discount_pesewas, total_pesewas)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """).params(itemId, invoiceId, item.description(), item.quantity(), item.unitPricePesewas(),
+            """).params(itemId, invoiceId, item.description(), qty, item.unitPricePesewas(),
                     item.taxRateBps(), item.discountPesewas(), lineTotal)
             .update();
         }
 
         // GRA e-VAT fiscal data integration
         var fiscalReceipt = graFiscalService.signFiscalInvoice(
-                invoiceId, cmd.customerTin(), cmd.invoiceNumber(), Math.max(0, subtotal - totalDiscount));
+                cmd.merchantId(), invoiceId, cmd.customerTin(), cmd.invoiceNumber(), Math.max(0, subtotal - totalDiscount));
 
         // Post to General Ledger:
         // Debit: Accounts Receivable (1040) -> totalPesewas
@@ -255,7 +270,7 @@ public class InvoiceAndQuoteService {
         """).param(quoteId)
         .query((rs, rowNum) -> new InvoiceItemCommand(
                 rs.getString("item_description"),
-                rs.getDouble("quantity"),
+                rs.getBigDecimal("quantity"),
                 rs.getLong("unit_price_pesewas"),
                 rs.getInt("tax_rate_bps"),
                 0L
