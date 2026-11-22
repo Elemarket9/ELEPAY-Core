@@ -110,7 +110,8 @@ class MerchantPayouts {
     public List<Payouts.Payout> withdrawals(@PathVariable UUID merchantId) {
         access.require(merchantId, FINANCE_VIEW);
         return payouts.forOwner("merchant", merchantId, 500).stream()
-                .filter(p -> p.clientReference() != null && p.clientReference().startsWith("withdrawal-")).toList();
+                .filter(p -> p.clientReference() != null && (p.clientReference().startsWith("withdrawal-")
+                        || p.clientReference().startsWith("auto-withdrawal-"))).toList();
     }
 
     @PostMapping("/payouts/{reference}/retry")
@@ -125,7 +126,7 @@ class MerchantPayouts {
             throw ApiException.badRequest("missing_idempotency_key", "Idempotency-Key header is required");
         }
         String clientRef = payoutOpt.get() == null ? "" : payoutOpt.get();
-        var a = access.require(merchantId, clientRef.startsWith("withdrawal-") ? WITHDRAW : PAYOUT);
+        var a = access.require(merchantId, clientRef.contains("withdrawal-") ? WITHDRAW : PAYOUT);
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("payout-retry:" + merchantId, key,
                 java.util.Map.of("reference", reference), Payouts.Batch.class,
                 () -> payouts.retry("merchant", merchantId, reference, a.actor().subject())));

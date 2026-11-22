@@ -1398,6 +1398,35 @@
         },
         "type" : "object"
       },
+      "Effective" : {
+        "properties" : {
+          "destinationId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "governedBy" : {
+            "items" : {
+              "$ref" : "#/components/schemas/Governor"
+            },
+            "type" : "array"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "minAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "mode" : {
+            "type" : "string"
+          },
+          "source" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Endpoint" : {
         "properties" : {
           "active" : {
@@ -1652,6 +1681,25 @@
             "maxItems" : 500,
             "minItems" : 0,
             "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "Governor" : {
+        "properties" : {
+          "marketplaceId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "minAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "mode" : {
+            "type" : "string"
+          },
+          "sellerOverride" : {
+            "type" : "boolean"
           }
         },
         "type" : "object"
@@ -2587,6 +2635,23 @@
         },
         "type" : "object"
       },
+      "OwnPolicy" : {
+        "properties" : {
+          "destinationId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "minAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "mode" : {
+            "pattern" : "on_request|automatic",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "PairTerminalRequest" : {
         "properties" : {
           "hardwareFingerprint" : {
@@ -2849,6 +2914,24 @@
           "pin" : {
             "pattern" : "[0-9]{4,6}",
             "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PlatformPolicy" : {
+        "properties" : {
+          "defaultRule" : {
+            "$ref" : "#/components/schemas/Rule"
+          },
+          "marketplaceId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "sellerOverrides" : {
+            "additionalProperties" : {
+              "$ref" : "#/components/schemas/Rule"
+            },
+            "type" : "object"
           }
         },
         "type" : "object"
@@ -3781,6 +3864,33 @@
             "type" : "string"
           }
         },
+        "type" : "object"
+      },
+      "Rule" : {
+        "properties" : {
+          "minAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "mode" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "RuleInput" : {
+        "properties" : {
+          "minAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "mode" : {
+            "minLength" : 1,
+            "pattern" : "on_request|automatic",
+            "type" : "string"
+          }
+        },
+        "required" : [ "mode" ],
         "type" : "object"
       },
       "SdkSnippet" : {
@@ -6529,7 +6639,7 @@
     },
     "/v1/merchants" : {
       "get" : {
-        "operationId" : "mine",
+        "operationId" : "mine_1",
         "responses" : {
           "200" : {
             "content" : {
@@ -7907,6 +8017,68 @@
         "tags" : [ "merchant-payouts" ]
       }
     },
+    "/v1/merchants/{merchantId}/payout-policy" : {
+      "get" : {
+        "operationId" : "mine",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Effective"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payout-policy-api" ]
+      },
+      "put" : {
+        "operationId" : "saveMine",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/OwnPolicy"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Effective"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payout-policy-api" ]
+      }
+    },
     "/v1/merchants/{merchantId}/payouts" : {
       "get" : {
         "operationId" : "list_1",
@@ -8087,6 +8259,179 @@
           }
         },
         "tags" : [ "checkouts" ]
+      }
+    },
+    "/v1/merchants/{merchantId}/seller-payout-policy" : {
+      "get" : {
+        "operationId" : "platform",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PlatformPolicy"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payout-policy-api" ]
+      },
+      "put" : {
+        "operationId" : "savePlatform",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RuleInput"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PlatformPolicy"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payout-policy-api" ]
+      }
+    },
+    "/v1/merchants/{merchantId}/sellers/{sellerId}/payout-policy" : {
+      "delete" : {
+        "operationId" : "clearSeller",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "sellerId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PlatformPolicy"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payout-policy-api" ]
+      },
+      "get" : {
+        "operationId" : "seller",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "sellerId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Effective"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payout-policy-api" ]
+      },
+      "put" : {
+        "operationId" : "saveSeller",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "sellerId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RuleInput"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PlatformPolicy"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payout-policy-api" ]
       }
     },
     "/v1/merchants/{merchantId}/settlements" : {
@@ -8890,6 +9235,25 @@
           }
         },
         "tags" : [ "operations" ]
+      }
+    },
+    "/v1/ops/payouts/automatic/run" : {
+      "post" : {
+        "operationId" : "run",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payout-policy-api" ]
       }
     },
     "/v1/ops/platform-payout-routes" : {
