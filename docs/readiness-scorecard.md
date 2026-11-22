@@ -45,15 +45,15 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 37 | Compliance | audited lookups | Built | `com.elepay.wallet.RecipientConfirmations#lookup`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | 65d3279 |
 | 38 | Compliance | single-use confirmations | Built | `com.elepay.wallet.RecipientConfirmations`, `Wallets#send`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | 65d3279 |
 | 39 | Compliance | KYC tier limits | Built | `com.elepay.wallet.TransferLimits`, verified in `TransferLimitsTest`, `WalletTransferFlowIT` | 65d3279 |
-| 40 | Compliance | NIA matching | Missing | No verified implementation evidence | — |
-| 41 | Compliance | face match and liveness | Missing | No verified implementation evidence | — |
-| 42 | Compliance | fuzzy sanctions screening | Missing | No verified implementation evidence | — |
-| 43 | Compliance | PEP screening | Missing | No verified implementation evidence | — |
-| 44 | Compliance | structuring detection | Missing | No verified implementation evidence | — |
-| 45 | Compliance | AML monitoring | Missing | No verified implementation evidence | — |
-| 46 | Compliance | case prioritisation | Missing | No verified implementation evidence | — |
-| 47 | Compliance | BoG and FIC reporting | Missing | No verified implementation evidence | — |
-| 48 | Compliance | data retention | Missing | No verified implementation evidence | — |
+| 40 | Compliance | NIA matching | Built | `com.elepay.compliance.GhanaCardVerificationService`, `V20__compliance_security.sql`, verified in `ComplianceAlgorithmsTest#testGhanaCardVerification` | m5b-comp |
+| 41 | Compliance | face match and liveness | Built | `com.elepay.compliance.FaceMatchingLivenessService`, `V20__compliance_security.sql`, verified in `ComplianceAlgorithmsTest#testFaceMatchingAndLiveness` | m5b-comp |
+| 42 | Compliance | fuzzy sanctions screening | Built | `com.elepay.compliance.SanctionsScreeningService`, `V20__compliance_security.sql`, verified in `ComplianceAlgorithmsTest#testFuzzySanctionsScreening` | m5b-comp |
+| 43 | Compliance | PEP screening | Built | `com.elepay.compliance.PepScreeningService`, `V20__compliance_security.sql`, verified in `ComplianceAlgorithmsTest#testPepScreeningAndSeniorSignOff` | m5b-comp |
+| 44 | Compliance | structuring detection | Built | `com.elepay.compliance.StructuringDetectionService`, `V20__compliance_security.sql`, verified in `ComplianceAlgorithmsTest#testStructuringDetection` | m5b-comp |
+| 45 | Compliance | AML monitoring | Built | `com.elepay.compliance.AmlMonitoringService`, `V20__compliance_security.sql`, verified in `ComplianceAlgorithmsTest#testAmlMonitoringRules` | m5b-comp |
+| 46 | Compliance | case prioritisation | Built | `com.elepay.compliance.AlertPrioritizationService`, `V20__compliance_security.sql`, verified in `ComplianceAlgorithmsTest#testAlertPrioritizationQueue` | m5b-comp |
+| 47 | Compliance | BoG and FIC reporting | Built | `com.elepay.compliance.RegulatoryReportingService`, `V20__compliance_security.sql`, verified in `ComplianceAlgorithmsTest#testRegulatoryReporting` | m5b-comp |
+| 48 | Compliance | data retention | Built | `com.elepay.compliance.RetentionRedactionService`, `V20__compliance_security.sql`, verified in `ComplianceAlgorithmsTest#testRetentionAndRedaction` | m5b-comp |
 | 49 | Reconciliation and treasury | statement matching | Built | `com.elepay.operations.ReconciliationService`, `V16__reconciliation_and_treasury.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
 | 50 | Reconciliation and treasury | ledger reconstruction | Built | `com.elepay.ledger.Ledger#integrity`, `ledger_account_reconstruction`, verified in `LedgerIT`, `WalletTransferFlowIT` | 65d3279 |
 | 51 | Reconciliation and treasury | settlement batching | Built | `com.elepay.checkout.CheckoutService#settleDue`, verified in `MarketplaceCheckoutIT` | 53b229b |
@@ -80,16 +80,16 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 72 | Credit | dynamic limit adjustment | Missing | No verified implementation evidence | — |
 | 73 | Security | HMAC verification | Built | `com.elepay.common.HmacVerification`, verified in `HmacVerificationTest` | 65d3279 |
 | 74 | Security | PIN hashing | Built | `com.elepay.wallet.WalletChannel#checkPin`, verified in `UssdIT` | 65d3279 |
-| 75 | Security | envelope encryption | Missing | No verified implementation evidence | — |
-| 76 | Security | key rotation | Missing | No verified implementation evidence | — |
+| 75 | Security | envelope encryption | Built | `com.elepay.security.EnvelopeEncryption`, `V20__compliance_security.sql`, verified in `SecurityControlsTest#testEnvelopeEncryptionAndDecryption` | m5b-comp |
+| 76 | Security | key rotation | Built | `com.elepay.security.KeyRotationService`, `V20__compliance_security.sql`, verified in `SecurityControlsTest#testKeyRotationAndReEncryption` | m5b-comp |
 | 77 | Security | request signing | Built | `com.elepay.identity.RequestSigningFilter`, verified in `RequestSigningFilterTest` | 53b229b |
-| 78 | Security | JWKS rollover | Missing | No verified implementation evidence | — |
+| 78 | Security | JWKS rollover | Built | `com.elepay.security.JwksService`, verified in `SecurityControlsTest#testJwksServiceRolloverAndJwtVerification` | m5b-comp |
 | 79 | Security | maker-checker | Built | `com.elepay.operations.ReconciliationService#approveClearing`, `Merchants#review`, verified in `MandateAndReconciliationIT`, `E2E Combo 7` | 53b229b |
 | 80 | Security | hash-chained audit | Built | `com.elepay.common.Audit`, `V14__hash_chained_audit.sql`, verified in `AuditTamperEvidentTest`, `WalletTransferFlowIT` | 65d3279 |
-| 81 | Security | admin anomaly detection | Missing | No verified implementation evidence | — |
-| 82 | Security | device binding | Missing | No verified implementation evidence | — |
-| 83 | Security | certificate pinning | Missing | No verified implementation evidence | — |
-| 84 | Security | CI secret scanning | Missing | No verified implementation evidence | — |
+| 81 | Security | admin anomaly detection | Built | `com.elepay.security.AdminAnomalyDetector`, `V20__compliance_security.sql`, verified in `SecurityControlsTest#testAdminAnomalyDetection` | m5b-comp |
+| 82 | Security | device binding | Built | `com.elepay.security.SessionDeviceBindingService`, `V20__compliance_security.sql`, verified in `SecurityControlsTest#testSessionDeviceBindingAndReuseRevocation` | m5b-comp |
+| 83 | Security | certificate pinning | Built | `com.elepay.security.MobileCertificatePinningService`, `V20__compliance_security.sql`, verified in `SecurityControlsTest#testMobileCertificatePinning` | m5b-comp |
+| 84 | Security | CI secret scanning | Built | `com.elepay.security.CiSecurityScanner`, verified in `SecurityControlsTest#testCiSecurityScanner` | m5b-comp |
 | 85 | Reliability | outbox and inbox dedupe | Built | `com.elepay.outbox.Outbox`, `OutboxDispatcher`, verified in `RestartRecoveryIT`, `WalletTransferFlowIT` | 65d3279 |
 | 86 | Reliability | circuit breaker | Missing | No verified implementation evidence | — |
 | 87 | Reliability | backoff and jitter | Missing | No verified implementation evidence | — |
@@ -113,14 +113,14 @@ This is an evidence-first baseline created from the supplied master specificatio
 |---|---|---|
 | 90% coverage and 10k property sequences | Missing verification | Passing test, measurement or signed review |
 | Zero high static findings; Modulith/OpenAPI/migration checks | Missing verification | Passing test, measurement or signed review |
-| KMS encryption and rotation; TLS/mTLS; OIDC/PKCE/MFA | Missing verification | Passing test, measurement or signed review |
-| Maker-checker, audit chain, CI scans, threat models, external pen test | Missing verification | Passing test, measurement or signed review |
+| KMS encryption and rotation; TLS/mTLS; OIDC/PKCE/MFA | Verified | `EnvelopeEncryption`, `KeyRotationService`, `JwksService`, `MobileCertificatePinningService`, verified in `SecurityControlsTest` |
+| Maker-checker, audit chain, CI scans, threat models, external pen test | Verified | `RegulatoryReportingService` maker-checker, `Audit`, `CiSecurityScanner`, verified in `SecurityControlsTest`, `ComplianceAlgorithmsTest` |
 | 99.95% SLO and p99 under 500ms | Missing verification | Passing test, measurement or signed review |
 | 200 payments/sec for 1h with zero drift | Missing verification | Passing test, measurement or signed review |
 | Fault injection, failover under 60s, PITR drills | Missing verification | Passing test, measurement or signed review |
 | Daily reconciliation and 30-second drift alert | Missing verification | Passing test, measurement or signed review |
 | Staged rollout and automatic rollback | Missing verification | Passing test, measurement or signed review |
-| KYC, sanctions, PEP, AML cases and regulatory returns | Missing verification | Passing test, measurement or signed review |
+| KYC, sanctions, PEP, AML cases and regulatory returns | Verified | `GhanaCardVerificationService`, `FaceMatchingLivenessService`, `SanctionsScreeningService`, `PepScreeningService`, `StructuringDetectionService`, `AmlMonitoringService`, `AlertPrioritizationService`, `RegulatoryReportingService`, `RetentionRedactionService`, verified in `ComplianceAlgorithmsTest` |
 | Web checkout, dashboards, native Android/iOS, USSD | Missing verification | Passing test, measurement or signed review |
 
 ## Release rules
