@@ -80,15 +80,6 @@ class SecurityConfig {
         return http.build();
     }
 
-    /** Local development and tests: HS256 tokens signed with a shared secret. */
-    @Bean
-    @ConditionalOnProperty("elepay.security.dev-jwt-secret")
-    JwtDecoder devJwtDecoder(org.springframework.core.env.Environment env) {
-        byte[] secret = env.getRequiredProperty("elepay.security.dev-jwt-secret").getBytes(StandardCharsets.UTF_8);
-        return NimbusJwtDecoder.withSecretKey(new SecretKeySpec(secret, "HmacSHA256"))
-                .macAlgorithm(MacAlgorithm.HS256).build();
-    }
-
     /** Maps the OIDC {@code roles} claim (and realm roles from Keycloak) to authorities. */
     static final class RolesConverter implements Converter<Jwt, AbstractAuthenticationToken> {
         @Override

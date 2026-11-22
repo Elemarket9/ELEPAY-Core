@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
  * outbound calls to private networks. Fail closed: a misconfigured production pod never serves traffic.
  */
 @Component
-@Profile("prod")
+@Profile("prod | (!test & !sandbox & !dev)")
 public class ProductionSafetyCheck {
     /** Secrets that have appeared in this repository and are therefore public. */
     static final Set<String> KNOWN_SECRETS = Set.of(

@@ -9,7 +9,6 @@ import org.springframework.web.bind.annotation.*;
  * Public and internal endpoints for partner rails:
  * - Card BIN lookups (Algorithm 017)
  * - Card tokenization (Algorithm 019)
- * - 3DS 2.x challenge completion (Algorithm 018)
  * - Smart routing resolution (Algorithm 014)
  * - Network health indicators (Algorithm 016)
  */
@@ -17,20 +16,17 @@ import org.springframework.web.bind.annotation.*;
 public class RailEndpoints {
     private final CardBinLookupService binService;
     private final CardTokenVault vault;
-    private final ThreeDSecureService threeDs;
     private final SmartPaymentRouter router;
     private final NetworkHealthDetector health;
 
     public RailEndpoints(
             CardBinLookupService binService,
             CardTokenVault vault,
-            ThreeDSecureService threeDs,
             SmartPaymentRouter router,
             NetworkHealthDetector health
     ) {
         this.binService = binService;
         this.vault = vault;
-        this.threeDs = threeDs;
         this.router = router;
         this.health = health;
     }
@@ -94,26 +90,6 @@ public class RailEndpoints {
         requireOwner(token);
         vault.revoke(token);
         return Map.of("status", "revoked", "token", token);
-    }
-
-    // --- 3-D Secure 2.x Challenge (018) ---
-    public record ChallengeRequest(String otp) {}
-
-    @PostMapping("/v1/rails/card/3ds/challenge/{sessionId}")
-    public ThreeDSecureService.ThreeDSSession completeChallenge(
-            @PathVariable String sessionId,
-            @RequestBody ChallengeRequest req
-    ) {
-        if (req.otp() == null || req.otp().isBlank()) {
-            throw ApiException.badRequest("missing_otp", "OTP code required to complete 3DS challenge");
-        }
-        return threeDs.completeChallenge(sessionId, req.otp().trim());
-    }
-
-    @GetMapping("/v1/rails/card/3ds/{sessionId}")
-    public ThreeDSecureService.ThreeDSSession getSession(@PathVariable String sessionId) {
-        return threeDs.findBySessionId(sessionId)
-                .orElseThrow(() -> ApiException.notFound("session_not_found", "3DS session not found"));
     }
 
     // --- Smart Routing (014) ---
