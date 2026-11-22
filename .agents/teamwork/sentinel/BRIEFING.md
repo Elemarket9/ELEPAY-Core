@@ -1,4 +1,4 @@
-# BRIEFING — 2026-11-22T02:40:50Z
+# BRIEFING — 2026-11-22T02:42:00Z
 
 ## Mission
 Sentinel monitoring and orchestration lifecycle management for ELEPAY CORE — COMPLETE IMPLEMENTATION OF THE 100 ALGORITHMS.
@@ -17,12 +17,15 @@ Sentinel monitoring and orchestration lifecycle management for ELEPAY CORE — C
 ## Active Orchestrators & Sub-Orchestrators
 - Root orchestrator: 8bad7bfffd7b87726ff5069de7fe43f4
 - Active orchestrator: 8bad7bfffd7b87726ff5069de7fe43f4
-- Sub-Orchestrator E2E Testing: 36f87fbfb73276bfc5b7a3efe94611a9 (TEST_READY.md published, gate passed)
-- Sub-Orchestrator Milestone 1: 9e88801d13049b41d667f56f239edd03 (Gate status PASSED: 18/18 M1 algorithms verified, 5/5 verification wave passed, finalization worker committing changes)
+- Sub-Orchestrator Milestone 2: 3a5571810c5dbed579845ba2c6230ead (Commercial Workflows: Checkout, Refunds, Disputes & Settlement; algorithms 009, 020-022, 049, 051-055, 077, 079)
+
+## Completed Milestones
+- E2E Testing Track: TEST_INFRA.md and TEST_READY.md published; 117 tests (Tiers 1-4) operational.
+- Milestone 1: Core Financial Journey & Ledger Hardening (Algorithms 001-007, 010, 037-039, 050, 073, 074, 080, 085, 088, 095). Gate PASSED (5/5 verifiers).
 
 ## Crons & Background Tasks
-- Cron 1 (Progress Reporting): task-12 (iteration 10)
-- Cron 2 (Liveness Check): task-14 (iteration 4 — healthy)
+- Cron 1 (Progress Reporting): task-12
+- Cron 2 (Liveness Check): task-14
 
 ## User Context
 - **Last user request**: ELEPAY CORE — COMPLETE IMPLEMENTATION OF THE 100 ALGORITHMS
@@ -30,9 +33,7 @@ Sentinel monitoring and orchestration lifecycle management for ELEPAY CORE — C
 - **Delivered results**: [none]
 
 ## Project Status
-- **Phase**: Dual-Track Gate Completion
-  - Track 1 (E2E Testing): `TEST_READY.md` signed off and certified.
-  - Track 2 (Milestone 1 Core Financial Journey): Gate PASSED. All 18 algorithms built and verified. Parallel verification wave passed unanimously (2 Reviewers, 2 Challengers with 29 adversarial test scenarios, Forensic Auditor). Finalization worker committing to repository.
+- **Phase**: Milestone 2 (Commercial Workflows & Settlement) In Progress
 
 ## Victory Audit Status
 - **Auditor**: [to be spawned on victory claim]
@@ -48,5 +49,5 @@ Sentinel monitoring and orchestration lifecycle management for ELEPAY CORE — C
 - /home/antigravity/Elemarket9/ELEPAY-Core/tests/e2e/ — 111 Tiers 1-4 Opaque-Box Tests
 - /home/antigravity/Elemarket9/ELEPAY-Core/scripts/run_e2e.py — Python standard library E2E test runner
 - /home/antigravity/Elemarket9/ELEPAY-Core/docs/readiness-scorecard.md — Scorecard with verified commit evidence
-- /home/antigravity/Elemarket9/ELEPAY-Core/.agents/teamwork/sub_orch_milestone_1/GATE_STATUS.md — M1 Gate Status (PASSED)
+- /home/antigravity/Elemarket9/ELEPAY-Core/.agents/teamwork/sub_orch_milestone_2/SCOPE.md — Milestone 2 Scope
 - /home/antigravity/Elemarket9/ELEPAY-Core/.agents/teamwork/sentinel/BRIEFING.md — Sentinel state & situational awareness
