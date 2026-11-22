@@ -1,4 +1,4 @@
-# BRIEFING — 2026-11-22T03:55:00Z
+# BRIEFING — 2026-11-22T04:15:00Z
 
 ## Mission
 Implement Algorithms #040 - #048 (Compliance, Sanctions, PEP, AML) and Security Controls #075, #076, #078, #081-#084 with genuine production logic, DB migration V20, comprehensive tests, and readiness scorecard updates.
@@ -22,7 +22,7 @@ Implement Algorithms #040 - #048 (Compliance, Sanctions, PEP, AML) and Security 
 
 ## Current Parent
 - Conversation ID: 8bad7bfffd7b87726ff5069de7fe43f4
-- Updated: not yet
+- Updated: 2026-11-22T04:01:24Z
 
 ## Task Summary
 - **What to build**:
@@ -45,14 +45,20 @@ Implement Algorithms #040 - #048 (Compliance, Sanctions, PEP, AML) and Security 
 - **Success criteria**: Genuine implementation, Flyway V20 migration, comprehensive tests passing via Maven, scorecard updated, committed and pushed.
 
 ## Change Tracker
-- **Files modified**: None yet
-- **Build status**: Untested
-- **Pending issues**: Initial design and implementation
+- **Files modified**:
+  - `src/main/resources/db/migration/V20__compliance_security.sql`: schema for compliance and security tables
+  - `src/main/java/com/elepay/compliance/*`: 9 compliance service classes
+  - `src/main/java/com/elepay/security/*`: 7 security control classes
+  - `src/test/java/com/elepay/compliance/ComplianceAlgorithmsTest.java`: 9 test methods
+  - `src/test/java/com/elepay/security/SecurityControlsTest.java`: 8 test methods
+  - `docs/readiness-scorecard.md`: updated status and evidence
+- **Build status**: PASS (17 tests passing, Modularity test passing)
+- **Pending issues**: None
 
 ## Quality Status
-- **Build/test result**: Not yet run
+- **Build/test result**: Pass (17/17 tests passing, 0 failures, 0 errors)
 - **Lint status**: Clean
-- **Tests added/modified**: 0
+- **Tests added/modified**: 17 tests added across 2 test suites
 
 ## Loaded Skills
 - None
@@ -61,3 +67,4 @@ Implement Algorithms #040 - #048 (Compliance, Sanctions, PEP, AML) and Security 
 - DISPATCH.md — assignment dispatch
 - BRIEFING.md — persistent memory
 - progress.md — liveness heartbeat
+- handoff.md — 5-component handoff report
