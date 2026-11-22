@@ -1646,8 +1646,16 @@
           "currency" : {
             "type" : "string"
           },
+          "recipientBalance" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
           "reference" : {
             "type" : "string"
+          },
+          "senderBalance" : {
+            "format" : "int64",
+            "type" : "integer"
           },
           "transactionId" : {
             "format" : "uuid",
@@ -1942,6 +1950,10 @@
           "amount" : {
             "format" : "int64",
             "type" : "integer"
+          },
+          "confirmationId" : {
+            "format" : "uuid",
+            "type" : "string"
           },
           "recipient" : {
             "format" : "uuid",

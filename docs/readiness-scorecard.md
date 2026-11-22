@@ -6,16 +6,16 @@ This is an evidence-first baseline created from the supplied master specificatio
 
 | # | Area | Algorithm | Status | Evidence | Commit |
 |---:|---|---|---|---|---|
-| 1 | Ledger and money | double-entry posting | Partial | Claimed by master specification; runtime verification pending | — |
-| 2 | Ledger and money | ordered row locking | Partial | Claimed by master specification; runtime verification pending | — |
-| 3 | Ledger and money | idempotent request hashing | Partial | Claimed by master specification; runtime verification pending | — |
-| 4 | Ledger and money | integer proportional split | Partial | Claimed by master specification; runtime verification pending | — |
-| 5 | Ledger and money | linked reversal | Partial | Claimed by master specification; runtime verification pending | — |
-| 6 | Ledger and money | per-currency FX clearing | Partial | Claimed by master specification; runtime verification pending | — |
-| 7 | Ledger and money | fee schedule engine | Missing | No verified implementation evidence | — |
+| 1 | Ledger and money | double-entry posting | Built | `com.elepay.ledger.Ledger#post`, verified in `LedgerIT`, `WalletTransferFlowIT` | d461339 |
+| 2 | Ledger and money | ordered row locking | Built | `com.elepay.wallet.Wallets#send`, `Ledger#lock`, verified in `WalletTransferFlowIT` | d461339 |
+| 3 | Ledger and money | idempotent request hashing | Built | `com.elepay.common.Idempotency`, verified in `WalletTransferFlowIT`, `WalletIT` | d461339 |
+| 4 | Ledger and money | integer proportional split | Built | `com.elepay.common.ProportionalAllocation`, verified in `ProportionalAllocationTest` | d461339 |
+| 5 | Ledger and money | linked reversal | Built | `com.elepay.ledger.Ledger#reverse`, verified in `LedgerIT` | d461339 |
+| 6 | Ledger and money | per-currency FX clearing | Built | `com.elepay.ledger.Ledger#post`, `com.elepay.fx.FxService`, verified in `FxIT`, `LedgerIT` | d461339 |
+| 7 | Ledger and money | fee schedule engine | Built | `com.elepay.fees.FeeSchedule`, verified in `FeeScheduleTest`, `WalletTransferFlowIT` | d461339 |
 | 8 | Ledger and money | interest and yield accrual | Missing | No verified implementation evidence | — |
 | 9 | Ledger and money | revenue recognition | Missing | No verified implementation evidence | — |
-| 10 | Ledger and money | balance snapshots | Missing | No verified implementation evidence | — |
+| 10 | Ledger and money | balance snapshots | Built | `com.elepay.ledger.BalanceSnapshots`, `V13__balance_snapshots.sql`, verified in `BalanceSnapshotsTest`, `WalletTransferFlowIT` | d461339 |
 | 11 | Payment processing | exactly-once rail submission | Partial | Claimed by master specification; runtime verification pending | — |
 | 12 | Payment processing | unknown-outcome recovery | Partial | Claimed by master specification; runtime verification pending | — |
 | 13 | Payment processing | callback state machine | Partial | Claimed by master specification; runtime verification pending | — |
@@ -42,9 +42,9 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 34 | Fraud and risk | behavioural biometrics | Missing | No verified implementation evidence | — |
 | 35 | Fraud and risk | gradient-boosted fraud model | Missing | No verified implementation evidence | — |
 | 36 | Fraud and risk | chargeback prediction | Missing | No verified implementation evidence | — |
-| 37 | Compliance | audited lookups | Partial | Claimed by master specification; runtime verification pending | — |
-| 38 | Compliance | single-use confirmations | Partial | Claimed by master specification; runtime verification pending | — |
-| 39 | Compliance | KYC tier limits | Missing | No verified implementation evidence | — |
+| 37 | Compliance | audited lookups | Built | `com.elepay.wallet.RecipientConfirmations#lookup`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | d461339 |
+| 38 | Compliance | single-use confirmations | Built | `com.elepay.wallet.RecipientConfirmations`, `Wallets#send`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | d461339 |
+| 39 | Compliance | KYC tier limits | Built | `com.elepay.wallet.TransferLimits`, verified in `TransferLimitsTest`, `WalletTransferFlowIT` | d461339 |
 | 40 | Compliance | NIA matching | Missing | No verified implementation evidence | — |
 | 41 | Compliance | face match and liveness | Missing | No verified implementation evidence | — |
 | 42 | Compliance | fuzzy sanctions screening | Missing | No verified implementation evidence | — |
@@ -55,7 +55,7 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 47 | Compliance | BoG and FIC reporting | Missing | No verified implementation evidence | — |
 | 48 | Compliance | data retention | Missing | No verified implementation evidence | — |
 | 49 | Reconciliation and treasury | statement matching | Partial | Claimed by master specification; runtime verification pending | — |
-| 50 | Reconciliation and treasury | ledger reconstruction | Partial | Claimed by master specification; runtime verification pending | — |
+| 50 | Reconciliation and treasury | ledger reconstruction | Built | `com.elepay.ledger.Ledger#integrity`, `ledger_account_reconstruction`, verified in `LedgerIT`, `WalletTransferFlowIT` | d461339 |
 | 51 | Reconciliation and treasury | settlement batching | Partial | Claimed by master specification; runtime verification pending | — |
 | 52 | Reconciliation and treasury | fuzzy statement matching | Missing | No verified implementation evidence | — |
 | 53 | Reconciliation and treasury | provider fee verification | Missing | No verified implementation evidence | — |
@@ -78,29 +78,29 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 70 | Credit | collections prioritisation | Missing | No verified implementation evidence | — |
 | 71 | Credit | default prediction | Missing | No verified implementation evidence | — |
 | 72 | Credit | dynamic limit adjustment | Missing | No verified implementation evidence | — |
-| 73 | Security | HMAC verification | Partial | Claimed by master specification; runtime verification pending | — |
-| 74 | Security | PIN hashing | Partial | Claimed by master specification; runtime verification pending | — |
+| 73 | Security | HMAC verification | Built | `com.elepay.common.HmacVerification`, verified in `HmacVerificationTest` | d461339 |
+| 74 | Security | PIN hashing | Built | `com.elepay.wallet.WalletChannel#checkPin`, verified in `UssdIT` | d461339 |
 | 75 | Security | envelope encryption | Missing | No verified implementation evidence | — |
 | 76 | Security | key rotation | Missing | No verified implementation evidence | — |
 | 77 | Security | request signing | Missing | No verified implementation evidence | — |
 | 78 | Security | JWKS rollover | Missing | No verified implementation evidence | — |
 | 79 | Security | maker-checker | Missing | No verified implementation evidence | — |
-| 80 | Security | hash-chained audit | Missing | No verified implementation evidence | — |
+| 80 | Security | hash-chained audit | Built | `com.elepay.common.Audit`, `V14__hash_chained_audit.sql`, verified in `AuditTamperEvidentTest`, `WalletTransferFlowIT` | d461339 |
 | 81 | Security | admin anomaly detection | Missing | No verified implementation evidence | — |
 | 82 | Security | device binding | Missing | No verified implementation evidence | — |
 | 83 | Security | certificate pinning | Missing | No verified implementation evidence | — |
 | 84 | Security | CI secret scanning | Missing | No verified implementation evidence | — |
-| 85 | Reliability | outbox and inbox dedupe | Partial | Claimed by master specification; runtime verification pending | — |
+| 85 | Reliability | outbox and inbox dedupe | Built | `com.elepay.outbox.Outbox`, `OutboxDispatcher`, verified in `RestartRecoveryIT`, `WalletTransferFlowIT` | d461339 |
 | 86 | Reliability | circuit breaker | Missing | No verified implementation evidence | — |
 | 87 | Reliability | backoff and jitter | Missing | No verified implementation evidence | — |
-| 88 | Reliability | token-bucket limiting | Missing | No verified implementation evidence | — |
+| 88 | Reliability | token-bucket limiting | Built | `com.elepay.common.TokenBucketRateLimiter`, verified in `TokenBucketRateLimiterTest` | d461339 |
 | 89 | Reliability | load shedding | Missing | No verified implementation evidence | — |
 | 90 | Reliability | SLO burn alerts | Missing | No verified implementation evidence | — |
 | 91 | Reliability | success anomaly detection | Missing | No verified implementation evidence | — |
 | 92 | Reliability | autoscaling signals | Missing | No verified implementation evidence | — |
 | 93 | Reliability | fault injection | Missing | No verified implementation evidence | — |
 | 94 | Reliability | database failover | Missing | No verified implementation evidence | — |
-| 95 | Customer | phone normalisation | Partial | Claimed by master specification; runtime verification pending | — |
+| 95 | Customer | phone normalisation | Built | `com.elepay.common.References#msisdn`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | d461339 |
 | 96 | Customer | spending categorisation | Missing | No verified implementation evidence | — |
 | 97 | Customer | savings goals | Missing | No verified implementation evidence | — |
 | 98 | Customer | churn prediction | Missing | No verified implementation evidence | — |

@@ -21,8 +21,8 @@ class FeeScheduleTest {
     @Test void exactRoundingAndLargeValues() {
         var p = new FeeSchedule.Plan("tiny", 0, Long.MAX_VALUE,
                 List.of(new FeeSchedule.Tier(Long.MAX_VALUE, 1)));
-        assertEquals(0, FeeSchedule.calculate(p, 49));
-        assertEquals(1, FeeSchedule.calculate(p, 50));
+        assertEquals(0, FeeSchedule.calculate(p, 4_999));
+        assertEquals(1, FeeSchedule.calculate(p, 5_000));
         assertEquals(922_337_203_685_478L, FeeSchedule.calculate(p, Long.MAX_VALUE));
     }
 

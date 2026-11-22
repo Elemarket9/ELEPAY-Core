@@ -248,7 +248,7 @@ class RecipientConfirmations {
     public Preview preview(@Valid @RequestBody ConfirmedTransfer request) {
         UUID sender = wallets.customer(Actor.current());
         Confirmation c = validate(sender, request.confirmationId(), false);
-        long fee = DOMESTIC_TRANSFER_FEE;
+        long fee = com.elepay.fees.FeeSchedule.calculate(DOMESTIC_TRANSFER_FEE_PLAN, request.amount());
         return new Preview(c.id(), c.rail(), display(c), c.name(), request.amount(), fee,
                 Math.addExact(request.amount(), fee), Ledger.GHS, c.expiresAt());
     }
@@ -264,10 +264,9 @@ class RecipientConfirmations {
         String scope = "confirmed-transfer:" + sender;
         ConfirmedReceipt receipt = tx.execute(s -> idempotency.execute(scope, key, request, ConfirmedReceipt.class, () -> {
             Confirmation c = validate(sender, request.confirmationId(), true);
-            long fee = DOMESTIC_TRANSFER_FEE;
+            long fee = com.elepay.fees.FeeSchedule.calculate(DOMESTIC_TRANSFER_FEE_PLAN, request.amount());
             if (c.rail().equals("wallet")) {
-                Wallets.Receipt r = wallets.send(sender, scope, key, c.recipient(), request.amount());
-                markUsed(c.id(), r.transactionId());
+                Wallets.Receipt r = wallets.send(sender, scope, key, c.recipient(), request.amount(), c.id());
                 return new ConfirmedReceipt(r.transactionId(), r.reference(), r.amount(), fee, r.amount() + fee,
                         r.currency(), c.name(), display(c), "completed", null);
             }
@@ -276,7 +275,7 @@ class RecipientConfirmations {
             var batch = payouts.create("customer", sender, java.util.List.of(new Payouts.Item("transfer-" + key,
                     request.amount(), new Payouts.Destination(c.rail(), c.network(), c.destination(), c.name()), null,
                     c.name())), "Transfer to " + c.name(), actorSubject);
-            var item = batch.items().getFirst();
+            var item = batch.items().get(0);
             UUID reservation = db.sql("SELECT reservation_tx FROM payout WHERE id = :id").param("id", item.id())
                     .query(UUID.class).single();
             markUsed(c.id(), reservation);
@@ -291,7 +290,7 @@ class RecipientConfirmations {
         }));
         if (receipt != null && receipt.payoutBatch() != null) {
             payouts.submit(receipt.payoutBatch());
-            String status = payouts.batch(receipt.payoutBatch()).items().getFirst().status();
+            String status = payouts.batch(receipt.payoutBatch()).items().get(0).status();
             return new ConfirmedReceipt(receipt.transactionId(), receipt.reference(), receipt.amount(), receipt.fee(),
                     receipt.total(), receipt.currency(), receipt.verifiedName(), receipt.destination(),
                     status.equals("reserved") ? "submitted" : status, receipt.payoutBatch());
@@ -333,7 +332,9 @@ class RecipientConfirmations {
         return c;
     }
 
-    private static final long DOMESTIC_TRANSFER_FEE = 0;
+    private static final com.elepay.fees.FeeSchedule.Plan DOMESTIC_TRANSFER_FEE_PLAN =
+            new com.elepay.fees.FeeSchedule.Plan("domestic_transfer", 0, Long.MAX_VALUE,
+                    java.util.List.of(new com.elepay.fees.FeeSchedule.Tier(Long.MAX_VALUE, 0)));
 
     private static String display(Confirmation c) {
         return switch (c.rail()) {
