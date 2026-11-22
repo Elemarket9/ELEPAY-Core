@@ -13,7 +13,7 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 5 | Ledger and money | linked reversal | Built | `com.elepay.ledger.Ledger#reverse`, verified in `LedgerIT` | 65d3279 |
 | 6 | Ledger and money | per-currency FX clearing | Built | `com.elepay.ledger.Ledger#post`, `com.elepay.fx.FxService`, verified in `FxIT`, `LedgerIT` | 65d3279 |
 | 7 | Ledger and money | fee schedule engine | Built | `com.elepay.fees.FeeSchedule`, verified in `FeeScheduleTest`, `WalletTransferFlowIT` | 65d3279 |
-| 8 | Ledger and money | interest and yield accrual | Missing | No verified implementation evidence | — |
+| 8 | Ledger and money | interest and yield accrual | Built | `com.elepay.credit.InterestAccrualService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
 | 9 | Ledger and money | revenue recognition | Built | `com.elepay.checkout.CheckoutService`, `V16__reconciliation_and_treasury.sql`, verified in `MarketplaceCheckoutIT`, `MandateAndReconciliationIT` | 53b229b |
 | 10 | Ledger and money | balance snapshots | Built | `com.elepay.ledger.BalanceSnapshots`, `V13__balance_snapshots.sql`, verified in `BalanceSnapshotsTest`, `WalletTransferFlowIT` | 65d3279 |
 | 11 | Payment processing | exactly-once rail submission | Built | `com.elepay.rails.RailTransactions#submit`, direct adapters (`MtnMomoRail`, `TelecelCashRail`, `AirtelTigoRail`, `GhipssRail`, `CardAcquirerRail`), verified in `PartnerRailAdaptersTest`, `MarketplaceCheckoutIT` | 53b229b |
@@ -28,20 +28,20 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 20 | Payment processing | recurring billing mandates | Built | `com.elepay.checkout.MandateService`, `V15__mandates_and_dunning.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
 | 21 | Payment processing | dunning schedule | Built | `com.elepay.checkout.MandateService#progressDunning`, `V15__mandates_and_dunning.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
 | 22 | Payment processing | EMVCo QR encoding | Built | `com.elepay.checkout.EmvcoQr`, verified in `EmvcoQrTest` | 53b229b |
-| 23 | Fraud and risk | velocity rules | Built | `com.elepay.risk.VelocityService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
-| 24 | Fraud and risk | risk scoring rules | Built | `com.elepay.risk.RuleEngineService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
-| 25 | Fraud and risk | device fingerprinting | Built | `com.elepay.risk.DeviceRiskService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
-| 26 | Fraud and risk | SIM-swap check | Built | `com.elepay.risk.SimSwapService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
-| 27 | Fraud and risk | geo-velocity check | Built | `com.elepay.risk.GeoVelocityService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 7b642e5 |
-| 28 | Fraud and risk | account takeover detection | Built | `com.elepay.risk.AccountTakeoverService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
-| 29 | Fraud and risk | adaptive step-up | Built | `com.elepay.risk.StepUpAuthService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 7b642e5 |
-| 30 | Fraud and risk | merchant risk scoring | Built | `com.elepay.risk.MerchantRiskService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
-| 31 | Fraud and risk | promo abuse | Built | `com.elepay.risk.PromotionAbuseService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
-| 32 | Fraud and risk | mule graph detection | Built | `com.elepay.risk.MuleGraphService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
-| 33 | Fraud and risk | synthetic identity detection | Built | `com.elepay.risk.SyntheticIdentityService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
-| 34 | Fraud and risk | behavioural biometrics | Built | `com.elepay.risk.BehavioralBiometricsService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 7b642e5 |
-| 35 | Fraud and risk | gradient-boosted fraud model | Built | `com.elepay.risk.GradientBoostedFraudModel`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 7b642e5 |
-| 36 | Fraud and risk | chargeback prediction | Built | `com.elepay.risk.ChargebackPredictionService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 7b642e5 |
+| 23 | Fraud and risk | velocity rules | Built | `com.elepay.risk.VelocityService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 8f88813 |
+| 24 | Fraud and risk | risk scoring rules | Built | `com.elepay.risk.RuleEngineService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 8f88813 |
+| 25 | Fraud and risk | device fingerprinting | Built | `com.elepay.risk.DeviceRiskService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 8f88813 |
+| 26 | Fraud and risk | SIM-swap check | Built | `com.elepay.risk.SimSwapService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 8f88813 |
+| 27 | Fraud and risk | geo-velocity check | Built | `com.elepay.risk.GeoVelocityService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 8f88813 |
+| 28 | Fraud and risk | account takeover detection | Built | `com.elepay.risk.AccountTakeoverService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 8f88813 |
+| 29 | Fraud and risk | adaptive step-up | Built | `com.elepay.risk.StepUpAuthService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 8f88813 |
+| 30 | Fraud and risk | merchant risk scoring | Built | `com.elepay.risk.MerchantRiskService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 8f88813 |
+| 31 | Fraud and risk | promo abuse | Built | `com.elepay.risk.PromotionAbuseService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 8f88813 |
+| 32 | Fraud and risk | mule graph detection | Built | `com.elepay.risk.MuleGraphService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 8f88813 |
+| 33 | Fraud and risk | synthetic identity detection | Built | `com.elepay.risk.SyntheticIdentityService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 8f88813 |
+| 34 | Fraud and risk | behavioural biometrics | Built | `com.elepay.risk.BehavioralBiometricsService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 8f88813 |
+| 35 | Fraud and risk | gradient-boosted fraud model | Built | `com.elepay.risk.GradientBoostedFraudModel`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 8f88813 |
+| 36 | Fraud and risk | chargeback prediction | Built | `com.elepay.risk.ChargebackPredictionService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 8f88813 |
 | 37 | Compliance | audited lookups | Built | `com.elepay.wallet.RecipientConfirmations#lookup`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | 65d3279 |
 | 38 | Compliance | single-use confirmations | Built | `com.elepay.wallet.RecipientConfirmations`, `Wallets#send`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | 65d3279 |
 | 39 | Compliance | KYC tier limits | Built | `com.elepay.wallet.TransferLimits`, verified in `TransferLimitsTest`, `WalletTransferFlowIT` | 65d3279 |
@@ -61,23 +61,23 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 53 | Reconciliation and treasury | provider fee verification | Built | `com.elepay.operations.ReconciliationService#verifyPartnerFee`, verified in `MandateAndReconciliationIT` | 53b229b |
 | 54 | Reconciliation and treasury | suspense ageing | Built | `com.elepay.operations.ReconciliationService`, `V16__reconciliation_and_treasury.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
 | 55 | Reconciliation and treasury | settlement netting | Built | `com.elepay.checkout.CheckoutService#settleDue`, verified in `MarketplaceCheckoutIT`, `MandateAndReconciliationIT` | 53b229b |
-| 56 | Reconciliation and treasury | float forecasting | Missing | No verified implementation evidence | — |
-| 57 | Reconciliation and treasury | auto-rebalancing | Missing | No verified implementation evidence | — |
-| 58 | Reconciliation and treasury | merchant cash-flow forecasting | Missing | No verified implementation evidence | — |
+| 56 | Reconciliation and treasury | float forecasting | Built | `com.elepay.credit.FloatForecastingService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
+| 57 | Reconciliation and treasury | auto-rebalancing | Built | `com.elepay.credit.FloatRebalancingService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
+| 58 | Reconciliation and treasury | merchant cash-flow forecasting | Built | `com.elepay.credit.MerchantCashFlowForecastService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
 | 59 | FX and cross-border | rate sourcing | Built | `com.elepay.fx.FxRateService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
 | 60 | FX and cross-border | dynamic margin | Built | `com.elepay.fx.FxPricingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
 | 61 | FX and cross-border | corridor routing | Built | `com.elepay.fx.FxRoutingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
 | 62 | FX and cross-border | exposure limits | Built | `com.elepay.fx.FxExposureService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
 | 63 | FX and cross-border | delivery estimation | Built | `com.elepay.fx.FxDeliveryEstimator`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
 | 64 | FX and cross-border | multi-currency reconciliation | Built | `com.elepay.fx.FxDualReconciliationService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT`, `FxIT` | b78a96a |
-| 65 | Credit | cash-flow underwriting | Missing | No verified implementation evidence | — |
-| 66 | Credit | earned-wage eligibility | Missing | No verified implementation evidence | — |
-| 67 | Credit | overdraft scoring | Missing | No verified implementation evidence | — |
-| 68 | Credit | cash advance pricing | Missing | No verified implementation evidence | — |
-| 69 | Credit | repayment scheduling | Missing | No verified implementation evidence | — |
-| 70 | Credit | collections prioritisation | Missing | No verified implementation evidence | — |
-| 71 | Credit | default prediction | Missing | No verified implementation evidence | — |
-| 72 | Credit | dynamic limit adjustment | Missing | No verified implementation evidence | — |
+| 65 | Credit | cash-flow underwriting | Built | `com.elepay.credit.CashFlowUnderwritingService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
+| 66 | Credit | earned-wage eligibility | Built | `com.elepay.credit.EwaEligibilityService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
+| 67 | Credit | overdraft scoring | Built | `com.elepay.credit.OverdraftScoringService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
+| 68 | Credit | cash advance pricing | Built | `com.elepay.credit.MerchantCashAdvancePricingService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
+| 69 | Credit | repayment scheduling | Built | `com.elepay.credit.RepaymentSweepsService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
+| 70 | Credit | collections prioritisation | Built | `com.elepay.credit.CollectionsPrioritizationService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
+| 71 | Credit | default prediction | Built | `com.elepay.credit.DefaultPredictionService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
+| 72 | Credit | dynamic limit adjustment | Built | `com.elepay.credit.DynamicCreditLimitService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
 | 73 | Security | HMAC verification | Built | `com.elepay.common.HmacVerification`, verified in `HmacVerificationTest` | 65d3279 |
 | 74 | Security | PIN hashing | Built | `com.elepay.wallet.WalletChannel#checkPin`, verified in `UssdIT` | 65d3279 |
 | 75 | Security | envelope encryption | Built | `com.elepay.security.EnvelopeEncryption`, `V20__compliance_security.sql`, verified in `SecurityControlsTest#testEnvelopeEncryptionAndDecryption` | m5b-comp |
@@ -91,21 +91,21 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 83 | Security | certificate pinning | Built | `com.elepay.security.MobileCertificatePinningService`, `V20__compliance_security.sql`, verified in `SecurityControlsTest#testMobileCertificatePinning` | m5b-comp |
 | 84 | Security | CI secret scanning | Built | `com.elepay.security.CiSecurityScanner`, verified in `SecurityControlsTest#testCiSecurityScanner` | m5b-comp |
 | 85 | Reliability | outbox and inbox dedupe | Built | `com.elepay.outbox.Outbox`, `OutboxDispatcher`, verified in `RestartRecoveryIT`, `WalletTransferFlowIT` | 65d3279 |
-| 86 | Reliability | circuit breaker | Missing | No verified implementation evidence | — |
-| 87 | Reliability | backoff and jitter | Missing | No verified implementation evidence | — |
+| 86 | Reliability | circuit breaker | Built | `com.elepay.reliability.PartnerCircuitBreaker`, `PartnerCircuitBreakerRegistry`, `V21__credit_growth_platform.sql`, verified in `ReliabilityPlatformTest` | m6-plat |
+| 87 | Reliability | backoff and jitter | Built | `com.elepay.reliability.BackoffAndJitterRetry`, verified in `ReliabilityPlatformTest` | m6-plat |
 | 88 | Reliability | token-bucket limiting | Built | `com.elepay.common.TokenBucketRateLimiter`, verified in `TokenBucketRateLimiterTest` | 65d3279 |
-| 89 | Reliability | load shedding | Missing | No verified implementation evidence | — |
-| 90 | Reliability | SLO burn alerts | Missing | No verified implementation evidence | — |
-| 91 | Reliability | success anomaly detection | Missing | No verified implementation evidence | — |
-| 92 | Reliability | autoscaling signals | Missing | No verified implementation evidence | — |
-| 93 | Reliability | fault injection | Missing | No verified implementation evidence | — |
-| 94 | Reliability | database failover | Missing | No verified implementation evidence | — |
+| 89 | Reliability | load shedding | Built | `com.elepay.reliability.LoadShedder`, `V21__credit_growth_platform.sql`, verified in `ReliabilityPlatformTest` | m6-plat |
+| 90 | Reliability | SLO burn alerts | Built | `com.elepay.reliability.SloBurnRateAlertService`, `V21__credit_growth_platform.sql`, verified in `ReliabilityPlatformTest` | m6-plat |
+| 91 | Reliability | success anomaly detection | Built | `com.elepay.reliability.SuccessRateAnomalyDetector`, `V21__credit_growth_platform.sql`, verified in `ReliabilityPlatformTest` | m6-plat |
+| 92 | Reliability | autoscaling signals | Built | `com.elepay.reliability.ScalingSignalService`, `V21__credit_growth_platform.sql`, verified in `ReliabilityPlatformTest` | m6-plat |
+| 93 | Reliability | fault injection | Built | `com.elepay.reliability.FaultInjectionHarness`, `V21__credit_growth_platform.sql`, verified in `ReliabilityPlatformTest` | m6-plat |
+| 94 | Reliability | database failover | Built | `com.elepay.reliability.DatabaseFailoverRecoveryService`, verified in `ReliabilityPlatformTest` | m6-plat |
 | 95 | Customer | phone normalisation | Built | `com.elepay.common.References#msisdn`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | 65d3279 |
-| 96 | Customer | spending categorisation | Missing | No verified implementation evidence | — |
-| 97 | Customer | savings goals | Missing | No verified implementation evidence | — |
-| 98 | Customer | churn prediction | Missing | No verified implementation evidence | — |
-| 99 | Customer | notification timing | Missing | No verified implementation evidence | — |
-| 100 | Customer | personalised limits | Missing | No verified implementation evidence | — |
+| 96 | Customer | spending categorisation | Built | `com.elepay.growth.SpendingCategorizationService`, `V21__credit_growth_platform.sql`, verified in `GrowthPlatformTest` | m6-plat |
+| 97 | Customer | savings goals | Built | `com.elepay.growth.SavingsGoalsService`, `V21__credit_growth_platform.sql`, verified in `GrowthPlatformTest` | m6-plat |
+| 98 | Customer | churn prediction | Built | `com.elepay.growth.ChurnPredictionService`, `V21__credit_growth_platform.sql`, verified in `GrowthPlatformTest` | m6-plat |
+| 99 | Customer | notification timing | Built | `com.elepay.growth.NotificationTimingService`, `V21__credit_growth_platform.sql`, verified in `GrowthPlatformTest` | m6-plat |
+| 100 | Customer | personalised limits | Built | `com.elepay.growth.PersonalizedLimitService`, `V21__credit_growth_platform.sql`, verified in `GrowthPlatformTest` | m6-plat |
 
 ## Readiness gates
 
