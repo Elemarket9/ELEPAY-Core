@@ -177,6 +177,25 @@ public class PosController {
                 () -> orderService.addTenderPayment(orderId, req.tenderType(), req.amountPesewas(), req.reference()));
     }
 
+    @PostMapping("/orders/{orderId}/digital-checkout")
+    public PosOrderService.DigitalCheckout startDigital(@PathVariable UUID orderId) {
+        verifyOrder(orderId);
+        return orderService.startDigital(orderId, com.elepay.identity.Actor.current().subject());
+    }
+
+    @PostMapping("/orders/{orderId}/digital-checkout/confirm")
+    public PosOrderService.PosOrder confirmDigital(@PathVariable UUID orderId) {
+        verifyOrder(orderId);
+        return orderService.confirmDigital(orderId);
+    }
+
+    @PostMapping("/orders/{orderId}/digital-checkout/cancel")
+    public ResponseEntity<Void> cancelDigital(@PathVariable UUID orderId) {
+        verifyOrder(orderId);
+        orderService.cancelDigital(orderId, com.elepay.identity.Actor.current().subject());
+        return ResponseEntity.noContent().build();
+    }
+
     // Split Bills
     @PostMapping("/orders/{orderId}/split/even")
     public PosSplitBillService.EvenSplitResult splitBillEven(@PathVariable UUID orderId, @RequestParam int count) {

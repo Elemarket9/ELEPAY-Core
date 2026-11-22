@@ -154,8 +154,10 @@ public class PosCommerceTest extends PostgresTestBase {
         assertThat(order.status()).isEqualTo("PENDING");
         assertThat(order.totalPesewas()).isEqualTo(3000L);
 
-        // 3. Multi-tender payment: 10.00 GHS via MoMo + 25.00 GHS via Cash (total 35.00 GHS) -> 5.00 GHS change
-        orderService.addTenderPayment(order.id(), TenderType.MOMO, 1000L, "MOMO-REF-001");
+        // 3. Cash payment in two parts: 10.00 GHS + 25.00 GHS (total 35.00 GHS) -> 5.00 GHS change
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.addTenderPayment(order.id(), TenderType.MOMO, 1000L, "UNVERIFIED"))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+        orderService.addTenderPayment(order.id(), TenderType.CASH, 1000L, "CASH-PARTIAL");
         var updatedOrder1 = orderService.getOrder(order.id()).orElseThrow();
         assertThat(updatedOrder1.status()).isEqualTo("PARTIAL");
         assertThat(updatedOrder1.paidPesewas()).isEqualTo(1000L);
@@ -257,5 +259,42 @@ public class PosCommerceTest extends PostgresTestBase {
         var conflictResult = syncService.syncOfflineOrder(conflictPayload);
         assertThat(conflictResult.status()).isEqualTo("REJECTED");
         assertThat(conflictResult.resolutionApplied()).isEqualTo("REJECT_FLAGGED");
+    }
+
+    @Autowired private com.elepay.ledger.Ledger ledger;
+    @org.springframework.boot.test.web.server.LocalServerPort private int port;
+
+    @Test
+    void linkedDigitalCheckoutRequiresLedgerPaymentAndCannotBeAppliedTwice() {
+        ledger.open("merchant", merchantId, "pending", "GHS");
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Retail item", BigDecimal.ONE, 3000L, 0L, 0L, "[]", null, null, null)),
+                0L, 0L, 0L, "STANDARD");
+        orderService.addTenderPayment(order.id(), TenderType.CASH, 1000L, "CASH");
+        var link = orderService.startDigital(order.id(), "integration-test");
+        assertThat(link.amount()).isEqualTo(2000L);
+        assertThat(orderService.startDigital(order.id(), "integration-test").reference()).isEqualTo(link.reference());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.confirmDigital(order.id()))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.addTenderPayment(order.id(), TenderType.CASH, 2000L, "SECOND"))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+
+        var api = new com.elepay.TestApi(port);
+        String subject = UUID.randomUUID().toString();
+        String ops = api.token(subject + "-ops", "ops");
+        String customerToken = api.token(subject);
+        UUID customer = api.enroll(ops, subject, com.elepay.TestApi.uniquePhone(), "POS test customer");
+        ledger.post(com.elepay.ledger.Ledger.Posting.of("pos-test", subject, "topup", List.of(
+                com.elepay.ledger.Ledger.Leg.debit(com.elepay.ledger.Ledger.clearing("sandbox"), 2000L),
+                com.elepay.ledger.Ledger.Leg.credit(com.elepay.wallet.CustomerDirectory.available(customer), 2000L))));
+        var paid = api.call("POST", "/v1/checkouts/" + link.reference() + "/pay/wallet", customerToken,
+                UUID.randomUUID().toString(), null);
+        assertThat(paid.status()).as(paid.body().toString()).isEqualTo(200);
+        var confirmed = orderService.confirmDigital(order.id());
+        assertThat(confirmed.status()).isEqualTo("PAID");
+        assertThat(confirmed.paidPesewas()).isEqualTo(3000L);
+        assertThat(orderService.confirmDigital(order.id())).isEqualTo(confirmed);
+        assertThat(orderService.listTenderPayments(order.id())).hasSize(2);
+        assertThat(ledger.integrity().ok()).isTrue();
     }
 }

@@ -67,7 +67,10 @@ class PublicCheckouts {
     @GetMapping("/v1/public/checkouts/{reference}")
     public PublicCheckout view(@PathVariable String reference) {
         var c = checkouts.load(reference, false);
-        List<MethodTotal> methods = List.of("wallet", "momo", "card").stream().map(m -> {
+        List<MethodTotal> methods = List.of("wallet", "momo", "card").stream()
+                .filter(m -> m.equals("wallet") || (m.equals("card") ? rails.available("charge","card", "card")
+                        : List.of("mtn","telecel","airteltigo").stream().anyMatch(n -> rails.available("charge","momo",n))))
+                .map(m -> {
             long fee = checkouts.customerFee(m, c.subtotal());
             return new MethodTotal(m, fee, c.subtotal() + fee);
         }).toList();

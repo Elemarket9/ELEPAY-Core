@@ -19,13 +19,14 @@ public class PosOrderService {
     private final JdbcClient db;
     private final StockService stockService;
     private final PosCashierService cashierService;
-    @org.springframework.beans.factory.annotation.Value("${elepay.rails.sandbox.enabled:false}")
-    private boolean simulatedDigitalTender;
+    private final com.elepay.checkout.PosCheckoutGateway checkout;
 
-    public PosOrderService(JdbcClient db, StockService stockService, PosCashierService cashierService) {
+    public PosOrderService(JdbcClient db, StockService stockService, PosCashierService cashierService,
+                           com.elepay.checkout.PosCheckoutGateway checkout) {
         this.db = db;
         this.stockService = stockService;
         this.cashierService = cashierService;
+        this.checkout = checkout;
     }
 
     public record PosOrder(
@@ -221,17 +222,87 @@ public class PosOrderService {
             .list();
     }
 
+    public record DigitalCheckout(UUID id, UUID orderId, String reference, long amount, String status, String payUrl) {}
+    private record Link(UUID id, UUID orderId, String checkoutRef, long amount, String status) {}
+
+    private PosOrder lockOrder(UUID orderId) {
+        db.sql("SELECT id FROM pos_order WHERE id = :id FOR UPDATE").param("id", orderId).query(UUID.class)
+                .optional().orElseThrow(() -> com.elepay.common.ApiException.notFound("Order not found"));
+        return getOrder(orderId).orElseThrow();
+    }
+
+    private Optional<Link> link(UUID orderId) {
+        return db.sql("""
+                SELECT id, order_id, checkout_ref, amount, status FROM pos_checkout_link
+                WHERE order_id = :id AND status IN ('open','applied') ORDER BY created_at DESC LIMIT 1
+                """).param("id",orderId).query(Link.class).optional();
+    }
+
+    @Transactional
+    public DigitalCheckout startDigital(UUID orderId, String actor) {
+        PosOrder order = lockOrder(orderId);
+        Optional<Link> existing = link(orderId);
+        if (existing.isPresent()) {
+            Link l = existing.get();
+            return new DigitalCheckout(l.id(), orderId, l.checkoutRef(), l.amount(), l.status(), checkout.payUrl(l.checkoutRef()));
+        }
+        long amount = Math.subtractExact(order.totalPesewas(), order.paidPesewas());
+        if ("PAID".equals(order.status()) || amount <= 0)
+            throw com.elepay.common.ApiException.conflict("order_paid", "Order already paid");
+        UUID linkId = UUID.randomUUID();
+        String ref = checkout.create(order.merchantId(), order.branchId(), linkId, amount, actor);
+        db.sql("""
+                INSERT INTO pos_checkout_link (id, order_id, checkout_ref, amount, status)
+                VALUES (:id, :order, :ref, :amount, 'open')
+                """).param("id",linkId).param("order",orderId).param("ref",ref).param("amount",amount).update();
+        return new DigitalCheckout(linkId, orderId, ref, amount, "open", checkout.payUrl(ref));
+    }
+
+    @Transactional
+    public PosOrder confirmDigital(UUID orderId) {
+        PosOrder order = lockOrder(orderId);
+        Link l = link(orderId).orElseThrow(() -> com.elepay.common.ApiException.notFound("Digital checkout not found"));
+        if ("applied".equals(l.status())) return order;
+        if (Math.subtractExact(order.totalPesewas(), order.paidPesewas()) != l.amount())
+            throw com.elepay.common.ApiException.conflict("pos_payment_mismatch", "POS balance no longer matches checkout");
+        var evidence = checkout.requirePaid(l.checkoutRef(),order.merchantId(),order.branchId(),l.amount());
+        TenderType type = switch (evidence.method()) {
+            case "momo" -> TenderType.MOMO;
+            case "card" -> TenderType.CARD;
+            case "wallet" -> TenderType.WALLET;
+            default -> throw com.elepay.common.ApiException.unprocessable("unsupported_payment", "Unsupported checkout payment method");
+        };
+        PosOrder result = recordTender(order,type,l.amount(),l.checkoutRef());
+        db.sql("UPDATE pos_checkout_link SET status = 'applied', journal_tx = :journal WHERE id = :id")
+                .param("journal",evidence.journalTx()).param("id",l.id()).update();
+        return result;
+    }
+
+    @Transactional
+    public void cancelDigital(UUID orderId, String actor) {
+        PosOrder order = lockOrder(orderId);
+        Link l = link(orderId).orElseThrow(() -> com.elepay.common.ApiException.notFound("Digital checkout not found"));
+        if (!"open".equals(l.status()))
+            throw com.elepay.common.ApiException.conflict("checkout_paid", "Paid checkout cannot be cancelled");
+        checkout.cancel(order.merchantId(),order.branchId(),l.checkoutRef(),actor);
+        db.sql("UPDATE pos_checkout_link SET status = 'cancelled' WHERE id = :id").param("id",l.id()).update();
+    }
+
     @Transactional
     public PosOrder addTenderPayment(UUID orderId, TenderType tenderType, long amountPesewas, String reference) {
-        if (tenderType == null) throw new IllegalArgumentException("Tender type required");
-        if (tenderType != TenderType.CASH && !simulatedDigitalTender)
-            throw com.elepay.common.ApiException.unprocessable("digital_payment_unverified", "An authoritative payment is required");
+        if (tenderType != TenderType.CASH)
+            throw com.elepay.common.ApiException.unprocessable("digital_payment_unverified", "Use the linked ELEPAY checkout");
+        PosOrder order = lockOrder(orderId);
+        if (link(orderId).isPresent())
+            throw com.elepay.common.ApiException.conflict("digital_payment_active", "Resolve the linked checkout before recording cash");
+        return recordTender(order, tenderType, amountPesewas, reference);
+    }
+
+    private PosOrder recordTender(PosOrder order, TenderType tenderType, long amountPesewas, String reference) {
         if (amountPesewas <= 0) throw new IllegalArgumentException("Payment amount must be positive");
-        db.sql("SELECT id FROM pos_order WHERE id = :id FOR UPDATE").param("id", orderId).query(UUID.class).optional().orElseThrow();
-        PosOrder order = getOrder(orderId).orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));
-        if ("PAID".equals(order.status())) {
-            throw new IllegalStateException("Order is already fully paid");
-        }
+        UUID orderId = order.id();
+        if ("PAID".equals(order.status()))
+            throw com.elepay.common.ApiException.conflict("order_paid", "Order is already fully paid");
 
         UUID paymentId = UUID.randomUUID();
         db.sql("""
