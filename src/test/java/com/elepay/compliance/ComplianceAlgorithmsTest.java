@@ -17,11 +17,10 @@ class ComplianceAlgorithmsTest {
 
     // --- 040: Ghana Card Matching ---
     @Test
-    @DisplayName("040: Validates Ghana Card format and check digit, and performs simulated NIA matching")
+    @DisplayName("040: Validates Ghana Card format and check digit, and handles unconfigured and test NIA matching")
     void testGhanaCardVerification() {
-        GhanaCardVerificationService service = new GhanaCardVerificationService(null, new GhanaCardVerificationService.SimulatedNiaClient());
-
-        // Calculate a valid check digit for "123456789"
+        // 1. Unconfigured production default: must return UNAVAILABLE without auto-approving
+        GhanaCardVerificationService unconfiguredService = new GhanaCardVerificationService(null);
         int checkDigit = GhanaCardVerificationService.calculateLuhnCheckDigit("123456789");
         String validId = "GHA-123456789-" + checkDigit;
         String invalidId = "GHA-123456789-9"; // Wrong check digit
@@ -32,6 +31,13 @@ class ComplianceAlgorithmsTest {
         }
 
         UUID customerId = UUID.randomUUID();
+        var unconfResult = unconfiguredService.verify(customerId, validId, "Kwame Mensah", LocalDate.of(1990, 5, 15), "M");
+        assertThat(unconfResult.status()).isEqualTo(GhanaCardVerificationService.Status.UNAVAILABLE);
+        assertThat(unconfResult.details()).contains("not configured");
+        assertThat(unconfResult.simulationProvider()).isEqualTo("UNCONFIGURED_NIA");
+
+        // 2. Test sandbox double
+        GhanaCardVerificationService service = new GhanaCardVerificationService(null, new GhanaCardVerificationService.SimulatedNiaClient());
         var result = service.verify(customerId, validId, "Kwame Mensah", LocalDate.of(1990, 5, 15), "M");
         assertThat(result.status()).isEqualTo(GhanaCardVerificationService.Status.VERIFIED);
         assertThat(result.simulated()).isTrue();
@@ -46,51 +52,76 @@ class ComplianceAlgorithmsTest {
 
     // --- 041: Face Matching and Liveness ---
     @Test
-    @DisplayName("041: Enforces consent, checks anti-spoofing liveness, and routes borderline matches to manual review")
+    @DisplayName("041: Validates biometric consent, anti-spoofing liveness, authentic matching, and manual review queue")
     void testFaceMatchingAndLiveness() {
-        FaceMatchingLivenessService service = new FaceMatchingLivenessService(null);
+        FaceMatchingLivenessService defaultService = new FaceMatchingLivenessService(null);
         UUID customerId = UUID.randomUUID();
         byte[] dummyPhoto = "photo-bytes-id".getBytes();
         byte[] dummySelfie = "selfie-bytes-user".getBytes();
 
         // 1. Consent required
         var noConsent = new FaceMatchingLivenessService.BiometricSubmission(
-                customerId, false, dummyPhoto, dummySelfie, 0.95, 0.95
+                customerId, false, dummyPhoto, dummySelfie, 0.95
         );
-        assertThatThrownBy(() -> service.processBiometrics(noConsent))
+        assertThatThrownBy(() -> defaultService.processBiometrics(noConsent))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("Explicit biometric consent must be granted");
 
         // 2. Anti-spoofing rejection when liveness is low (< 0.80)
         var spoof = new FaceMatchingLivenessService.BiometricSubmission(
-                customerId, true, dummyPhoto, dummySelfie, 0.45, 0.95
+                customerId, true, dummyPhoto, dummySelfie, 0.45
         );
-        var spoofRecord = service.processBiometrics(spoof);
+        var spoofRecord = defaultService.processBiometrics(spoof);
         assertThat(spoofRecord.status()).isEqualTo(FaceMatchingLivenessService.VerificationStatus.REJECTED);
         assertThat(spoofRecord.isLive()).isFalse();
 
-        // 3. Auto-approval when live and high match score (>= 0.80)
-        var autoApproved = new FaceMatchingLivenessService.BiometricSubmission(
-                customerId, true, dummyPhoto, dummySelfie, 0.95, 0.88
+        // 3. Fail closed to manual review when no authentic biometric evaluator is configured
+        var unconfiguredSubmission = new FaceMatchingLivenessService.BiometricSubmission(
+                customerId, true, dummyPhoto, dummySelfie, 0.95
         );
-        var approvedRecord = service.processBiometrics(autoApproved);
-        assertThat(approvedRecord.status()).isEqualTo(FaceMatchingLivenessService.VerificationStatus.APPROVED);
+        var unconfiguredRecord = defaultService.processBiometrics(unconfiguredSubmission);
+        assertThat(unconfiguredRecord.status()).isEqualTo(FaceMatchingLivenessService.VerificationStatus.MANUAL_REVIEW_REQUIRED);
+        assertThat(unconfiguredRecord.reviewerNotes()).contains("not configured");
 
-        // 4. Borderline match (0.60 to 0.79) routes to human review queue
-        var borderline = new FaceMatchingLivenessService.BiometricSubmission(
-                customerId, true, dummyPhoto, dummySelfie, 0.92, 0.72
+        // 4. Authentic biometric evaluator configured: high match score (>= 0.80) -> APPROVED
+        FaceMatchingLivenessService.BiometricEvaluator highMatchEvaluator = (idPhoto, selfie) ->
+                new FaceMatchingLivenessService.BiometricEvaluationResult(true, 0.88, "HIGH", "Authentic model match");
+        FaceMatchingLivenessService authenticService = new FaceMatchingLivenessService(null, highMatchEvaluator);
+
+        var approvedSubmission = new FaceMatchingLivenessService.BiometricSubmission(
+                customerId, true, dummyPhoto, dummySelfie, 0.95
         );
-        var reviewRecord = service.processBiometrics(borderline);
+        var approvedRecord = authenticService.processBiometrics(approvedSubmission);
+        assertThat(approvedRecord.status()).isEqualTo(FaceMatchingLivenessService.VerificationStatus.APPROVED);
+        assertThat(approvedRecord.matchScore()).isEqualTo(0.88);
+
+        // 5. Borderline match (0.60 to 0.79) routes to human review queue
+        FaceMatchingLivenessService.BiometricEvaluator borderlineEvaluator = (idPhoto, selfie) ->
+                new FaceMatchingLivenessService.BiometricEvaluationResult(true, 0.72, "MEDIUM", "Borderline features");
+        FaceMatchingLivenessService borderlineService = new FaceMatchingLivenessService(null, borderlineEvaluator);
+
+        var borderlineSubmission = new FaceMatchingLivenessService.BiometricSubmission(
+                customerId, true, dummyPhoto, dummySelfie, 0.92
+        );
+        var reviewRecord = borderlineService.processBiometrics(borderlineSubmission);
         assertThat(reviewRecord.status()).isEqualTo(FaceMatchingLivenessService.VerificationStatus.MANUAL_REVIEW_REQUIRED);
 
         // Review queue inspection and analyst approval
-        var queue = service.getManualReviewQueue();
+        var queue = borderlineService.getManualReviewQueue();
         assertThat(queue).anyMatch(r -> r.id().equals(reviewRecord.id()));
 
         UUID analystId = UUID.randomUUID();
-        var reviewed = service.reviewCase(reviewRecord.id(), analystId, FaceMatchingLivenessService.VerificationStatus.APPROVED, "Manual comparison verified customer features");
+        var reviewed = borderlineService.reviewCase(reviewRecord.id(), analystId, FaceMatchingLivenessService.VerificationStatus.APPROVED, "Manual comparison verified customer features");
         assertThat(reviewed.status()).isEqualTo(FaceMatchingLivenessService.VerificationStatus.APPROVED);
         assertThat(reviewed.reviewedBy()).isEqualTo(analystId);
+
+        // 6. Low match score (< 0.60) -> REJECTED
+        FaceMatchingLivenessService.BiometricEvaluator lowMatchEvaluator = (idPhoto, selfie) ->
+                new FaceMatchingLivenessService.BiometricEvaluationResult(true, 0.40, "LOW", "Facial mismatch");
+        FaceMatchingLivenessService mismatchService = new FaceMatchingLivenessService(null, lowMatchEvaluator);
+
+        var mismatchRecord = mismatchService.processBiometrics(borderlineSubmission);
+        assertThat(mismatchRecord.status()).isEqualTo(FaceMatchingLivenessService.VerificationStatus.REJECTED);
     }
 
     // --- 042: Fuzzy Sanctions Screening ---

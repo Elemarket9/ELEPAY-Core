@@ -116,9 +116,9 @@ public class IntegrityKeys {
         }
     }
 
-    /** Constant-time check of a stored MAC. False for an unknown key. */
+    /** Constant-time check of a stored MAC. False for an unknown key or invalid inputs. */
     public boolean verifyMac(String keyId, String data, String expected) {
-        if (expected == null || !macKeys.containsKey(keyId)) return false;
+        if (expected == null || data == null || keyId == null || !macKeys.containsKey(keyId)) return false;
         return MessageDigest.isEqual(mac(keyId, data).getBytes(StandardCharsets.UTF_8),
                 expected.getBytes(StandardCharsets.UTF_8));
     }
@@ -146,6 +146,10 @@ public class IntegrityKeys {
 
     /** Verifies both halves against the given public keys. Both must hold. */
     public static boolean verify(PublicKeys keys, byte[] data, String ed25519Signature, String mldsaSignature) {
+        if (keys == null || data == null || ed25519Signature == null || mldsaSignature == null
+                || keys.ed25519() == null || keys.mldsa65() == null) {
+            return false;
+        }
         try {
             Base64.Decoder d = Base64.getDecoder();
             PublicKey ed = KeyFactory.getInstance("Ed25519", BC).generatePublic(new X509EncodedKeySpec(d.decode(keys.ed25519())));

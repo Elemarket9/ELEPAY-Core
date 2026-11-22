@@ -65,4 +65,28 @@ class HmacVerificationTest {
         assertFalse(HmacVerification.verifyWithTimestamp(secret, timestamp + 301, payload,
                 HmacVerification.computeHex(secret, (timestamp + 301) + "." + payload), now, 300));
     }
+
+    @Test
+    void webhooksHeaderVerification() {
+        String secret = "whsec_live_abcdef1234567890";
+        String body = "{\"event\":\"charge.success\",\"data\":{\"id\":\"ch_123\"}}";
+        long now = Instant.now().getEpochSecond();
+        String sigHex = com.elepay.outbox.Webhooks.sign(secret, now + "." + body);
+        String header = "t=" + now + ",v1=" + sigHex;
+
+        assertTrue(com.elepay.outbox.Webhooks.verifySignature(secret, header, body));
+        assertTrue(com.elepay.outbox.Webhooks.verifySignature(secret, "v1=" + sigHex + ", t=" + now, body),
+                "Header parts order should not matter");
+
+        // Tampered body
+        assertFalse(com.elepay.outbox.Webhooks.verifySignature(secret, header, body + " "));
+        // Tampered secret
+        assertFalse(com.elepay.outbox.Webhooks.verifySignature("wrong_secret", header, body));
+        // Malformed header
+        assertFalse(com.elepay.outbox.Webhooks.verifySignature(secret, "invalid_header", body));
+        assertFalse(com.elepay.outbox.Webhooks.verifySignature(secret, "t=not_a_number,v1=" + sigHex, body));
+        assertFalse(com.elepay.outbox.Webhooks.verifySignature(null, header, body));
+        assertFalse(com.elepay.outbox.Webhooks.verifySignature(secret, null, body));
+        assertFalse(com.elepay.outbox.Webhooks.verifySignature(secret, header, null));
+    }
 }

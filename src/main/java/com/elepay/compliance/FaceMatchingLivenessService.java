@@ -16,7 +16,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 /**
  * Biometric face matching and anti-spoofing liveness service (Algorithm 041).
  * Validates user consent, performs anti-spoofing liveness scoring,
- * computes facial similarity against ID photos, and manages a human review queue.
+ * evaluates facial similarity via authentic biometric evaluation (or fails closed
+ * to human review queue when unconfigured), and manages the manual review queue.
  */
 public class FaceMatchingLivenessService {
 
@@ -48,19 +49,51 @@ public class FaceMatchingLivenessService {
             boolean consentObtained,
             byte[] idPhotoBytes,
             byte[] selfieBytes,
-            double measuredLivenessScore,
-            double simulatedMatchScore
+            double measuredLivenessScore
+    ) {
+        /**
+         * Deprecated constructor retaining parameter compatibility.
+         * Note: simulatedMatchScore is strictly ignored in production; authentic evaluation is required.
+         */
+        @Deprecated
+        public BiometricSubmission(UUID customerId, boolean consentObtained, byte[] idPhotoBytes, byte[] selfieBytes,
+                                  double measuredLivenessScore, double simulatedMatchScore) {
+            this(customerId, consentObtained, idPhotoBytes, selfieBytes, measuredLivenessScore);
+        }
+    }
+
+    /**
+     * Authentic biometric evaluation provider contract.
+     * Evaluates face similarity between an official ID credential photo and a live capture selfie.
+     */
+    public interface BiometricEvaluator {
+        BiometricEvaluationResult evaluate(byte[] idPhotoBytes, byte[] selfieBytes);
+        default boolean isConfigured() { return true; }
+        default String getEngineName() { return "AUTHENTIC_BIOMETRIC_EVALUATOR"; }
+    }
+
+    public record BiometricEvaluationResult(
+            boolean evaluated,
+            double matchScore,
+            String confidenceBand,
+            String details
     ) {}
 
     private final JdbcClient db;
+    private final BiometricEvaluator evaluator;
     private final Map<UUID, FaceVerificationRecord> memoryQueue = new ConcurrentHashMap<>();
 
-    private static final double LIVENESS_THRESHOLD = 0.80;
-    private static final double AUTO_APPROVE_THRESHOLD = 0.80;
-    private static final double MANUAL_REVIEW_MIN_THRESHOLD = 0.60;
+    public static final double LIVENESS_THRESHOLD = 0.80;
+    public static final double AUTO_APPROVE_THRESHOLD = 0.80;
+    public static final double MANUAL_REVIEW_MIN_THRESHOLD = 0.60;
 
     public FaceMatchingLivenessService(JdbcClient db) {
+        this(db, null);
+    }
+
+    public FaceMatchingLivenessService(JdbcClient db, BiometricEvaluator evaluator) {
         this.db = db;
+        this.evaluator = evaluator;
     }
 
     public FaceVerificationRecord processBiometrics(BiometricSubmission submission) {
@@ -84,16 +117,38 @@ public class FaceMatchingLivenessService {
         // 3. Evaluate Liveness
         boolean isLive = submission.measuredLivenessScore() >= LIVENESS_THRESHOLD;
 
-        // 4. Determine status based on anti-spoofing & facial match score
+        // 4. Determine status based on anti-spoofing & authentic facial evaluation
         VerificationStatus status;
+        double matchScore = 0.0;
+        String notes;
+
         if (!isLive) {
             status = VerificationStatus.REJECTED;
-        } else if (submission.simulatedMatchScore() >= AUTO_APPROVE_THRESHOLD) {
-            status = VerificationStatus.APPROVED;
-        } else if (submission.simulatedMatchScore() >= MANUAL_REVIEW_MIN_THRESHOLD) {
-            status = VerificationStatus.MANUAL_REVIEW_REQUIRED;
+            notes = "Anti-spoofing liveness check failed (liveness score " + submission.measuredLivenessScore() + " < " + LIVENESS_THRESHOLD + ")";
+        } else if (evaluator != null && evaluator.isConfigured()) {
+            // Authentic biometric evaluation
+            BiometricEvaluationResult evalResult = evaluator.evaluate(submission.idPhotoBytes(), submission.selfieBytes());
+            if (!evalResult.evaluated()) {
+                status = VerificationStatus.MANUAL_REVIEW_REQUIRED;
+                matchScore = evalResult.matchScore();
+                notes = "Authentic biometric evaluator inconclusive: " + evalResult.details();
+            } else {
+                matchScore = evalResult.matchScore();
+                if (matchScore >= AUTO_APPROVE_THRESHOLD) {
+                    status = VerificationStatus.APPROVED;
+                    notes = "Authentic biometric match verified by " + evaluator.getEngineName() + " (score " + matchScore + ")";
+                } else if (matchScore >= MANUAL_REVIEW_MIN_THRESHOLD) {
+                    status = VerificationStatus.MANUAL_REVIEW_REQUIRED;
+                    notes = "Borderline biometric match (score " + matchScore + "); escalated to manual compliance review queue";
+                } else {
+                    status = VerificationStatus.REJECTED;
+                    notes = "Biometric facial mismatch (score " + matchScore + " < " + MANUAL_REVIEW_MIN_THRESHOLD + ")";
+                }
+            }
         } else {
-            status = VerificationStatus.REJECTED;
+            // FAIL CLOSED: No synthetic score pass-through. Without an authentic evaluator, escalate to human review queue.
+            status = VerificationStatus.MANUAL_REVIEW_REQUIRED;
+            notes = "Biometric evaluation engine not configured; authentic facial evaluation requires manual compliance review queue";
         }
 
         UUID recordId = UUID.randomUUID();
@@ -104,12 +159,12 @@ public class FaceMatchingLivenessService {
                 true,
                 now,
                 submission.measuredLivenessScore(),
-                submission.simulatedMatchScore(),
+                matchScore,
                 isLive,
                 status,
                 idPhotoHash,
                 selfieHash,
-                null,
+                notes,
                 null,
                 now,
                 null
@@ -121,8 +176,8 @@ public class FaceMatchingLivenessService {
             try {
                 db.sql("""
                     INSERT INTO biometric_face_verification
-                    (id, customer_id, consent_obtained, consent_timestamp, liveness_score, match_score, is_live, status, id_photo_hash, selfie_hash, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, customer_id, consent_obtained, consent_timestamp, liveness_score, match_score, is_live, status, id_photo_hash, selfie_hash, reviewer_notes, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """)
                     .params(
                             record.id(),
@@ -135,6 +190,7 @@ public class FaceMatchingLivenessService {
                             record.status().name(),
                             record.idPhotoHash(),
                             record.selfieHash(),
+                            record.reviewerNotes(),
                             record.createdAt()
                     )
                     .update();

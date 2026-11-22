@@ -48,9 +48,18 @@ public class AuditCheckpoints {
         keys.register(db);
     }
 
-    static byte[] message(long lastEntryId, String lastEntryHash, long entries, OffsetDateTime createdAt) {
+    public static byte[] message(long lastEntryId, String lastEntryHash, long entries, OffsetDateTime createdAt) {
         return ("elepay-audit-checkpoint:v1\n" + lastEntryId + "\n" + lastEntryHash + "\n" + entries + "\n"
                 + createdAt.toInstant()).getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Verifies a checkpoint's hybrid signature against provided public keys without requiring database access.
+     */
+    public static boolean verifyCheckpoint(IntegrityKeys.PublicKeys keys, Checkpoint checkpoint) {
+        if (keys == null || checkpoint == null) return false;
+        byte[] msg = message(checkpoint.lastEntryId(), checkpoint.lastEntryHash(), checkpoint.entries(), checkpoint.createdAt());
+        return IntegrityKeys.verify(keys, msg, checkpoint.ed25519Signature(), checkpoint.mldsa65Signature());
     }
 
     /** Signs the current chain head. Returns empty when nothing new has been logged since the last checkpoint. */

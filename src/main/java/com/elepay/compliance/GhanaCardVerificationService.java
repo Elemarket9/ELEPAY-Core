@@ -55,9 +55,13 @@ public class GhanaCardVerificationService {
     private final JdbcClient db;
     private final NiaClient niaClient;
 
+    public GhanaCardVerificationService(JdbcClient db) {
+        this(db, null);
+    }
+
     public GhanaCardVerificationService(JdbcClient db, NiaClient niaClient) {
         this.db = db;
-        this.niaClient = Objects.requireNonNull(niaClient, "Explicit NIA client required; never default to simulated verification");
+        this.niaClient = niaClient != null ? niaClient : new UnconfiguredNiaClient();
     }
 
     public static boolean isValidFormat(String idNumber) {
@@ -145,8 +149,37 @@ public class GhanaCardVerificationService {
     }
 
     /**
-     * Default simulated NIA client for testing and sandbox environments.
+     * Production fallback when an official NIA client bean or credentials are not configured.
+     * Always fails closed with {@link Status#UNAVAILABLE}.
      */
+    public static class UnconfiguredNiaClient implements NiaClient {
+        @Override
+        public NiaResponse queryNia(String idNumber, String fullName, LocalDate dateOfBirth) {
+            return new NiaResponse(
+                    Status.UNAVAILABLE,
+                    0.0,
+                    null,
+                    null,
+                    "Official National Identification Authority (NIA) client bean or credentials not configured; verification unavailable"
+            );
+        }
+
+        @Override
+        public boolean isSimulated() {
+            return false;
+        }
+
+        @Override
+        public String getProviderName() {
+            return "UNCONFIGURED_NIA";
+        }
+    }
+
+    /**
+     * Test double for isolated testing and sandbox environments only.
+     * Never used as default fallback in production.
+     */
+    @Deprecated
     public static class SimulatedNiaClient implements NiaClient {
         @Override
         public NiaResponse queryNia(String idNumber, String fullName, LocalDate dateOfBirth) {

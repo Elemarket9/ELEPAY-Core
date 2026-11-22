@@ -269,4 +269,36 @@ public class Webhooks implements OutboxConsumer {
             throw new IllegalStateException(e);
         }
     }
+
+    /**
+     * Verifies an incoming Elepay-Signature header against the raw body using constant-time comparison
+     * and replay window validation.
+     * Header format: {@code Elepay-Signature: t=<unix>,v1=<hex(hmac(secret, t + "." + body))>}
+     */
+    public static boolean verifySignature(String secret, String signatureHeader, String rawBody) {
+        return verifySignature(secret, signatureHeader, rawBody, com.elepay.common.HmacVerification.DEFAULT_TOLERANCE_SECONDS);
+    }
+
+    public static boolean verifySignature(String secret, String signatureHeader, String rawBody, long toleranceSeconds) {
+        if (secret == null || signatureHeader == null || rawBody == null) return false;
+        String[] parts = signatureHeader.split(",");
+        String timestampStr = null;
+        String signatureHex = null;
+        for (String part : parts) {
+            String trimmed = part.trim();
+            if (trimmed.startsWith("t=")) {
+                timestampStr = trimmed.substring(2);
+            } else if (trimmed.startsWith("v1=")) {
+                signatureHex = trimmed.substring(3);
+            }
+        }
+        if (timestampStr == null || signatureHex == null) return false;
+        try {
+            long timestampSeconds = Long.parseLong(timestampStr);
+            return com.elepay.common.HmacVerification.verifyWithTimestamp(secret, timestampSeconds, rawBody, signatureHex,
+                    java.time.Instant.now(), toleranceSeconds);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
 }
