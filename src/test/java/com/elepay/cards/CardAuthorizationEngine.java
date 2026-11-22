@@ -1,7 +1,11 @@
 package com.elepay.cards;
 
+import com.elepay.common.ApiException;
+import com.elepay.ledger.Ledger;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -13,17 +17,32 @@ public class CardAuthorizationEngine implements CardProcessorContract {
     private final JdbcClient db;
     private final CardControlsService controlsService;
     private final CompanyExpenseCardService expenseCardService;
+    private final CardIssuingService issuingService;
+    private final Ledger ledger;
+    private final NetworkTokenService networkTokenService;
 
-    public CardAuthorizationEngine(JdbcClient db, CardControlsService controlsService, CompanyExpenseCardService expenseCardService) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public CardAuthorizationEngine(
+            JdbcClient db,
+            CardControlsService controlsService,
+            CompanyExpenseCardService expenseCardService,
+            CardIssuingService issuingService,
+            Ledger ledger,
+            NetworkTokenService networkTokenService
+    ) {
         this.db = db;
         this.controlsService = controlsService;
         this.expenseCardService = expenseCardService;
+        this.issuingService = issuingService;
+        this.ledger = ledger;
+        this.networkTokenService = networkTokenService;
     }
 
     private static class CardRecord {
         UUID id;
+        UUID customerId;
+        UUID merchantId;
         String status;
-        String cvv2;
         int expiryMonth;
         int expiryYear;
         long perTxLimitPesewas;
@@ -43,29 +62,47 @@ public class CardAuthorizationEngine implements CardProcessorContract {
 
         String panHash = CardIssuingService.hashPan(req.pan());
 
+        // 1. Check if PAN matches a primary card in card_registry
         var cardOpt = db.sql("""
-            SELECT id, status, cvv2, expiry_month, expiry_year, per_tx_limit_pesewas,
+            SELECT id, customer_id, merchant_id, status, expiry_month, expiry_year, per_tx_limit_pesewas,
                    daily_limit_pesewas, monthly_limit_pesewas, current_day_spent_pesewas,
                    current_month_spent_pesewas, last_spend_date
             FROM card_registry
             WHERE pan_hash = ?
             FOR UPDATE
         """).param(panHash)
-        .query((rs, rowNum) -> {
-            CardRecord c = new CardRecord();
-            c.id = rs.getObject("id", UUID.class);
-            c.status = rs.getString("status");
-            c.cvv2 = rs.getString("cvv2");
-            c.expiryMonth = rs.getInt("expiry_month");
-            c.expiryYear = rs.getInt("expiry_year");
-            c.perTxLimitPesewas = rs.getLong("per_tx_limit_pesewas");
-            c.dailyLimitPesewas = rs.getLong("daily_limit_pesewas");
-            c.monthlyLimitPesewas = rs.getLong("monthly_limit_pesewas");
-            c.currentDaySpentPesewas = rs.getLong("current_day_spent_pesewas");
-            c.currentMonthSpentPesewas = rs.getLong("current_month_spent_pesewas");
-            c.lastSpendDate = rs.getObject("last_spend_date", LocalDate.class);
-            return c;
-        }).optional();
+        .query(this::mapCardRecord).optional();
+
+        boolean isNetworkToken = false;
+        NetworkToken networkToken = null;
+
+        // 2. If not found in card_registry, check if PAN is an active Network Token
+        if (cardOpt.isEmpty()) {
+            Optional<NetworkToken> tokenOpt = networkTokenService.findByTokenPan(req.pan());
+            if (tokenOpt.isPresent()) {
+                networkToken = tokenOpt.get();
+                isNetworkToken = true;
+
+                if (networkToken.status() != TokenStatus.ACTIVE) {
+                    return recordDecline(networkToken.cardId(), req, "DECLINED_TOKEN_" + networkToken.status(), "403");
+                }
+
+                if (networkToken.expiryMonth() != req.expiryMonth() || networkToken.expiryYear() != req.expiryYear()) {
+                    return recordDecline(networkToken.cardId(), req, "DECLINED_INVALID_TOKEN_EXPIRY", "401");
+                }
+
+                // Load underlying card for limits and ledger hold
+                cardOpt = db.sql("""
+                    SELECT id, customer_id, merchant_id, status, expiry_month, expiry_year, per_tx_limit_pesewas,
+                           daily_limit_pesewas, monthly_limit_pesewas, current_day_spent_pesewas,
+                           current_month_spent_pesewas, last_spend_date
+                    FROM card_registry
+                    WHERE id = ?
+                    FOR UPDATE
+                """).param(networkToken.cardId())
+                .query(this::mapCardRecord).optional();
+            }
+        }
 
         if (cardOpt.isEmpty()) {
             return recordDecline(null, req, "DECLINED_CARD_NOT_FOUND", "404");
@@ -77,12 +114,15 @@ public class CardAuthorizationEngine implements CardProcessorContract {
             return recordDecline(card.id, req, "DECLINED_CARD_" + card.status, "403");
         }
 
-        if (!card.cvv2.equals(req.cvv2())) {
-            return recordDecline(card.id, req, "DECLINED_INVALID_CVV2", "401");
-        }
+        // For non-token card transactions, verify CVV2 dynamically using secret Card Verification Key
+        if (!isNetworkToken) {
+            if (!issuingService.verifyCvv2(req.pan(), card.expiryMonth, card.expiryYear, req.cvv2())) {
+                return recordDecline(card.id, req, "DECLINED_INVALID_CVV2", "401");
+            }
 
-        if (card.expiryMonth != req.expiryMonth() || card.expiryYear != req.expiryYear()) {
-            return recordDecline(card.id, req, "DECLINED_INVALID_EXPIRY", "401");
+            if (card.expiryMonth != req.expiryMonth() || card.expiryYear != req.expiryYear()) {
+                return recordDecline(card.id, req, "DECLINED_INVALID_EXPIRY", "401");
+            }
         }
 
         LocalDate today = LocalDate.now();
@@ -145,7 +185,60 @@ public class CardAuthorizationEngine implements CardProcessorContract {
             """).params(req.amountPesewas(), expCard.id()).update();
         }
 
-        // All checks passed! Update card registry spending counters
+        // ---------------------------------------------------------------------
+        // Wire to Authoritative Financial Ledger: Atomic Balance Hold / Reservation
+        // ---------------------------------------------------------------------
+        String ownerType = card.customerId != null ? "customer" : (card.merchantId != null ? "merchant" : null);
+        UUID ownerId = card.customerId != null ? card.customerId : card.merchantId;
+
+        if (ownerType == null) {
+            return recordDecline(card.id, req, "DECLINED_UNBACKED_CARD", "403");
+        }
+
+        String currency = req.currency() != null && !req.currency().isBlank() ? req.currency() : Ledger.GHS;
+        // Ensure available and reserved accounts exist
+        ledger.open(ownerType, ownerId, "available", currency);
+        ledger.open(ownerType, ownerId, "reserved", currency);
+
+        String availableAccount = Ledger.code(ownerType, ownerId, "available", currency);
+        String reservedAccount = Ledger.code(ownerType, ownerId, "reserved", currency);
+
+        // Pre-check available funds on authoritative ledger
+        long availableBalance = ledger.balance(availableAccount);
+        if (availableBalance < req.amountPesewas()) {
+            return recordDecline(card.id, req, "DECLINED_INSUFFICIENT_FUNDS", "51");
+        }
+
+        String authCode = "AUTH-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+
+        try {
+            Ledger.Posting holdPosting = new Ledger.Posting(
+                    "card-auth-hold:" + card.id,
+                    authCode,
+                    "card:authorization:hold",
+                    "Card spend hold: " + req.merchantName(),
+                    List.of(
+                            Ledger.Leg.debit(availableAccount, req.amountPesewas()),
+                            Ledger.Leg.credit(reservedAccount, req.amountPesewas())
+                    ),
+                    null, // related_to is FK to journal_transaction(id)
+                    Map.of(
+                            "authCode", authCode,
+                            "cardId", card.id.toString(),
+                            "merchantName", req.merchantName() != null ? req.merchantName() : "",
+                            "mcc", req.mcc() != null ? req.mcc() : "",
+                            "isNetworkToken", String.valueOf(isNetworkToken)
+                    )
+            );
+            ledger.post(holdPosting);
+        } catch (ApiException e) {
+            if ("insufficient_funds".equalsIgnoreCase(e.code()) || (e.getMessage() != null && e.getMessage().contains("insufficient"))) {
+                return recordDecline(card.id, req, "DECLINED_INSUFFICIENT_FUNDS", "51");
+            }
+            return recordDecline(card.id, req, "DECLINED_LEDGER_ERROR: " + e.getMessage(), "500");
+        }
+
+        // All checks passed and ledger hold placed! Update card registry spending counters
         daySpent += req.amountPesewas();
         monthSpent += req.amountPesewas();
 
@@ -158,15 +251,13 @@ public class CardAuthorizationEngine implements CardProcessorContract {
             WHERE id = ?
         """).params(daySpent, monthSpent, today, card.id).update();
 
-        String authCode = "AUTH-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
-
         UUID txnId = UUID.randomUUID();
         db.sql("""
             INSERT INTO card_transaction
             (id, card_id, merchant_name, merchant_city, mcc, amount_pesewas, currency, auth_code, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED')
         """).params(txnId, card.id, req.merchantName(), req.merchantCity(), req.mcc(),
-                req.amountPesewas(), req.currency() != null ? req.currency() : "GHS", authCode)
+                req.amountPesewas(), currency, authCode)
         .update();
 
         return new AuthorizationResponse(true, authCode, "00", null);
@@ -184,5 +275,22 @@ public class CardAuthorizationEngine implements CardProcessorContract {
             .update();
         }
         return new AuthorizationResponse(false, null, code, reason);
+    }
+
+    private CardRecord mapCardRecord(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
+        CardRecord c = new CardRecord();
+        c.id = rs.getObject("id", UUID.class);
+        c.customerId = rs.getObject("customer_id", UUID.class);
+        c.merchantId = rs.getObject("merchant_id", UUID.class);
+        c.status = rs.getString("status");
+        c.expiryMonth = rs.getInt("expiry_month");
+        c.expiryYear = rs.getInt("expiry_year");
+        c.perTxLimitPesewas = rs.getLong("per_tx_limit_pesewas");
+        c.dailyLimitPesewas = rs.getLong("daily_limit_pesewas");
+        c.monthlyLimitPesewas = rs.getLong("monthly_limit_pesewas");
+        c.currentDaySpentPesewas = rs.getLong("current_day_spent_pesewas");
+        c.currentMonthSpentPesewas = rs.getLong("current_month_spent_pesewas");
+        c.lastSpendDate = rs.getObject("last_spend_date", LocalDate.class);
+        return c;
     }
 }

@@ -9,18 +9,48 @@ import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * PCI DSS 4.0.1 Compliant Card Issuing Service.
+ * - Never stores CVV2 or PIN blocks in the database.
+ * - Prohibits standard test BINs (411111, 539999).
+ * - Implements AES-256-GCM authenticated envelope encryption with unique DEKs and AAD.
+ */
 @Service
 public class CardIssuingService {
 
+    public static final String PRODUCTION_VISA_BIN = "402234";
+    public static final String PRODUCTION_MASTERCARD_BIN = "524128";
+
     private final JdbcClient db;
+    private final CardPanVault vault;
     private final SecureRandom random = new SecureRandom();
+    private final String visaBin;
+    private final String mastercardBin;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public CardIssuingService(
+            JdbcClient db,
+            CardPanVault vault,
+            @Value("${elepay.cards.issuing.bin.visa:402234}") String visaBin,
+            @Value("${elepay.cards.issuing.bin.mastercard:524128}") String mastercardBin
+    ) {
+        this.db = db;
+        this.vault = vault;
+        this.visaBin = visaBin;
+        this.mastercardBin = mastercardBin;
+    }
+
+    public CardIssuingService(JdbcClient db, CardPanVault vault) {
+        this(db, vault, PRODUCTION_VISA_BIN, PRODUCTION_MASTERCARD_BIN);
+    }
 
     public CardIssuingService(JdbcClient db) {
-        this.db = db;
+        this(db, new CardPanVault());
     }
 
     public record CardDetails(
@@ -30,8 +60,8 @@ public class CardIssuingService {
             String cardType,
             String scheme,
             String maskedPan,
-            String fullPan, // returned only upon creation
-            String cvv2,
+            String fullPan, // returned only upon initial creation
+            String cvv2,    // returned only upon initial creation, NEVER stored in database
             int expiryMonth,
             int expiryYear,
             String status,
@@ -64,7 +94,7 @@ public class CardIssuingService {
 
     public static int calculateLuhnCheckDigit(String numberWithoutCheck) {
         int sum = 0;
-        boolean alternate = true; // since the check digit will be at the end (odd position from right)
+        boolean alternate = true;
         for (int i = numberWithoutCheck.length() - 1; i >= 0; i--) {
             int n = numberWithoutCheck.charAt(i) - '0';
             if (alternate) {
@@ -82,12 +112,15 @@ public class CardIssuingService {
     public String generatePan(String scheme) {
         String bin;
         if ("VISA".equalsIgnoreCase(scheme)) {
-            bin = "411111"; // Standard test BIN for Visa
+            bin = visaBin;
         } else if ("MASTERCARD".equalsIgnoreCase(scheme)) {
-            bin = "539999"; // Standard test BIN for Mastercard
+            bin = mastercardBin;
         } else {
             throw new IllegalArgumentException("Unsupported scheme: " + scheme);
         }
+
+        // Strictly enforce PCI DSS mandate: Never generate production cards using test BINs
+        CardPanVault.assertProductionBin(bin);
 
         StringBuilder accountBuilder = new StringBuilder(bin);
         // Add 9 random digits to reach 15 digits
@@ -103,11 +136,6 @@ public class CardIssuingService {
             throw new IllegalStateException("Generated PAN failed Luhn check: " + fullPan);
         }
         return fullPan;
-    }
-
-    public String generateCvv2() {
-        int code = random.nextInt(1000);
-        return String.format("%03d", code);
     }
 
     public static String hashPan(String pan) {
@@ -130,7 +158,6 @@ public class CardIssuingService {
         String fullPan = generatePan(scheme);
         String panHash = hashPan(fullPan);
         String maskedPan = maskPan(fullPan);
-        String cvv2 = generateCvv2();
 
         LocalDate now = LocalDate.now();
         int expiryMonth = now.getMonthValue();
@@ -144,18 +171,26 @@ public class CardIssuingService {
         long dailyLimit = 2000000L;   // 20,000 GHS
         long monthlyLimit = 10000000L;// 100,000 GHS
 
+        // Compute dynamic CVV2 using secret Card Verification Key (never persisted)
+        String cvv2 = vault.computeCvv2(fullPan, expiryMonth, expiryYear);
+
+        // Real AES-256-GCM envelope encryption with unique DEK and cardId-bound AAD
+        String encryptedPan = vault.encryptPan(cardId, fullPan);
+
+        // PCI DSS 4.0.1: cvv2 column is strictly NULL in database storage
         db.sql("""
             INSERT INTO card_registry
             (id, customer_id, merchant_id, card_type, scheme, masked_pan, pan_hash,
              encrypted_pan, cvv2, expiry_month, expiry_year, status, per_tx_limit_pesewas,
              daily_limit_pesewas, monthly_limit_pesewas, current_day_spent_pesewas,
              current_month_spent_pesewas, last_spend_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, CURRENT_DATE)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 0, 0, CURRENT_DATE)
         """).params(cardId, customerId, merchantId, cardType.toUpperCase(), scheme.toUpperCase(),
-                maskedPan, panHash, "ENC:" + fullPan, cvv2, expiryMonth, expiryYear, initialStatus,
+                maskedPan, panHash, encryptedPan, expiryMonth, expiryYear, initialStatus,
                 perTxLimit, dailyLimit, monthlyLimit)
         .update();
 
+        // Return details with fullPan and cvv2 only for initial cardholder presentation
         return new CardDetails(
                 cardId, customerId, merchantId, cardType.toUpperCase(), scheme.toUpperCase(),
                 maskedPan, fullPan, cvv2, expiryMonth, expiryYear, initialStatus,
@@ -165,7 +200,7 @@ public class CardIssuingService {
 
     public Optional<CardDetails> getCardById(UUID cardId) {
         return db.sql("""
-            SELECT id, customer_id, merchant_id, card_type, scheme, masked_pan, cvv2,
+            SELECT id, customer_id, merchant_id, card_type, scheme, masked_pan,
                    expiry_month, expiry_year, status, per_tx_limit_pesewas,
                    daily_limit_pesewas, monthly_limit_pesewas, created_at
             FROM card_registry
@@ -178,8 +213,8 @@ public class CardIssuingService {
                 rs.getString("card_type"),
                 rs.getString("scheme"),
                 rs.getString("masked_pan"),
-                null,
-                rs.getString("cvv2"),
+                null, // fullPan never retrieved after issuance
+                null, // cvv2 never stored or retrieved
                 rs.getInt("expiry_month"),
                 rs.getInt("expiry_year"),
                 rs.getString("status"),
@@ -188,5 +223,17 @@ public class CardIssuingService {
                 rs.getLong("monthly_limit_pesewas"),
                 rs.getObject("created_at", OffsetDateTime.class)
         )).optional();
+    }
+
+    public boolean verifyCvv2(String pan, int expiryMonth, int expiryYear, String cvv2) {
+        return vault.verifyCvv2(pan, expiryMonth, expiryYear, cvv2);
+    }
+
+    public String decryptPan(UUID cardId, String encryptedPan) {
+        return vault.decryptPan(cardId, encryptedPan);
+    }
+
+    public CardPanVault vault() {
+        return vault;
     }
 }
