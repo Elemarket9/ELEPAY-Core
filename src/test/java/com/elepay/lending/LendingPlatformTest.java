@@ -101,7 +101,7 @@ public class LendingPlatformTest extends PostgresTestBase {
 
         assertThatThrownBy(() -> contractService.disburse(contract.id(), true)).hasMessageContaining("SIMULATIONS_NOT_PERMITTED");
         ledger.open("merchant", merchantId, "available", Ledger.GHS);
-        ledger.openSystem(LoanContractService.FUNDING, "lending_funding", Ledger.GHS, false);
+        ledger.openSystem(LoanContractService.FUNDING, "clearing", Ledger.GHS, false);
         String testSource = ledger.openSystem("system:test_loan_funds:GHS", "clearing", Ledger.GHS, true);
         ledger.post(Ledger.Posting.of("test-loan-fund", contract.id().toString(), "test_funding",List.of(Ledger.Leg.debit(testSource,1_000_000L),Ledger.Leg.credit(LoanContractService.FUNDING,1_000_000L))));
         configService.setLiveLendingEnabled(true);

@@ -1,7 +1,10 @@
 package com.elepay.agents;
 
+import com.elepay.ledger.Ledger;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -15,6 +18,7 @@ public class AgentCashOutService {
     private final AgentOnboardingService onboardingService;
     private final AgentFloatService floatService;
     private final AgentCommissionEngine commissionEngine;
+    private final Ledger ledger;
     private final SecureRandom random = new SecureRandom();
 
     public AgentCashOutService(
@@ -22,13 +26,15 @@ public class AgentCashOutService {
             AgentConfigService configService,
             AgentOnboardingService onboardingService,
             AgentFloatService floatService,
-            AgentCommissionEngine commissionEngine
+            AgentCommissionEngine commissionEngine,
+            Ledger ledger
     ) {
         this.db = db;
         this.configService = configService;
         this.onboardingService = onboardingService;
         this.floatService = floatService;
         this.commissionEngine = commissionEngine;
+        this.ledger = ledger;
     }
 
     public record CashOutOtpChallenge(
@@ -50,6 +56,16 @@ public class AgentCashOutService {
             long updatedFloatPesewas,
             String status
     ) {}
+
+    private UUID resolveCustomer(String phoneOrAccount) {
+        try {
+            return UUID.fromString(phoneOrAccount);
+        } catch (IllegalArgumentException e) {
+            return db.sql("SELECT id FROM customer WHERE phone = ?").param(phoneOrAccount)
+                    .query(UUID.class).optional()
+                    .orElseGet(() -> UUID.nameUUIDFromBytes(phoneOrAccount.getBytes(StandardCharsets.UTF_8)));
+        }
+    }
 
     @Transactional
     public CashOutOtpChallenge generateOtpChallenge(UUID agentId, String customerPhone, UUID customerWalletId, long amountPesewas) {
@@ -88,7 +104,7 @@ public class AgentCashOutService {
         }
 
         var challengeOpt = db.sql("""
-            SELECT id, otp_code, expires_at, status, amount_pesewas
+            SELECT id, otp_code, expires_at, status, amount_pesewas, customer_wallet_id
             FROM agent_cash_out_otp
             WHERE agent_id = ? AND customer_phone = ? AND status = 'PENDING'
             ORDER BY created_at DESC
@@ -101,6 +117,7 @@ public class AgentCashOutService {
             OffsetDateTime expiresAt = rs.getObject("expires_at", OffsetDateTime.class);
             String status = rs.getString("status");
             long expectedAmount = rs.getLong("amount_pesewas");
+            UUID customerWalletId = rs.getObject("customer_wallet_id", UUID.class);
         }).optional();
 
         if (challengeOpt.isEmpty()) {
@@ -131,6 +148,20 @@ public class AgentCashOutService {
         long floatBefore = floatAcc.availableFloatPesewas();
         long floatAfter = floatBefore + amountPesewas;
 
+        // Authoritative double-entry ledger posting:
+        // Debit customer wallet account, Credit agent float account
+        UUID customerId = challenge.customerWalletId != null ? challenge.customerWalletId : resolveCustomer(customerPhone);
+        String customerAccount = ledger.open("customer", customerId, "available", Ledger.GHS);
+        String agentAccount = ledger.open("merchant", agentId, "available", Ledger.GHS);
+
+        UUID txnId = UUID.randomUUID();
+        String ref = "COT-" + System.currentTimeMillis() + "-" + txnId.toString().substring(0, 6).toUpperCase();
+
+        var posted = ledger.post(Ledger.Posting.of("agent-cash-out", ref, "agent_cash_out", List.of(
+                Ledger.Leg.debit(customerAccount, amountPesewas),
+                Ledger.Leg.credit(agentAccount, amountPesewas)
+        )).describedAs("Agent cash-out withdrawal from customer: " + customerPhone));
+
         // Credit agent float with cash-out amount, accrue commission
         db.sql("""
             UPDATE agent_float_account
@@ -141,17 +172,14 @@ public class AgentCashOutService {
         """).params(amountPesewas, comm.agentSharePesewas(), agentId)
         .update();
 
-        UUID txnId = UUID.randomUUID();
-        String ref = "COT-" + System.currentTimeMillis() + "-" + txnId.toString().substring(0, 6).toUpperCase();
-
         db.sql("""
             INSERT INTO agent_transaction
             (id, agent_id, transaction_type, customer_identifier, amount_pesewas,
              float_before_pesewas, float_after_pesewas, agent_commission_pesewas,
-             platform_fee_pesewas, reference, status)
-            VALUES (?, ?, 'CASH_OUT', ?, ?, ?, ?, ?, ?, ?, 'COMPLETED')
+             platform_fee_pesewas, reference, status, journal_tx)
+            VALUES (?, ?, 'CASH_OUT', ?, ?, ?, ?, ?, ?, ?, 'COMPLETED', ?)
         """).params(txnId, agentId, customerPhone, amountPesewas, floatBefore, floatAfter,
-                comm.agentSharePesewas(), comm.platformSharePesewas(), ref)
+                comm.agentSharePesewas(), comm.platformSharePesewas(), ref, posted.transactionId())
         .update();
 
         return new CashOutReceipt(txnId, ref, agentId, customerPhone, amountPesewas, comm.agentSharePesewas(), floatAfter, "COMPLETED");

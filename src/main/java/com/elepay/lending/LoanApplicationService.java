@@ -1,6 +1,7 @@
 package com.elepay.lending;
 
 import com.elepay.identity.Actor;
+import java.math.BigInteger;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
@@ -77,17 +78,19 @@ public class LoanApplicationService {
             return new ScoreCardEvaluation(300, "REJECT", 0L, "REJECTED", "Monthly turnover must be strictly positive");
         }
 
-        double turnoverRatio = (double) sub.requestedAmountPesewas() / sub.monthlyTurnoverPesewas();
+        long ratioBps = BigInteger.valueOf(sub.requestedAmountPesewas())
+                .multiply(BigInteger.valueOf(10000L))
+                .divide(BigInteger.valueOf(sub.monthlyTurnoverPesewas())).longValueExact();
         int baseScore = 650;
 
         // Favorable ratio: loan <= 50% of monthly turnover adds points
-        if (turnoverRatio <= 0.5) {
+        if (ratioBps <= 5000) {
             baseScore += 100;
-        } else if (turnoverRatio <= 1.0) {
+        } else if (ratioBps <= 10000) {
             baseScore += 50;
-        } else if (turnoverRatio <= 2.0) {
+        } else if (ratioBps <= 20000) {
             baseScore += 0;
-        } else if (turnoverRatio <= 3.0) {
+        } else if (ratioBps <= 30000) {
             baseScore -= 100;
         } else {
             baseScore -= 200;
@@ -113,12 +116,14 @@ public class LoanApplicationService {
             reason = "Excellent cash-flow profile, approved for 100% of requested amount";
         } else if (finalScore >= 600) {
             riskBand = "MEDIUM";
-            maxApproved = Math.min(product.maxAmountPesewas(), (long) (sub.requestedAmountPesewas() * 0.85));
+            maxApproved = Math.min(product.maxAmountPesewas(),
+                    BigInteger.valueOf(sub.requestedAmountPesewas()).multiply(BigInteger.valueOf(85L)).divide(BigInteger.valueOf(100L)).longValueExact());
             decision = "APPROVED";
             reason = "Satisfactory cash-flow profile, approved with 15% debt containment cushion";
         } else if (finalScore >= 500) {
             riskBand = "HIGH";
-            maxApproved = Math.min(product.maxAmountPesewas(), (long) (sub.requestedAmountPesewas() * 0.60));
+            maxApproved = Math.min(product.maxAmountPesewas(),
+                    BigInteger.valueOf(sub.requestedAmountPesewas()).multiply(BigInteger.valueOf(60L)).divide(BigInteger.valueOf(100L)).longValueExact());
             decision = "APPROVED";
             reason = "High debt-to-turnover ratio, approved with 40% risk-adjusted reduction";
         } else {

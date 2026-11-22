@@ -27,7 +27,8 @@ public class AgentConfigService {
     }
 
     public void assertPermitted(boolean isSimulation) {
-        if (!isSimulation && !isLiveAgentEnabled()) {
+        if (isSimulation) throw new IllegalStateException("SIMULATIONS_NOT_PERMITTED");
+        if (!isLiveAgentEnabled()) {
             throw new IllegalStateException("LIVE_AGENT_DISABLED: Agent live operations are disabled by policy until regulatory clearance.");
         }
     }

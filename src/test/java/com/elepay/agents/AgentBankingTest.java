@@ -1,6 +1,9 @@
 package com.elepay.agents;
 
 import com.elepay.PostgresTestBase;
+import com.elepay.common.ApiException;
+import com.elepay.ledger.Ledger;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -32,6 +35,9 @@ public class AgentBankingTest extends PostgresTestBase {
     @Autowired
     private AgentPortalService portalService;
 
+    @Autowired
+    private Ledger ledger;
+
     @Test
     @DisplayName("Domain 11: Authorized Agent Banking Platform - Onboarding, Float, Cash-In, Cash-Out, Commissions, Daily Payout, Portal")
     void testAgentBankingPlatform() {
@@ -53,24 +59,40 @@ public class AgentBankingTest extends PostgresTestBase {
         assertThat(onboardingService.verifyPin(agent.id(), "4321")).isTrue();
         assertThat(onboardingService.verifyPin(agent.id(), "0000")).isFalse();
 
-        // 3. Float Account Management
+        // 3. Float Account Management & Ledger Invariant (Prohibit money creation out of thin air)
         var initialFloat = floatService.getFloatAccount(agent.id()).orElseThrow();
         assertThat(initialFloat.availableFloatPesewas()).isEqualTo(0L);
 
-        // Replenish float with 10,000 GHS (1,000,000 pesewas)
         String floatRef = "BANK-TXN-" + UUID.randomUUID().toString().substring(0, 8);
+        // Attempting to replenish float without funded bank deposit or settlement must fail
+        assertThatThrownBy(() -> floatService.replenishFloat(agent.id(), 1_000_000L, floatRef))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("Insufficient");
+
+        // Fund bank deposit legitimately
+        floatService.recordBankDeposit(1_000_000L, floatRef);
+
+        // Replenish float with 10,000 GHS (1,000,000 pesewas)
         var replenishedFloat = floatService.replenishFloat(agent.id(), 1_000_000L, floatRef);
         assertThat(replenishedFloat.availableFloatPesewas()).isEqualTo(1_000_000L);
+        assertThat(ledger.balance(Ledger.code("merchant", agent.id(), "available", Ledger.GHS))).isEqualTo(1_000_000L);
 
         // 4. Cash-In (Deposit to customer) with PIN authorization
-        // Live operation must fail by policy
+        // Live operation must fail when policy is disabled
         assertThatThrownBy(() -> cashInService.processCashIn(new AgentCashInService.CashInRequest(
                 agent.id(), "4321", "0244112233", 50000L, false // 500 GHS
         ))).isInstanceOf(IllegalStateException.class).hasMessageContaining("LIVE_AGENT_DISABLED");
 
-        // Simulation cash-in succeeds
+        // Simulation cash-in must be rejected
+        assertThatThrownBy(() -> cashInService.processCashIn(new AgentCashInService.CashInRequest(
+                agent.id(), "4321", "0244112233", 50000L, true
+        ))).isInstanceOf(IllegalStateException.class).hasMessageContaining("SIMULATIONS_NOT_PERMITTED");
+
+        // Enable live agent operations
+        configService.setLiveAgentEnabled(true);
+
         var cashInReceipt = cashInService.processCashIn(new AgentCashInService.CashInRequest(
-                agent.id(), "4321", "0244112233", 50000L, true // 500 GHS
+                agent.id(), "4321", "0244112233", 50000L, false // 500 GHS
         ));
         assertThat(cashInReceipt.status()).isEqualTo("COMPLETED");
         assertThat(cashInReceipt.amountPesewas()).isEqualTo(50000L);
@@ -81,28 +103,45 @@ public class AgentBankingTest extends PostgresTestBase {
         var floatAfterCashIn = floatService.getFloatAccount(agent.id()).orElseThrow();
         assertThat(floatAfterCashIn.availableFloatPesewas()).isEqualTo(950_000L);
         assertThat(floatAfterCashIn.accruedCommissionPesewas()).isGreaterThan(0L);
+        assertThat(ledger.balance(Ledger.code("merchant", agent.id(), "available", Ledger.GHS))).isEqualTo(950_000L);
 
-        // 5. Cash-Out (Withdrawal from customer) with OTP Challenge
-        // Step 1: Customer requests cash-out, system generates OTP challenge
+        // 5. Cash-Out (Withdrawal from customer) with OTP Challenge & Customer Ledger Balance
         UUID customerWallet = UUID.randomUUID();
+        // Pre-fund customer wallet legitimately
+        ledger.open("customer", customerWallet, "available", Ledger.GHS);
+        String testSource = ledger.openSystem("system:test_wallet_funds:GHS", "clearing", Ledger.GHS, true);
+        ledger.post(Ledger.Posting.of("test-fund-cust", customerWallet.toString(), "test_funding", List.of(
+                Ledger.Leg.debit(testSource, 50000L),
+                Ledger.Leg.credit(Ledger.code("customer", customerWallet, "available", Ledger.GHS), 50000L)
+        )));
+
+        // Step 1: Customer requests cash-out, system generates OTP challenge
         var otpChallenge = cashOutService.generateOtpChallenge(agent.id(), "0244556677", customerWallet, 20000L); // 200 GHS
         assertThat(otpChallenge.otpCode()).hasSize(6);
 
-        // Step 2: Agent confirms cash-out with customer OTP
-        var cashOutReceipt = cashOutService.confirmCashOut(agent.id(), "0244556677", 20000L, otpChallenge.otpCode(), true);
+        // Step 2: Simulation cash-out must fail
+        assertThatThrownBy(() -> cashOutService.confirmCashOut(agent.id(), "0244556677", 20000L, otpChallenge.otpCode(), true))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("SIMULATIONS_NOT_PERMITTED");
+
+        // Step 3: Agent confirms cash-out with customer OTP
+        var cashOutReceipt = cashOutService.confirmCashOut(agent.id(), "0244556677", 20000L, otpChallenge.otpCode(), false);
         assertThat(cashOutReceipt.status()).isEqualTo("COMPLETED");
         assertThat(cashOutReceipt.amountPesewas()).isEqualTo(20000L);
         assertThat(cashOutReceipt.updatedFloatPesewas()).isEqualTo(970_000L); // 950,000 + 20,000
         assertThat(cashOutReceipt.agentCommissionPesewas()).isGreaterThan(0L);
+        assertThat(ledger.balance(Ledger.code("merchant", agent.id(), "available", Ledger.GHS))).isEqualTo(970_000L);
 
         // 6. Tiered Commission Calculation Engine
         var commTier1 = commissionEngine.calculateCommission("TIER_1", "CASH_IN", 100000L);
         var commTier3 = commissionEngine.calculateCommission("TIER_3", "CASH_IN", 100000L);
         assertThat(commTier3.agentSharePesewas()).isGreaterThanOrEqualTo(commTier1.agentSharePesewas());
 
-        // 7. Automated Daily Commission Payout Sweep
+        // 7. Automated Daily Commission Payout Sweep (Wired to Ledger)
         long accruedBefore = floatService.getFloatAccount(agent.id()).orElseThrow().accruedCommissionPesewas();
         assertThat(accruedBefore).isGreaterThan(0L);
+
+        // Pre-fund revenue account if needed
+        ledger.openSystem(Ledger.REVENUE, "revenue", Ledger.GHS, true);
 
         var payoutSummary = commissionEngine.executeDailyCommissionPayouts();
         assertThat(payoutSummary.agentsPaid()).isGreaterThanOrEqualTo(1);
@@ -118,7 +157,10 @@ public class AgentBankingTest extends PostgresTestBase {
         assertThat(summary.availableFloatPesewas()).isGreaterThan(0L);
         assertThat(summary.todayTxnCount()).isGreaterThanOrEqualTo(2); // Cash-in + Cash-out
 
-        var ledger = portalService.getTransactionLedger(agent.id(), null, 10, 0);
-        assertThat(ledger).hasSizeGreaterThanOrEqualTo(3); // Float deposit, Cash-in, Cash-out, Commission payout
+        var txLedger = portalService.getTransactionLedger(agent.id(), null, 10, 0);
+        assertThat(txLedger).hasSizeGreaterThanOrEqualTo(3); // Float deposit, Cash-in, Cash-out, Commission payout
+
+        // Reset policy
+        configService.setLiveAgentEnabled(false);
     }
 }

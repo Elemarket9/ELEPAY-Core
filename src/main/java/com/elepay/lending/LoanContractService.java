@@ -2,6 +2,7 @@ package com.elepay.lending;
 
 import com.elepay.ledger.Ledger;
 import com.elepay.identity.Actor;
+import java.math.BigInteger;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -71,6 +72,8 @@ public class LoanContractService {
             OffsetDateTime updatedAt
     ) {}
 
+    record AppRow(UUID id, UUID applicantId, UUID productId, long approvedAmount, int tenorDays, String status) {}
+
     @Transactional
     public LoanContract generateContract(UUID applicationId) {
         var app = db.sql("""
@@ -78,40 +81,47 @@ public class LoanContractService {
             FROM loan_application
             WHERE id = ? FOR UPDATE
         """).param(applicationId)
-        .query((rs, rowNum) -> new Object() {
-            UUID id = rs.getObject("id", UUID.class);
-            UUID applicantId = rs.getObject("applicant_id", UUID.class);
-            UUID productId = rs.getObject("product_id", UUID.class);
-            long approvedAmount = rs.getLong("max_approved_pesewas");
-            int tenorDays = rs.getInt("tenor_days");
-            String status = rs.getString("status");
-        }).optional().orElseThrow(() -> new IllegalArgumentException("Application not found: " + applicationId));
+        .query((rs, rowNum) -> new AppRow(
+                rs.getObject("id", UUID.class),
+                rs.getObject("applicant_id", UUID.class),
+                rs.getObject("product_id", UUID.class),
+                rs.getLong("max_approved_pesewas"),
+                rs.getInt("tenor_days"),
+                rs.getString("status")
+        )).optional().orElseThrow(() -> new IllegalArgumentException("Application not found: " + applicationId));
 
-        if (!"APPROVED".equals(app.status)) {
-            throw new IllegalStateException("Application is not approved: " + app.status);
+        if (!"APPROVED".equals(app.status())) {
+            throw new IllegalStateException("Application is not approved: " + app.status());
         }
 
         if (db.sql("SELECT count(*) FROM loan_contract WHERE application_id = ?").param(applicationId).query(Long.class).single() != 0) {
             throw new IllegalStateException("A contract already exists for this application");
         }
-        var product = productService.getProductById(app.productId)
-                .orElseThrow(() -> new IllegalArgumentException("Product not found: " + app.productId));
+        var product = productService.getProductById(app.productId())
+                .orElseThrow(() -> new IllegalArgumentException("Product not found: " + app.productId()));
 
-        long principal = app.approvedAmount;
-        long originationFee = Math.round(principal * (product.originationFeeBps() / 10000.0));
+        long principal = app.approvedAmount();
+        long originationFee = BigInteger.valueOf(principal)
+                .multiply(BigInteger.valueOf(product.originationFeeBps()))
+                .divide(BigInteger.valueOf(10000L)).longValueExact();
 
         long totalInterest;
         if ("MERCHANT_CASH_ADVANCE".equals(product.productType())) {
-            totalInterest = Math.round(principal * (product.interestRateBps() / 10000.0));
+            totalInterest = BigInteger.valueOf(principal)
+                    .multiply(BigInteger.valueOf(product.interestRateBps()))
+                    .divide(BigInteger.valueOf(10000L)).longValueExact();
         } else {
-            totalInterest = Math.round(principal * (product.interestRateBps() / 10000.0) * (app.tenorDays / 365.0));
+            totalInterest = BigInteger.valueOf(principal)
+                    .multiply(BigInteger.valueOf(product.interestRateBps()))
+                    .multiply(BigInteger.valueOf(app.tenorDays()))
+                    .divide(BigInteger.valueOf(3650000L)).longValueExact();
         }
 
         long totalRepayment = principal + totalInterest + originationFee;
         UUID contractId = UUID.randomUUID();
         String contractReference = "LN-" + System.currentTimeMillis() + "-" + contractId.toString().substring(0, 8).toUpperCase();
         LocalDate startDate = LocalDate.now();
-        LocalDate maturityDate = startDate.plusDays(app.tenorDays);
+        LocalDate maturityDate = startDate.plusDays(app.tenorDays());
 
         db.sql("""
             INSERT INTO loan_contract
@@ -122,13 +132,13 @@ public class LoanContractService {
              outstanding_penalties_pesewas, tenor_days, daily_sweep_bps,
              start_date, maturity_date, status, delinquency_state, days_past_due)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'ACTIVE', 'PERFORMING', 0)
-        """).params(contractId, applicationId, contractReference, app.applicantId, app.productId,
+        """).params(contractId, applicationId, contractReference, app.applicantId(), app.productId(),
                 principal, originationFee, totalInterest, totalRepayment, principal, totalInterest,
-                originationFee, app.tenorDays, product.dailySweepBps(), startDate, maturityDate)
+                originationFee, app.tenorDays(), product.dailySweepBps(), startDate, maturityDate)
         .update();
 
         // Generate Installments
-        int installmentCount = Math.max(1, app.tenorDays / 30);
+        int installmentCount = Math.max(1, app.tenorDays() / 30);
         long installmentPrincipal = principal / installmentCount;
         long residualPrincipal = principal - (installmentPrincipal * installmentCount);
 
@@ -175,7 +185,7 @@ public class LoanContractService {
         if (db.sql("SELECT count(*) FROM loan_application WHERE id = ? AND reviewed_by IS NOT NULL AND review_evidence IS NOT NULL AND status = 'APPROVED'")
                 .param(contract.applicationId()).query(Long.class).single() != 1) throw new IllegalStateException("Verified credit review required");
         String borrower = borrowerAccount(contract);
-        ledger.openSystem(FUNDING, "lending_funding", Ledger.GHS, false);
+        ledger.openSystem(FUNDING, "clearing", Ledger.GHS, false);
         // Origination fee is due on repayment as specified by the schedule; do not deduct it twice.
         long netDisbursement = contract.principalPesewas();
         var posted = ledger.post(Ledger.Posting.of("loan-disbursement", contractId.toString(), "loan_disbursement", List.of(

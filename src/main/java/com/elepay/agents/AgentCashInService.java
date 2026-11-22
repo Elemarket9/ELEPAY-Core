@@ -1,5 +1,8 @@
 package com.elepay.agents;
 
+import com.elepay.ledger.Ledger;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -13,19 +16,22 @@ public class AgentCashInService {
     private final AgentOnboardingService onboardingService;
     private final AgentFloatService floatService;
     private final AgentCommissionEngine commissionEngine;
+    private final Ledger ledger;
 
     public AgentCashInService(
             JdbcClient db,
             AgentConfigService configService,
             AgentOnboardingService onboardingService,
             AgentFloatService floatService,
-            AgentCommissionEngine commissionEngine
+            AgentCommissionEngine commissionEngine,
+            Ledger ledger
     ) {
         this.db = db;
         this.configService = configService;
         this.onboardingService = onboardingService;
         this.floatService = floatService;
         this.commissionEngine = commissionEngine;
+        this.ledger = ledger;
     }
 
     public record CashInRequest(
@@ -46,6 +52,16 @@ public class AgentCashInService {
             long remainingFloatPesewas,
             String status
     ) {}
+
+    private UUID resolveCustomer(String phoneOrAccount) {
+        try {
+            return UUID.fromString(phoneOrAccount);
+        } catch (IllegalArgumentException e) {
+            return db.sql("SELECT id FROM customer WHERE phone = ?").param(phoneOrAccount)
+                    .query(UUID.class).optional()
+                    .orElseGet(() -> UUID.nameUUIDFromBytes(phoneOrAccount.getBytes(StandardCharsets.UTF_8)));
+        }
+    }
 
     @Transactional
     public CashInReceipt processCashIn(CashInRequest req) {
@@ -85,7 +101,21 @@ public class AgentCashInService {
         long floatBefore = floatAcc.availableFloatPesewas();
         long floatAfter = floatBefore - req.amountPesewas();
 
-        // Update float and commission
+        // Authoritative double-entry ledger posting:
+        // Debit agent float account, Credit customer available wallet
+        String agentAccount = ledger.open("merchant", req.agentId(), "available", Ledger.GHS);
+        UUID customerId = resolveCustomer(req.customerPhoneOrAccount());
+        String customerAccount = ledger.open("customer", customerId, "available", Ledger.GHS);
+
+        UUID txnId = UUID.randomUUID();
+        String ref = "CIN-" + System.currentTimeMillis() + "-" + txnId.toString().substring(0, 6).toUpperCase();
+
+        var posted = ledger.post(Ledger.Posting.of("agent-cash-in", ref, "agent_cash_in", List.of(
+                Ledger.Leg.debit(agentAccount, req.amountPesewas()),
+                Ledger.Leg.credit(customerAccount, req.amountPesewas())
+        )).describedAs("Agent cash-in deposit to customer: " + req.customerPhoneOrAccount()));
+
+        // Update float and accrued commission
         db.sql("""
             UPDATE agent_float_account
             SET available_float_pesewas = available_float_pesewas - ?,
@@ -95,17 +125,14 @@ public class AgentCashInService {
         """).params(req.amountPesewas(), comm.agentSharePesewas(), req.agentId())
         .update();
 
-        UUID txnId = UUID.randomUUID();
-        String ref = "CIN-" + System.currentTimeMillis() + "-" + txnId.toString().substring(0, 6).toUpperCase();
-
         db.sql("""
             INSERT INTO agent_transaction
             (id, agent_id, transaction_type, customer_identifier, amount_pesewas,
              float_before_pesewas, float_after_pesewas, agent_commission_pesewas,
-             platform_fee_pesewas, reference, status)
-            VALUES (?, ?, 'CASH_IN', ?, ?, ?, ?, ?, ?, ?, 'COMPLETED')
+             platform_fee_pesewas, reference, status, journal_tx)
+            VALUES (?, ?, 'CASH_IN', ?, ?, ?, ?, ?, ?, ?, 'COMPLETED', ?)
         """).params(txnId, req.agentId(), req.customerPhoneOrAccount(), req.amountPesewas(),
-                floatBefore, floatAfter, comm.agentSharePesewas(), comm.platformSharePesewas(), ref)
+                floatBefore, floatAfter, comm.agentSharePesewas(), comm.platformSharePesewas(), ref, posted.transactionId())
         .update();
 
         return new CashInReceipt(txnId, ref, req.agentId(), req.customerPhoneOrAccount(),

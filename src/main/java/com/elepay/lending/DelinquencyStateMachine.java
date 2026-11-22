@@ -1,5 +1,6 @@
 package com.elepay.lending;
 
+import java.math.BigInteger;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -77,7 +78,10 @@ public class DelinquencyStateMachine {
         if (maxDpd > 7 && overduePrincipal > 0) {
             var product = productService.getProductById(contract.productId()).orElseThrow();
             if (product.penaltyRateBps() > 0) {
-                accruedPenalty = Math.round(overduePrincipal * (product.penaltyRateBps() / 10000.0) * (maxDpd / 365.0));
+                accruedPenalty = BigInteger.valueOf(overduePrincipal)
+                        .multiply(BigInteger.valueOf(product.penaltyRateBps()))
+                        .multiply(BigInteger.valueOf(maxDpd))
+                        .divide(BigInteger.valueOf(3650000L)).longValueExact();
                 if (accruedPenalty > 0) {
                     long newPenalties = contract.outstandingPenaltiesPesewas() + accruedPenalty;
                     db.sql("""

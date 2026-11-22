@@ -1,11 +1,15 @@
 package com.elepay.bills;
 
 import com.elepay.PostgresTestBase;
+import com.elepay.ledger.Ledger;
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -27,8 +31,14 @@ public class BillPaymentsTest extends PostgresTestBase {
     @Autowired
     private ScheduledBillPaymentService scheduledBillService;
 
+    @Autowired
+    private Ledger ledger;
+
+    @Autowired
+    private JdbcClient db;
+
     @Test
-    @DisplayName("Domain 9: Everyday Financial Services & Bill Payments - Airtime, Bundles, ECG, GWCL, Tuition, Recurring Bills")
+    @DisplayName("Domain 9: Authentic Bill Payments & Utility Engine - Simulation Elimination, Catalog, Airtime, Utilities, Tuition, Recurring Bills")
     void testBillPaymentsEngine() {
         // 1. Verify Catalog
         var providers = catalogService.listActiveProviders();
@@ -39,50 +49,84 @@ public class BillPaymentsTest extends PostgresTestBase {
         var mtnBundles = catalogService.listProductsForProvider("MTN");
         assertThat(mtnBundles).isNotEmpty();
 
-        // 2. Airtime & Data Bundles Purchase
+        // 2. Airtime & Data Bundles: Network Detection & Unconfigured Behavior
         UUID customerId = UUID.randomUUID();
 
         // Network detection
         assertThat(airtimeEngine.detectNetwork("0244123456")).isEqualTo("MTN");
         assertThat(airtimeEngine.detectNetwork("+233201234567")).isEqualTo("TELECEL");
         assertThat(airtimeEngine.detectNetwork("0277987654")).isEqualTo("AIRTELTIGO");
+        assertThatThrownBy(() -> airtimeEngine.detectNetwork("0123456789")).isInstanceOf(IllegalArgumentException.class);
 
-        // Purchase MTN Airtime
-        var airtimeReceipt = airtimeEngine.purchaseAirtime(new AirtimeDataPurchaseEngine.AirtimePurchaseRequest(
-                customerId, "MTN", "0244123456", 2000L // 20.00 GHS
+        // Simulation eliminated: When carrier integration is unconfigured, operations must return UNAVAILABLE
+        var unavailAirtime = airtimeEngine.purchaseAirtime(new AirtimeDataPurchaseEngine.AirtimePurchaseRequest(
+                customerId, "MTN", "0244123456", 2000L
         ));
-        assertThat(airtimeReceipt.status()).isEqualTo("COMPLETED");
-        assertThat(airtimeReceipt.reference()).startsWith("AIR-");
-        assertThat(airtimeReceipt.amountPesewas()).isEqualTo(2000L);
+        assertThat(unavailAirtime.status()).isEqualTo("UNAVAILABLE");
+        assertThat(unavailAirtime.partnerReference()).isNull();
 
-        // Purchase Telecel Data Bundle
-        var bundleReceipt = airtimeEngine.purchaseBundle(new AirtimeDataPurchaseEngine.BundlePurchaseRequest(
+        var unavailBundle = airtimeEngine.purchaseBundle(new AirtimeDataPurchaseEngine.BundlePurchaseRequest(
                 customerId, "TELECEL_DATA_2GB", "0201234567"
         ));
-        assertThat(bundleReceipt.status()).isEqualTo("COMPLETED");
-        assertThat(bundleReceipt.tokenVoucher()).isNotNull();
-        assertThat(bundleReceipt.productCode()).isEqualTo("TELECEL_DATA_2GB");
+        assertThat(unavailBundle.status()).isEqualTo("UNAVAILABLE");
+        assertThat(unavailBundle.partnerReference()).isNull();
 
-        // 3. Utility Payments: ECG & GWCL
-        // ECG Prepaid (Generates STS 20-digit token)
-        var ecgPrepaid = utilityService.payEcgPrepaid(customerId, "14285719302", 5000L); // 50.00 GHS
-        assertThat(ecgPrepaid.status()).isEqualTo("COMPLETED");
-        assertThat(ecgPrepaid.unitsKwh()).isGreaterThan(0.0);
-        assertThat(ecgPrepaid.stsToken()).hasSize(24); // 20 digits + 4 dashes: XXXX-XXXX-XXXX-XXXX-XXXX
-        assertThat(ecgPrepaid.stsToken()).matches("^\\d{4}-\\d{4}-\\d{4}-\\d{4}-\\d{4}$");
+        // 3. Utility Payments: ECG & GWCL Simulation Elimination
+        // When utility provider is unconfigured, must return UNAVAILABLE without random STS tokens or hardcoded balances
+        var unavailEcg = utilityService.payEcgPrepaid(customerId, "14285719302", 5000L);
+        assertThat(unavailEcg.status()).isEqualTo("UNAVAILABLE");
+        assertThat(unavailEcg.stsToken()).isNull();
+        assertThat(unavailEcg.partnerReference()).isNull();
 
-        // ECG Postpaid Bill Payment
-        var ecgPostpaid = utilityService.payEcgPostpaid(customerId, "ECG-ACC-9988", 15000L);
-        assertThat(ecgPostpaid.status()).isEqualTo("COMPLETED");
-        assertThat(ecgPostpaid.provider()).isEqualTo("ECG");
+        var unavailPostpaid = utilityService.payEcgPostpaid(customerId, "ECG-ACC-9988", 15000L);
+        assertThat(unavailPostpaid.status()).isEqualTo("UNAVAILABLE");
+        assertThat(unavailPostpaid.partnerReference()).isNull();
 
-        // GWCL Water Payment
-        var gwclReceipt = utilityService.payGwclWater(customerId, "GW-102938", 10000L);
-        assertThat(gwclReceipt.status()).isEqualTo("COMPLETED");
-        assertThat(gwclReceipt.provider()).isEqualTo("GWCL");
+        var unavailGwcl = utilityService.payGwclWater(customerId, "GW-102938", 10000L);
+        assertThat(unavailGwcl.status()).isEqualTo("UNAVAILABLE");
+        assertThat(unavailGwcl.partnerReference()).isNull();
 
-        // 4. School and Tuition Fee Payments with Student ID Validation
-        // Verify student record
+        // 4. Authorized Fulfillment with Authoritative Provider and Authoritative Ledger
+        // Test with configured mock provider client
+        UtilityProviderClient authoritativeProvider = new UtilityProviderClient() {
+            @Override
+            public boolean isConfigured(String provider) { return true; }
+
+            @Override
+            public UtilityVerificationResponse verifyAccount(String provider, String accountNumber) {
+                return new UtilityVerificationResponse("VERIFIED", provider, accountNumber, "Mensah Residence", 12000L, true, "OK");
+            }
+
+            @Override
+            public PrepaidPurchaseResponse purchasePrepaid(String provider, String meterNumber, long amountPesewas) {
+                return new PrepaidPurchaseResponse("COMPLETED", "GW-ECG-AUTH-9912", "1234-5678-9012-3456-7890", BigDecimal.valueOf(40.00), "SUCCESS");
+            }
+
+            @Override
+            public PostpaidPaymentResponse payPostpaid(String provider, String accountNumber, long amountPesewas) {
+                return new PostpaidPaymentResponse("COMPLETED", "GW-POST-AUTH-1123", "REC-887766", "Mensah Residence", "SUCCESS");
+            }
+        };
+
+        UtilityPaymentService liveUtilityService = new UtilityPaymentService(db, authoritativeProvider, ledger);
+        // Pre-fund customer wallet
+        ledger.open("customer", customerId, "available", Ledger.GHS);
+        String testSource = ledger.openSystem("system:test_utility_source:GHS", "clearing", Ledger.GHS, true);
+        ledger.post(Ledger.Posting.of("test-fund-cust-util", customerId.toString(), "test_funding", List.of(
+                Ledger.Leg.debit(testSource, 100000L),
+                Ledger.Leg.credit(Ledger.code("customer", customerId, "available", Ledger.GHS), 100000L)
+        )));
+
+        var livePrepaid = liveUtilityService.payEcgPrepaid(customerId, "14285719302", 5000L);
+        assertThat(livePrepaid.status()).isEqualTo("COMPLETED");
+        assertThat(livePrepaid.stsToken()).isEqualTo("1234-5678-9012-3456-7890");
+        assertThat(livePrepaid.partnerReference()).isEqualTo("GW-ECG-AUTH-9912");
+
+        var livePostpaid = liveUtilityService.payEcgPostpaid(customerId, "ECG-ACC-9988", 15000L);
+        assertThat(livePostpaid.status()).isEqualTo("COMPLETED");
+        assertThat(livePostpaid.partnerReference()).isEqualTo("GW-POST-AUTH-1123");
+
+        // 5. School and Tuition Fee Payments with Student ID Validation
         var studentOpt = schoolFeeService.verifyStudent("UG_LEGON", "10982341");
         assertThat(studentOpt).isPresent();
         var student = studentOpt.get();
@@ -90,7 +134,6 @@ public class BillPaymentsTest extends PostgresTestBase {
         long initialOutstanding = student.outstandingFeePesewas();
         assertThat(initialOutstanding).isGreaterThan(0L);
 
-        // Pay tuition fees
         long tuitionPayment = 50000L; // 500.00 GHS
         var tuitionReceipt = schoolFeeService.payTuition(
                 customerId, "UG_LEGON", "10982341", tuitionPayment, "Kwame Mensah Senior"
@@ -100,7 +143,7 @@ public class BillPaymentsTest extends PostgresTestBase {
         assertThat(tuitionReceipt.remainingOutstandingPesewas()).isEqualTo(initialOutstanding - tuitionPayment);
         assertThat(tuitionReceipt.voucherCode()).startsWith("VOUCH-UG_LEGON-");
 
-        // 5. Scheduled Recurring Bill Payments & Pre-Debit Notifications
+        // 6. Scheduled Recurring Bill Payments & Pre-Debit Notifications
         var plan = scheduledBillService.createSchedule(
                 customerId, "MTN", "MTN_AIRTIME", "0244123456", 1000L,
                 "WEEKLY", null, LocalDate.now()
@@ -108,12 +151,12 @@ public class BillPaymentsTest extends PostgresTestBase {
         assertThat(plan.status()).isEqualTo("ACTIVE");
         assertThat(plan.amountPesewas()).isEqualTo(1000L);
 
-        // Generate pre-debit notifications
+        // Pre-debit notifications
         var notices = scheduledBillService.generatePreDebitNotifications(LocalDate.now().plusDays(1));
         assertThat(notices).isNotEmpty();
         assertThat(notices.stream().anyMatch(n -> n.planId().equals(plan.id()))).isTrue();
 
-        // Execute due scheduled recurring bills
+        // Execution of scheduled recurring bills
         int executed = scheduledBillService.executeDueScheduledBills(LocalDate.now());
         assertThat(executed).isGreaterThanOrEqualTo(1);
 

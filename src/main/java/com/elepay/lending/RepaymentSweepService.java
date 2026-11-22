@@ -105,7 +105,7 @@ public class RepaymentSweepService {
         long remainingTotal = newPenalties + newFees + newInterest + newPrincipal;
         String newStatus = remainingTotal == 0 ? "CLOSED" : contract.status();
 
-        ledger.openSystem(LoanContractService.FUNDING, "lending_funding", Ledger.GHS, false);
+        ledger.openSystem(LoanContractService.FUNDING, "clearing", Ledger.GHS, false);
         List<Ledger.Leg> legs = new ArrayList<>();
         legs.add(Ledger.Leg.debit(borrower, actualSweep));
         if (principalAlloc > 0) legs.add(Ledger.Leg.credit(LoanContractService.FUNDING, principalAlloc));

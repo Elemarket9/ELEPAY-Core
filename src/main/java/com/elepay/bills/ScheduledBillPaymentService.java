@@ -1,5 +1,6 @@
 package com.elepay.bills;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -121,7 +122,7 @@ public class ScheduledBillPaymentService {
             db.sql("UPDATE scheduled_bill_payment SET last_notification_at = now() WHERE id = ?")
                     .param(plan.id()).update();
 
-            String msg = "Reminder: Your recurring " + plan.providerCode() + " payment of " + (plan.amountPesewas() / 100.0)
+            String msg = "Reminder: Your recurring " + plan.providerCode() + " payment of " + BigDecimal.valueOf(plan.amountPesewas(), 2)
                     + " GHS for account " + plan.billerAccount() + " is scheduled for debit on " + plan.nextRunDate() + ".";
             return new PreDebitNotice(plan.id(), plan.customerId(), plan.providerCode(), plan.billerAccount(), plan.amountPesewas(), plan.nextRunDate(), msg);
         }).toList();
