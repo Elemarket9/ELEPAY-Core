@@ -69,6 +69,136 @@ public interface PaymentRail {
      */
     boolean callbacksAreAuthoritative();
 
+    /**
+     * Submits an external payment action guarded by Algorithm 086 (PartnerCircuitBreaker)
+     * and Algorithm 087 (BackoffAndJitterRetry).
+     */
+    default Result submitWithResilience(
+            com.elepay.reliability.PartnerCircuitBreaker circuitBreaker,
+            com.elepay.reliability.BackoffAndJitterRetry retry,
+            com.elepay.reliability.BackoffAndJitterRetry.RetryConfig retryConfig,
+            java.util.concurrent.Callable<Result> submission
+    ) {
+        if (circuitBreaker != null) {
+            try {
+                circuitBreaker.acquirePermission();
+            } catch (com.elepay.reliability.PartnerCircuitBreaker.CircuitBreakerOpenException e) {
+                return Result.unavailable("Circuit breaker OPEN for rail " + name() + ": " + e.getMessage());
+            }
+        }
+
+        try {
+            Result result;
+            if (retry != null && retryConfig != null) {
+                result = retry.executeWithRetry(
+                        submission,
+                        retryConfig,
+                        PaymentRail::isRetryable
+                );
+            } else {
+                result = submission.call();
+            }
+
+            if (circuitBreaker != null) {
+                if (result != null && result.status() == Status.UNAVAILABLE) {
+                    circuitBreaker.recordFailure();
+                } else {
+                    circuitBreaker.recordSuccess();
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            if (circuitBreaker != null) {
+                circuitBreaker.recordFailure();
+            }
+            return Result.unavailable("Rail " + name() + " submission failed: " + e.getMessage());
+        }
+    }
+
+    default Result submitWithResilience(
+            com.elepay.reliability.PartnerCircuitBreaker circuitBreaker,
+            com.elepay.reliability.BackoffAndJitterRetry retry,
+            java.util.concurrent.Callable<Result> submission
+    ) {
+        return submitWithResilience(circuitBreaker, retry,
+                com.elepay.reliability.BackoffAndJitterRetry.RetryConfig.defaultConfig(), submission);
+    }
+
+    static boolean isRetryable(Throwable t) {
+        if (t == null) return false;
+        if (t instanceof java.io.IOException) return true;
+        if (t instanceof java.util.concurrent.TimeoutException) return true;
+        if (t instanceof java.net.SocketException) return true;
+        if (t.getCause() != null && isRetryable(t.getCause())) return true;
+        if (t.getMessage() != null) {
+            String m = t.getMessage().toLowerCase();
+            return m.contains("timeout") || m.contains("connection reset") || m.contains("503")
+                    || m.contains("unavailable") || m.contains("network");
+        }
+        return false;
+    }
+
+    /**
+     * Decorates an existing PaymentRail with circuit breaking (Algo 086) and exponential backoff retry (Algo 087).
+     */
+    static PaymentRail resilient(
+            PaymentRail delegate,
+            com.elepay.reliability.PartnerCircuitBreaker circuitBreaker,
+            com.elepay.reliability.BackoffAndJitterRetry retry
+    ) {
+        return resilient(delegate, circuitBreaker, retry,
+                com.elepay.reliability.BackoffAndJitterRetry.RetryConfig.defaultConfig());
+    }
+
+    static PaymentRail resilient(
+            PaymentRail delegate,
+            com.elepay.reliability.PartnerCircuitBreaker circuitBreaker,
+            com.elepay.reliability.BackoffAndJitterRetry retry,
+            com.elepay.reliability.BackoffAndJitterRetry.RetryConfig config
+    ) {
+        return new PaymentRail() {
+            @Override
+            public String name() {
+                return delegate.name();
+            }
+
+            @Override
+            public boolean supports(String direction, String channel, String network) {
+                return delegate.supports(direction, channel, network);
+            }
+
+            @Override
+            public Result charge(Charge charge) {
+                return submitWithResilience(circuitBreaker, retry, config, () -> delegate.charge(charge));
+            }
+
+            @Override
+            public Result payout(Payout payout) {
+                return submitWithResilience(circuitBreaker, retry, config, () -> delegate.payout(payout));
+            }
+
+            @Override
+            public Result refund(Refund refund) {
+                return submitWithResilience(circuitBreaker, retry, config, () -> delegate.refund(refund));
+            }
+
+            @Override
+            public Result query(String direction, String reference, String railReference) {
+                return submitWithResilience(circuitBreaker, retry, config, () -> delegate.query(direction, reference, railReference));
+            }
+
+            @Override
+            public Callback verifyCallback(Map<String, String> headers, String body) {
+                return delegate.verifyCallback(headers, body);
+            }
+
+            @Override
+            public boolean callbacksAreAuthoritative() {
+                return delegate.callbacksAreAuthoritative();
+            }
+        };
+    }
+
     class InvalidCallbackException extends RuntimeException {
         public InvalidCallbackException(String message) {
             super(message);

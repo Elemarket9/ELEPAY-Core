@@ -160,10 +160,59 @@ class FxService {
         if (sourceAmount < c.minAmount() || sourceAmount > c.maxAmount()) {
             throw ApiException.badRequest("amount_out_of_range", "Amount must be between " + c.minAmount() + " and " + c.maxAmount());
         }
-        FxPartner.Quote pq = partner(c.partner()).quote(c.sourceCurrency(), c.destinationCurrency(), sourceAmount);
-        long fee = Math.addExact(c.feeFixed(), Math.multiplyExact(sourceAmount, c.feeBps()) / 10_000);
-        long destination = convert(sourceAmount, c.sourceCurrency(), pq.rate(), c.destinationCurrency());
+
+        // Algorithm 061: Corridor Partner Selection
+        String selectedPartner = routingService.selectOptimalPartner(c.code(), sourceAmount, c.partner());
+        if (!partners.containsKey(selectedPartner)) {
+            selectedPartner = c.partner();
+        }
+        FxPartner chosenPartner = partner(selectedPartner);
+        FxPartner.Quote pq = chosenPartner.quote(c.sourceCurrency(), c.destinationCurrency(), sourceAmount);
+
+        // Algorithm 059: Rate Sourcing & Blending (authoritative mid-market rate synthesis)
+        BigDecimal baseRate = pq.rate();
+        try {
+            var blended = rateService.latestBlendedRate(c.sourceCurrency(), c.destinationCurrency());
+            if (blended != null && blended.midRate() != null && blended.midRate().compareTo(BigDecimal.ZERO) > 0) {
+                baseRate = blended.midRate();
+            }
+        } catch (Exception ignored) {
+            // Use partner quote rate as base rate when multi-source blended rate is not seeded
+        }
+
+        // Algorithm 060: Dynamic FX Margin Pricing & Tiers
+        var tier = pricingService.resolveMarginTier(c.code(), "standard", sourceAmount);
+        BigDecimal effectiveRate;
+        long fee;
+        long destination;
+        if (tier != null) {
+            var pricing = pricingService.calculatePricing(c.code(), "standard", c.sourceCurrency(),
+                    c.destinationCurrency(), sourceAmount, baseRate, c.feeFixed(), c.feeBps());
+            effectiveRate = pricing.effectiveRate();
+            fee = pricing.totalFee();
+            destination = pricing.destinationAmount();
+        } else {
+            fee = Math.addExact(c.feeFixed(), Math.multiplyExact(sourceAmount, c.feeBps()) / 10_000);
+            effectiveRate = baseRate;
+            destination = convert(sourceAmount, c.sourceCurrency(), effectiveRate, c.destinationCurrency());
+        }
+
         if (destination <= 0) throw ApiException.badRequest("amount_too_small", "Amount is too small to convert");
+
+        // Algorithm 063: Delivery-time SLA estimation taking cutoffs and weekends into account
+        int estDeliveryMinutes = c.estDeliveryMinutes();
+        try {
+            var deliveryEst = deliveryEstimator.estimate(c.code(), c.deliveryMethod(), null, OffsetDateTime.now());
+            if (deliveryEst != null && deliveryEst.estimatedMinutes() > 0) {
+                var rule = deliveryEstimator.resolveRule(c.code(), c.deliveryMethod(), null);
+                if (rule != null && (rule.corridor() != null || estDeliveryMinutes <= 0)) {
+                    estDeliveryMinutes = deliveryEst.estimatedMinutes();
+                }
+            }
+        } catch (Exception ignored) {
+            // Keep corridor configured delivery estimate
+        }
+
         OffsetDateTime own = OffsetDateTime.now().plusSeconds(c.quoteTtlSeconds());
         OffsetDateTime expires = pq.expiresAt().isBefore(own) ? pq.expiresAt() : own;
         UUID id = UUID.randomUUID();
@@ -171,11 +220,11 @@ class FxService {
                 INSERT INTO fx_quote (id, corridor, customer_id, partner, partner_quote_ref, source_currency, source_amount,
                     fee, total_debit, rate, destination_currency, destination_amount, expires_at, est_delivery_minutes)
                 VALUES (:id, :c, :cust, :p, :pref, :src, :amount, :fee, :total, :rate, :dst, :dest, :exp, :eta)""")
-                .param("id", id).param("c", c.code()).param("cust", customer).param("p", c.partner())
+                .param("id", id).param("c", c.code()).param("cust", customer).param("p", selectedPartner)
                 .param("pref", pq.reference()).param("src", c.sourceCurrency()).param("amount", sourceAmount)
-                .param("fee", fee).param("total", sourceAmount + fee).param("rate", pq.rate())
+                .param("fee", fee).param("total", sourceAmount + fee).param("rate", effectiveRate)
                 .param("dst", c.destinationCurrency()).param("dest", destination).param("exp", expires)
-                .param("eta", c.estDeliveryMinutes()).update();
+                .param("eta", estDeliveryMinutes).update();
         return quote(id);
     }
 
