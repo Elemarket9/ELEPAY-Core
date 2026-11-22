@@ -41,8 +41,8 @@ final class WC_Elepay_Blocks_Support extends AbstractPaymentMethodType {
 
     public function get_payment_method_data() {
         return array(
-            'title'       => $this->get_setting('title', 'Mobile Money & Card (ELEPAY)'),
-            'description' => $this->get_setting('description', 'Pay securely with MTN MoMo, Telecel Cash, AirtelTigo Money or Card.'),
+            'title'       => $this->get_setting('title', 'Mobile Money, GhQR & Card (ELEPAY)'),
+            'description' => $this->get_setting('description', 'Pay securely with MTN MoMo, Telecel Cash, AT Money, GhIPSS GhQR, or Debit/Credit Card.'),
             'supports'    => array('products'),
             'icon'        => WC_ELEPAY_PLUGIN_URL . 'assets/elepay-icon.svg',
         );

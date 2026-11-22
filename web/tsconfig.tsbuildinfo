@@ -1,1 +1,1 @@
-{"root":["./src/Checkout.tsx","./src/Merchant.tsx","./src/Ops.tsx","./src/Wallet.tsx","./src/api.ts","./src/auth.ts","./src/main.tsx","./src/money.test.ts","./src/money.ts"],"version":"5.9.3"}
+{"root":["./src/Checkout.tsx","./src/Developer.tsx","./src/Merchant.tsx","./src/Ops.tsx","./src/Wallet.tsx","./src/api.ts","./src/auth.ts","./src/developer_and_backoffice.test.ts","./src/main.tsx","./src/money.test.ts","./src/money.ts"],"version":"5.9.3"}

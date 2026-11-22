@@ -15,7 +15,7 @@ interface PaymentStatus {
   railStatus: string | null; redirectUrl: string | null; message: string | null;
 }
 
-const NETWORKS = [["mtn", "MTN MoMo"], ["telecel", "Telecel Cash"], ["airteltigo", "AirtelTigo Money"]];
+const NETWORKS = [["mtn", "MTN MoMo"], ["telecel", "Telecel Cash"], ["airteltigo", "AT Money"]];
 
 // Multi-currency FX conversion rates (relative to GHS)
 const FX_RATES: Record<string, { symbol: string; rate: number; label: string }> = {

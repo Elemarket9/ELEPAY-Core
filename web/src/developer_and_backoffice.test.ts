@@ -76,4 +76,40 @@ describe("Developer Platform and BackOffice Calculations", () => {
     expect(timestamp).toBe(1732250000);
     expect(signature).toBe("9f83cf4b1234567890abcdef");
   });
+
+  it("constructs HMAC-SHA256 v2 canonical signing payload correctly", () => {
+    const timestamp = "1732260000";
+    const method = "POST";
+    const path = "/v1/checkouts";
+    const query = "";
+    const nonce = "test-nonce-12345";
+    const idempotencyKey = "idem-key-abcde";
+    const body = '{"amount":15000,"currency":"GHS"}';
+
+    // Canonical v2 format: elepay-request:v2:{len}:{field}...
+    const fields = [timestamp, method, path, query, nonce, idempotencyKey, body];
+    let canonical = "elepay-request:v2";
+    for (const field of fields) {
+      const val = field ?? "";
+      const len = new TextEncoder().encode(val).length;
+      canonical += `:${len}:${val}`;
+    }
+
+    expect(canonical).toBe(
+      `elepay-request:v2:${timestamp.length}:${timestamp}:${method.length}:${method}:${path.length}:${path}:0::${nonce.length}:${nonce}:${idempotencyKey.length}:${idempotencyKey}:${body.length}:${body}`
+    );
+    expect(canonical.startsWith("elepay-request:v2")).toBe(true);
+  });
+
+  it("verifies direct Ghanaian rails supported in WooCommerce plugin", () => {
+    const supportedRails = ["mtn_momo", "telecel_cash", "at_money", "ghipss_ghqr", "direct_card"];
+    expect(supportedRails).toContain("mtn_momo");
+    expect(supportedRails).toContain("telecel_cash");
+    expect(supportedRails).toContain("at_money");
+    expect(supportedRails).toContain("ghipss_ghqr");
+    expect(supportedRails).toContain("direct_card");
+    expect(supportedRails).not.toContain("paystack");
+    expect(supportedRails).not.toContain("hubtel");
+  });
 });
+

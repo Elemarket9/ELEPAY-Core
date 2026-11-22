@@ -63,15 +63,8 @@ function useAction() {
 // -------------------------------------------------------------------------------------------------
 // 1. Agent Banking Oversight
 // -------------------------------------------------------------------------------------------------
-const SAMPLE_AGENTS: Agent[] = [
-  { id: "ag_1", code: "AG-1001", businessName: "Kaneshie Market Hub", location: "Kaneshie Market Gate 3", region: "Greater Accra", floatBalancePesewas: 3850000, dailyCashInPesewas: 1250000, dailyCashOutPesewas: 950000, status: "ACTIVE", minFloatThresholdPesewas: 1000000 },
-  { id: "ag_2", code: "AG-1002", businessName: "Kejetia Express Pay", location: "Kejetia Terminal", region: "Ashanti", floatBalancePesewas: 650000, dailyCashInPesewas: 800000, dailyCashOutPesewas: 1450000, status: "FLAGGED", minFloatThresholdPesewas: 1000000 },
-  { id: "ag_3", code: "AG-1003", businessName: "Takoradi Harbour Stop", location: "Harbour Road", region: "Western", floatBalancePesewas: 2100000, dailyCashInPesewas: 550000, dailyCashOutPesewas: 400000, status: "ACTIVE", minFloatThresholdPesewas: 800000 },
-  { id: "ag_4", code: "AG-1004", businessName: "Tamale Central Enterprise", location: "Hospital Road", region: "Northern", floatBalancePesewas: 0, dailyCashInPesewas: 0, dailyCashOutPesewas: 0, status: "SUSPENDED", minFloatThresholdPesewas: 500000 },
-];
-
 function AgentBanking() {
-  const [agents, setAgents] = useState<Agent[]>(SAMPLE_AGENTS);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [topUpAgent, setTopUpAgent] = useState<Agent | null>(null);
   const [topUpAmount, setTopUpAmount] = useState("5000");
@@ -157,6 +150,9 @@ function AgentBanking() {
               </tr>
             );
           })}
+          {agents.length === 0 && (
+            <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No registered agency banking terminals in network. Onboard certified agents to monitor cash-in/out float liquidity.</td></tr>
+          )}
         </tbody>
       </table>
 
@@ -183,14 +179,8 @@ function AgentBanking() {
 // -------------------------------------------------------------------------------------------------
 // 2. Lending Portfolio Review
 // -------------------------------------------------------------------------------------------------
-const SAMPLE_LOANS: LoanProductSummary[] = [
-  { id: "lp_1", name: "Merchant Working Capital Advance", activeCount: 42, principalOutstandingPesewas: 185000000, delinquentCount: 2, defaultRatePct: 1.8, lossProvisionPesewas: 3700000 },
-  { id: "lp_2", name: "POS Daily Revenue-Based Financing", activeCount: 78, principalOutstandingPesewas: 94000000, delinquentCount: 4, defaultRatePct: 2.4, lossProvisionPesewas: 2350000 },
-  { id: "lp_3", name: "Smallholder Agro-Supply Microloan", activeCount: 110, principalOutstandingPesewas: 55000000, delinquentCount: 7, defaultRatePct: 3.9, lossProvisionPesewas: 2200000 },
-];
-
 function LendingPortfolio() {
-  const [products] = useState<LoanProductSummary[]>(SAMPLE_LOANS);
+  const [products] = useState<LoanProductSummary[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<LoanProductSummary | null>(null);
 
   const totalOutstanding = products.reduce((acc, p) => acc + p.principalOutstandingPesewas, 0);
@@ -203,7 +193,7 @@ function LendingPortfolio() {
         <div className="card"><div className="muted">Total Active Loans</div><div className="big">{totalActive}</div></div>
         <div className="card"><div className="muted">Total Principal Outstanding</div><div className="big">{formatMoney(totalOutstanding)}</div></div>
         <div className="card"><div className="muted">Expected Credit Loss Provision (ECL)</div><div className="big" style={{ color: "#8a5a00" }}>{formatMoney(totalProvision)}</div></div>
-        <div className="card"><div className="muted">Portfolio NPL Delinquency Rate</div><div className="big" style={{ color: "#0b5d3b" }}>2.4% (Healthy &lt; 5%)</div></div>
+        <div className="card"><div className="muted">Portfolio NPL Delinquency Rate</div><div className="big" style={{ color: "#0b5d3b" }}>{products.length === 0 ? "0.0% (Zero Delinquencies)" : "0.0%"}</div></div>
       </div>
 
       <h3>Lending Portfolio Performance &amp; Delinquency Aging</h3>
@@ -233,6 +223,9 @@ function LendingPortfolio() {
               </td>
             </tr>
           ))}
+          {products.length === 0 && (
+            <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No active lending products or originated loan facilities in portfolio. Lending metrics and IFRS 9 ECL provisions will appear once facilities are approved and originated.</td></tr>
+          )}
         </tbody>
       </table>
 
@@ -267,15 +260,8 @@ function LendingPortfolio() {
 // -------------------------------------------------------------------------------------------------
 // 3. GRA e-VAT Audit Logs
 // -------------------------------------------------------------------------------------------------
-const SAMPLE_GRA_LOGS: GraEvatLog[] = [
-  { id: "ev_1", invoiceRef: "INV-2026-9041", fiscalTime: "2026-11-22 04:12:00", merchantTin: "C001284759X", grossSalePesewas: 45000, vatPesewas: 6750, nhilPesewas: 1125, getFundPesewas: 1125, covidLevyPesewas: 450, sdcFiscalSignature: "GRA-SDC-GH-9874-ABCD-20261122", status: "ACKNOWLEDGED" },
-  { id: "ev_2", invoiceRef: "INV-2026-9042", fiscalTime: "2026-11-22 04:15:30", merchantTin: "C001284759X", grossSalePesewas: 120000, vatPesewas: 18000, nhilPesewas: 3000, getFundPesewas: 3000, covidLevyPesewas: 1200, sdcFiscalSignature: "GRA-SDC-GH-9875-BCDE-20261122", status: "ACKNOWLEDGED" },
-  { id: "ev_3", invoiceRef: "INV-2026-9043", fiscalTime: "2026-11-22 04:22:10", merchantTin: "C009948211M", grossSalePesewas: 32000, vatPesewas: 4800, nhilPesewas: 800, getFundPesewas: 800, covidLevyPesewas: 320, sdcFiscalSignature: "GRA-SDC-GH-9876-CDEF-20261122", status: "ACKNOWLEDGED" },
-  { id: "ev_4", invoiceRef: "INV-2026-9044", fiscalTime: "2026-11-22 04:30:45", merchantTin: "C005511224P", grossSalePesewas: 85000, vatPesewas: 12750, nhilPesewas: 2125, getFundPesewas: 2125, covidLevyPesewas: 850, sdcFiscalSignature: "GRA-SDC-GH-9877-DEFG-20261122", status: "ACKNOWLEDGED" },
-];
-
 function GraEvatAudit() {
-  const [logs] = useState<GraEvatLog[]>(SAMPLE_GRA_LOGS);
+  const [logs] = useState<GraEvatLog[]>([]);
 
   function exportGraCsv() {
     const headers = "InvoiceRef,FiscalTimestamp,MerchantTIN,GrossSale(GHS),VAT15%(GHS),NHIL2.5%(GHS),GETFund2.5%(GHS),COVID1%(GHS),SDCFiscalSignature,Status\n";
@@ -300,7 +286,7 @@ function GraEvatAudit() {
           <h3>Ghana Revenue Authority (GRA) e-VAT Compliance Audit</h3>
           <p className="muted small">Statutory e-VAT, NHIL, GETFund, COVID-19 Health Recovery Levy transmission audit.</p>
         </div>
-        <button onClick={() => exportGraCsv()}>📥 Export GRA Audit File (CSV)</button>
+        <button onClick={() => exportGraCsv()} disabled={logs.length === 0}>📥 Export GRA Audit File (CSV)</button>
       </div>
 
       <table className="grid" style={{ marginTop: "1rem" }}>
@@ -333,6 +319,9 @@ function GraEvatAudit() {
               <td><span className="tag active">{l.status}</span></td>
             </tr>
           ))}
+          {logs.length === 0 && (
+            <tr><td colSpan={10} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No GRA e-VAT fiscal transaction records found. Tax-stamped receipts with SDC signatures will be recorded here in real time.</td></tr>
+          )}
         </tbody>
       </table>
     </div>

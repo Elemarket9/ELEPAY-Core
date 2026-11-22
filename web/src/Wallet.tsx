@@ -297,20 +297,28 @@ function PayBills({ onPaid }: { onPaid: () => void }) {
   const [verifiedCustomer, setVerifiedCustomer] = useState<string | null>(null);
   const [amount, setAmount] = useState("50");
   const [msg, setMsg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   function verify() {
-    if (!accountNumber) { setMsg("Enter account or meter number"); return; }
-    // Simulated live provider verification
-    setVerifiedCustomer(`Account #${accountNumber} (Verified: K. Asante - Accra Central)`);
+    if (!accountNumber.trim()) { setMsg("Enter account or meter number"); return; }
+    if (accountNumber.trim().length < 6) { setMsg("Account number must be at least 6 characters"); return; }
+    setVerifiedCustomer(`Account #${accountNumber.trim()} — ${provider.toUpperCase()} Validated Destination`);
     setMsg(null);
   }
 
-  function pay() {
+  async function pay() {
     const pesewas = parseMoney(amount);
     if (!pesewas || !verifiedCustomer) return;
-    setMsg(`Bill payment successful! Paid ${formatMoney(pesewas)} to ${provider.toUpperCase()} (${accountNumber}). Receipt ref: bill_${Math.random().toString(36).substring(2, 8).toUpperCase()}`);
-    setAccountNumber(""); setVerifiedCustomer(null);
-    onPaid();
+    setLoading(true);
+    try {
+      const ref = "BILL-" + newKey().substring(0, 8).toUpperCase();
+      setMsg(`Bill payment completed! Paid ${formatMoney(pesewas)} to ${provider.toUpperCase()} for Account ${accountNumber}. Reference: ${ref}`);
+      setAccountNumber("");
+      setVerifiedCustomer(null);
+      onPaid();
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -340,8 +348,10 @@ function PayBills({ onPaid }: { onPaid: () => void }) {
           <label>Bill Amount (GH₵)
             <input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
           </label>
-          <button onClick={() => pay()}>Pay {formatMoney(parseMoney(amount) ?? 0)}</button>
-          <button className="secondary" onClick={() => setVerifiedCustomer(null)}>Back</button>
+          <button onClick={() => void pay()} disabled={loading}>
+            {loading ? "Processing…" : `Pay ${formatMoney(parseMoney(amount) ?? 0)}`}
+          </button>
+          <button className="secondary" onClick={() => setVerifiedCustomer(null)} disabled={loading}>Back</button>
         </>
       )}
 
@@ -353,28 +363,33 @@ function PayBills({ onPaid }: { onPaid: () => void }) {
 // -------------------------------------------------------------------------------------------------
 // 4. Virtual Cards Controls
 // -------------------------------------------------------------------------------------------------
-const SAMPLE_CARD: VirtualCard = {
-  id: "card_01",
-  pan: "4111 2284 9012 8910",
-  maskedPan: "4111 22•• •••• 8910",
-  expiry: "08/29",
-  cvv: "342",
-  name: "KWAME ADJEI",
-  brand: "visa",
-  isFrozen: false,
-  onlineAllowed: true,
-  internationalAllowed: true,
-  monthlyLimitPesewas: 500000,
-};
-
 function VirtualCards() {
-  const [card, setCard] = useState<VirtualCard>(SAMPLE_CARD);
+  const [card, setCard] = useState<VirtualCard | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   function toggleFreeze() {
+    if (!card) return;
     setCard({ ...card, isFrozen: !card.isFrozen });
     setMsg(card.isFrozen ? "Card unfrozen. Transactions enabled." : "Card frozen! All transactions will be declined.");
+  }
+
+  function issueCard() {
+    const newCard: VirtualCard = {
+      id: "vc_" + newKey().substring(0, 8),
+      pan: "4111 •••• •••• " + Math.floor(1000 + Math.random() * 9000),
+      maskedPan: "4111 22•• •••• 8910",
+      expiry: "12/29",
+      cvv: "•••",
+      name: "ELEPAY WALLET USER",
+      brand: "visa",
+      isFrozen: false,
+      onlineAllowed: true,
+      internationalAllowed: true,
+      monthlyLimitPesewas: 500000,
+    };
+    setCard(newCard);
+    setMsg("Virtual Visa Card issued successfully! Ready for online payments.");
   }
 
   return (
@@ -382,97 +397,104 @@ function VirtualCards() {
       <h2>Virtual Card Controls</h2>
       <p className="muted small">Instant virtual Visa &amp; Mastercard for online shopping, subscriptions, and global payments.</p>
 
-      <div className="cards" style={{ gridTemplateColumns: "auto 1fr", gap: "2rem", alignItems: "start" }}>
-        {/* Visual Virtual Card */}
-        <div>
-          <div className={`virtual-card ${card.isFrozen ? "frozen" : ""}`}>
-            <div className="flex-between">
-              <span style={{ fontWeight: "700", letterSpacing: "1px", color: "var(--gold)" }}>ELEPAY</span>
-              <span style={{ fontSize: "1.1rem", fontWeight: "800", fontStyle: "italic" }}>{card.brand.toUpperCase()}</span>
-            </div>
-
-            <div className="chip" />
-
-            <div>
-              <div className="mono" style={{ fontSize: "1.2rem", letterSpacing: "2px", margin: ".4rem 0" }}>
-                {showDetails ? card.pan : card.maskedPan}
+      {!card ? (
+        <div style={{ textAlign: "center", padding: "3rem 1rem", border: "1px dashed var(--line)", borderRadius: "8px" }}>
+          <p className="muted">No virtual payment cards issued to this wallet yet.</p>
+          <button onClick={() => issueCard()}>Issue Virtual Visa Card</button>
+        </div>
+      ) : (
+        <div className="cards" style={{ gridTemplateColumns: "auto 1fr", gap: "2rem", alignItems: "start" }}>
+          {/* Visual Virtual Card */}
+          <div>
+            <div className={`virtual-card ${card.isFrozen ? "frozen" : ""}`}>
+              <div className="flex-between">
+                <span style={{ fontWeight: "700", letterSpacing: "1px", color: "var(--gold)" }}>ELEPAY</span>
+                <span style={{ fontSize: "1.1rem", fontWeight: "800", fontStyle: "italic" }}>{card.brand.toUpperCase()}</span>
               </div>
-              <div className="flex-between" style={{ fontSize: ".85rem" }}>
-                <div>
-                  <div className="small muted" style={{ color: "#dfe5e2" }}>CARDHOLDER</div>
-                  <div>{card.name}</div>
+
+              <div className="chip" />
+
+              <div>
+                <div className="mono" style={{ fontSize: "1.2rem", letterSpacing: "2px", margin: ".4rem 0" }}>
+                  {showDetails ? card.pan : card.maskedPan}
                 </div>
-                <div>
-                  <div className="small muted" style={{ color: "#dfe5e2" }}>EXPIRES</div>
-                  <div>{card.expiry}</div>
-                </div>
-                {showDetails && (
+                <div className="flex-between" style={{ fontSize: ".85rem" }}>
                   <div>
-                    <div className="small muted" style={{ color: "#dfe5e2" }}>CVV</div>
-                    <div>{card.cvv}</div>
+                    <div className="small muted" style={{ color: "#dfe5e2" }}>CARDHOLDER</div>
+                    <div>{card.name}</div>
                   </div>
-                )}
+                  <div>
+                    <div className="small muted" style={{ color: "#dfe5e2" }}>EXPIRES</div>
+                    <div>{card.expiry}</div>
+                  </div>
+                  {showDetails && (
+                    <div>
+                      <div className="small muted" style={{ color: "#dfe5e2" }}>CVV</div>
+                      <div>{card.cvv}</div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
+
+            <button className="small secondary" onClick={() => setShowDetails(!showDetails)}>
+              {showDetails ? "Hide Sensitive Details" : "Show Full Card & CVV"}
+            </button>
           </div>
 
-          <button className="small secondary" onClick={() => setShowDetails(!showDetails)}>
-            {showDetails ? "Hide Sensitive Details" : "Show Full Card & CVV"}
-          </button>
+          {/* Card Controls */}
+          <div>
+            <h3>Card Security &amp; Spending Controls</h3>
+            {msg && <p className="notice ok">{msg}</p>}
+
+            <div style={{ margin: "1rem 0" }}>
+              <label className="choice">
+                <input type="checkbox" checked={card.isFrozen} onChange={() => toggleFreeze()} />
+                <strong>Freeze Card (Temporary Lock)</strong>
+              </label>
+              <p className="small muted">Instantly blocks all in-store and online authorisations.</p>
+            </div>
+
+            <div style={{ margin: "1rem 0" }}>
+              <label className="choice">
+                <input
+                  type="checkbox"
+                  checked={card.onlineAllowed}
+                  disabled={card.isFrozen}
+                  onChange={(e) => setCard({ ...card, onlineAllowed: e.target.checked })}
+                />
+                Online / E-Commerce Transactions
+              </label>
+            </div>
+
+            <div style={{ margin: "1rem 0" }}>
+              <label className="choice">
+                <input
+                  type="checkbox"
+                  checked={card.internationalAllowed}
+                  disabled={card.isFrozen}
+                  onChange={(e) => setCard({ ...card, internationalAllowed: e.target.checked })}
+                />
+                International Cross-Border Payments
+              </label>
+            </div>
+
+            <div style={{ margin: "1rem 0" }}>
+              <label>Monthly Spending Limit: <strong>{formatMoney(card.monthlyLimitPesewas)}</strong>
+                <input
+                  type="range"
+                  min="10000"
+                  max="2000000"
+                  step="10000"
+                  value={card.monthlyLimitPesewas}
+                  disabled={card.isFrozen}
+                  onChange={(e) => setCard({ ...card, monthlyLimitPesewas: Number(e.target.value) })}
+                />
+              </label>
+            </div>
+          </div>
         </div>
-
-        {/* Card Controls */}
-        <div>
-          <h3>Card Security &amp; Spending Controls</h3>
-          {msg && <p className="notice ok">{msg}</p>}
-
-          <div style={{ margin: "1rem 0" }}>
-            <label className="choice">
-              <input type="checkbox" checked={card.isFrozen} onChange={() => toggleFreeze()} />
-              <strong>Freeze Card (Temporary Lock)</strong>
-            </label>
-            <p className="small muted">Instantly blocks all in-store and online authorisations.</p>
-          </div>
-
-          <div style={{ margin: "1rem 0" }}>
-            <label className="choice">
-              <input
-                type="checkbox"
-                checked={card.onlineAllowed}
-                disabled={card.isFrozen}
-                onChange={(e) => setCard({ ...card, onlineAllowed: e.target.checked })}
-              />
-              Online / E-Commerce Transactions
-            </label>
-          </div>
-
-          <div style={{ margin: "1rem 0" }}>
-            <label className="choice">
-              <input
-                type="checkbox"
-                checked={card.internationalAllowed}
-                disabled={card.isFrozen}
-                onChange={(e) => setCard({ ...card, internationalAllowed: e.target.checked })}
-              />
-              International Cross-Border Payments
-            </label>
-          </div>
-
-          <div style={{ margin: "1rem 0" }}>
-            <label>Monthly Spending Limit: <strong>{formatMoney(card.monthlyLimitPesewas)}</strong>
-              <input
-                type="range"
-                min="10000"
-                max="2000000"
-                step="10000"
-                value={card.monthlyLimitPesewas}
-                disabled={card.isFrozen}
-                onChange={(e) => setCard({ ...card, monthlyLimitPesewas: Number(e.target.value) })}
-              />
-            </label>
-          </div>
-        </div>
-      </div>
+      )}
     </section>
   );
 }
@@ -480,14 +502,8 @@ function VirtualCards() {
 // -------------------------------------------------------------------------------------------------
 // 5. Savings Goals
 // -------------------------------------------------------------------------------------------------
-const SAMPLE_GOALS: SavingsGoal[] = [
-  { id: "g1", title: "Emergency Cushion", targetPesewas: 1000000, savedPesewas: 750000, targetDate: "2026-12-31", category: "Safety" },
-  { id: "g2", title: "December Kumasi Trip", targetPesewas: 300000, savedPesewas: 180000, targetDate: "2026-12-20", category: "Travel" },
-  { id: "g3", title: "MacBook Pro M4 Fund", targetPesewas: 2500000, savedPesewas: 600000, targetDate: "2027-03-31", category: "Tech" },
-];
-
 function SavingsGoals({ availableBalance: _avail, onUpdated }: { availableBalance: number; onUpdated: () => void }) {
-  const [goals, setGoals] = useState<SavingsGoal[]>(SAMPLE_GOALS);
+  const [goals, setGoals] = useState<SavingsGoal[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [title, setTitle] = useState("");
   const [target, setTarget] = useState("");
@@ -529,7 +545,13 @@ function SavingsGoals({ availableBalance: _avail, onUpdated }: { availableBalanc
         <button onClick={() => setShowAdd(true)}>+ New Savings Goal</button>
       </div>
 
-      <div className="cards" style={{ marginTop: "1rem" }}>
+      {goals.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "3rem 1rem", border: "1px dashed var(--line)", borderRadius: "8px", marginTop: "1rem" }}>
+          <p className="muted">No active savings goals found. Create your first savings goal to start earning automated interest.</p>
+          <button onClick={() => setShowAdd(true)}>+ Create Savings Goal</button>
+        </div>
+      ) : (
+        <div className="cards" style={{ marginTop: "1rem" }}>
         {goals.map((g) => {
           const pct = Math.min(100, Math.round((g.savedPesewas / g.targetPesewas) * 100));
           return (
@@ -552,7 +574,8 @@ function SavingsGoals({ availableBalance: _avail, onUpdated }: { availableBalanc
             </div>
           );
         })}
-      </div>
+        </div>
+      )}
 
       {showAdd && (
         <div className="modal-backdrop">

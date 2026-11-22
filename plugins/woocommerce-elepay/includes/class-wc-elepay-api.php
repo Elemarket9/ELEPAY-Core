@@ -1,6 +1,8 @@
 <?php
 /**
  * ELEPAY API Client wrapper for WooCommerce
+ * Integrates directly with ELEPAY Core using HMAC-SHA256 v2 request signing
+ * and direct Ghanaian payment network rails (MTN MoMo, Telecel Cash, AT Money, GhIPSS GhQR, Direct Card).
  */
 
 if (!defined('ABSPATH')) {
@@ -10,37 +12,115 @@ if (!defined('ABSPATH')) {
 class WC_Elepay_API {
 
     private $api_key;
+    private $signing_secret;
     private $base_url;
+    private $merchant_id;
 
-    public function __construct($api_key, $base_url = 'https://api.elepay.com') {
+    public function __construct($api_key, $signing_secret = '', $base_url = 'https://api.elepay.com', $merchant_id = '') {
         $this->api_key = trim($api_key);
+        $this->signing_secret = trim($signing_secret);
         $this->base_url = rtrim($base_url, '/');
+        $this->merchant_id = trim($merchant_id);
     }
 
     /**
-     * Create Checkout Session on ELEPAY Core
+     * Compute Canonical String for HMAC-SHA256 v2 Request Signing
+     * Format: elepay-request:v2:{len}:{timestamp}:{len}:{method}:{len}:{path}:{len}:{query}:{len}:{nonce}:{len}:{idempotencyKey}:{len}:{body}
+     *
+     * @param string $timestamp
+     * @param string $method
+     * @param string $path
+     * @param string $query
+     * @param string $nonce
+     * @param string $idempotency_key
+     * @param string $body
+     * @return string
+     */
+    public static function canonical_v2($timestamp, $method, $path, $query, $nonce, $idempotency_key, $body) {
+        $fields = array($timestamp, strtoupper($method), $path, $query, $nonce, $idempotency_key, $body);
+        $canonical = 'elepay-request:v2';
+        foreach ($fields as $field) {
+            $val = ($field === null) ? '' : (string) $field;
+            $canonical .= ':' . strlen($val) . ':' . $val;
+        }
+        return $canonical;
+    }
+
+    /**
+     * Compute HMAC-SHA256 v2 signature
+     *
+     * @param string $secret
+     * @param string $timestamp
+     * @param string $method
+     * @param string $path
+     * @param string $query
+     * @param string $nonce
+     * @param string $idempotency_key
+     * @param string $body
+     * @return string
+     */
+    public static function compute_signature_v2($secret, $timestamp, $method, $path, $query, $nonce, $idempotency_key, $body) {
+        $canonical = self::canonical_v2($timestamp, $method, $path, $query, $nonce, $idempotency_key, $body);
+        return hash_hmac('sha256', $canonical, $secret);
+    }
+
+    /**
+     * Create Checkout Session on ELEPAY Core with v2 request signing
      *
      * @param array $payload
      * @return array
      * @throws Exception
      */
     public function create_checkout($payload) {
-        $url = $this->base_url . '/v1/checkouts';
+        // If merchant_id is set, target merchant checkout route; otherwise root checkouts route
+        if (!empty($this->merchant_id)) {
+            $url = $this->base_url . '/v1/merchants/' . urlencode($this->merchant_id) . '/checkouts';
+        } else {
+            $url = $this->base_url . '/v1/checkouts';
+        }
+
         $idempotency_key = wp_generate_uuid4();
+        $timestamp = (string) time();
+        $nonce = wp_generate_password(32, false);
+        $body_json = wp_json_encode($payload);
+
+        $path = parse_url($url, PHP_URL_PATH);
+        $query = parse_url($url, PHP_URL_QUERY);
+        if (!$query) {
+            $query = '';
+        }
+
+        $headers = array(
+            'Content-Type'               => 'application/json',
+            'Accept'                     => 'application/json',
+            'X-Elepay-Api-Key'           => $this->api_key,
+            'Idempotency-Key'            => $idempotency_key,
+            'X-Elepay-Timestamp'         => $timestamp,
+            'X-Elepay-Nonce'             => $nonce,
+            'X-Elepay-Signature-Version' => '2',
+            'User-Agent'                 => 'ELEPAY-WooCommerce/' . WC_ELEPAY_VERSION . ' (WordPress/' . get_bloginfo('version') . ')',
+        );
+
+        if (!empty($this->signing_secret)) {
+            $headers['X-Elepay-Signature'] = self::compute_signature_v2(
+                $this->signing_secret,
+                $timestamp,
+                'POST',
+                $path,
+                $query,
+                $nonce,
+                $idempotency_key,
+                $body_json
+            );
+        }
 
         $args = array(
             'method'      => 'POST',
             'timeout'     => 30,
             'redirection' => 5,
             'httpversion' => '1.1',
-            'headers'     => array(
-                'Content-Type'    => 'application/json',
-                'Accept'          => 'application/json',
-                'X-Elepay-Api-Key' => $this->api_key,
-                'Idempotency-Key' => $idempotency_key,
-                'User-Agent'      => 'ELEPAY-WooCommerce/' . WC_ELEPAY_VERSION . ' (WordPress/' . get_bloginfo('version') . ')',
-            ),
-            'body'        => wp_json_encode($payload),
+            'headers'     => $headers,
+            'body'        => $body_json,
         );
 
         $response = wp_remote_post($url, $args);
@@ -74,8 +154,9 @@ class WC_Elepay_API {
             'method'  => 'GET',
             'timeout' => 15,
             'headers' => array(
-                'Accept'          => 'application/json',
+                'Accept'           => 'application/json',
                 'X-Elepay-Api-Key' => $this->api_key,
+                'User-Agent'       => 'ELEPAY-WooCommerce/' . WC_ELEPAY_VERSION . ' (WordPress/' . get_bloginfo('version') . ')',
             ),
         );
 
@@ -90,7 +171,7 @@ class WC_Elepay_API {
     }
 
     /**
-     * Issue Refund on Checkout
+     * Issue Refund on Checkout with HMAC-SHA256 v2 request signing
      *
      * @param string $merchant_id
      * @param string $checkout_ref
@@ -103,19 +184,49 @@ class WC_Elepay_API {
     public function create_refund($merchant_id, $checkout_ref, $line, $amount_pesewas, $reason) {
         $url = $this->base_url . '/v1/merchants/' . urlencode($merchant_id) . '/checkouts/' . urlencode($checkout_ref) . '/allocations/' . intval($line) . '/refunds';
 
+        $idempotency_key = wp_generate_uuid4();
+        $timestamp = (string) time();
+        $nonce = wp_generate_password(32, false);
+        $body_json = wp_json_encode(array(
+            'amount' => $amount_pesewas,
+            'reason' => $reason,
+        ));
+
+        $path = parse_url($url, PHP_URL_PATH);
+        $query = parse_url($url, PHP_URL_QUERY);
+        if (!$query) {
+            $query = '';
+        }
+
+        $headers = array(
+            'Content-Type'               => 'application/json',
+            'Accept'                     => 'application/json',
+            'X-Elepay-Api-Key'           => $this->api_key,
+            'Idempotency-Key'            => $idempotency_key,
+            'X-Elepay-Timestamp'         => $timestamp,
+            'X-Elepay-Nonce'             => $nonce,
+            'X-Elepay-Signature-Version' => '2',
+            'User-Agent'                 => 'ELEPAY-WooCommerce/' . WC_ELEPAY_VERSION . ' (WordPress/' . get_bloginfo('version') . ')',
+        );
+
+        if (!empty($this->signing_secret)) {
+            $headers['X-Elepay-Signature'] = self::compute_signature_v2(
+                $this->signing_secret,
+                $timestamp,
+                'POST',
+                $path,
+                $query,
+                $nonce,
+                $idempotency_key,
+                $body_json
+            );
+        }
+
         $args = array(
             'method'  => 'POST',
             'timeout' => 30,
-            'headers' => array(
-                'Content-Type'    => 'application/json',
-                'Accept'          => 'application/json',
-                'X-Elepay-Api-Key' => $this->api_key,
-                'Idempotency-Key' => wp_generate_uuid4(),
-            ),
-            'body'    => wp_json_encode(array(
-                'amount' => $amount_pesewas,
-                'reason' => $reason,
-            )),
+            'headers' => $headers,
+            'body'    => $body_json,
         );
 
         $response = wp_remote_post($url, $args);

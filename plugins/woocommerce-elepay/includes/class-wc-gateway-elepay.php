@@ -2,8 +2,10 @@
 /**
  * WC_Gateway_Elepay Class
  *
- * Extends WooCommerce WC_Payment_Gateway to provide seamless Mobile Money
- * (MTN MoMo, Telecel Cash, AirtelTigo Money) and Card checkout in Ghana Cedis (GHS).
+ * Extends WooCommerce WC_Payment_Gateway to provide seamless direct integration
+ * with Ghanaian payment network rails: MTN Mobile Money (MoMo), Telecel Cash,
+ * AT Money, GhIPSS GhQR, and Direct Card (Visa, Mastercard, Gh-Link) in Ghana Cedis (GHS).
+ * Requests are authenticated using HMAC-SHA256 v2 request signing with distributed replay defense.
  */
 
 if (!defined('ABSPATH')) {
@@ -15,6 +17,8 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
     public $testmode;
     public $test_api_key;
     public $live_api_key;
+    public $test_signing_secret;
+    public $live_signing_secret;
     public $webhook_secret;
     public $api_base_url;
     public $merchant_id;
@@ -23,8 +27,8 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
         $this->id                 = 'elepay';
         $this->icon               = apply_filters('woocommerce_elepay_icon', WC_ELEPAY_PLUGIN_URL . 'assets/elepay-icon.svg');
         $this->has_fields         = false;
-        $this->method_title       = __('ELEPAY (MoMo & Card)', 'woocommerce-elepay');
-        $this->method_description = __('Accept MTN Mobile Money, Telecel Cash, AirtelTigo Money and Card payments via ELEPAY.', 'woocommerce-elepay');
+        $this->method_title       = __('ELEPAY Direct Rails (MoMo, GhQR & Card)', 'woocommerce-elepay');
+        $this->method_description = __('Accept direct Ghanaian payment rails: MTN Mobile Money, Telecel Cash, AT Money, GhIPSS GhQR, and Direct Card.', 'woocommerce-elepay');
 
         $this->supports = array(
             'products',
@@ -34,15 +38,17 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
         $this->init_form_fields();
         $this->init_settings();
 
-        $this->title          = $this->get_option('title', __('Mobile Money & Card (ELEPAY)', 'woocommerce-elepay'));
-        $this->description    = $this->get_option('description', __('Pay securely with MTN MoMo, Telecel Cash, AirtelTigo Money, or Debit/Credit Card.', 'woocommerce-elepay'));
-        $this->enabled        = $this->get_option('enabled', 'yes');
-        $this->testmode       = 'yes' === $this->get_option('testmode', 'yes');
-        $this->test_api_key   = $this->get_option('test_api_key');
-        $this->live_api_key   = $this->get_option('live_api_key');
-        $this->webhook_secret = $this->get_option('webhook_secret');
-        $this->api_base_url   = $this->get_option('api_base_url', 'https://api.elepay.com');
-        $this->merchant_id    = $this->get_option('merchant_id');
+        $this->title               = $this->get_option('title', __('Mobile Money, GhQR & Card (ELEPAY)', 'woocommerce-elepay'));
+        $this->description         = $this->get_option('description', __('Pay securely with MTN MoMo, Telecel Cash, AT Money, GhIPSS GhQR, or Debit/Credit Card.', 'woocommerce-elepay'));
+        $this->enabled             = $this->get_option('enabled', 'yes');
+        $this->testmode            = 'yes' === $this->get_option('testmode', 'yes');
+        $this->test_api_key        = $this->get_option('test_api_key');
+        $this->live_api_key        = $this->get_option('live_api_key');
+        $this->test_signing_secret = $this->get_option('test_signing_secret');
+        $this->live_signing_secret = $this->get_option('live_signing_secret');
+        $this->webhook_secret      = $this->get_option('webhook_secret');
+        $this->api_base_url        = $this->get_option('api_base_url', 'https://api.elepay.com');
+        $this->merchant_id         = $this->get_option('merchant_id');
 
         // Save admin options
         add_action('woocommerce_update_options_payment_gateways_' . $this->id, array($this, 'process_admin_options'));
@@ -71,44 +77,56 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
                 'title'       => __('Title', 'woocommerce-elepay'),
                 'type'        => 'text',
                 'description' => __('Payment method title that the customer will see on checkout.', 'woocommerce-elepay'),
-                'default'     => __('Mobile Money & Card (ELEPAY)', 'woocommerce-elepay'),
+                'default'     => __('Mobile Money, GhQR & Card (ELEPAY)', 'woocommerce-elepay'),
                 'desc_tip'    => true,
             ),
             'description' => array(
                 'title'       => __('Description', 'woocommerce-elepay'),
                 'type'        => 'textarea',
                 'description' => __('Payment method description that the customer will see on checkout.', 'woocommerce-elepay'),
-                'default'     => __('Pay securely with MTN MoMo, Telecel Cash, AirtelTigo Money, or Debit/Credit Card.', 'woocommerce-elepay'),
+                'default'     => __('Pay securely via direct Ghanaian rails: MTN MoMo, Telecel Cash, AT Money, GhIPSS GhQR, or Debit/Credit Card.', 'woocommerce-elepay'),
             ),
             'testmode' => array(
                 'title'       => __('Sandbox / Test Mode', 'woocommerce-elepay'),
                 'type'        => 'checkbox',
-                'label'       => __('Enable Test Mode (simulates transactions without real money)', 'woocommerce-elepay'),
+                'label'       => __('Enable Test Mode (simulates transactions with sandbox rails)', 'woocommerce-elepay'),
                 'default'     => 'yes',
-                'description' => __('Use test API keys from the ELEPAY developer portal.', 'woocommerce-elepay'),
+                'description' => __('Use test API keys and signing secrets from the ELEPAY Developer Portal.', 'woocommerce-elepay'),
+            ),
+            'merchant_id' => array(
+                'title'       => __('Merchant UUID', 'woocommerce-elepay'),
+                'type'        => 'text',
+                'description' => __('Your ELEPAY Merchant UUID (used for merchant checkout routing and refunds).', 'woocommerce-elepay'),
+                'default'     => '',
             ),
             'test_api_key' => array(
                 'title'       => __('Test API Key', 'woocommerce-elepay'),
                 'type'        => 'password',
-                'description' => __('Begins with ek_test_...', 'woocommerce-elepay'),
+                'description' => __('Begins with ek_test_... from Developer Portal.', 'woocommerce-elepay'),
+                'default'     => '',
+            ),
+            'test_signing_secret' => array(
+                'title'       => __('Test Request Signing Secret', 'woocommerce-elepay'),
+                'type'        => 'password',
+                'description' => __('Cryptographic secret used to compute HMAC-SHA256 v2 request signatures for test transactions.', 'woocommerce-elepay'),
                 'default'     => '',
             ),
             'live_api_key' => array(
                 'title'       => __('Live API Key', 'woocommerce-elepay'),
                 'type'        => 'password',
-                'description' => __('Begins with ek_live_...', 'woocommerce-elepay'),
+                'description' => __('Begins with ek_live_... from Developer Portal.', 'woocommerce-elepay'),
+                'default'     => '',
+            ),
+            'live_signing_secret' => array(
+                'title'       => __('Live Request Signing Secret', 'woocommerce-elepay'),
+                'type'        => 'password',
+                'description' => __('Cryptographic secret used to compute HMAC-SHA256 v2 request signatures for live production transactions.', 'woocommerce-elepay'),
                 'default'     => '',
             ),
             'webhook_secret' => array(
                 'title'       => __('Webhook Secret', 'woocommerce-elepay'),
                 'type'        => 'password',
-                'description' => __('Begins with whsec_... Paste this into your ELEPAY Developer Portal webhook settings.', 'woocommerce-elepay'),
-                'default'     => '',
-            ),
-            'merchant_id' => array(
-                'title'       => __('Merchant UUID', 'woocommerce-elepay'),
-                'type'        => 'text',
-                'description' => __('Your ELEPAY Merchant UUID (used for refunds and merchant operations).', 'woocommerce-elepay'),
+                'description' => __('Begins with whsec_... Paste this from your ELEPAY Developer Portal webhook registration.', 'woocommerce-elepay'),
                 'default'     => '',
             ),
             'api_base_url' => array(
@@ -121,7 +139,7 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
                 'title'       => __('Webhook Notification URL', 'woocommerce-elepay'),
                 'type'        => 'title',
                 'description' => '<code>' . esc_url($webhook_url) . '</code><br><span class="description">' .
-                    __('Copy this URL to your ELEPAY Developer Portal to receive real-time payment notifications.', 'woocommerce-elepay') . '</span>',
+                    __('Register this URL in your ELEPAY Developer Portal to receive real-time payment events.', 'woocommerce-elepay') . '</span>',
             ),
         );
     }
@@ -134,10 +152,22 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
     }
 
     /**
+     * Get the active Request Signing Secret based on mode
+     */
+    public function get_signing_secret() {
+        return $this->testmode ? $this->test_signing_secret : $this->live_signing_secret;
+    }
+
+    /**
      * Get API Client instance
      */
     public function get_api() {
-        return new WC_Elepay_API($this->get_api_key(), $this->api_base_url);
+        return new WC_Elepay_API(
+            $this->get_api_key(),
+            $this->get_signing_secret(),
+            $this->api_base_url,
+            $this->merchant_id
+        );
     }
 
     /**
@@ -156,7 +186,6 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
         // Build itemized lines
         $lines = array();
         foreach ($order->get_items() as $item) {
-            $product = $item->get_product();
             $item_total_pesewas = intval(round($order->get_line_total($item, true) * 100));
             $lines[] = array(
                 'kind'        => 'sale',
@@ -193,11 +222,14 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
             'lines'          => $lines,
             'returnUrl'      => $this->get_return_url($order),
             'cancelUrl'      => $order->get_cancel_order_url(),
+            'supportedRails' => array('mtn_momo', 'telecel_cash', 'at_money', 'ghipss_ghqr', 'direct_card'),
             'metadata'       => array(
                 'order_id'       => $order->get_id(),
                 'order_key'      => $order->get_order_key(),
                 'customer_email' => $order->get_billing_email(),
                 'customer_phone' => $order->get_billing_phone(),
+                'platform'       => 'woocommerce',
+                'plugin_version' => WC_ELEPAY_VERSION,
             ),
         );
 
@@ -206,7 +238,7 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
 
             // Save checkout reference in order metadata
             $order->update_meta_data('_elepay_checkout_reference', $session['reference']);
-            $order->add_order_note(sprintf(__('ELEPAY checkout session created. Reference: %s', 'woocommerce-elepay'), $session['reference']));
+            $order->add_order_note(sprintf(__('ELEPAY checkout session created via direct rails. Reference: %s', 'woocommerce-elepay'), $session['reference']));
             $order->save();
 
             return array(
@@ -220,7 +252,7 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
     }
 
     /**
-     * Process Refunds
+     * Process Refunds with HMAC v2 request signing
      */
     public function process_refund($order_id, $amount = null, $reason = '') {
         $order = wc_get_order($order_id);
@@ -242,7 +274,7 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
 
         try {
             $api->create_refund($this->merchant_id, $checkout_ref, 1, $amount_pesewas, $reason ? $reason : 'WooCommerce Admin Refund');
-            $order->add_order_note(sprintf(__('Refund of GH₵%s processed via ELEPAY.', 'woocommerce-elepay'), wc_format_decimal($amount, 2)));
+            $order->add_order_note(sprintf(__('Refund of GH₵%s processed via ELEPAY direct rail.', 'woocommerce-elepay'), wc_format_decimal($amount, 2)));
             return true;
         } catch (Exception $e) {
             return new WP_Error('refund_failed', $e->getMessage());
@@ -338,7 +370,7 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
                     $status = $this->get_api()->get_checkout_status($reference);
                     if (isset($status['status']) && $status['status'] === 'paid') {
                         $order->payment_complete($reference);
-                        $order->add_order_note(sprintf(__('Payment confirmed upon return from ELEPAY. Reference: %s', 'woocommerce-elepay'), $reference));
+                        $order->add_order_note(sprintf(__('Payment confirmed upon return from ELEPAY direct rail. Reference: %s', 'woocommerce-elepay'), $reference));
                     }
                 } catch (Exception $e) {
                     // Non-fatal, webhook will reconcile

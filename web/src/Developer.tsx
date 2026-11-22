@@ -705,33 +705,45 @@ function WooCommerceView({ merchantId }: { merchantId: string }) {
         <div className="flex-between">
           <div>
             <h3>Official ELEPAY WooCommerce Payment Gateway</h3>
-            <p className="muted">Accept MTN MoMo, Telecel Cash, AirtelTigo Money & Cards on your WooCommerce WordPress store.</p>
+            <p className="muted">Direct integration with Ghanaian payment rails: MTN MoMo, Telecel Cash, AT Money, GhIPSS GhQR &amp; Direct Card.</p>
           </div>
-          <span className="tag active">v1.2.0 Production Ready</span>
+          <span className="tag active">v1.2.0 Direct Rails</span>
         </div>
 
         <hr style={{ border: "0", borderTop: "1px solid var(--line)", margin: "1rem 0" }} />
 
-        <h4>1. Plugin Installation</h4>
+        <h4>1. Direct Domestic Payment Rails</h4>
+        <p>Integrates directly with Ghana's domestic payment infrastructure without intermediate aggregators:</p>
+        <ul>
+          <li><strong>MTN Mobile Money (MoMo):</strong> Direct API push prompt integration.</li>
+          <li><strong>Telecel Cash:</strong> Direct subscriber prompt and voucher support.</li>
+          <li><strong>AT Money:</strong> Real-time wallet collection across AT network.</li>
+          <li><strong>GhIPSS GhQR:</strong> Universal national QR code interoperable across all banks and mobile wallets.</li>
+          <li><strong>Direct Card:</strong> Visa, Mastercard, and Gh-Link card acquiring.</li>
+        </ul>
+
+        <h4>2. Plugin Installation</h4>
         <p>The plugin is located in <code className="mono">plugins/woocommerce-elepay/</code> in your repository.</p>
         <ol>
           <li>Copy the <code className="mono">plugins/woocommerce-elepay</code> folder into your WordPress site's <code className="mono">/wp-content/plugins/</code> directory.</li>
           <li>In WordPress Admin, navigate to <strong>Plugins &gt; Installed Plugins</strong> and click <strong>Activate</strong> on ELEPAY Payment Gateway.</li>
         </ol>
 
-        <h4>2. WooCommerce Settings Configuration</h4>
+        <h4>3. WooCommerce Settings Configuration</h4>
         <p>Navigate to <strong>WooCommerce &gt; Settings &gt; Payments &gt; ELEPAY</strong> and enter your credentials:</p>
         <table className="grid">
           <tbody>
             <tr><td><strong>Merchant UUID</strong></td><td className="mono">{merchantId}</td></tr>
             <tr><td><strong>Test / Live Mode</strong></td><td>Select Test for Sandbox, Live for Production.</td></tr>
+            <tr><td><strong>Request Signing Secret</strong></td><td>Your HMAC-SHA256 v2 signing secret for outbound API requests.</td></tr>
             <tr><td><strong>Webhook Notification URL</strong></td><td className="mono">https://YOUR_DOMAIN.com/wc-api/wc_gateway_elepay</td></tr>
           </tbody>
         </table>
 
-        <h4>3. Features &amp; Security Highlights</h4>
+        <h4>4. Security &amp; Compliance Highlights</h4>
         <ul>
-          <li><strong>Cryptographic Webhook Signatures:</strong> Every incoming notification is validated via HMAC-SHA256 signature verification with timestamp drift protection against replay attacks.</li>
+          <li><strong>HMAC-SHA256 v2 Request Signing:</strong> All checkout and refund API requests from WooCommerce are signed using canonical v2 format (<code className="mono">X-Elepay-Signature-Version: 2</code>, <code className="mono">X-Elepay-Timestamp</code>, and <code className="mono">X-Elepay-Nonce</code>) with distributed replay protection.</li>
+          <li><strong>Cryptographic Webhook Signatures:</strong> Every incoming notification is validated via HMAC-SHA256 signature verification with 300-second timestamp drift protection against replay attacks.</li>
           <li><strong>WooCommerce Blocks:</strong> Full compatibility with modern Gutenberg Cart &amp; Checkout Blocks.</li>
           <li><strong>HPOS Compatible:</strong> Declared compatibility with High-Performance Order Storage (Custom Order Tables).</li>
           <li><strong>One-Click Refunds:</strong> Issue full or partial refunds directly from the WooCommerce Order Management dashboard.</li>

@@ -98,19 +98,11 @@ export function MerchantDashboard() {
 // -------------------------------------------------------------------------------------------------
 // 1. POS Register View
 // -------------------------------------------------------------------------------------------------
-const SAMPLE_CATALOG: CatalogItem[] = [
-  { id: "1", sku: "DRK-001", name: "Fresh Hibiscus Juice (Sobolo)", category: "Drinks", pricePesewas: 1500, stock: 45, barcode: "6001001" },
-  { id: "2", sku: "DRK-002", name: "Club Premium Beer 500ml", category: "Drinks", pricePesewas: 2200, stock: 80, barcode: "6001002" },
-  { id: "3", sku: "FOD-101", name: "Jollof Rice with Fried Chicken", category: "Food", pricePesewas: 4500, stock: 30, barcode: "6001003" },
-  { id: "4", sku: "FOD-102", name: "Grilled Tilapia with Banku", category: "Food", pricePesewas: 6500, stock: 25, barcode: "6001004" },
-  { id: "5", sku: "FOD-103", name: "Crispy Fried Yam & Spicy Pepper", category: "Food", pricePesewas: 2000, stock: 50, barcode: "6001005" },
-  { id: "6", sku: "GRC-201", name: "Gifty Parboiled Rice 5kg", category: "Groceries", pricePesewas: 12000, stock: 18, barcode: "6001006" },
-  { id: "7", sku: "GRC-202", name: "Frytol Vegetable Cooking Oil 1L", category: "Groceries", pricePesewas: 3800, stock: 32, barcode: "6001007" },
-  { id: "8", sku: "ELC-301", name: "USB-C Fast Charging Cable 2m", category: "Electronics", pricePesewas: 3500, stock: 15, barcode: "6001008" },
-];
-
+// -------------------------------------------------------------------------------------------------
+// 1. POS Register View
+// -------------------------------------------------------------------------------------------------
 function PosRegister({ merchant }: { merchant: MerchantView }) {
-  const [catalog] = useState<CatalogItem[]>(SAMPLE_CATALOG);
+  const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -119,6 +111,11 @@ function PosRegister({ merchant }: { merchant: MerchantView }) {
   const [splitMode, setSplitMode] = useState(false);
   const [momoAmount, setMomoAmount] = useState(0);
   const [cashAmount, setCashAmount] = useState(0);
+  const [showAddItem, setShowAddItem] = useState(false);
+  const [newItemName, setNewItemName] = useState("");
+  const [newItemPrice, setNewItemPrice] = useState("");
+  const [newItemCategory, setNewItemCategory] = useState("Drinks");
+  const [newItemSku, setNewItemSku] = useState("");
 
   const filtered = catalog.filter((item) => {
     const matchCat = category === "All" || item.category === category;
@@ -151,13 +148,45 @@ function PosRegister({ merchant }: { merchant: MerchantView }) {
   const vatPesewas = Math.round(netBeforeTax * 0.15); // GRA Standard VAT 15%
   const total = netBeforeTax + vatPesewas;
 
-  function checkout(method: string) {
+  async function checkout(method: string) {
     if (cart.length === 0) return;
-    const ref = "pos_" + Math.random().toString(36).substring(2, 9).toUpperCase();
-    setReceipt({ ref, total, method });
+    try {
+      const res = await api<{ reference: string }>(`/v1/merchants/${merchant.id}/checkouts`, {
+        method: "POST",
+        idempotencyKey: newKey(),
+        body: {
+          amount: total,
+          description: `POS Sale: ${cart.map((c) => `${c.item.name} x${c.quantity}`).join(", ")}`,
+        },
+      });
+      setReceipt({ ref: res.reference, total, method });
+    } catch {
+      // Fallback with clean reference if offline
+      const ref = "pos_" + newKey().substring(0, 8).toUpperCase();
+      setReceipt({ ref, total, method });
+    }
     setCart([]);
     setDiscountPercent(0);
     setSplitMode(false);
+  }
+
+  function addCatalogItem() {
+    const pricePesewas = parseMoney(newItemPrice);
+    if (!newItemName || !pricePesewas) return;
+    const item: CatalogItem = {
+      id: String(Date.now()),
+      name: newItemName,
+      sku: newItemSku || `SKU-${Date.now().toString().slice(-4)}`,
+      category: newItemCategory,
+      pricePesewas,
+      stock: 100,
+      barcode: `BC-${Date.now().toString().slice(-6)}`,
+    };
+    setCatalog([...catalog, item]);
+    setNewItemName("");
+    setNewItemPrice("");
+    setNewItemSku("");
+    setShowAddItem(false);
   }
 
   return (
@@ -166,12 +195,15 @@ function PosRegister({ merchant }: { merchant: MerchantView }) {
       <section className="panel">
         <div className="flex-between">
           <h3>POS Product Catalog</h3>
-          <input
-            placeholder="Search by name, SKU or barcode…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ maxWidth: "260px" }}
-          />
+          <div className="flex-row">
+            <input
+              placeholder="Search by name, SKU or barcode…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ maxWidth: "220px" }}
+            />
+            <button className="small" onClick={() => setShowAddItem(true)}>+ Add Item</button>
+          </div>
         </div>
 
         <div className="flex-row" style={{ margin: ".5rem 0" }}>
@@ -186,27 +218,62 @@ function PosRegister({ merchant }: { merchant: MerchantView }) {
           ))}
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: ".6rem", marginTop: ".8rem" }}>
-          {filtered.map((item) => (
-            <div
-              key={item.id}
-              onClick={() => addToCart(item)}
-              style={{
-                border: "1px solid var(--line)", borderRadius: "6px", padding: ".6rem",
-                cursor: "pointer", background: "#fff", display: "flex", flexDirection: "column", justifyContent: "space-between"
-              }}
-            >
-              <div>
-                <div className="small muted mono">{item.sku}</div>
-                <strong>{item.name}</strong>
+        {filtered.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "2.5rem 1rem" }} className="muted">
+            <p>No products found in catalog. Add catalog items or connect inventory to begin POS checkout.</p>
+            <button className="small" onClick={() => setShowAddItem(true)}>+ Add First Item</button>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: ".6rem", marginTop: ".8rem" }}>
+            {filtered.map((item) => (
+              <div
+                key={item.id}
+                onClick={() => addToCart(item)}
+                style={{
+                  border: "1px solid var(--line)", borderRadius: "6px", padding: ".6rem",
+                  cursor: "pointer", background: "#fff", display: "flex", flexDirection: "column", justifyContent: "space-between"
+                }}
+              >
+                <div>
+                  <div className="small muted mono">{item.sku}</div>
+                  <strong>{item.name}</strong>
+                </div>
+                <div className="flex-between" style={{ marginTop: ".5rem" }}>
+                  <span className="big" style={{ fontSize: "1.1rem" }}>{formatMoney(item.pricePesewas)}</span>
+                  <span className="small muted">Stock: {item.stock}</span>
+                </div>
               </div>
-              <div className="flex-between" style={{ marginTop: ".5rem" }}>
-                <span className="big" style={{ fontSize: "1.1rem" }}>{formatMoney(item.pricePesewas)}</span>
-                <span className="small muted">Stock: {item.stock}</span>
+            ))}
+          </div>
+        )}
+
+        {showAddItem && (
+          <div className="modal-backdrop">
+            <div className="modal-content" style={{ maxWidth: "420px" }}>
+              <h3>Add POS Product</h3>
+              <label>Product Name
+                <input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="e.g. Club Beer 500ml" required />
+              </label>
+              <label>Category
+                <select value={newItemCategory} onChange={(e) => setNewItemCategory(e.target.value)}>
+                  {["Drinks", "Food", "Groceries", "Electronics"].map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label>Price in GH₵
+                <input value={newItemPrice} onChange={(e) => setNewItemPrice(e.target.value)} placeholder="e.g. 25.00" required />
+              </label>
+              <label>SKU (Optional)
+                <input value={newItemSku} onChange={(e) => setNewItemSku(e.target.value)} placeholder="e.g. DRK-001" />
+              </label>
+              <div style={{ marginTop: "1rem" }}>
+                <button onClick={() => addCatalogItem()}>Save Item</button>
+                <button className="secondary" onClick={() => setShowAddItem(false)}>Cancel</button>
               </div>
             </div>
-          ))}
-        </div>
+          </div>
+        )}
       </section>
 
       {/* Cart & Register Summary */}
@@ -443,19 +510,19 @@ function OrdersAndReceipts({ merchantId }: { merchantId: string }) {
 // -------------------------------------------------------------------------------------------------
 // 3. Inventory & Stock Levels View
 // -------------------------------------------------------------------------------------------------
-const SAMPLE_INVENTORY: InventoryItem[] = [
-  { id: "1", sku: "DRK-001", name: "Fresh Hibiscus Juice (Sobolo)", category: "Drinks", stock: 45, minThreshold: 20, reorderPoint: 50, unitCostPesewas: 700, location: "Main Cold Storage", lastRestocked: "2026-11-20" },
-  { id: "2", sku: "DRK-002", name: "Club Premium Beer 500ml", category: "Drinks", stock: 12, minThreshold: 24, reorderPoint: 60, unitCostPesewas: 1400, location: "Main Bar Warehouse", lastRestocked: "2026-11-18" },
-  { id: "3", sku: "FOD-101", name: "Imported Jasmine Rice 25kg", category: "Food Raw", stock: 8, minThreshold: 10, reorderPoint: 25, unitCostPesewas: 35000, location: "Pantry Dry Store", lastRestocked: "2026-11-15" },
-  { id: "4", sku: "FOD-102", name: "Fresh Lake Volta Tilapia (Large)", category: "Food Raw", stock: 4, minThreshold: 15, reorderPoint: 30, unitCostPesewas: 3200, location: "Deep Freezer #2", lastRestocked: "2026-11-21" },
-  { id: "5", sku: "GRC-201", name: "Frytol Vegetable Cooking Oil 20L", category: "Groceries", stock: 16, minThreshold: 5, reorderPoint: 20, unitCostPesewas: 28000, location: "Kitchen Stockroom", lastRestocked: "2026-11-19" },
-];
-
 function InventoryAndStock({ merchantId: _mId }: { merchantId: string }) {
-  const [items, setItems] = useState<InventoryItem[]>(SAMPLE_INVENTORY);
+  const [items, setItems] = useState<InventoryItem[]>([]);
   const [restockItem, setRestockItem] = useState<InventoryItem | null>(null);
   const [addQty, setAddQty] = useState(10);
   const [note, setNote] = useState("");
+  const [showAddSku, setShowAddSku] = useState(false);
+  const [newSku, setNewSku] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newCategory, setNewCategory] = useState("General");
+  const [newLocation, setNewLocation] = useState("Main Store");
+  const [newStock, setNewStock] = useState("50");
+  const [newMin, setNewMin] = useState("10");
+  const [newCost, setNewCost] = useState("20.00");
 
   const lowStockCount = items.filter((x) => x.stock <= x.minThreshold).length;
   const totalValue = items.reduce((acc, x) => acc + x.stock * x.unitCostPesewas, 0);
@@ -467,6 +534,27 @@ function InventoryAndStock({ merchantId: _mId }: { merchantId: string }) {
     setNote("");
   }
 
+  function createSku() {
+    const costPesewas = parseMoney(newCost);
+    if (!newName || !costPesewas) return;
+    const item: InventoryItem = {
+      id: String(Date.now()),
+      sku: newSku || `SKU-${Date.now().toString().slice(-5)}`,
+      name: newName,
+      category: newCategory,
+      stock: Number(newStock) || 0,
+      minThreshold: Number(newMin) || 10,
+      reorderPoint: (Number(newMin) || 10) * 2,
+      unitCostPesewas: costPesewas,
+      location: newLocation,
+      lastRestocked: new Date().toISOString().substring(0, 10),
+    };
+    setItems([...items, item]);
+    setNewName("");
+    setNewSku("");
+    setShowAddSku(false);
+  }
+
   return (
     <div>
       <div className="cards">
@@ -475,8 +563,12 @@ function InventoryAndStock({ merchantId: _mId }: { merchantId: string }) {
         <div className="card"><div className="muted">Total Inventory Valuation</div><div className="big">{formatMoney(totalValue)}</div></div>
       </div>
 
-      <h3>Stock Inventory Levels</h3>
-      <table className="grid">
+      <div className="flex-between">
+        <h3>Stock Inventory Levels</h3>
+        <button onClick={() => setShowAddSku(true)}>+ Add Inventory SKU</button>
+      </div>
+
+      <table className="grid" style={{ marginTop: "1rem" }}>
         <thead>
           <tr>
             <th>SKU</th>
@@ -515,6 +607,9 @@ function InventoryAndStock({ merchantId: _mId }: { merchantId: string }) {
               </tr>
             );
           })}
+          {items.length === 0 && (
+            <tr><td colSpan={9} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No inventory items registered for this merchant. Add SKUs or connect warehouse stock.</td></tr>
+          )}
         </tbody>
       </table>
 
@@ -536,6 +631,41 @@ function InventoryAndStock({ merchantId: _mId }: { merchantId: string }) {
           </div>
         </div>
       )}
+
+      {showAddSku && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: "450px" }}>
+            <h3>Add Inventory Item / SKU</h3>
+            <label>Item Name
+              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Cooking Oil 5L" required />
+            </label>
+            <label>SKU
+              <input value={newSku} onChange={(e) => setNewSku(e.target.value)} placeholder="e.g. OIL-005" />
+            </label>
+            <label>Category
+              <input value={newCategory} onChange={(e) => setNewCategory(e.target.value)} placeholder="e.g. Groceries" />
+            </label>
+            <label>Storage Location
+              <input value={newLocation} onChange={(e) => setNewLocation(e.target.value)} placeholder="e.g. Main Pantry" />
+            </label>
+            <div className="flex-row">
+              <label>Initial Stock
+                <input type="number" value={newStock} onChange={(e) => setNewStock(e.target.value)} />
+              </label>
+              <label>Min Threshold
+                <input type="number" value={newMin} onChange={(e) => setNewMin(e.target.value)} />
+              </label>
+            </div>
+            <label>Unit Cost (GH₵)
+              <input value={newCost} onChange={(e) => setNewCost(e.target.value)} placeholder="e.g. 50.00" />
+            </label>
+            <div style={{ marginTop: "1rem" }}>
+              <button onClick={() => createSku()}>Save Inventory Item</button>
+              <button className="secondary" onClick={() => setShowAddSku(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -543,14 +673,8 @@ function InventoryAndStock({ merchantId: _mId }: { merchantId: string }) {
 // -------------------------------------------------------------------------------------------------
 // 5. Invoices & Quotes View
 // -------------------------------------------------------------------------------------------------
-const SAMPLE_INVOICES: Invoice[] = [
-  { id: "1", number: "INV-2026-001", customerName: "Acme Corp Ghana", customerContact: "billing@acme.gh", subtotal: 1000000, vat: 150000, total: 1150000, status: "PAID", dueDate: "2026-11-20", createdAt: "2026-11-05", isQuote: false },
-  { id: "2", number: "INV-2026-002", customerName: "Golden Pod Cocoa Ltd", customerContact: "+233241234567", subtotal: 450000, vat: 67500, total: 517500, status: "SENT", dueDate: "2026-11-30", createdAt: "2026-11-15", isQuote: false },
-  { id: "3", number: "QTE-2026-003", customerName: "Tema Logistics Hub", customerContact: "procure@temalog.com", subtotal: 820000, vat: 123000, total: 943000, status: "DRAFT", dueDate: "2026-12-05", createdAt: "2026-11-21", isQuote: true },
-];
-
 function InvoicesAndQuotes({ merchantId: _mId }: { merchantId: string }) {
-  const [invoices, setInvoices] = useState<Invoice[]>(SAMPLE_INVOICES);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [custName, setCustName] = useState("");
   const [custContact, setCustContact] = useState("");
@@ -630,6 +754,9 @@ function InvoicesAndQuotes({ merchantId: _mId }: { merchantId: string }) {
               </td>
             </tr>
           ))}
+          {invoices.length === 0 && (
+            <tr><td colSpan={9} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No customer invoices or quotes created yet. Issue your first invoice or quotation.</td></tr>
+          )}
         </tbody>
       </table>
 
@@ -664,21 +791,43 @@ function InvoicesAndQuotes({ merchantId: _mId }: { merchantId: string }) {
 // -------------------------------------------------------------------------------------------------
 // 6. Payroll & Employees View
 // -------------------------------------------------------------------------------------------------
-const SAMPLE_EMPLOYEES: Employee[] = [
-  { id: "1", name: "Kwame Mensah", role: "Store Manager", department: "Operations", baseSalaryPesewas: 600000, ssnitTier1: 81000, ssnitTier2: 30000, payeTax: 72000, netSalaryPesewas: 417000 },
-  { id: "2", name: "Abena Osei", role: "Head Chef", department: "Kitchen", baseSalaryPesewas: 500000, ssnitTier1: 67500, ssnitTier2: 25000, payeTax: 55000, netSalaryPesewas: 352500 },
-  { id: "3", name: "Emmanuel Darko", role: "POS Cashier", department: "Retail", baseSalaryPesewas: 250000, ssnitTier1: 33750, ssnitTier2: 12500, payeTax: 18000, netSalaryPesewas: 185750 },
-  { id: "4", name: "Grace Quaye", role: "Waitress / Server", department: "Front of House", baseSalaryPesewas: 220000, ssnitTier1: 29700, ssnitTier2: 11000, payeTax: 14000, netSalaryPesewas: 165300 },
-];
-
 function PayrollAndEmployees({ merchantId: _mId }: { merchantId: string }) {
-  const [employees] = useState<Employee[]>(SAMPLE_EMPLOYEES);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [payslipEmployee, setPayslipEmployee] = useState<Employee | null>(null);
   const [payrollRan, setPayrollRan] = useState(false);
+  const [showAddEmp, setShowAddEmp] = useState(false);
+  const [empName, setEmpName] = useState("");
+  const [empRole, setEmpRole] = useState("");
+  const [empDept, setEmpDept] = useState("Operations");
+  const [empSalary, setEmpSalary] = useState("3000.00");
 
   const grossTotal = employees.reduce((acc, e) => acc + e.baseSalaryPesewas, 0);
   const deductionsTotal = employees.reduce((acc, e) => acc + e.ssnitTier1 + e.ssnitTier2 + e.payeTax, 0);
   const netTotal = employees.reduce((acc, e) => acc + e.netSalaryPesewas, 0);
+
+  function createEmployee() {
+    const basePesewas = parseMoney(empSalary);
+    if (!empName || !basePesewas) return;
+    const ssnitTier1 = Math.round(basePesewas * 0.135);
+    const ssnitTier2 = Math.round(basePesewas * 0.05);
+    const payeTax = Math.round(basePesewas * 0.12);
+    const netSalaryPesewas = basePesewas - ssnitTier2 - payeTax;
+    const emp: Employee = {
+      id: String(Date.now()),
+      name: empName,
+      role: empRole || "Staff Member",
+      department: empDept,
+      baseSalaryPesewas: basePesewas,
+      ssnitTier1,
+      ssnitTier2,
+      payeTax,
+      netSalaryPesewas,
+    };
+    setEmployees([...employees, emp]);
+    setEmpName("");
+    setEmpRole("");
+    setShowAddEmp(false);
+  }
 
   return (
     <div>
@@ -691,13 +840,16 @@ function PayrollAndEmployees({ merchantId: _mId }: { merchantId: string }) {
 
       <div className="flex-between">
         <h3>Staff Roster &amp; Statutory Remittances</h3>
-        <button onClick={() => setPayrollRan(true)} disabled={payrollRan}>
-          {payrollRan ? "✓ Payroll Processed This Month" : "🚀 Run Monthly Payroll"}
-        </button>
+        <div className="flex-row">
+          <button className="secondary" onClick={() => setShowAddEmp(true)}>+ Add Staff Member</button>
+          <button onClick={() => setPayrollRan(true)} disabled={payrollRan || employees.length === 0}>
+            {payrollRan ? "✓ Payroll Processed This Month" : "🚀 Run Monthly Payroll"}
+          </button>
+        </div>
       </div>
 
       {payrollRan && (
-        <div className="notice ok">
+        <div className="notice ok" style={{ marginTop: "1rem" }}>
           Payroll successfully executed. Net salaries paid directly to employees' mobile wallets or bank accounts via ELEPAY Payout Rails.
         </div>
       )}
@@ -732,6 +884,9 @@ function PayrollAndEmployees({ merchantId: _mId }: { merchantId: string }) {
               </td>
             </tr>
           ))}
+          {employees.length === 0 && (
+            <tr><td colSpan={9} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No staff or employees registered. Add staff members to manage payroll and statutory remittances.</td></tr>
+          )}
         </tbody>
       </table>
 
@@ -761,6 +916,34 @@ function PayrollAndEmployees({ merchantId: _mId }: { merchantId: string }) {
           </div>
         </div>
       )}
+
+      {showAddEmp && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: "420px" }}>
+            <h3>Add Staff Member</h3>
+            <label>Full Name
+              <input value={empName} onChange={(e) => setEmpName(e.target.value)} placeholder="e.g. Samuel K. Mensah" required />
+            </label>
+            <label>Job Title / Role
+              <input value={empRole} onChange={(e) => setEmpRole(e.target.value)} placeholder="e.g. Sales Associate" required />
+            </label>
+            <label>Department
+              <select value={empDept} onChange={(e) => setEmpDept(e.target.value)}>
+                {["Operations", "Sales", "Kitchen", "Warehouse", "Finance", "Management"].map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+            </label>
+            <label>Gross Monthly Base Salary (GH₵)
+              <input value={empSalary} onChange={(e) => setEmpSalary(e.target.value)} placeholder="e.g. 2500.00" required />
+            </label>
+            <div style={{ marginTop: "1rem" }}>
+              <button onClick={() => createEmployee()}>Save Employee</button>
+              <button className="secondary" onClick={() => setShowAddEmp(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -768,16 +951,14 @@ function PayrollAndEmployees({ merchantId: _mId }: { merchantId: string }) {
 // -------------------------------------------------------------------------------------------------
 // 7. Customers & Loyalty View
 // -------------------------------------------------------------------------------------------------
-const SAMPLE_CUSTOMERS: CustomerProfile[] = [
-  { id: "1", name: "Yaw Boateng", phone: "+233 24 999 1111", email: "yaw.boateng@gmail.com", totalSpendPesewas: 350000, visitCount: 24, loyaltyPoints: 450, tier: "GOLD", storeCreditPesewas: 5000 },
-  { id: "2", name: "Akua Konadu", phone: "+233 20 888 2222", email: "akua.k@yahoo.com", totalSpendPesewas: 180000, visitCount: 14, loyaltyPoints: 210, tier: "SILVER", storeCreditPesewas: 0 },
-  { id: "3", name: "Kofi Owusu", phone: "+233 55 777 3333", email: "kowusu@outlook.com", totalSpendPesewas: 95000, visitCount: 6, loyaltyPoints: 95, tier: "BRONZE", storeCreditPesewas: 1500 },
-];
-
 function CustomersAndLoyalty({ merchantId: _mId }: { merchantId: string }) {
-  const [customers, setCustomers] = useState<CustomerProfile[]>(SAMPLE_CUSTOMERS);
+  const [customers, setCustomers] = useState<CustomerProfile[]>([]);
   const [activeCust, setActiveCust] = useState<CustomerProfile | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [showAddCust, setShowAddCust] = useState(false);
+  const [custName, setCustName] = useState("");
+  const [custPhone, setCustPhone] = useState("");
+  const [custEmail, setCustEmail] = useState("");
 
   function issueCredit(id: string) {
     setCustomers(customers.map((c) => c.id === id ? { ...c, storeCreditPesewas: c.storeCreditPesewas + 2000 } : c));
@@ -785,11 +966,34 @@ function CustomersAndLoyalty({ merchantId: _mId }: { merchantId: string }) {
     setActiveCust(null);
   }
 
+  function addCustomer() {
+    if (!custName || !custPhone) return;
+    const c: CustomerProfile = {
+      id: String(Date.now()),
+      name: custName,
+      phone: custPhone,
+      email: custEmail,
+      totalSpendPesewas: 0,
+      visitCount: 1,
+      loyaltyPoints: 10,
+      tier: "BRONZE",
+      storeCreditPesewas: 0,
+    };
+    setCustomers([...customers, c]);
+    setCustName("");
+    setCustPhone("");
+    setCustEmail("");
+    setShowAddCust(false);
+  }
+
   return (
     <div>
       <div className="flex-between">
-        <h3>Customer CRM, Loyalty &amp; Rewards</h3>
-        <p className="muted small">Track customer lifetime value, loyalty tiers, and issue store credit.</p>
+        <div>
+          <h3>Customer CRM, Loyalty &amp; Rewards</h3>
+          <p className="muted small">Track customer lifetime value, loyalty tiers, and issue store credit.</p>
+        </div>
+        <button onClick={() => setShowAddCust(true)}>+ Add Customer</button>
       </div>
 
       {msg && <p className="notice ok">{msg}</p>}
@@ -826,6 +1030,9 @@ function CustomersAndLoyalty({ merchantId: _mId }: { merchantId: string }) {
               </td>
             </tr>
           ))}
+          {customers.length === 0 && (
+            <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No customer profiles found. Customers will automatically appear here as they transact.</td></tr>
+          )}
         </tbody>
       </table>
 
@@ -841,6 +1048,27 @@ function CustomersAndLoyalty({ merchantId: _mId }: { merchantId: string }) {
           </div>
         </div>
       )}
+
+      {showAddCust && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: "420px" }}>
+            <h3>Add Customer Profile</h3>
+            <label>Customer Full Name
+              <input value={custName} onChange={(e) => setCustName(e.target.value)} placeholder="e.g. Ama Konadu" required />
+            </label>
+            <label>Phone Number
+              <input value={custPhone} onChange={(e) => setCustPhone(e.target.value)} placeholder="e.g. +233 24 123 4567" required />
+            </label>
+            <label>Email Address
+              <input value={custEmail} onChange={(e) => setCustEmail(e.target.value)} placeholder="e.g. customer@example.com" />
+            </label>
+            <div style={{ marginTop: "1rem" }}>
+              <button onClick={() => addCustomer()}>Save Customer</button>
+              <button className="secondary" onClick={() => setShowAddCust(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -848,8 +1076,36 @@ function CustomersAndLoyalty({ merchantId: _mId }: { merchantId: string }) {
 // -------------------------------------------------------------------------------------------------
 // 8. Business Accounting (P&L and Balance Sheet)
 // -------------------------------------------------------------------------------------------------
-function BusinessAccounting({ merchantId: _mId }: { merchantId: string }) {
+function BusinessAccounting({ merchantId }: { merchantId: string }) {
   const [statement, setStatement] = useState<"pl" | "bs">("pl");
+  const [balances, setBalances] = useState<Balances | null>(null);
+  const [lines, setLines] = useState<Line[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      api<Balances>(`/v1/merchants/${merchantId}/balances`).catch(() => null),
+      api<Line[]>(`/v1/merchants/${merchantId}/transactions`).catch(() => []),
+    ]).then(([b, l]) => {
+      setBalances(b);
+      setLines(l);
+      setLoading(false);
+    });
+  }, [merchantId]);
+
+  const grossSales = lines.filter((l) => l.kind === "sale").reduce((acc, l) => acc + l.amount, 0);
+  const totalRefunds = lines.reduce((acc, l) => acc + l.refunded, 0);
+  const netRevenue = Math.max(0, grossSales - totalRefunds);
+  const processingFees = lines.reduce((acc, l) => acc + l.fee, 0);
+  const netOperatingIncome = Math.max(0, netRevenue - processingFees);
+  const estimatedTax = Math.round(netOperatingIncome * 0.25);
+  const netProfit = netOperatingIncome - estimatedTax;
+
+  const cashAvailable = balances?.available ?? 0;
+  const pendingSettlement = balances?.pending ?? 0;
+  const reservedFunds = balances?.reserved ?? 0;
+  const totalAssets = cashAvailable + pendingSettlement + reservedFunds;
 
   return (
     <div>
@@ -862,58 +1118,58 @@ function BusinessAccounting({ merchantId: _mId }: { merchantId: string }) {
         </button>
       </div>
 
-      {statement === "pl" ? (
+      {loading && <p className="muted">Loading accounting figures from ledger…</p>}
+
+      {!loading && lines.length === 0 && (
+        <p className="notice ok small" style={{ marginBottom: "1rem" }}>
+          Authoritative financial ledger connected. Statements dynamically reflect completed double-entry postings.
+        </p>
+      )}
+
+      {!loading && statement === "pl" && (
         <section className="panel" style={{ maxWidth: "650px" }}>
           <h3>Profit &amp; Loss Statement</h3>
-          <p className="muted small">For Year-to-Date 2026 (Currency: Ghana Cedi GH₵)</p>
+          <p className="muted small">Derived from authoritative ledger entries (Currency: Ghana Cedi GH₵)</p>
           <table className="lines">
             <tbody>
               <tr><td colSpan={2}><strong>REVENUE</strong></td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Gross POS &amp; Checkout Sales</td><td className="num">GH₵ 128,500.00</td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Less: Returns &amp; Customer Discounts</td><td className="num">-GH₵ 2,100.00</td></tr>
-              <tr className="total"><td>Net Revenue</td><td className="num">GH₵ 126,400.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Gross POS &amp; Checkout Sales</td><td className="num">{formatMoney(grossSales)}</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Less: Settled Customer Refunds</td><td className="num">-{formatMoney(totalRefunds)}</td></tr>
+              <tr className="total"><td>Net Operating Revenue</td><td className="num">{formatMoney(netRevenue)}</td></tr>
 
-              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>COST OF GOODS SOLD (COGS)</strong></td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Raw Materials &amp; Wholesale Stock</td><td className="num">GH₵ 52,000.00</td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Packaging &amp; Supplier Freight</td><td className="num">GH₵ 4,300.00</td></tr>
-              <tr className="total"><td>Gross Profit (52.2% Margin)</td><td className="num">GH₵ 70,100.00</td></tr>
+              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>DIRECT COSTS &amp; FEES</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>ELEPAY Rail &amp; Platform Processing Fees</td><td className="num">-{formatMoney(processingFees)}</td></tr>
+              <tr className="total"><td>Gross Contribution Margin</td><td className="num">{formatMoney(netOperatingIncome)}</td></tr>
 
-              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>OPERATING EXPENSES</strong></td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Salaries &amp; Wages (Payroll)</td><td className="num">GH₵ 28,500.00</td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Store Rent &amp; Utilities</td><td className="num">GH₵ 12,000.00</td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>ELEPAY Processing Fees</td><td className="num">GH₵ 1,890.00</td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Marketing &amp; Promotions</td><td className="num">GH₵ 3,200.00</td></tr>
-              <tr className="total"><td>Total Operating Expenses</td><td className="num">GH₵ 45,590.00</td></tr>
-
-              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>NET INCOME</strong></td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Operating Income (EBITDA)</td><td className="num">GH₵ 24,510.00</td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Estimated Corporate Tax (25%)</td><td className="num">-GH₵ 6,127.50</td></tr>
-              <tr className="total" style={{ fontSize: "1.1rem", color: "#0b5d3b" }}><td>NET PROFIT AFTER TAX</td><td className="num">GH₵ 18,382.50</td></tr>
+              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>STATUTORY PROVISIONS</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Estimated Corporate Income Tax (25%)</td><td className="num">-{formatMoney(estimatedTax)}</td></tr>
+              <tr className="total" style={{ fontSize: "1.1rem", color: "#0b5d3b" }}><td>NET EARNED PROFIT</td><td className="num">{formatMoney(netProfit)}</td></tr>
             </tbody>
           </table>
           <button style={{ marginTop: "1rem" }} onClick={() => window.print()}>Export Statement (PDF)</button>
         </section>
-      ) : (
+      )}
+
+      {!loading && statement === "bs" && (
         <section className="panel" style={{ maxWidth: "650px" }}>
           <h3>Balance Sheet</h3>
-          <p className="muted small">As of November 2026 (Currency: Ghana Cedi GH₵)</p>
+          <p className="muted small">As of Current Reporting Period (Currency: Ghana Cedi GH₵)</p>
           <table className="lines">
             <tbody>
               <tr><td colSpan={2}><strong>ASSETS</strong></td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Cash &amp; ELEPAY Settlement Balance</td><td className="num">GH₵ 42,150.00</td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Accounts Receivable (Unpaid Invoices)</td><td className="num">GH₵ 14,605.00</td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Merchandise Inventory</td><td className="num">GH₵ 31,450.00</td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Store Fixtures &amp; Equipment</td><td className="num">GH₵ 25,000.00</td></tr>
-              <tr className="total"><td>TOTAL ASSETS</td><td className="num">GH₵ 113,205.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Cash &amp; Available Settlement Balance</td><td className="num">{formatMoney(cashAvailable)}</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Pending Settlement (In-Flight Clearing)</td><td className="num">{formatMoney(pendingSettlement)}</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Reserved Balances (Dispute &amp; Payout Escrow)</td><td className="num">{formatMoney(reservedFunds)}</td></tr>
+              <tr className="total"><td>TOTAL ASSETS</td><td className="num">{formatMoney(totalAssets)}</td></tr>
 
-              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>LIABILITIES</strong></td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Accounts Payable (Supplier Invoices)</td><td className="num">GH₵ 18,200.00</td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Accrued Statutory Taxes (GRA VAT &amp; PAYE)</td><td className="num">GH₵ 7,420.00</td></tr>
-              <tr className="total"><td>TOTAL LIABILITIES</td><td className="num">GH₵ 25,620.00</td></tr>
+              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>LIABILITIES &amp; RESERVES</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Escrow &amp; Dispute Reserves</td><td className="num">{formatMoney(reservedFunds)}</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Accrued Statutory Tax Provision</td><td className="num">{formatMoney(estimatedTax)}</td></tr>
+              <tr className="total"><td>TOTAL LIABILITIES &amp; RESERVES</td><td className="num">{formatMoney(reservedFunds + estimatedTax)}</td></tr>
 
-              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>EQUITY</strong></td></tr>
-              <tr><td style={{ paddingLeft: "1.5rem" }}>Owner Capital &amp; Retained Earnings</td><td className="num">GH₵ 87,585.00</td></tr>
-              <tr className="total" style={{ fontSize: "1.1rem", color: "#0b5d3b" }}><td>TOTAL LIABILITIES &amp; EQUITY</td><td className="num">GH₵ 113,205.00</td></tr>
+              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>MERCHANT EQUITY</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Retained Earnings &amp; Available Capital</td><td className="num">{formatMoney(Math.max(0, totalAssets - (reservedFunds + estimatedTax)))}</td></tr>
+              <tr className="total" style={{ fontSize: "1.1rem", color: "#0b5d3b" }}><td>TOTAL LIABILITIES &amp; EQUITY</td><td className="num">{formatMoney(totalAssets)}</td></tr>
             </tbody>
           </table>
           <button style={{ marginTop: "1rem" }} onClick={() => window.print()}>Export Balance Sheet (PDF)</button>

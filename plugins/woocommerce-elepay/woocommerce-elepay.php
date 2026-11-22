@@ -2,7 +2,7 @@
 /**
  * Plugin Name: ELEPAY Payment Gateway for WooCommerce
  * Plugin URI: https://elepay.com/developer/woocommerce
- * Description: Accept Mobile Money (MTN MoMo, Telecel Cash, AirtelTigo Money) and Cards seamlessly on your WooCommerce store via ELEPAY.
+ * Description: Accept direct Ghanaian payment rails (MTN MoMo, Telecel Cash, AT Money, GhIPSS GhQR, Direct Card) seamlessly on your WooCommerce store via ELEPAY.
  * Version: 1.2.0
  * Author: ELEPAY Technologies Ltd
  * Author URI: https://elepay.com
