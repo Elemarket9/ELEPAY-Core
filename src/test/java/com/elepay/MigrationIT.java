@@ -46,7 +46,7 @@ class MigrationIT {
                     "system:revenue:GHS", "system:suspense:GHS", "system:refunds_in_flight:GHS",
                     "system:clearing:sandbox:GHS", "system:rail_fees:GHS", "system:revenue:USD",
                     "system:fx_clearing:GHS", "system:fx_clearing:USD", "system:fx_in_flight:USD",
-                    "system:fx_in_flight:GHS");
+                    "system:fx_in_flight:GHS", "system:deferred_revenue:GHS", "system:revenue:earned:GHS");
         }
     }
 

@@ -51,7 +51,7 @@ class WalletIT extends PostgresTestBase {
     }
 
     private UUID enroll(RestClient http, String token, String subject) {
-        String phone = "233" + String.format("%09d", Math.floorMod(UUID.randomUUID().hashCode(), 1000000000));
+        String phone = TestApi.uniquePhone(); // a leading 0 after 233 is not a valid Ghana number
         JsonNode body = http.post().uri("/v1/ops/customers").headers(h -> h.setBearerAuth(token))
                 .body(Map.of("subject", subject, "phone", phone, "displayName", "Wallet test"))
                 .retrieve().body(JsonNode.class);
