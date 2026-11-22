@@ -19,29 +19,29 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 11 | Payment processing | exactly-once rail submission | Built | `com.elepay.rails.RailTransactions#submit`, direct adapters (`MtnMomoRail`, `TelecelCashRail`, `AirtelTigoRail`, `GhipssRail`, `CardAcquirerRail`), verified in `PartnerRailAdaptersTest`, `MarketplaceCheckoutIT` | 53b229b |
 | 12 | Payment processing | unknown-outcome recovery | Built | `com.elepay.rails.RailTransactions#recover`, verified in `PartnerRailAdaptersTest`, `MarketplaceCheckoutIT` | 53b229b |
 | 13 | Payment processing | callback state machine | Built | `com.elepay.rails.RailCallbacks`, `RailTransactions#handleCallback`, verified in `PartnerRailAdaptersTest` | 53b229b |
-| 14 | Payment processing | smart routing | Built | `com.elepay.rails.SmartPaymentRouter`, `V18__partner_rails.sql`, verified in `NetworkHealthAndRoutingTest` | working |
-| 15 | Payment processing | failover routing | Built | `com.elepay.rails.SafeFailoverRouter`, `V18__partner_rails.sql`, verified in `NetworkHealthAndRoutingTest` | working |
-| 16 | Payment processing | network health detection | Built | `com.elepay.rails.NetworkHealthDetector`, `V18__partner_rails.sql`, verified in `NetworkHealthAndRoutingTest` | working |
-| 17 | Payment processing | card BIN lookup | Built | `com.elepay.rails.CardBinLookupService`, `V18__partner_rails.sql`, verified in `CardBinLookupTest` | working |
-| 18 | Payment processing | risk-based 3-D Secure | Built | `com.elepay.rails.ThreeDSecureService`, `V18__partner_rails.sql`, verified in `ThreeDSecureTest` | working |
-| 19 | Payment processing | card tokenisation vault | Built | `com.elepay.rails.CardTokenVault`, `V18__partner_rails.sql`, verified in `CardTokenVaultTest` | working |
+| 14 | Payment processing | smart routing | Built | `com.elepay.rails.SmartPaymentRouter`, `V18__partner_rails.sql`, verified in `NetworkHealthAndRoutingTest` | 87832d6 |
+| 15 | Payment processing | failover routing | Built | `com.elepay.rails.SafeFailoverRouter`, `V18__partner_rails.sql`, verified in `NetworkHealthAndRoutingTest` | 87832d6 |
+| 16 | Payment processing | network health detection | Built | `com.elepay.rails.NetworkHealthDetector`, `V18__partner_rails.sql`, verified in `NetworkHealthAndRoutingTest` | 87832d6 |
+| 17 | Payment processing | card BIN lookup | Built | `com.elepay.rails.CardBinLookupService`, `V18__partner_rails.sql`, verified in `CardBinLookupTest` | 87832d6 |
+| 18 | Payment processing | risk-based 3-D Secure | Built | `com.elepay.rails.ThreeDSecureService`, `V18__partner_rails.sql`, verified in `ThreeDSecureTest` | 87832d6 |
+| 19 | Payment processing | card tokenisation vault | Built | `com.elepay.rails.CardTokenVault`, `V18__partner_rails.sql`, verified in `CardTokenVaultTest` | 87832d6 |
 | 20 | Payment processing | recurring billing mandates | Built | `com.elepay.checkout.MandateService`, `V15__mandates_and_dunning.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
 | 21 | Payment processing | dunning schedule | Built | `com.elepay.checkout.MandateService#progressDunning`, `V15__mandates_and_dunning.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
 | 22 | Payment processing | EMVCo QR encoding | Built | `com.elepay.checkout.EmvcoQr`, verified in `EmvcoQrTest` | 53b229b |
-| 23 | Fraud and risk | velocity rules | Missing | No verified implementation evidence | — |
-| 24 | Fraud and risk | risk scoring rules | Missing | No verified implementation evidence | — |
-| 25 | Fraud and risk | device fingerprinting | Missing | No verified implementation evidence | — |
-| 26 | Fraud and risk | SIM-swap check | Missing | No verified implementation evidence | — |
-| 27 | Fraud and risk | geo-velocity check | Missing | No verified implementation evidence | — |
-| 28 | Fraud and risk | account takeover detection | Missing | No verified implementation evidence | — |
-| 29 | Fraud and risk | adaptive step-up | Missing | No verified implementation evidence | — |
-| 30 | Fraud and risk | merchant risk scoring | Missing | No verified implementation evidence | — |
-| 31 | Fraud and risk | promo abuse | Missing | No verified implementation evidence | — |
-| 32 | Fraud and risk | mule graph detection | Missing | No verified implementation evidence | — |
-| 33 | Fraud and risk | synthetic identity detection | Missing | No verified implementation evidence | — |
-| 34 | Fraud and risk | behavioural biometrics | Missing | No verified implementation evidence | — |
-| 35 | Fraud and risk | gradient-boosted fraud model | Missing | No verified implementation evidence | — |
-| 36 | Fraud and risk | chargeback prediction | Missing | No verified implementation evidence | — |
+| 23 | Fraud and risk | velocity rules | Built | `com.elepay.risk.VelocityService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
+| 24 | Fraud and risk | risk scoring rules | Built | `com.elepay.risk.RuleEngineService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
+| 25 | Fraud and risk | device fingerprinting | Built | `com.elepay.risk.DeviceRiskService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
+| 26 | Fraud and risk | SIM-swap check | Built | `com.elepay.risk.SimSwapService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
+| 27 | Fraud and risk | geo-velocity check | Built | `com.elepay.risk.GeoVelocityService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 7b642e5 |
+| 28 | Fraud and risk | account takeover detection | Built | `com.elepay.risk.AccountTakeoverService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
+| 29 | Fraud and risk | adaptive step-up | Built | `com.elepay.risk.StepUpAuthService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 7b642e5 |
+| 30 | Fraud and risk | merchant risk scoring | Built | `com.elepay.risk.MerchantRiskService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
+| 31 | Fraud and risk | promo abuse | Built | `com.elepay.risk.PromotionAbuseService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
+| 32 | Fraud and risk | mule graph detection | Built | `com.elepay.risk.MuleGraphService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
+| 33 | Fraud and risk | synthetic identity detection | Built | `com.elepay.risk.SyntheticIdentityService`, `V19__fraud_risk_engine.sql`, verified in `RiskEngineIntegrationTest` | 7b642e5 |
+| 34 | Fraud and risk | behavioural biometrics | Built | `com.elepay.risk.BehavioralBiometricsService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 7b642e5 |
+| 35 | Fraud and risk | gradient-boosted fraud model | Built | `com.elepay.risk.GradientBoostedFraudModel`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 7b642e5 |
+| 36 | Fraud and risk | chargeback prediction | Built | `com.elepay.risk.ChargebackPredictionService`, `V19__fraud_risk_engine.sql`, verified in `RiskAlgorithmsUnitTest`, `RiskEngineIntegrationTest` | 7b642e5 |
 | 37 | Compliance | audited lookups | Built | `com.elepay.wallet.RecipientConfirmations#lookup`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | 65d3279 |
 | 38 | Compliance | single-use confirmations | Built | `com.elepay.wallet.RecipientConfirmations`, `Wallets#send`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | 65d3279 |
 | 39 | Compliance | KYC tier limits | Built | `com.elepay.wallet.TransferLimits`, verified in `TransferLimitsTest`, `WalletTransferFlowIT` | 65d3279 |
