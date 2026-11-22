@@ -64,12 +64,12 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 56 | Reconciliation and treasury | float forecasting | Built | `com.elepay.credit.FloatForecastingService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
 | 57 | Reconciliation and treasury | auto-rebalancing | Built | `com.elepay.credit.FloatRebalancingService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
 | 58 | Reconciliation and treasury | merchant cash-flow forecasting | Built | `com.elepay.credit.MerchantCashFlowForecastService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
-| 59 | FX and cross-border | rate sourcing | Built | `com.elepay.fx.FxRateService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
-| 60 | FX and cross-border | dynamic margin | Built | `com.elepay.fx.FxPricingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
-| 61 | FX and cross-border | corridor routing | Built | `com.elepay.fx.FxRoutingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
-| 62 | FX and cross-border | exposure limits | Built | `com.elepay.fx.FxExposureService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
-| 63 | FX and cross-border | delivery estimation | Built | `com.elepay.fx.FxDeliveryEstimator`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
-| 64 | FX and cross-border | multi-currency reconciliation | Built | `com.elepay.fx.FxDualReconciliationService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT`, `FxIT` | b78a96a |
+| 59 | FX and cross-border | rate sourcing | Built | `com.elepay.fx.FxRateService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | c8bcdc0 |
+| 60 | FX and cross-border | dynamic margin | Built | `com.elepay.fx.FxPricingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | c8bcdc0 |
+| 61 | FX and cross-border | corridor routing | Built | `com.elepay.fx.FxRoutingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | c8bcdc0 |
+| 62 | FX and cross-border | exposure limits | Built | `com.elepay.fx.FxExposureService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | c8bcdc0 |
+| 63 | FX and cross-border | delivery estimation | Built | `com.elepay.fx.FxDeliveryEstimator`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | c8bcdc0 |
+| 64 | FX and cross-border | multi-currency reconciliation | Built | `com.elepay.fx.FxDualReconciliationService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT`, `FxIT` | c8bcdc0 |
 | 65 | Credit | cash-flow underwriting | Built | `com.elepay.credit.CashFlowUnderwritingService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
 | 66 | Credit | earned-wage eligibility | Built | `com.elepay.credit.EwaEligibilityService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |
 | 67 | Credit | overdraft scoring | Built | `com.elepay.credit.OverdraftScoringService`, `V21__credit_growth_platform.sql`, verified in `CreditPlatformTest` | m6-plat |

@@ -139,10 +139,10 @@ ELEPAY is a Ghana-first financial platform designed as a modular monolith in Jav
 |---|------|-------|-------------|--------|
 | M1 | Core Financial Journey & Ledger Hardening | Setup toolchain / compilation fixes, algorithms 001-007, 010, 037-039, 050, 073-074, 080, 085, 088, 095. Complete 12-step wallet transfer flow. | None | DONE (Gate passed 5/5 verifiers, 18 algorithms Built, commits: 65d3279, 0884620) |
 | M2 | Commercial Checkout, Refunds, Disputes & Settlement | Algorithms 009, 020-022, 049, 051-055, 077, 079. Multi-allocation checkout, payment links, QR, settlement batches, disputes, maker-checker. | M1 | DONE (12 algorithms Built, commits: 53b229b, 11b69f9) |
-| M3 | FX, Cross-Border Remittances & Payouts | Algorithms 059-064, Payout batching, multi-currency clearing, quote engine, corridor routing. | M1 | IN_PROGRESS (Worker 1 conv: 249e4c89d53c56b0213b87e8dcb78a9b) |
-| M4 | Direct Partner Rail Adapters & Simulators | Algorithms 011-019. Direct MoMo (MTN, Telecel, AirtelTigo), GHIPSS/NIP, Card acquirer simulators, tokenization boundary. Paystack/Hubtel excluded. | M1 | IN_PROGRESS (Worker 2 conv: 7264b48e7ed39e52b0f236f7ff0f0861) |
-| M5 | Risk, Fraud, Compliance & Platform Security | Algorithms 023-034, 040-048, 075-076, 078, 081-084, 086-087, 089-094. Sanctions, PEP, AML, Ghana Card, envelope encryption, circuit breakers, rate limiting. | M1, M2 | IN_PROGRESS (Workers 3 & 4 conv: c74a1ba022b95a586248c982d7ed49ac, bd115b54c3cbbe07f131fe3b32716bb7) |
-| M6 | Advanced Analytics, Credit Models, Growth & Final Readiness | Algorithms 008, 035-036, 056-058, 065-072, 096-100. Credit engine (disabled live), ML models, float forecasting, scorecard completion, E2E 100% pass, adversarial hardening. | M1-M5, TEST_READY | IN_PROGRESS (Worker 5 conv: e7630539cfa4d01533854e69101f9be9) |
+| M3 | FX, Cross-Border Remittances & Payouts | Algorithms 059-064, Payout batching, multi-currency clearing, quote engine, corridor routing. | M1 | DONE (6 algorithms Built, commits: b78a96a, 7b642e5) |
+| M4 | Direct Partner Rail Adapters & Simulators | Algorithms 011-019. Direct MoMo (MTN, Telecel, AirtelTigo), GHIPSS/NIP, Card acquirer simulators, tokenization boundary. Paystack/Hubtel excluded. | M1 | DONE (9 algorithms Built, commits: 87832d6, 997ac14) |
+| M5 | Risk, Fraud, Compliance & Platform Security | Algorithms 023-034, 040-048, 075-076, 078, 081-084, 086-087, 089-094. Sanctions, PEP, AML, Ghana Card, envelope encryption, circuit breakers, rate limiting. | M1, M2 | DONE (30 algorithms Built, M5A & M5B merged, commits: 8f88813, 708ebec) |
+| M6 | Advanced Analytics, Credit Models, Growth & Final Readiness | Algorithms 008, 035-036, 056-058, 065-072, 096-100. Credit engine (disabled live), ML models, float forecasting, scorecard completion, E2E 100% pass, adversarial hardening. | M1-M5, TEST_READY | DONE (25 algorithms Built, commits: 8b61d35, 16e61d2; 100/100 Algorithms Complete) |
 
 ## Interface Contracts
 
@@ -161,3 +161,19 @@ ELEPAY is a Ghana-first financial platform designed as a modular monolith in Jav
 ### Rails ↔ Adapters
 - `PaymentRail`: Abstract contract for `submitCharge`, `submitPayout`, `submitRefund`, `queryStatus`, `verifyCallback`.
 - Strict exclusion: No Paystack or Hubtel adapters allowed in registry.
+
+
+# Phase 2: Gap Closure and Fintech Expansion
+
+## Architecture Expansion
+Extending ELEPAY into a comprehensive, independent financial and business management platform across 15 critical enterprise domains while preserving core double-entry accounting and ledger immutability.
+
+## Expansion Streams
+
+| Stream | Name | Domains Covered | Scope / Package | Migration | Status |
+|---|---|---|---|---|---|
+| S1 | In-Store Commerce & POS | Domains 1, 3, 4: ELEPAY POS, Inventory & Warehouses, Restaurant & KDS | `com.elepay.pos`, `com.elepay.inventory`, `com.elepay.restaurant` | `V22__pos_inventory_restaurant.sql` | IN_PROGRESS |
+| S2 | Business Accounting, Invoicing, Payroll & CRM | Domains 5, 6, 7: Merchant GL, Invoices, AR/AP, Payroll, Statutory Deductions, CRM, Loyalty, Gift Cards | `com.elepay.accounting`, `com.elepay.payroll`, `com.elepay.crm` | `V23__accounting_payroll_crm.sql` | IN_PROGRESS |
+| S3 | Fintech Expansion | Domains 8, 9, 10, 11: Lending Lifecycle, Bill Payments (Airtime/Utilities), Card Issuing, Agent Banking | `com.elepay.lending`, `com.elepay.bills`, `com.elepay.cards`, `com.elepay.agents` | `V24__fintech_expansion.sql` | IN_PROGRESS |
+| S4 | Developer Platform & Responsive Web | Domains 2, 12, 13: BackOffice, Developer Portal, Webhook Replay, WooCommerce Plugin, Wallet/Merchant/Ops/Checkout UI | `com.elepay.developer`, `web/src/` | `V25__developer_portal.sql` | IN_PROGRESS |
+| S5 | Financial Hardening & Production Infra | Domains 14, 15: Security Defect Fixes, Request Signing, Signing Secrets, Distributed Controls, Redis, OTEL, CI/CD | `com.elepay.common`, `com.elepay.identity`, `com.elepay.reliability` | `V26__security_hardening.sql` | IN_PROGRESS |
