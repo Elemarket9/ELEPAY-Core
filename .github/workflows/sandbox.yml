@@ -77,6 +77,9 @@ jobs:
       # Run unit and integration test suite
       - name: Run Maven Tests & Verify
         env:
+          ELEPAY_TEST_DB_URL: jdbc:postgresql://localhost:5432/elepay_sandbox
+          ELEPAY_TEST_DB_USER: elepay
+          ELEPAY_TEST_DB_PASSWORD: sandbox-ci-only
           ELEPAY_DB_URL: jdbc:postgresql://localhost:5432/elepay_sandbox
           ELEPAY_DB_USER: elepay
           ELEPAY_DB_PASSWORD: sandbox-ci-only
@@ -84,7 +87,14 @@ jobs:
           ELEPAY_REDIS_PORT: 6379
         run: mvn -B verify
 
-      - name: Verify Live Sandbox Service & End-to-End Scenarios
+      - name: Verify production artifact contains no test payment implementations
+        run: |
+          jar tf target/elepay-core-0.1.0-SNAPSHOT.jar > jar-contents.txt
+          if grep -E 'BOOT-INF/classes/(application-(dev|sandbox|test)\.properties|com/elepay/.*(Simulated|SandboxLedger|DevTokens|PaymentIntents|ThreeDSecureService|CardIssuingService|CardAuthorizationEngine|CompanyExpenseCardService|AgentCashInService|AgentCashOutService|AgentFloatService|AgentPortalService|AirtimeDataPurchaseEngine|UtilityPaymentService|SchoolFeePaymentService|ScheduledBillPaymentService|FaceMatchingLivenessService))' jar-contents.txt; then
+            echo 'Test-only implementations are present in production artifact'; exit 1
+          fi
+
+      - name: Verify isolated test service & End-to-End Scenarios
         env:
           ELEPAY_DB_URL: jdbc:postgresql://localhost:5432/elepay_sandbox
           ELEPAY_DB_USER: elepay
@@ -92,7 +102,7 @@ jobs:
           ELEPAY_REDIS_HOST: localhost
           ELEPAY_REDIS_PORT: 6379
         run: |
-          java -jar target/elepay-core-0.1.0-SNAPSHOT.jar --spring.profiles.active=sandbox,dev > sandbox.log 2>&1 &
+          mvn -B -Dspring-boot.run.profiles=sandbox,dev -Dspring-boot.run.main-class=com.elepay.SandboxApplication spring-boot:test-run > sandbox.log 2>&1 &
           pid=$!
           trap 'cat sandbox.log; kill "$pid" 2>/dev/null || true' EXIT
           for attempt in {1..60}; do
