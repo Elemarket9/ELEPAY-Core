@@ -1,5 +1,10 @@
 package com.elepay.merchanttools.pos;
 
+import com.elepay.common.ApiException;
+import com.elepay.common.Idempotency;
+import com.elepay.merchanttools.MerchantToolAccess;
+import static com.elepay.merchanttools.MerchantToolAccess.Resource.*;
+import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -9,6 +14,8 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/v1/pos")
 public class PosController {
+    private final MerchantToolAccess access;
+    private final Idempotency idempotency;
     private final PosTerminalService terminalService;
     private final PosCashierService cashierService;
     private final PosCartService cartService;
@@ -18,6 +25,8 @@ public class PosController {
     private final PosOfflineSyncService syncService;
 
     public PosController(
+            MerchantToolAccess access,
+            Idempotency idempotency,
             PosTerminalService terminalService,
             PosCashierService cashierService,
             PosCartService cartService,
@@ -26,6 +35,8 @@ public class PosController {
             PosReceiptService receiptService,
             PosOfflineSyncService syncService
     ) {
+        this.access = access;
+        this.idempotency = idempotency;
         this.terminalService = terminalService;
         this.cashierService = cashierService;
         this.cartService = cartService;
@@ -40,6 +51,8 @@ public class PosController {
 
     @PostMapping("/terminals/register")
     public PosTerminalService.PosTerminal registerTerminal(@RequestBody RegisterTerminalRequest req) {
+        access.manage(req.merchantId());
+        access.branch(req.merchantId(), req.branchId());
         return terminalService.registerTerminal(req.merchantId(), req.branchId(), req.serialNumber(), req.model());
     }
 
@@ -47,11 +60,14 @@ public class PosController {
 
     @PostMapping("/terminals/pair")
     public PosTerminalService.PairingResult pairTerminal(@RequestBody PairTerminalRequest req) {
+        var terminal = terminalService.findBySerialNumber(req.serialNumber()).orElseThrow(() -> ApiException.notFound("Terminal not found"));
+        access.manage(terminal.merchantId());
         return terminalService.pairTerminal(req.serialNumber(), req.pairingCode(), req.hardwareFingerprint());
     }
 
     @GetMapping("/terminals/merchant/{merchantId}")
     public List<PosTerminalService.PosTerminal> listTerminals(@PathVariable UUID merchantId) {
+        access.manage(merchantId);
         return terminalService.listTerminals(merchantId);
     }
 
@@ -60,6 +76,7 @@ public class PosController {
 
     @PostMapping("/cashiers/register")
     public PosCashierService.Cashier registerCashier(@RequestBody RegisterCashierRequest req) {
+        access.manage(req.merchantId());
         return cashierService.registerCashier(req.merchantId(), req.name(), req.pin(), req.badgeNumber());
     }
 
@@ -67,6 +84,7 @@ public class PosController {
 
     @PostMapping("/cashiers/auth")
     public ResponseEntity<Void> authenticateCashier(@RequestBody AuthenticateCashierRequest req) {
+        access.manage(req.merchantId());
         boolean valid = cashierService.authenticateCashier(req.merchantId(), req.badgeNumber(), req.pin());
         return valid ? ResponseEntity.ok().build() : ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
     }
@@ -75,6 +93,9 @@ public class PosController {
 
     @PostMapping("/shifts/open")
     public PosCashierService.Shift openShift(@RequestBody OpenShiftRequest req) {
+        access.manage(req.merchantId());
+        access.belongs(req.merchantId(), TERMINAL, req.terminalId());
+        access.belongs(req.merchantId(), CASHIER, req.cashierId());
         return cashierService.openShift(req.terminalId(), req.cashierId(), req.merchantId(), req.openingBalancePesewas(), req.notes());
     }
 
@@ -82,11 +103,13 @@ public class PosController {
 
     @PostMapping("/shifts/{shiftId}/close")
     public PosCashierService.Shift closeShift(@PathVariable UUID shiftId, @RequestBody CloseShiftRequest req) {
+        access.manage(SHIFT, shiftId);
         return cashierService.closeShift(shiftId, req.closingBalancePesewas(), req.notes());
     }
 
     @GetMapping("/shifts/active/{terminalId}")
     public ResponseEntity<PosCashierService.Shift> getActiveShift(@PathVariable UUID terminalId) {
+        access.manage(TERMINAL, terminalId);
         return cashierService.getActiveShift(terminalId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
@@ -97,16 +120,21 @@ public class PosController {
 
     @PostMapping("/carts/hold")
     public PosCartService.HeldCart holdCart(@RequestBody HoldCartRequest req) {
+        access.manage(req.merchantId());
+        access.belongs(req.merchantId(), TERMINAL, req.terminalId());
+        access.belongs(req.merchantId(), CASHIER, req.cashierId());
         return cartService.holdCart(req.terminalId(), req.cashierId(), req.merchantId(), req.customerName(), req.cartPayloadJson(), req.totalPesewas());
     }
 
     @GetMapping("/carts/held/{terminalId}")
     public List<PosCartService.HeldCart> listHeldCarts(@PathVariable UUID terminalId) {
+        access.manage(TERMINAL, terminalId);
         return cartService.listHeldCarts(terminalId);
     }
 
     @PostMapping("/carts/held/{cartId}/recall")
     public PosCartService.HeldCart recallHeldCart(@PathVariable UUID cartId) {
+        access.manage(CART, cartId);
         return cartService.recallHeldCart(cartId);
     }
 
@@ -119,6 +147,8 @@ public class PosController {
 
     @PostMapping("/orders")
     public PosOrderService.PosOrder createOrder(@RequestBody CreateOrderRequest req) {
+        access.manage(req.merchantId());
+        verifyOrderInputs(req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(), req.items());
         return orderService.createOrder(
                 req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(),
                 req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType()
@@ -127,6 +157,7 @@ public class PosController {
 
     @GetMapping("/orders/{orderId}")
     public ResponseEntity<PosOrderService.PosOrder> getOrder(@PathVariable UUID orderId) {
+        verifyOrder(orderId);
         return orderService.getOrder(orderId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
@@ -135,29 +166,41 @@ public class PosController {
     public record TenderPaymentRequest(TenderType tenderType, long amountPesewas, String reference) {}
 
     @PostMapping("/orders/{orderId}/payments")
-    public PosOrderService.PosOrder addPayment(@PathVariable UUID orderId, @RequestBody TenderPaymentRequest req) {
-        return orderService.addTenderPayment(orderId, req.tenderType(), req.amountPesewas(), req.reference());
+    @Transactional
+    public PosOrderService.PosOrder addPayment(@PathVariable UUID orderId,
+            @RequestHeader("Idempotency-Key") String key, @RequestBody TenderPaymentRequest req) {
+        var order = verifyOrder(orderId);
+        if (req.tenderType() != TenderType.CASH)
+            throw ApiException.unprocessable("digital_payment_unverified", "Use ELEPAY checkout for digital payment; POS capture is not connected yet");
+        return idempotency.execute("pos-cash:" + order.merchantId() + ":" + orderId, key, req,
+                PosOrderService.PosOrder.class,
+                () -> orderService.addTenderPayment(orderId, req.tenderType(), req.amountPesewas(), req.reference()));
     }
 
     // Split Bills
     @PostMapping("/orders/{orderId}/split/even")
     public PosSplitBillService.EvenSplitResult splitBillEven(@PathVariable UUID orderId, @RequestParam int count) {
+        verifyOrder(orderId);
         return splitBillService.splitBillEven(orderId, count);
     }
 
     @PostMapping("/orders/{orderId}/split/seats")
     public PosSplitBillService.SeatSplitResult splitBillBySeats(@PathVariable UUID orderId) {
+        verifyOrder(orderId);
         return splitBillService.splitBillBySeats(orderId);
     }
 
     // Receipts
     @PostMapping("/orders/{orderId}/receipt")
     public PosReceiptService.PosReceipt generateReceipt(@PathVariable UUID orderId) {
+        var order = verifyOrder(orderId);
+        if (!"PAID".equals(order.status())) throw ApiException.conflict("order_unpaid", "Payment is not complete");
         return receiptService.generateReceipt(orderId);
     }
 
     @GetMapping("/orders/{orderId}/receipt")
     public ResponseEntity<PosReceiptService.PosReceipt> getReceipt(@PathVariable UUID orderId) {
+        verifyOrder(orderId);
         return receiptService.findByOrderId(orderId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
@@ -166,6 +209,34 @@ public class PosController {
     // Offline Sync
     @PostMapping("/sync")
     public PosOfflineSyncService.SyncResult syncOfflineOrder(@RequestBody PosOfflineSyncService.OfflineOrderPayload payload) {
+        access.manage(payload.merchantId());
+        verifyOrderInputs(payload.merchantId(), payload.branchId(), payload.terminalId(), payload.cashierId(), payload.customerId(), payload.items());
         return syncService.syncOfflineOrder(payload);
+    }
+    private void verifyOrderInputs(UUID merchant, UUID branch, UUID terminal, UUID cashier, UUID customer,
+            List<PosOrderService.OrderItemInput> items) {
+        access.branch(merchant, branch);
+        if (terminal != null) {
+            access.belongs(merchant, TERMINAL, terminal);
+            var device = terminalService.getTerminal(terminal).orElseThrow();
+            if (!java.util.Objects.equals(branch, device.branchId()))
+                throw ApiException.notFound("Terminal not found in branch");
+        }
+        if (cashier != null) access.belongs(merchant, CASHIER, cashier);
+        if (customer != null) throw ApiException.badRequest("customer_link_unverified", "POS customer linking is not enabled");
+        if (items == null || items.isEmpty()) throw ApiException.badRequest("items_required", "Order items required");
+        items.forEach(item -> { if (item.variantId() != null) access.belongs(merchant, VARIANT, item.variantId()); });
+    }
+
+    private PosOrderService.PosOrder verifyOrder(UUID id) {
+        access.manage(ORDER, id);
+        var order = orderService.getOrder(id).orElseThrow(() -> ApiException.notFound("Order not found"));
+        access.branch(order.merchantId(), order.branchId());
+        if (order.terminalId() != null) access.belongs(order.merchantId(), TERMINAL, order.terminalId());
+        if (order.cashierId() != null) access.belongs(order.merchantId(), CASHIER, order.cashierId());
+        orderService.listOrderItems(id).forEach(item -> {
+            if (item.variantId() != null) access.belongs(order.merchantId(), VARIANT, item.variantId());
+        });
+        return order;
     }
 }

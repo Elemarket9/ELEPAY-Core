@@ -19,6 +19,8 @@ public class PosOrderService {
     private final JdbcClient db;
     private final StockService stockService;
     private final PosCashierService cashierService;
+    @org.springframework.beans.factory.annotation.Value("${elepay.rails.sandbox.enabled:false}")
+    private boolean simulatedDigitalTender;
 
     public PosOrderService(JdbcClient db, StockService stockService, PosCashierService cashierService) {
         this.db = db;
@@ -85,6 +87,16 @@ public class PosOrderService {
             OffsetDateTime createdAt
     ) {}
 
+    private static long itemTotal(OrderItemInput item) {
+        if (item == null || item.quantity() == null || item.quantity().signum() <= 0
+                || item.unitPricePesewas() < 0 || item.discountPesewas() < 0 || item.taxPesewas() < 0)
+            throw new IllegalArgumentException("Invalid POS item amounts");
+        long gross = item.quantity().multiply(BigDecimal.valueOf(item.unitPricePesewas()))
+                .setScale(0, java.math.RoundingMode.HALF_UP).longValueExact();
+        if (item.discountPesewas() > gross) throw new IllegalArgumentException("Item discount exceeds gross");
+        return Math.addExact(Math.subtractExact(gross, item.discountPesewas()), item.taxPesewas());
+    }
+
     public static String generateOrderNumber() {
         String date = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
         int rand = ThreadLocalRandom.current().nextInt(10000, 99999);
@@ -107,14 +119,12 @@ public class PosOrderService {
         UUID orderId = UUID.randomUUID();
         String orderNumber = generateOrderNumber();
 
+        if (items == null || items.isEmpty() || discountPesewas < 0 || taxPesewas < 0 || tipPesewas < 0)
+            throw new IllegalArgumentException("Invalid order amounts or empty items");
         long subtotal = 0;
-        for (OrderItemInput item : items) {
-            long itemTotal = (item.unitPricePesewas() * item.quantity().longValue()) - item.discountPesewas() + item.taxPesewas();
-            subtotal += itemTotal;
-        }
-
-        long total = subtotal - discountPesewas + taxPesewas + tipPesewas;
-        if (total < 0) total = 0;
+        for (OrderItemInput item : items) subtotal = Math.addExact(subtotal, itemTotal(item));
+        if (discountPesewas > subtotal) throw new IllegalArgumentException("Order discount exceeds subtotal");
+        long total = Math.addExact(Math.addExact(Math.subtractExact(subtotal, discountPesewas), taxPesewas), tipPesewas);
 
         db.sql("""
             INSERT INTO pos_order (
@@ -144,7 +154,7 @@ public class PosOrderService {
 
         for (OrderItemInput item : items) {
             UUID itemId = UUID.randomUUID();
-            long itemTotal = (item.unitPricePesewas() * item.quantity().longValue()) - item.discountPesewas() + item.taxPesewas();
+            long itemTotal = itemTotal(item);
 
             db.sql("""
                 INSERT INTO pos_order_item (
@@ -213,6 +223,9 @@ public class PosOrderService {
 
     @Transactional
     public PosOrder addTenderPayment(UUID orderId, TenderType tenderType, long amountPesewas, String reference) {
+        if (tenderType == null) throw new IllegalArgumentException("Tender type required");
+        if (tenderType != TenderType.CASH && !simulatedDigitalTender)
+            throw com.elepay.common.ApiException.unprocessable("digital_payment_unverified", "An authoritative payment is required");
         if (amountPesewas <= 0) throw new IllegalArgumentException("Payment amount must be positive");
         db.sql("SELECT id FROM pos_order WHERE id = :id FOR UPDATE").param("id", orderId).query(UUID.class).optional().orElseThrow();
         PosOrder order = getOrder(orderId).orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));

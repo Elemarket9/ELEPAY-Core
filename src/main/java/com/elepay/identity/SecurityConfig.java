@@ -54,9 +54,9 @@ class SecurityConfig {
                                 "Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(self)")))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // Quarantine incomplete POS/inventory and simulated 3DS HTTP interfaces until ownership
-                        // checks and authoritative digital tender evidence are implemented.
-                        .requestMatchers("/v1/pos/**", "/v1/inventory/**", "/v1/rails/card/3ds/**").denyAll()
+                        // Quarantine device pairing, offline sync and simulated 3DS until their trust protocols are implemented.
+                        // POS and inventory controllers independently enforce merchant-wide membership.
+                        .requestMatchers("/v1/pos/sync", "/v1/pos/terminals/pair", "/v1/rails/card/3ds/**").denyAll()
                         // The legacy sandbox only runs under the sandbox profile and binds to loopback.
                         .requestMatchers("/sandbox/**").permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/health", "/actuator/info").permitAll()
