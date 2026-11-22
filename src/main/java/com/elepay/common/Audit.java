@@ -18,19 +18,26 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * Append-only, tamper-evident hash-chained audit trail (Algorithm 080).
  *
- * <p>Each log entry cryptographically seals its predecessor:
- * {@code entry_hash = sha256(prev_hash + id + event_type + actor + payload + timestamp)}.
+ * <p>Each log entry seals its predecessor. Version 2 entries (current) use a keyed MAC over every field,
+ * {@code entry_hash = HMAC-SHA-512(key, len-prefixed(prev_hash, id, action, actor, subject, payload, timestamp))},
+ * so someone with database access but without the key cannot rewrite history and recompute the chain.
+ * Version 1 entries (unkeyed SHA-256, subject not covered) written by earlier releases still verify.
+ * {@link AuditCheckpoints} signs the chain head with Ed25519 and ML-DSA-65.
  */
 @Component
 public class Audit {
     public static final String GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 
+    public static final int HASH_VERSION = 2;
+
     private final JdbcClient db;
     private final ObjectMapper json;
+    private final IntegrityKeys keys;
 
-    public Audit(JdbcClient db, ObjectMapper json) {
+    public Audit(JdbcClient db, ObjectMapper json, IntegrityKeys keys) {
         this.db = Objects.requireNonNull(db);
         this.json = Objects.requireNonNull(json);
+        this.keys = Objects.requireNonNull(keys);
     }
 
     public record Entry(long id, String actor, String action, String subject, String payload,
@@ -68,13 +75,17 @@ public class Audit {
                 .param("d", rawJson).query(String.class).single();
 
         String timestampStr = createdAt.toString();
-        String entryHash = computeHash(prevHash, nextId, action, actor, canonicalPayload, timestampStr);
+        String entryHash = keys.mac(canonicalV2(prevHash, nextId, action, actor, subject, canonicalPayload, timestampStr));
 
         db.sql("""
-                INSERT INTO audit_log (id, actor, action, subject, details, created_at, prev_hash, entry_hash)
+                INSERT INTO audit_log (id, actor, action, subject, details, created_at, prev_hash, entry_hash,
+                    hash_version, hash_key_id)
                 OVERRIDING SYSTEM VALUE
-                VALUES (:id, :actor, :action, :subject, CAST(:details AS jsonb), :created_at, :prev_hash, :entry_hash)
+                VALUES (:id, :actor, :action, :subject, CAST(:details AS jsonb), :created_at, :prev_hash, :entry_hash,
+                    :version, :key_id)
                 """)
+                .param("version", HASH_VERSION)
+                .param("key_id", keys.macKeyId())
                 .param("id", nextId)
                 .param("actor", actor)
                 .param("action", action)
@@ -95,10 +106,11 @@ public class Audit {
     @Transactional(readOnly = true)
     public VerificationResult verifyChain() {
         record Row(long id, String actor, String action, String subject, String details,
-                   OffsetDateTime createdAt, String prevHash, String entryHash) {}
+                   OffsetDateTime createdAt, String prevHash, String entryHash, int version, String keyId) {}
 
         List<Row> entries = db.sql("""
-                SELECT id, actor, action, subject, details::text, created_at, prev_hash, entry_hash
+                SELECT id, actor, action, subject, details::text, created_at, prev_hash, entry_hash,
+                       hash_version, hash_key_id
                 FROM audit_log
                 ORDER BY id ASC""")
                 .query((rs, i) -> new Row(
@@ -109,7 +121,9 @@ public class Audit {
                         rs.getString("details"),
                         rs.getObject("created_at", OffsetDateTime.class),
                         rs.getString("prev_hash"),
-                        rs.getString("entry_hash")
+                        rs.getString("entry_hash"),
+                        rs.getInt("hash_version"),
+                        rs.getString("hash_key_id")
                 )).list();
 
         String expectedPrevHash = GENESIS_HASH;
@@ -134,14 +148,19 @@ public class Audit {
             }
 
             String timestampStr = entry.createdAt().toString();
-            String computed = computeHash(entry.prevHash(), entry.id(), entry.action(),
-                    entry.actor(), entry.details(), timestampStr);
-
-            if (!MessageDigest.isEqual(entry.entryHash().getBytes(StandardCharsets.UTF_8),
-                                      computed.getBytes(StandardCharsets.UTF_8))) {
+            boolean intact;
+            if (entry.version() >= 2) {
+                intact = keys.verifyMac(entry.keyId(), canonicalV2(entry.prevHash(), entry.id(), entry.action(),
+                        entry.actor(), entry.subject(), entry.details(), timestampStr), entry.entryHash());
+            } else {
+                String computed = computeHash(entry.prevHash(), entry.id(), entry.action(),
+                        entry.actor(), entry.details(), timestampStr);
+                intact = MessageDigest.isEqual(entry.entryHash().getBytes(StandardCharsets.UTF_8),
+                        computed.getBytes(StandardCharsets.UTF_8));
+            }
+            if (!intact) {
                 throw new AuditTamperedException(String.format(
-                        "Audit entry tampered at id %d: expected hash %s but found %s",
-                        entry.id(), computed, entry.entryHash()));
+                        "Audit entry tampered at id %d (hash version %d)", entry.id(), entry.version()));
             }
 
             expectedPrevHash = entry.entryHash();
@@ -151,6 +170,19 @@ public class Audit {
         return new VerificationResult(true, verified, expectedPrevHash);
     }
 
+    /** Unambiguous encoding: each field is prefixed with its length, so no two field sets collide. */
+    static String canonicalV2(String prevHash, long id, String action, String actor, String subject, String payload,
+                              String timestamp) {
+        StringBuilder b = new StringBuilder("elepay-audit:v2\n");
+        for (String f : new String[]{prevHash != null ? prevHash : GENESIS_HASH, Long.toString(id), action, actor,
+                subject, payload, timestamp}) {
+            String v = f == null ? "" : f;
+            b.append(v.length()).append(':').append(v).append('\n');
+        }
+        return b.toString();
+    }
+
+    /** Version 1 (legacy, unkeyed) entry hash. */
     public static String computeHash(String prevHash, long id, String eventType, String actor, String payload, String timestamp) {
         String input = (prevHash != null ? prevHash : GENESIS_HASH) + id + eventType + actor + payload + timestamp;
         return Idempotency.sha256(input);

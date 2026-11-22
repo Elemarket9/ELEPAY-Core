@@ -39,6 +39,8 @@
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-redis</artifactId></dependency>
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-api</artifactId><version>1.44.1</version></dependency>
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk</artifactId><version>1.44.1</version></dependency>
+    <!-- Post-quantum signatures (FIPS 204 ML-DSA) and Ed25519 for hybrid integrity checkpoints. -->
+    <dependency><groupId>org.bouncycastle</groupId><artifactId>bcprov-jdk18on</artifactId><version>1.82</version></dependency>
     <dependency><groupId>org.springdoc</groupId><artifactId>springdoc-openapi-starter-webmvc-api</artifactId><version>3.0.3</version></dependency>
 
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
@@ -59,4 +61,26 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- mvn -Psecurity-scan verify -DnvdApiKey=...: fails on any dependency with a CVSS 7.0+ vulnerability. -->
+    <profile>
+      <id>security-scan</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.owasp</groupId>
+            <artifactId>dependency-check-maven</artifactId>
+            <version>12.1.9</version>
+            <configuration>
+              <failBuildOnCVSS>7</failBuildOnCVSS>
+              <nvdApiKey>${nvdApiKey}</nvdApiKey>
+              <formats><format>HTML</format><format>SARIF</format></formats>
+            </configuration>
+            <executions><execution><goals><goal>check</goal></goals></execution></executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

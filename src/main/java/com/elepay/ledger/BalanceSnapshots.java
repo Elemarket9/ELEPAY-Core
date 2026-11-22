@@ -22,9 +22,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class BalanceSnapshots {
     private final JdbcClient db;
+    private final com.elepay.common.IntegrityKeys keys;
 
-    public BalanceSnapshots(JdbcClient db) {
+    public BalanceSnapshots(JdbcClient db, com.elepay.common.IntegrityKeys keys) {
         this.db = Objects.requireNonNull(db);
+        this.keys = Objects.requireNonNull(keys);
     }
 
     public record Snapshot(
@@ -91,14 +93,16 @@ public class BalanceSnapshots {
         OffsetDateTime snapshotAt = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
         long sequenceId = journal.count();
 
-        String signature = computeSignature(snapshotId, acc.id(), acc.currency(), acc.balance(), sequenceId, snapshotAt);
+        // Version 2: keyed HMAC-SHA-512, so a snapshot cannot be forged without the integrity key.
+        String signature = keys.mac(canonical(snapshotId, acc.id(), acc.currency(), acc.balance(), sequenceId, snapshotAt));
 
         db.sql("""
                 INSERT INTO ledger_account_snapshot
                     (id, account_id, currency, snapshot_balance, journal_entry_sequence_id, snapshot_at, signature,
-                     created_at, entry_seq_cutoff)
+                     created_at, entry_seq_cutoff, signature_version, signature_key_id)
                 VALUES
-                    (:id, :acc, :curr, :bal, :seq, :at, :sig, :created, :cutoff)""")
+                    (:id, :acc, :curr, :bal, :seq, :at, :sig, :created, :cutoff, 2, :key)""")
+                .param("key", keys.macKeyId())
                 .param("cutoff", journal.lastSeq())
                 .param("id", snapshotId)
                 .param("acc", acc.id())
@@ -179,13 +183,19 @@ public class BalanceSnapshots {
         }
 
         SnapshotRow row = opt.get();
-        String expectedSignature = computeSignature(row.id(), row.accountId(), row.currency(),
-                row.snapshotBalance(), row.sequenceId(), row.snapshotAt());
-
-        boolean sigMatch = MessageDigest.isEqual(
-                row.signature().getBytes(StandardCharsets.UTF_8),
-                expectedSignature.getBytes(StandardCharsets.UTF_8)
-        );
+        record Sig(int version, String keyId) {}
+        Sig sigMeta = db.sql("SELECT signature_version, signature_key_id FROM ledger_account_snapshot WHERE id = :id")
+                .param("id", snapshotId).query((rs, i) -> new Sig(rs.getInt(1), rs.getString(2))).single();
+        boolean sigMatch;
+        if (sigMeta.version() >= 2) {
+            sigMatch = keys.verifyMac(sigMeta.keyId(), canonical(row.id(), row.accountId(), row.currency(),
+                    row.snapshotBalance(), row.sequenceId(), row.snapshotAt()), row.signature());
+        } else {
+            String expectedSignature = computeSignature(row.id(), row.accountId(), row.currency(),
+                    row.snapshotBalance(), row.sequenceId(), row.snapshotAt());
+            sigMatch = MessageDigest.isEqual(row.signature().getBytes(StandardCharsets.UTF_8),
+                    expectedSignature.getBytes(StandardCharsets.UTF_8));
+        }
 
         if (!sigMatch) {
             return new VerificationResult(false, snapshotId, row.snapshotBalance(), -1, false,
@@ -217,6 +227,13 @@ public class BalanceSnapshots {
                 "Snapshot verified consistent with journal entries");
     }
 
+    private static String canonical(UUID id, long accountId, String currency, long balance, long sequenceId,
+                                    OffsetDateTime at) {
+        return "elepay-snapshot:v2\n" + id + "\n" + accountId + "\n" + currency.trim() + "\n" + balance + "\n"
+                + sequenceId + "\n" + at.toInstant();
+    }
+
+    /** Version 1 (legacy, unkeyed) snapshot signature. */
     private static String computeSignature(UUID id, long accountId, String currency, long balance,
                                            long sequenceId, OffsetDateTime at) {
         String canonical = id + ":" + accountId + ":" + currency.trim() + ":" + balance + ":"

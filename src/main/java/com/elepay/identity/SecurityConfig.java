@@ -35,10 +35,23 @@ class SecurityConfig {
 
     @Bean
     SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys, RequestSigningFilter requestSigningFilter,
+                            RateLimitFilter rateLimitFilter,
                             @org.springframework.beans.factory.annotation.Value("${management.server.port:0}") int managementPort)
             throws Exception {
         http.csrf(csrf -> csrf.disable())
                 .cors(cors -> {})
+                // OWASP secure headers: strict CSP for the web app, HSTS, no framing, no referrer leakage.
+                .headers(h -> h
+                        .contentSecurityPolicy(csp -> csp.policyDirectives(
+                                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                                + "img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; "
+                                + "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"))
+                        .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31_536_000))
+                        .frameOptions(f -> f.deny())
+                        .referrerPolicy(r -> r.policy(org.springframework.security.web.header.writers
+                                .ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
+                        .addHeaderWriter(new org.springframework.security.web.header.writers.StaticHeadersWriter(
+                                "Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(self)")))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         // The legacy sandbox only runs under the sandbox profile and binds to loopback.
@@ -58,6 +71,7 @@ class SecurityConfig {
                                 "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**", "/developer", "/developer/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter())))
+                .addFilterBefore(rateLimitFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterBefore(requestSigningFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterBefore(new ApiKeyFilter(apiKeys), BearerTokenAuthenticationFilter.class);
         return http.build();

@@ -15,7 +15,12 @@ class ProductionSafetyCheckTest {
                 .withProperty("elepay.security.signing-secret", "Qm9kZ2V0LXJhbmRvbS1zZWNyZXQtdmFsdWUtNDJ4eXo=")
                 .withProperty("elepay.vault.master-key", "o3Hc0gWk0Gk2cJ7Vq0r9b2p8Yz1mN4tE6aS5dF7gH8k=")
                 .withProperty("elepay.outbound.allow-http", "false")
-                .withProperty("elepay.outbound.allow-private-hosts", "false");
+                .withProperty("elepay.outbound.allow-private-hosts", "false")
+                .withProperty("elepay.integrity.mac-key", java.util.Base64.getEncoder().encodeToString(new byte[64]))
+                .withProperty("elepay.integrity.ed25519-private-key", "configured")
+                .withProperty("elepay.integrity.mldsa65-private-key", "configured")
+                .withProperty("spring.security.oauth2.resourceserver.jwt.audiences", "elepay-api")
+                .withProperty("server.forward-headers-strategy", "native");
     }
 
     @Test

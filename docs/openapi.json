@@ -511,6 +511,61 @@
         },
         "type" : "object"
       },
+      "Checkpoint" : {
+        "properties" : {
+          "algorithm" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "ed25519Signature" : {
+            "type" : "string"
+          },
+          "entries" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "keyId" : {
+            "type" : "string"
+          },
+          "lastEntryHash" : {
+            "type" : "string"
+          },
+          "lastEntryId" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "mldsa65Signature" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CheckpointCheck" : {
+        "properties" : {
+          "chainMatches" : {
+            "type" : "boolean"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "lastEntryId" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "signatureValid" : {
+            "type" : "boolean"
+          }
+        },
+        "type" : "object"
+      },
       "CloseShiftRequest" : {
         "properties" : {
           "closingBalancePesewas" : {
@@ -3791,6 +3846,30 @@
             "type" : "integer"
           },
           "success" : {
+            "type" : "boolean"
+          }
+        },
+        "type" : "object"
+      },
+      "Report" : {
+        "properties" : {
+          "chainHead" : {
+            "type" : "string"
+          },
+          "checkpoints" : {
+            "items" : {
+              "$ref" : "#/components/schemas/CheckpointCheck"
+            },
+            "type" : "array"
+          },
+          "entriesVerified" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "failure" : {
+            "type" : "string"
+          },
+          "valid" : {
             "type" : "boolean"
           }
         },
@@ -8639,6 +8718,42 @@
         "tags" : [ "operations" ]
       }
     },
+    "/v1/ops/audit/checkpoints" : {
+      "post" : {
+        "operationId" : "checkpoint",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Checkpoint"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "integrity-api" ]
+      }
+    },
+    "/v1/ops/audit/verify" : {
+      "get" : {
+        "operationId" : "verify",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Report"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "integrity-api" ]
+      }
+    },
     "/v1/ops/customers" : {
       "post" : {
         "operationId" : "enroll",
@@ -10276,6 +10391,25 @@
           }
         },
         "tags" : [ "public-checkouts" ]
+      }
+    },
+    "/v1/public/integrity/keys" : {
+      "get" : {
+        "operationId" : "publicKeys",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "integrity-api" ]
       }
     },
     "/v1/public/links/{slug}" : {
