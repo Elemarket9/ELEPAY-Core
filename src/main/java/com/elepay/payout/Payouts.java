@@ -322,4 +322,18 @@ public class Payouts {
                 rs.getObject(13, UUID.class), rs.getObject(14, UUID.class), rs.getObject(15, OffsetDateTime.class),
                 rs.getObject(16, OffsetDateTime.class));
     }
+
+    public Optional<Payout> payout(String reference) {
+        return db.sql(SELECT + " WHERE reference = :r").param("r", reference).query(this::map).optional();
+    }
+
+    public boolean isRetryEligible(String reference) {
+        var p = payout(reference);
+        if (p.isEmpty()) return false;
+        String status = p.get().status();
+        if (!Set.of("failed", "returned").contains(status)) return false;
+        long retried = db.sql("SELECT count(*) FROM payout WHERE retry_of = :id")
+                .param("id", p.get().id()).query(Long.class).single();
+        return retried == 0;
+    }
 }

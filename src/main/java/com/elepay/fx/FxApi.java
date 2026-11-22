@@ -50,6 +50,20 @@ class FxApi {
 
     record ReconRequest(@NotBlank String period, @NotNull List<FxService.StatementLine> lines) {}
 
+    record IngestRateRequest(@NotBlank String source, @NotBlank String sourceCurrency,
+                             @NotBlank String destinationCurrency, @NotNull @Positive BigDecimal bidRate,
+                             @NotNull @Positive BigDecimal askRate, @Positive double weight) {}
+
+    record SynthesizeRateRequest(@NotBlank String sourceCurrency, @NotBlank String destinationCurrency,
+                                Integer maxAgeMinutes) {}
+
+    record PricingRequest(@NotBlank String corridor, String customerTier, @Positive long sourceAmount,
+                          @NotNull @Positive BigDecimal baseRate) {}
+
+    record DualReconRequest(@NotBlank String period, @NotBlank String sourceCurrency,
+                            @NotBlank String destinationCurrency, long statedClosingBalance,
+                            @NotNull List<FxDualReconciliationService.DualStatementLine> lines) {}
+
     @GetMapping("/v1/fx/corridors")
     public List<FxService.Corridor> corridors() {
         Actor.current();
@@ -151,5 +165,63 @@ class FxApi {
     public Map<String, Integer> recover() {
         Actor.current().requireOps();
         return Map.of("checked", fx.recover());
+    }
+
+    // ---- Algorithms 059 - 064 Endpoints ----------------------------------------------------
+
+    @PostMapping("/v1/ops/fx/rates/sources")
+    public FxRateService.RateSource ingestRate(@Valid @RequestBody IngestRateRequest req) {
+        Actor.current().requireOps();
+        return fx.ingestRate(req.source(), req.sourceCurrency(), req.destinationCurrency(),
+                req.bidRate(), req.askRate(), req.weight());
+    }
+
+    @PostMapping("/v1/ops/fx/rates/synthesize")
+    public FxRateService.BlendedRate synthesizeRate(@Valid @RequestBody SynthesizeRateRequest req) {
+        Actor.current().requireOps();
+        java.time.Duration age = req.maxAgeMinutes() != null ? java.time.Duration.ofMinutes(req.maxAgeMinutes()) : null;
+        return fx.synthesizeRate(req.sourceCurrency(), req.destinationCurrency(), age);
+    }
+
+    @GetMapping("/v1/fx/rates/latest")
+    public FxRateService.BlendedRate latestRate(@RequestParam String from, @RequestParam String to) {
+        Actor.current();
+        return fx.latestRate(from, to);
+    }
+
+    @PostMapping("/v1/fx/pricing")
+    public FxPricingService.PricingResult price(@Valid @RequestBody PricingRequest req) {
+        Actor.current();
+        return fx.price(req.corridor(), req.customerTier(), req.sourceAmount(), req.baseRate());
+    }
+
+    @GetMapping("/v1/fx/corridors/{code}/routes")
+    public List<FxRoutingService.PartnerRoute> routes(@PathVariable String code,
+                                                      @RequestParam(defaultValue = "10000") long amount) {
+        Actor.current();
+        return fx.rankRoutes(code, amount);
+    }
+
+    @GetMapping("/v1/fx/corridors/{code}/delivery-estimate")
+    public FxDeliveryEstimator.DeliveryEstimate deliveryEstimate(@PathVariable String code,
+                                                                 @RequestParam String deliveryMethod,
+                                                                 @RequestParam(required = false) String network) {
+        Actor.current();
+        return fx.estimateDelivery(code, deliveryMethod, network, java.time.OffsetDateTime.now());
+    }
+
+    @GetMapping("/v1/ops/fx/exposure/{currency}")
+    public FxExposureService.ExposureStatus exposure(@PathVariable String currency) {
+        Actor.current().requireOps();
+        return fx.checkExposure(currency);
+    }
+
+    @PostMapping("/v1/ops/fx/reconcile-dual/{partner}")
+    public FxDualReconciliationService.DualReconReport reconcileDual(@PathVariable String partner,
+                                                                     @Valid @RequestBody DualReconRequest req) {
+        Actor actor = Actor.current();
+        actor.requireOps();
+        return fx.reconcileDual(partner, req.period(), req.sourceCurrency(), req.destinationCurrency(),
+                req.statedClosingBalance(), req.lines(), actor.subject());
     }
 }

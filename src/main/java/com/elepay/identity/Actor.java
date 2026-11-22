@@ -19,6 +19,7 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
 
     public boolean isOps() { return roles.contains(OPS) || roles.contains(OPS_ADMIN); }
     public boolean isApiKey() { return apiKeyMerchant != null; }
+    public boolean isCustomer() { return !isOps() && !isApiKey(); }
 
     public static Actor current() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -47,5 +48,9 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
 
     public void requireUser() {
         if (isApiKey()) throw ApiException.forbidden("This operation requires a signed-in user");
+    }
+
+    public void requireCustomer() {
+        if (!isCustomer()) throw ApiException.forbidden("Customer role required");
     }
 }

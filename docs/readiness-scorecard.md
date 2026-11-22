@@ -64,12 +64,12 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 56 | Reconciliation and treasury | float forecasting | Missing | No verified implementation evidence | — |
 | 57 | Reconciliation and treasury | auto-rebalancing | Missing | No verified implementation evidence | — |
 | 58 | Reconciliation and treasury | merchant cash-flow forecasting | Missing | No verified implementation evidence | — |
-| 59 | FX and cross-border | rate sourcing | Missing | No verified implementation evidence | — |
-| 60 | FX and cross-border | dynamic margin | Missing | No verified implementation evidence | — |
-| 61 | FX and cross-border | corridor routing | Missing | No verified implementation evidence | — |
-| 62 | FX and cross-border | exposure limits | Missing | No verified implementation evidence | — |
-| 63 | FX and cross-border | delivery estimation | Missing | No verified implementation evidence | — |
-| 64 | FX and cross-border | multi-currency reconciliation | Missing | No verified implementation evidence | — |
+| 59 | FX and cross-border | rate sourcing | Built | `com.elepay.fx.FxRateService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | m3-fx |
+| 60 | FX and cross-border | dynamic margin | Built | `com.elepay.fx.FxPricingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | m3-fx |
+| 61 | FX and cross-border | corridor routing | Built | `com.elepay.fx.FxRoutingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | m3-fx |
+| 62 | FX and cross-border | exposure limits | Built | `com.elepay.fx.FxExposureService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | m3-fx |
+| 63 | FX and cross-border | delivery estimation | Built | `com.elepay.fx.FxDeliveryEstimator`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | m3-fx |
+| 64 | FX and cross-border | multi-currency reconciliation | Built | `com.elepay.fx.FxDualReconciliationService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT`, `FxIT` | m3-fx |
 | 65 | Credit | cash-flow underwriting | Missing | No verified implementation evidence | — |
 | 66 | Credit | earned-wage eligibility | Missing | No verified implementation evidence | — |
 | 67 | Credit | overdraft scoring | Missing | No verified implementation evidence | — |

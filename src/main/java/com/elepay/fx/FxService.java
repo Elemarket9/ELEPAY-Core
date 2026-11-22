@@ -41,9 +41,18 @@ class FxService {
     private final OpsQueue ops;
     private final ObjectMapper json;
     private final TransactionTemplate tx;
+    private final FxRateService rateService;
+    private final FxPricingService pricingService;
+    private final FxRoutingService routingService;
+    private final FxDeliveryEstimator deliveryEstimator;
+    private final FxExposureService exposureService;
+    private final FxDualReconciliationService dualReconciliationService;
 
     FxService(JdbcClient db, Ledger ledger, List<FxPartner> partners, Outbox outbox, Audit audit, OpsQueue ops,
-              ObjectMapper json, PlatformTransactionManager tm) {
+              ObjectMapper json, PlatformTransactionManager tm, FxRateService rateService,
+              FxPricingService pricingService, FxRoutingService routingService,
+              FxDeliveryEstimator deliveryEstimator, FxExposureService exposureService,
+              FxDualReconciliationService dualReconciliationService) {
         this.db = db;
         this.ledger = ledger;
         this.partners = partners.stream().collect(Collectors.toMap(FxPartner::name, Function.identity()));
@@ -52,6 +61,12 @@ class FxService {
         this.ops = ops;
         this.json = json;
         this.tx = new TransactionTemplate(tm);
+        this.rateService = rateService;
+        this.pricingService = pricingService;
+        this.routingService = routingService;
+        this.deliveryEstimator = deliveryEstimator;
+        this.exposureService = exposureService;
+        this.dualReconciliationService = dualReconciliationService;
     }
 
     record Corridor(String code, String direction, String sendingCountry, String receivingCountry,
@@ -482,5 +497,46 @@ class FxService {
             audit.record(actor, "fx.reconciled", "fx-recon:" + partnerName, Map.of("period", period, "lines", n));
             return results;
         });
+    }
+
+    // ---- Advanced FX Capabilities (Algorithms 059 - 064) -----------------------------------
+
+    public FxRateService.RateSource ingestRate(String source, String sourceCurrency, String destinationCurrency,
+                                               BigDecimal bidRate, BigDecimal askRate, double weight) {
+        return rateService.ingestRate(source, sourceCurrency, destinationCurrency, bidRate, askRate, weight);
+    }
+
+    public FxRateService.BlendedRate synthesizeRate(String sourceCurrency, String destinationCurrency, java.time.Duration maxAge) {
+        return rateService.synthesizeRate(sourceCurrency, destinationCurrency, maxAge);
+    }
+
+    public FxRateService.BlendedRate latestRate(String sourceCurrency, String destinationCurrency) {
+        return rateService.latestBlendedRate(sourceCurrency, destinationCurrency);
+    }
+
+    public FxPricingService.PricingResult price(String corridorCode, String customerTier, long sourceAmount, BigDecimal baseRate) {
+        Corridor c = corridor(corridorCode);
+        return pricingService.calculatePricing(corridorCode, customerTier, c.sourceCurrency(), c.destinationCurrency(),
+                sourceAmount, baseRate, c.feeFixed(), c.feeBps());
+    }
+
+    public List<FxRoutingService.PartnerRoute> rankRoutes(String corridorCode, long sourceAmount) {
+        return routingService.rankRoutes(corridorCode, sourceAmount);
+    }
+
+    public FxDeliveryEstimator.DeliveryEstimate estimateDelivery(String corridorCode, String deliveryMethod, String network, OffsetDateTime requestTime) {
+        return deliveryEstimator.estimate(corridorCode, deliveryMethod, network, requestTime);
+    }
+
+    public FxExposureService.ExposureStatus checkExposure(String currency) {
+        return exposureService.checkExposure(currency);
+    }
+
+    public FxDualReconciliationService.DualReconReport reconcileDual(String partnerName, String period, String sourceCurrency,
+                                                                     String destinationCurrency, long statedClosingBalance,
+                                                                     List<FxDualReconciliationService.DualStatementLine> lines,
+                                                                     String actor) {
+        return dualReconciliationService.reconcileDual(partnerName, period, sourceCurrency, destinationCurrency,
+                statedClosingBalance, lines, actor);
     }
 }
