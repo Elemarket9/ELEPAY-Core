@@ -56,7 +56,7 @@ public class RequestSigningFilter extends OncePerRequestFilter {
 
     @Autowired
     public RequestSigningFilter(
-            @Value("${elepay.security.signing-secret:elepay-default-signing-secret-key-32b}") String defaultSigningSecret,
+            @Value("${elepay.security.signing-secret:}") String defaultSigningSecret,
             @Value("${elepay.security.request-signing.enforce:false}") boolean enforceSigning,
             DistributedNonceStore nonceStore,
             @Autowired(required = false) ApiKeys apiKeys) {
@@ -130,6 +130,12 @@ public class RequestSigningFilter extends OncePerRequestFilter {
 
         // 3. Resolve Dynamic Signing Secret per API Credential
         String signingSecret = resolveSigningSecret(request);
+        if (signingSecret == null || signingSecret.isBlank()) {
+            // No per-key secret and no platform secret: a signature cannot be verified, so it is not accepted.
+            sendJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "signing_not_configured",
+                    "Request signing is not configured for this credential");
+            return;
+        }
 
         // 4. Cache Body and Validate HMAC-SHA256 Signature
         CachedBodyRequestWrapper wrappedRequest = new CachedBodyRequestWrapper(request);

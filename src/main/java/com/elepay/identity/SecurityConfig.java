@@ -34,7 +34,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 class SecurityConfig {
 
     @Bean
-    SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys, RequestSigningFilter requestSigningFilter) throws Exception {
+    SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys, RequestSigningFilter requestSigningFilter,
+                            @org.springframework.beans.factory.annotation.Value("${management.server.port:0}") int managementPort)
+            throws Exception {
         http.csrf(csrf -> csrf.disable())
                 .cors(cors -> {})
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -42,8 +44,10 @@ class SecurityConfig {
                         // The legacy sandbox only runs under the sandbox profile and binds to loopback.
                         .requestMatchers("/sandbox/**").permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/health", "/actuator/info").permitAll()
-                        // In production the management endpoints listen on a separate internal port.
-                        .requestMatchers("/actuator/prometheus").permitAll()
+                        // Metrics are served only on the internal management port (prod: 9090), never publicly.
+                        .requestMatchers(request -> request.getRequestURI().startsWith("/actuator/")
+                                && managementPort > 0 && request.getLocalPort() == managementPort).permitAll()
+                        .requestMatchers("/actuator/**").hasAnyRole("ops", "ops_admin")
                         .requestMatchers("/v1/public/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/v3/api-docs", "/v3/api-docs/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/v1/rails/*/callbacks/**").permitAll()

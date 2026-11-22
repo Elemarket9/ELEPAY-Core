@@ -1,0 +1,35 @@
+package com.elepay.common;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.api.Test;
+
+class OutboundUrlGuardTest {
+    final OutboundUrlGuard prod = new OutboundUrlGuard(false, false);
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "https://169.254.169.254/latest/meta-data/",   // cloud metadata
+            "https://127.0.0.1/hook", "https://localhost/hook", "https://10.0.0.5/hook", "https://192.168.1.10/",
+            "https://172.16.4.4/", "https://100.64.1.1/", "https://0.0.0.0/", "https://[::1]/", "https://[fd00::1]/",
+            "https://[::ffff:127.0.0.1]/", "https://redis.internal/", "http://93.184.216.34/hook",
+            "https://user:pass@93.184.216.34/", "https://93.184.216.34:6379/", "ftp://93.184.216.34/", "not a url"})
+    void internalAndUnsafeDestinationsAreRefused(String url) {
+        assertThat(prod.isSafe(url)).as(url).isFalse();
+        assertThatThrownBy(() -> prod.validate(url)).isInstanceOf(ApiException.class);
+    }
+
+    @Test
+    void publicHttpsIsAllowed() {
+        assertThat(prod.problem("https://93.184.216.34/webhooks/elepay")).isNull();
+        assertThat(prod.problem("https://93.184.216.34:8443/hook")).isNull();
+    }
+
+    @Test
+    void developmentMayCallLocalReceivers() {
+        assertThat(new OutboundUrlGuard(true, true).problem("http://127.0.0.1:9/hook")).isNull();
+    }
+}

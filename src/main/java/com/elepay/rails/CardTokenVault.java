@@ -35,20 +35,75 @@ public class CardTokenVault {
     private static final int GCM_TAG_LENGTH = 128;
     private static final int GCM_IV_LENGTH = 12;
 
+    /** Ciphertext written with the configured key carries this prefix; older rows have none. */
+    static final String V2 = "v2:";
+    /** The key earlier releases used when none was configured. Only for upgrading old rows. */
+    static final String LEGACY_DEFAULT_KEY = "elepay-default-secret-card-vault-key-32b!";
+
     private final JdbcClient db;
     private final CardBinLookupService binLookup;
     private final byte[] vaultKey;
+    private final byte[] fingerprintKey;
+    private final byte[] legacyKey;
     private final SecureRandom rng = new SecureRandom();
 
+    public CardTokenVault(JdbcClient db, CardBinLookupService binLookup, String masterKey) {
+        this(db, binLookup, masterKey, "");
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
     public CardTokenVault(
             JdbcClient db,
             CardBinLookupService binLookup,
-            @Value("${elepay.vault.master-key:elepay-default-secret-card-vault-key-32b!}") String masterKey
+            @Value("${elepay.vault.master-key:}") String masterKey,
+            @Value("${elepay.vault.legacy-master-key:}") String legacyMasterKey
     ) {
         this.db = db;
         this.binLookup = binLookup;
-        byte[] keyBytes = masterKey.getBytes(StandardCharsets.UTF_8);
-        this.vaultKey = Arrays.copyOf(keyBytes, 32); // Ensure 256 bits
+        this.vaultKey = vaultKey(masterKey);
+        // Separate key for fingerprints, derived from the vault key (key separation).
+        this.fingerprintKey = hmac(vaultKey, "elepay:card-fingerprint:v2".getBytes(StandardCharsets.UTF_8));
+        String legacy = legacyMasterKey == null || legacyMasterKey.isBlank() ? LEGACY_DEFAULT_KEY : legacyMasterKey;
+        this.legacyKey = Arrays.copyOf(legacy.getBytes(StandardCharsets.UTF_8), 32);
+    }
+
+    /**
+     * The 256-bit vault key: base64 of 32 random bytes in production. A non-production passphrase of at least
+     * 32 characters is stretched with SHA-256. There is no default.
+     */
+    static byte[] vaultKey(String configured) {
+        if (configured == null || configured.isBlank()) {
+            throw new IllegalStateException("elepay.vault.master-key is required (base64 of 32 random bytes)");
+        }
+        try {
+            byte[] decoded = Base64.getDecoder().decode(configured.trim());
+            if (decoded.length == 32) return decoded;
+        } catch (IllegalArgumentException notBase64) {
+            // fall through to passphrase handling
+        }
+        if (configured.length() < 32) {
+            throw new IllegalStateException("elepay.vault.master-key must be base64 of 32 bytes or at least 32 characters");
+        }
+        try {
+            return java.security.MessageDigest.getInstance("SHA-256").digest(configured.getBytes(StandardCharsets.UTF_8));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    static byte[] hmac(byte[] key, byte[] data) {
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(key, "HmacSHA256"));
+            return mac.doFinal(data);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Keyed fingerprint (PCI DSS 3.5.1.1): HMAC-SHA256 of the card number under a vault-derived key. */
+    String fingerprint(String pan) {
+        return java.util.HexFormat.of().formatHex(hmac(fingerprintKey, pan.getBytes(StandardCharsets.UTF_8)));
     }
 
     public record CardInput(
@@ -57,8 +112,13 @@ public class CardTokenVault {
             int expiryYear,
             String cardholderName,
             String cvv,
-            UUID customerId
-    ) {}
+            UUID customerId,
+            String ownerSubject
+    ) {
+        public CardInput(String pan, int expiryMonth, int expiryYear, String cardholderName, String cvv, UUID customerId) {
+            this(pan, expiryMonth, expiryYear, cardholderName, cvv, customerId, null);
+        }
+    }
 
     public record TokenizedCard(
             UUID id,
@@ -114,7 +174,7 @@ public class CardTokenVault {
 
         // Compute masked PAN: keep first 6 and last 4, mask middle
         String maskedPan = maskPan(cleanPan);
-        String fingerprint = Idempotency.sha256("elepay:card:fingerprint:" + cleanPan);
+        String fingerprint = fingerprint(cleanPan);
 
         // Check if card is already tokenized for this customer
         if (input.customerId() != null) {
@@ -131,9 +191,10 @@ public class CardTokenVault {
         db.sql("""
                 INSERT INTO card_token (id, token, customer_id, masked_pan, fingerprint, scheme, card_type,
                                         issuer_bank, expiry_month, expiry_year, cardholder_name,
-                                        encrypted_pan, status)
+                                        encrypted_pan, status, owner_subject, fingerprint_version)
                 VALUES (:id, :tok, :cust, :masked, :fp, :scheme, :ctype, :bank, :month, :year,
-                        :name, :enc, 'active')""")
+                        :name, :enc, 'active', :owner, 2)""")
+                .param("owner", input.ownerSubject())
                 .param("id", id)
                 .param("tok", token)
                 .param("cust", input.customerId())
@@ -201,6 +262,47 @@ public class CardTokenVault {
         return decrypt(encrypted);
     }
 
+    /** The subject that tokenized the card ("merchant:<id>" for API keys), if recorded. */
+    public Optional<String> ownerOf(String token) {
+        return db.sql("SELECT owner_subject FROM card_token WHERE token = :t").param("t", token)
+                .query((rs, i) -> Optional.ofNullable(rs.getString(1))).optional().flatMap(o -> o);
+    }
+
+    /**
+     * Upgrades rows written by earlier releases: re-encrypts each card number under the configured vault key
+     * and replaces the unkeyed fingerprint with a keyed one. Safe to run repeatedly.
+     */
+    @Transactional
+    public int upgradeLegacyRows() {
+        record Legacy(UUID id, String encrypted) {}
+        List<Legacy> rows = db.sql("""
+                SELECT id, encrypted_pan FROM card_token
+                WHERE fingerprint_version < 2 OR encrypted_pan NOT LIKE 'v2:%' FOR UPDATE SKIP LOCKED""")
+                .query((rs, i) -> new Legacy(rs.getObject(1, UUID.class), rs.getString(2))).list();
+        int upgraded = 0;
+        for (Legacy row : rows) {
+            String pan;
+            try {
+                pan = decrypt(row.encrypted());
+            } catch (IllegalStateException e) {
+                log.warn("Card token {} could not be decrypted for upgrade; set elepay.vault.legacy-master-key", row.id());
+                continue;
+            }
+            db.sql("""
+                    UPDATE card_token SET encrypted_pan = :enc, fingerprint = :fp, fingerprint_version = 2,
+                           updated_at = now() WHERE id = :id""")
+                    .param("enc", encrypt(pan)).param("fp", fingerprint(pan)).param("id", row.id()).update();
+            upgraded++;
+        }
+        if (upgraded > 0) log.info("Upgraded {} card tokens to the configured vault key and keyed fingerprints", upgraded);
+        return upgraded;
+    }
+
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    void upgradeOnStartup() {
+        upgradeLegacyRows();
+    }
+
     public static boolean passesLuhn(String pan) {
         int sum = 0;
         boolean alternate = false;
@@ -239,24 +341,31 @@ public class CardTokenVault {
             rng.nextBytes(iv);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(vaultKey, "AES"), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+            cipher.updateAAD(AAD);
             byte[] cipherText = cipher.doFinal(plainText.getBytes(StandardCharsets.UTF_8));
             byte[] combined = new byte[iv.length + cipherText.length];
             System.arraycopy(iv, 0, combined, 0, iv.length);
             System.arraycopy(cipherText, 0, combined, iv.length, cipherText.length);
-            return Base64.getEncoder().encodeToString(combined);
+            return V2 + Base64.getEncoder().encodeToString(combined);
         } catch (Exception e) {
             throw new IllegalStateException("Vault encryption failure", e);
         }
     }
 
-    private String decrypt(String base64Combined) {
+    private static final byte[] AAD = "elepay:card_token:pan:v2".getBytes(StandardCharsets.UTF_8);
+
+    private String decrypt(String stored) {
+        boolean current = stored.startsWith(V2);
+        String base64Combined = current ? stored.substring(V2.length()) : stored;
         try {
             byte[] combined = Base64.getDecoder().decode(base64Combined);
             if (combined.length < GCM_IV_LENGTH) throw new IllegalArgumentException("Invalid ciphertext");
             byte[] iv = Arrays.copyOfRange(combined, 0, GCM_IV_LENGTH);
             byte[] cipherText = Arrays.copyOfRange(combined, GCM_IV_LENGTH, combined.length);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(vaultKey, "AES"), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(current ? vaultKey : legacyKey, "AES"),
+                    new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+            if (current) cipher.updateAAD(AAD);
             byte[] plainText = cipher.doFinal(cipherText);
             return new String(plainText, StandardCharsets.UTF_8);
         } catch (Exception e) {

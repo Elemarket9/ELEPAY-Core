@@ -54,12 +54,12 @@ class BalanceSnapshotsTest extends PostgresTestBase {
         )));
 
         // Verify that snapshot1 remains historically valid
-        assertTrue(balanceSnapshots.verifySnapshot(snapshot1.id()));
+        assertTrue(balanceSnapshots.verifySnapshot(snapshot1.id()), () -> balanceSnapshots.verify(snapshot1.id()).toString());
 
         // Snapshot by owner UUID
         BalanceSnapshots.Snapshot snapshot2 = balanceSnapshots.createSnapshot(ownerId);
         assertEquals(15_000L, snapshot2.snapshotBalance());
-        assertTrue(balanceSnapshots.verifySnapshot(snapshot2.id()));
+        assertTrue(balanceSnapshots.verifySnapshot(snapshot2.id()), () -> balanceSnapshots.verify(snapshot2.id()).toString());
     }
 
     @Test

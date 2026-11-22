@@ -49,7 +49,7 @@ public class DeveloperService {
         this.json = json;
         this.apiKeys = apiKeys;
         this.webhooks = webhooks;
-        var factory = new SimpleClientHttpRequestFactory();
+        var factory = Webhooks.noRedirects();
         factory.setConnectTimeout(Duration.ofSeconds(5));
         factory.setReadTimeout(Duration.ofSeconds(10));
         this.http = RestClient.builder().requestFactory(factory).build();
@@ -315,7 +315,11 @@ public class DeveloperService {
         Integer statusCode = null;
         String responseBody = null;
         String status = "FAILED";
-        try {
+        String unsafe = webhooks == null ? null : webhooks.destinationProblem(url);
+        if (unsafe != null) {
+            responseBody = "Blocked destination: " + unsafe;
+            statusCode = 400;
+        } else try {
             var entity = http.post().uri(url)
                     .header("Content-Type", "application/json")
                     .header("Elepay-Event-Id", eventId.toString())

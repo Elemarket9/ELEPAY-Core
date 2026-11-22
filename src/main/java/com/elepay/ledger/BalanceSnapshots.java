@@ -72,12 +72,12 @@ public class BalanceSnapshots {
                 .optional()
                 .orElseThrow(() -> ApiException.notFound("Ledger account not found: " + accountId));
 
-        record JournalSummary(long sum, long count) {}
+        record JournalSummary(long sum, long count, long lastSeq) {}
         JournalSummary journal = db.sql("""
-                SELECT coalesce(sum(amount), 0), count(*)
+                SELECT coalesce(sum(amount), 0), count(*), coalesce(max(entry_seq), 0)
                 FROM journal_entry WHERE account_id = :id""")
                 .param("id", accountId)
-                .query((rs, i) -> new JournalSummary(rs.getLong(1), rs.getLong(2)))
+                .query((rs, i) -> new JournalSummary(rs.getLong(1), rs.getLong(2), rs.getLong(3)))
                 .single();
 
         if (journal.sum() != acc.balance()) {
@@ -86,7 +86,8 @@ public class BalanceSnapshots {
         }
 
         UUID snapshotId = UUID.randomUUID();
-        Instant now = Instant.now();
+        // Postgres keeps microseconds (rounding finer values); sign exactly what is stored.
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         OffsetDateTime snapshotAt = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
         long sequenceId = journal.count();
 
@@ -94,9 +95,11 @@ public class BalanceSnapshots {
 
         db.sql("""
                 INSERT INTO ledger_account_snapshot
-                    (id, account_id, currency, snapshot_balance, journal_entry_sequence_id, snapshot_at, signature, created_at)
+                    (id, account_id, currency, snapshot_balance, journal_entry_sequence_id, snapshot_at, signature,
+                     created_at, entry_seq_cutoff)
                 VALUES
-                    (:id, :acc, :curr, :bal, :seq, :at, :sig, :created)""")
+                    (:id, :acc, :curr, :bal, :seq, :at, :sig, :created, :cutoff)""")
+                .param("cutoff", journal.lastSeq())
                 .param("id", snapshotId)
                 .param("acc", acc.id())
                 .param("curr", acc.currency().trim())
@@ -189,14 +192,20 @@ public class BalanceSnapshots {
                     "Cryptographic signature mismatch: snapshot was tampered");
         }
 
-        long reconstructed = db.sql("""
-                SELECT coalesce(sum(e.amount), 0)
-                FROM journal_entry e
-                JOIN journal_transaction t ON t.id = e.transaction_id
-                WHERE e.account_id = :acc AND t.posted_at <= :at""")
-                .param("acc", row.accountId())
-                .param("at", row.snapshotAt())
-                .query(Long.class).single();
+        Long cutoff = db.sql("SELECT entry_seq_cutoff FROM ledger_account_snapshot WHERE id = :id")
+                .param("id", snapshotId).query((rs, i) -> (Long) rs.getObject(1)).single();
+        // Snapshots taken since V32 carry an exact entry cut-off; older ones fall back to the timestamp.
+        long reconstructed = cutoff != null
+                ? db.sql("""
+                        SELECT coalesce(sum(amount), 0) FROM journal_entry
+                        WHERE account_id = :acc AND entry_seq <= :cutoff""")
+                        .param("acc", row.accountId()).param("cutoff", cutoff).query(Long.class).single()
+                : db.sql("""
+                        SELECT coalesce(sum(e.amount), 0)
+                        FROM journal_entry e
+                        JOIN journal_transaction t ON t.id = e.transaction_id
+                        WHERE e.account_id = :acc AND t.posted_at <= :at""")
+                        .param("acc", row.accountId()).param("at", row.snapshotAt()).query(Long.class).single();
 
         if (reconstructed != row.snapshotBalance()) {
             return new VerificationResult(false, snapshotId, row.snapshotBalance(), reconstructed, true,
