@@ -1,5 +1,7 @@
 package com.elepay.checkout;
 
+import com.elepay.rails.RailTransactions;
+
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.elepay.identity.Actor;
 import jakarta.validation.Valid;
@@ -13,9 +15,11 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/v1/ops")
 class CheckoutOperations {
     private final CheckoutService checkouts;
+    private final RailTransactions rails;
 
-    CheckoutOperations(CheckoutService checkouts) {
+    CheckoutOperations(CheckoutService checkouts, RailTransactions rails) {
         this.checkouts = checkouts;
+        this.rails = rails;
     }
 
     record OpenDispute(@NotBlank String checkout, @JsonAlias("allocationLine") @Min(0) int line, @Positive long amount,
@@ -37,7 +41,10 @@ class CheckoutOperations {
     public CheckoutService.Dispute resolve(@PathVariable UUID id, @Valid @RequestBody Resolve request) {
         Actor actor = Actor.current();
         actor.requireOps();
-        return checkouts.resolveDispute(actor.subject(), id, request.outcome(), request.note());
+        var dispute = checkouts.resolveDispute(actor.subject(), id, request.outcome(), request.note());
+        // A customer-won dispute paid by MoMo or card goes back through the original rail.
+        checkouts.disputeRefundRailTx(id).ifPresent(rails::submit);
+        return dispute;
     }
 
     @PostMapping("/settlements/run")

@@ -29,7 +29,9 @@ Amounts are integer pesewas (GHS). Merchant routes accept an ELEPAY user token o
 
 | Endpoint | Purpose |
 | --- | --- |
-| POST /v1/merchants/{id}/checkouts | `Idempotency-Key` required. Send `amount` for a single-merchant sale, or `allocations` (`merchantId`, `kind` = `sale`/`delivery`, `amount`, `description`). Allocations to other merchants require an active marketplace relationship. Each allocation's merchant fee comes from that merchant's agreement. |
+| POST /v1/merchants/{id}/checkouts | `Idempotency-Key` required. Send `amount` for a single-merchant sale, or `allocations` (`merchantId`, `kind` = `sale`/`delivery`, `amount`, `description`, optional `category`). Allocations to other merchants require an active marketplace relationship. Each allocation's ELEPAY fee comes from that merchant's agreement; on a marketplace checkout each seller `sale` line also carries the marketplace's commission and processing fee from its commission grid (`fees_exceed_amount` if they exceed the price). |
+| PUT/GET /v1/merchants/{id}/fee-schedule | Marketplace commission grid, Jumia style: `rules` of `category`, `commissionBps` (0–5000), `commissionMin`, `processingFee` (pesewas), with `*` as the default rule, and `deliveryConfirmDays` (1–60, default 14). Replaces the grid for checkouts created afterwards. Owner or admin only. |
+| POST /v1/merchants/{id}/checkouts/{reference}/deliveries | The marketplace confirms delivery of `lines` (all held lines when omitted). Seller and delivery lines of a marketplace checkout settle only after delivery, so commission is earned only on delivered items. Lines not confirmed by the order's delivery deadline are treated as delivered. |
 | GET /v1/public/checkouts/{reference} | Low-data view: merchant names, lines, subtotal and fee/total for each method. |
 | POST /v1/checkouts/{reference}/pay/wallet | Signed-in customer pays from the wallet (`Idempotency-Key`). |
 | POST /v1/public/checkouts/{reference}/pay | Guest pays by `momo` (phone, network) or `card` (`Idempotency-Key`). Repeating the request after a dropped connection returns the attempt already in flight; only one charge can be pending per checkout. |
@@ -37,14 +39,14 @@ Amounts are integer pesewas (GHS). Merchant routes accept an ELEPAY user token o
 | GET /v1/public/fees/quote?amount=&method= | Fee and total for any amount, e.g. 500 or 1000 pesewas. |
 | POST/GET /v1/merchants/{id}/payment-links, GET /v1/merchants/{id}/qr | Payment links and QR payloads (link or merchant code). |
 | POST /v1/public/links/{slug}/checkouts, POST /v1/public/merchant-codes/{code}/checkouts | Start a checkout from a link or merchant code. |
-| POST /v1/merchants/{id}/checkouts/{reference}/allocations/{line}/refunds | Partial or full refund of one allocation (`Idempotency-Key`). The allocation's merchant or the collecting marketplace may refund. The agreed fee is returned proportionally. The final refund returns the remainder. |
+| POST /v1/merchants/{id}/checkouts/{reference}/allocations/{line}/refunds | Partial or full refund of one allocation (`Idempotency-Key`). The allocation's merchant or the collecting marketplace may refund. ELEPAY's fee and the marketplace's commission are returned proportionally (`feeReturned`, `platformFeeReturned`). The final refund returns the remainder. |
 | GET /v1/merchants/{id}/checkouts, /checkouts/{reference}, /transactions, /refunds, /settlements, /disputes | Reports. A seller sees only its own allocations of a marketplace checkout. |
-| POST /v1/ops/disputes, POST /v1/ops/disputes/{id}/resolve | Hold a disputed amount in the merchant's reserved balance; release it (`merchant_won`) or return it to the customer (`customer_won`). |
-| POST /v1/ops/settlements/run | Move due pending proceeds to available, one batch per merchant (`ignoreDelay` for an operator run). Runs every minute by default. |
+| POST /v1/ops/disputes, POST /v1/ops/disputes/{id}/resolve | Hold a disputed amount in the merchant's reserved balance; release it (`merchant_won`) or return it to the customer (`customer_won`). The hold takes the seller's net, the marketplace's commission and ELEPAY's fee in proportion, and the resolution returns exactly those parts. A customer win on MoMo or card is refunded through the original rail automatically. |
+| POST /v1/ops/settlements/run | Move due pending proceeds to available, one batch per merchant (`ignoreDelay` for an operator run; it never releases a line still awaiting delivery). Runs every minute by default. |
 
 ## Money flow
 
-Payment debits the customer's wallet, or the rail clearing account, once for the total. It credits each allocation's net to the merchant's pending balance and the fees to ELEPAY revenue, in one journal transaction. A refund debits the merchant (pending first, then available) and ELEPAY revenue for the returned fee. It credits the customer's wallet, or refunds-in-flight when the payment came through a rail. Settlement moves pending to available. Every movement is a balanced journal transaction linked to the checkout.
+Payment debits the customer's wallet, or the rail clearing account, once for the total. It credits each allocation's net to the merchant's pending balance, the marketplace's commission and processing fee to the marketplace's pending balance, and ELEPAY's merchant fee to deferred revenue, in one journal transaction; the customer fee goes to revenue. Under BoG Notice BG/GOV/SEC/2026/43, fees move only at settlement: when a line settles, ELEPAY's deferred fee is recognised as revenue. A refund debits the merchant and the marketplace (pending first, then available) and deferred revenue (then revenue) for the returned fees. It credits the customer's wallet, or refunds-in-flight when the payment came through a rail. Settlement moves pending to available. Every movement is a balanced journal transaction linked to the checkout.
 
 ## Platform API
 

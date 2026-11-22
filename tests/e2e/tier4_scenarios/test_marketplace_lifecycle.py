@@ -6,7 +6,7 @@ Full multi-actor end-to-end journey:
 3. Customer wallet funding via MoMo topup & rail recovery
 4. Split checkout payment execution & duplicate prevention
 5. Line refund & fee return
-6. Scheduled settlement run with mature proceeds
+6. Delivery confirmation and settlement run
 7. Merchant proceeds withdrawal to settlement destination
 8. Final authoritative ledger drift verification
 """
@@ -114,7 +114,15 @@ class TestMarketplaceLifecycleScenario(OpaqueTestCase):
         kwame_avail = next(a["balance"] for a in kwame_wallet_after.body["accounts"] if a["bucket"] == "available")
         self.assertEqual(kwame_avail, 6000)
 
-        # --- Stage 6: Settlement Run for Mature Proceeds ---
+        # --- Stage 6: Delivery Confirmation and Settlement Run ---
+        # Marketplace lines are held until the marketplace confirms delivery.
+        self.client.call(
+            "POST",
+            f"/v1/merchants/{mp['id']}/checkouts/{checkout_ref}/deliveries",
+            token=mp["ownerToken"],
+            body={},
+            expected_status=200,
+        )
         # Settle seller A and delivery
         self.client.call(
             "POST",

@@ -45,7 +45,8 @@ class Checkouts {
     }
 
     record AllocationInput(@NotNull UUID merchantId, @Pattern(regexp = "sale|delivery") String kind,
-                           @Positive long amount, @Size(max = 200) String description) {}
+                           @Positive long amount, @Size(max = 200) String description,
+                           @Size(max = 64) String category) {}
 
     record CreateCheckout(@Positive Long amount, @Size(max = MAX) List<@Valid AllocationInput> allocations,
                           @Size(max = 500) String description, UUID branchId,
@@ -63,9 +64,22 @@ class Checkouts {
 
     record Link(UUID id, String slug, String title, Long amount, UUID branchId, boolean active, String url) {}
 
-    record Line(String reference, int line, String kind, String description, long amount, long fee, long net,
-                long refunded, long disputed, long pending, long settled, String status, String method,
-                OffsetDateTime paidAt, String collector) {}
+    /**
+     * One allocation. {@code fee} is ELEPAY's fee; {@code commission} and {@code processingFee} are the
+     * marketplace's take from its commission grid; {@code net} is what the seller receives.
+     */
+    record Line(String reference, int line, String kind, String description, String category, long amount,
+                long fee, long commission, long processingFee, long net, long refunded, long disputed, long pending,
+                long settled, String status, String method, OffsetDateTime paidAt, OffsetDateTime deliveredAt,
+                String collector) {}
+
+    record DeliveryRequest(List<@Min(0) Integer> lines) {}
+
+    record FeeRuleInput(@NotBlank @Size(max = 64) String category, @Min(0) @Max(5000) int commissionBps,
+                        @PositiveOrZero long commissionMin, @PositiveOrZero long processingFee) {}
+
+    record FeeScheduleInput(@Min(1) @Max(60) Integer deliveryConfirmDays,
+                            @Size(max = 500) List<@Valid FeeRuleInput> rules) {}
 
     record CheckoutSummary(String reference, String status, long subtotal, String method, Long totalPaid,
                            UUID branchId, OffsetDateTime createdAt, OffsetDateTime paidAt, List<Line> lines) {}
@@ -85,7 +99,7 @@ class Checkouts {
             } else {
                 if (request.amount() != null) throw ApiException.badRequest("ambiguous_amount", "Provide either amount or allocations");
                 allocations = request.allocations().stream().map(x -> new CheckoutService.AllocationRequest(
-                        x.merchantId(), x.kind(), x.amount(), x.description())).toList();
+                        x.merchantId(), x.kind(), x.amount(), x.description(), x.category())).toList();
             }
             UUID branch = branchFor(a, request.branchId());
             var c = checkouts.create(merchantId, branch, null, allocations, request.description(),
@@ -161,9 +175,10 @@ class Checkouts {
     }
 
     private static Line line(CheckoutService.Checkout c, CheckoutService.Allocation x) {
-        return new Line(c.reference(), x.line(), x.kind(), x.description(), x.amount(), x.merchantFee(), x.net(),
-                x.refunded(), x.disputed(), x.pendingAmount(), x.settledAmount(), x.status(c.status()),
-                c.paymentMethod(), c.paidAt(), c.collectorName());
+        return new Line(c.reference(), x.line(), x.kind(), x.description(), x.category(), x.amount(),
+                x.merchantFee(), x.commission(), x.processingFee(), x.net(), x.refunded(), x.disputed(),
+                x.pendingAmount(), x.settledAmount(), x.status(c.status()), c.paymentMethod(), c.paidAt(),
+                x.deliveredAt(), c.collectorName());
     }
 
     /** Allocations paid to this merchant across all collectors (its own sales ledger). */
@@ -182,6 +197,42 @@ class Checkouts {
             var c = checkouts.load(r.checkout(), false);
             return line(c, c.allocations().stream().filter(x -> x.line() == r.line()).findFirst().orElseThrow());
         }).toList();
+    }
+
+    // ---- delivery ---------------------------------------------------------------------------
+
+    /**
+     * The marketplace confirms delivery of some or all held lines. Lines whose seller has no settlement
+     * delay are released at once; the rest settle when their delay passes.
+     */
+    @PostMapping("/checkouts/{reference}/deliveries")
+    public CheckoutSummary delivered(@PathVariable UUID merchantId, @PathVariable String reference,
+                                     @Valid @RequestBody(required = false) DeliveryRequest request) {
+        var a = access.require(merchantId, COLLECT);
+        var c = checkouts.confirmDelivery(merchantId, reference, request == null ? null : request.lines(),
+                a.actor().subject());
+        checkouts.settleDue(false, null, c.id());
+        return summary(checkouts.load(c.id(), false), null);
+    }
+
+    // ---- marketplace commission grid ---------------------------------------------------------
+
+    @GetMapping("/fee-schedule")
+    public CheckoutService.FeeSchedule feeSchedule(@PathVariable UUID merchantId) {
+        access.require(merchantId, VIEW);
+        return checkouts.feeSchedule(merchantId);
+    }
+
+    /** Replaces the marketplace's commission grid (category '*' is the default rule). */
+    @PutMapping("/fee-schedule")
+    public CheckoutService.FeeSchedule saveFeeSchedule(@PathVariable UUID merchantId,
+                                                       @Valid @RequestBody FeeScheduleInput request) {
+        var a = access.require(merchantId, MANAGE);
+        List<CheckoutService.FeeRule> rules = request.rules() == null ? List.of() : request.rules().stream()
+                .map(r -> new CheckoutService.FeeRule(r.category(), r.commissionBps(), r.commissionMin(), r.processingFee()))
+                .toList();
+        return checkouts.saveFeeSchedule(merchantId,
+                request.deliveryConfirmDays() == null ? 14 : request.deliveryConfirmDays(), rules, a.actor().subject());
     }
 
     // ---- refunds ----------------------------------------------------------------------------
@@ -205,8 +256,8 @@ class Checkouts {
     public List<Map<String, Object>> refunds(@PathVariable UUID merchantId) {
         access.require(merchantId, FINANCE_VIEW);
         return db.sql("""
-                SELECT r.reference, c.reference AS checkout, r.line, r.amount, r.fee_returned, r.destination, r.status,
-                       r.reason, r.created_at
+                SELECT r.reference, c.reference AS checkout, r.line, r.amount, r.fee_returned,
+                       r.platform_fee_returned, r.destination, r.status, r.reason, r.created_at
                 FROM refund r JOIN checkout c ON c.id = r.checkout_id
                 JOIN checkout_allocation a ON a.checkout_id = r.checkout_id AND a.line = r.line
                 WHERE a.merchant_id = :m OR c.collector_id = :m ORDER BY r.created_at DESC LIMIT 200""")

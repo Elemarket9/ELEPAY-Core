@@ -33,11 +33,32 @@
         },
         "type" : "object"
       },
+      "AgingSummary" : {
+        "properties" : {
+          "bucket" : {
+            "type" : "string"
+          },
+          "count" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalAmountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "AllocationInput" : {
         "properties" : {
           "amount" : {
             "format" : "int64",
             "type" : "integer"
+          },
+          "category" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
           },
           "description" : {
             "maxLength" : 200,
@@ -66,6 +87,73 @@
             "maxLength" : 200,
             "minLength" : 0,
             "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "ApiKeyCreated" : {
+        "properties" : {
+          "apiKey" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "environment" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "label" : {
+            "type" : "string"
+          },
+          "prefix" : {
+            "type" : "string"
+          },
+          "scopes" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "ApiKeyView" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "environment" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "label" : {
+            "type" : "string"
+          },
+          "lastUsedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "prefix" : {
+            "type" : "string"
+          },
+          "revokedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "scopes" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
           }
         },
         "type" : "object"
@@ -105,6 +193,21 @@
           }
         },
         "required" : [ "contactPhone", "kind", "legalName", "tradingName" ],
+        "type" : "object"
+      },
+      "AuthenticateCashierRequest" : {
+        "properties" : {
+          "badgeNumber" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "pin" : {
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "Balances" : {
@@ -183,6 +286,44 @@
         "required" : [ "items" ],
         "type" : "object"
       },
+      "BlendedRate" : {
+        "properties" : {
+          "calculatedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "destinationCurrency" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "midRate" : {
+            "type" : "number"
+          },
+          "outliersCount" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "sourceCurrency" : {
+            "type" : "string"
+          },
+          "sourcesCount" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "spreadBps" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "validUntil" : {
+            "format" : "date-time",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Branch" : {
         "properties" : {
           "active" : {
@@ -207,6 +348,102 @@
           }
         },
         "required" : [ "name" ],
+        "type" : "object"
+      },
+      "CardBin" : {
+        "properties" : {
+          "bin" : {
+            "type" : "string"
+          },
+          "cardType" : {
+            "type" : "string"
+          },
+          "countryCode" : {
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "issuerBank" : {
+            "type" : "string"
+          },
+          "scheme" : {
+            "type" : "string"
+          },
+          "version" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Cashier" : {
+        "properties" : {
+          "badgeNumber" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "isActive" : {
+            "type" : "boolean"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          },
+          "pinHash" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Category" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "ChallengeRequest" : {
+        "properties" : {
+          "otp" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "ChargeRequest" : {
+        "properties" : {
+          "amount" : {
+            "format" : "int64",
+            "minimum" : 1,
+            "type" : "integer"
+          },
+          "description" : {
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "CheckoutCreated" : {
@@ -270,6 +507,18 @@
           "totalPaid" : {
             "format" : "int64",
             "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "CloseShiftRequest" : {
+        "properties" : {
+          "closingBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "notes" : {
+            "type" : "string"
           }
         },
         "type" : "object"
@@ -461,6 +710,45 @@
         "required" : [ "deliveryMethod", "destinationCurrency", "direction", "fundingMethod", "partner", "receivingCountry", "sendingCountry", "sourceCurrency" ],
         "type" : "object"
       },
+      "CreateBatchRequest" : {
+        "properties" : {
+          "batchNumber" : {
+            "type" : "string"
+          },
+          "costPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "expiryDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "number"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateCategoryRequest" : {
+        "properties" : {
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "CreateCheckout" : {
         "properties" : {
           "allocations" : {
@@ -499,8 +787,239 @@
         },
         "type" : "object"
       },
+      "CreateMandateRequest" : {
+        "properties" : {
+          "consentReference" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "frequency" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "maxAmountPesewas" : {
+            "format" : "int64",
+            "minimum" : 1,
+            "type" : "integer"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "required" : [ "consentReference", "frequency", "merchantId" ],
+        "type" : "object"
+      },
+      "CreateOrderRequest" : {
+        "properties" : {
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "cashierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "customerId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "discountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/OrderItemInput"
+            },
+            "type" : "array"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "orderType" : {
+            "type" : "string"
+          },
+          "taxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "tipPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "CreatePoRequest" : {
+        "properties" : {
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/PoItemInput"
+            },
+            "type" : "array"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "poNumber" : {
+            "type" : "string"
+          },
+          "supplierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateProductRequest" : {
+        "properties" : {
+          "brand" : {
+            "type" : "string"
+          },
+          "categoryId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateSupplierRequest" : {
+        "properties" : {
+          "address" : {
+            "type" : "string"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          },
+          "phone" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateTransferRequest" : {
+        "properties" : {
+          "destWarehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/TransferItemInput"
+            },
+            "type" : "array"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "sourceWarehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "trackingNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateVariantRequest" : {
+        "properties" : {
+          "attributesJson" : {
+            "type" : "string"
+          },
+          "barcode" : {
+            "type" : "string"
+          },
+          "costPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "productId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "retailPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "trackInventory" : {
+            "type" : "boolean"
+          },
+          "variantName" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateWarehouseRequest" : {
+        "properties" : {
+          "address" : {
+            "type" : "string"
+          },
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Created" : {
         "properties" : {
+          "apiKey" : {
+            "type" : "string"
+          },
           "id" : {
             "format" : "uuid",
             "type" : "string"
@@ -516,6 +1035,65 @@
           },
           "secret" : {
             "type" : "string"
+          },
+          "signingSecret" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Decoded" : {
+        "properties" : {
+          "additionalData" : {
+            "additionalProperties" : {
+              "type" : "string"
+            },
+            "type" : "object"
+          },
+          "amount" : {
+            "type" : "string"
+          },
+          "calculatedCrc" : {
+            "type" : "string"
+          },
+          "countryCode" : {
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "expectedCrc" : {
+            "type" : "string"
+          },
+          "formatIndicator" : {
+            "type" : "string"
+          },
+          "merchantAccountInfo" : {
+            "type" : "string"
+          },
+          "merchantCategoryCode" : {
+            "type" : "string"
+          },
+          "merchantCity" : {
+            "type" : "string"
+          },
+          "merchantCode" : {
+            "type" : "string"
+          },
+          "merchantName" : {
+            "type" : "string"
+          },
+          "pointOfInitiation" : {
+            "type" : "string"
+          },
+          "tags" : {
+            "additionalProperties" : {
+              "type" : "string"
+            },
+            "type" : "object"
+          },
+          "valid" : {
+            "type" : "boolean"
           }
         },
         "type" : "object"
@@ -550,6 +1128,62 @@
           "permissions" : {
             "items" : {
               "type" : "string"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "DeliveryEstimate" : {
+        "properties" : {
+          "corridor" : {
+            "type" : "string"
+          },
+          "cutoffApplied" : {
+            "type" : "boolean"
+          },
+          "deliveryMethod" : {
+            "type" : "string"
+          },
+          "displayText" : {
+            "type" : "string"
+          },
+          "estimatedArrival" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "estimatedMinutes" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "maxMinutes" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "minMinutes" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "network" : {
+            "type" : "string"
+          },
+          "slaDeadline" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "weekendDelayApplied" : {
+            "type" : "boolean"
+          }
+        },
+        "type" : "object"
+      },
+      "DeliveryRequest" : {
+        "properties" : {
+          "lines" : {
+            "items" : {
+              "format" : "int32",
+              "minimum" : 0,
+              "type" : "integer"
             },
             "type" : "array"
           }
@@ -623,8 +1257,139 @@
           "reason" : {
             "type" : "string"
           },
+          "refund" : {
+            "type" : "string"
+          },
           "resolutionTx" : {
             "format" : "uuid",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "DualReconItem" : {
+        "properties" : {
+          "destDiscrepancy" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "detail" : {
+            "type" : "string"
+          },
+          "reference" : {
+            "type" : "string"
+          },
+          "result" : {
+            "type" : "string"
+          },
+          "sourceDiscrepancy" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "DualReconReport" : {
+        "properties" : {
+          "balanceDifference" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "computedBalance" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "currencyPair" : {
+            "type" : "string"
+          },
+          "itemSummary" : {
+            "additionalProperties" : {
+              "format" : "int64",
+              "type" : "integer"
+            },
+            "type" : "object"
+          },
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/DualReconItem"
+            },
+            "type" : "array"
+          },
+          "overallStatus" : {
+            "type" : "string"
+          },
+          "partner" : {
+            "type" : "string"
+          },
+          "period" : {
+            "type" : "string"
+          },
+          "statedBalance" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "statementId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "DualReconRequest" : {
+        "properties" : {
+          "destinationCurrency" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "lines" : {
+            "items" : {
+              "$ref" : "#/components/schemas/DualStatementLine"
+            },
+            "type" : "array"
+          },
+          "period" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "sourceCurrency" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "statedClosingBalance" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "required" : [ "destinationCurrency", "lines", "period", "sourceCurrency" ],
+        "type" : "object"
+      },
+      "DualStatementLine" : {
+        "properties" : {
+          "destinationAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "destinationCurrency" : {
+            "type" : "string"
+          },
+          "feeAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "feeCurrency" : {
+            "type" : "string"
+          },
+          "reference" : {
+            "type" : "string"
+          },
+          "sourceAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "sourceCurrency" : {
             "type" : "string"
           },
           "status" : {
@@ -709,6 +1474,42 @@
         },
         "type" : "object"
       },
+      "EvenSplitPortion" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "portionIndex" : {
+            "format" : "int32",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "EvenSplitResult" : {
+        "properties" : {
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "portions" : {
+            "items" : {
+              "$ref" : "#/components/schemas/EvenSplitPortion"
+            },
+            "type" : "array"
+          },
+          "splitCount" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "Event" : {
         "properties" : {
           "aggregateId" : {
@@ -733,6 +1534,249 @@
             "type" : "string"
           }
         },
+        "type" : "object"
+      },
+      "ExposureStatus" : {
+        "properties" : {
+          "breach" : {
+            "type" : "boolean"
+          },
+          "clearingBalance" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "inFlightBalance" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "limit" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "netOpenPosition" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "trigger" : {
+            "$ref" : "#/components/schemas/HedgingTrigger"
+          },
+          "utilizationPct" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "warning" : {
+            "type" : "boolean"
+          }
+        },
+        "type" : "object"
+      },
+      "FeeRule" : {
+        "properties" : {
+          "category" : {
+            "type" : "string"
+          },
+          "commissionBps" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "commissionMin" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "processingFee" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "FeeRuleInput" : {
+        "properties" : {
+          "category" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "commissionBps" : {
+            "format" : "int32",
+            "maximum" : 5000,
+            "minimum" : 0,
+            "type" : "integer"
+          },
+          "commissionMin" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "processingFee" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "required" : [ "category" ],
+        "type" : "object"
+      },
+      "FeeSchedule" : {
+        "properties" : {
+          "deliveryConfirmDays" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "marketplaceId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "rules" : {
+            "items" : {
+              "$ref" : "#/components/schemas/FeeRule"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "FeeScheduleInput" : {
+        "properties" : {
+          "deliveryConfirmDays" : {
+            "format" : "int32",
+            "maximum" : 60,
+            "minimum" : 1,
+            "type" : "integer"
+          },
+          "rules" : {
+            "items" : {
+              "$ref" : "#/components/schemas/FeeRuleInput"
+            },
+            "maxItems" : 500,
+            "minItems" : 0,
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "HedgingTrigger" : {
+        "properties" : {
+          "currency" : {
+            "type" : "string"
+          },
+          "exposureLimit" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "hedgeAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "netOpenPosition" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "recommendedAction" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "triggerType" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "HeldCart" : {
+        "properties" : {
+          "cartPayloadJson" : {
+            "type" : "string"
+          },
+          "cashierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "customerName" : {
+            "type" : "string"
+          },
+          "heldAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "HoldCartRequest" : {
+        "properties" : {
+          "cartPayloadJson" : {
+            "type" : "string"
+          },
+          "cashierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "customerName" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "IngestRateRequest" : {
+        "properties" : {
+          "askRate" : {
+            "type" : "number"
+          },
+          "bidRate" : {
+            "type" : "number"
+          },
+          "destinationCurrency" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "source" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "sourceCurrency" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "weight" : {
+            "format" : "double",
+            "type" : "number"
+          }
+        },
+        "required" : [ "askRate", "bidRate", "destinationCurrency", "source", "sourceCurrency" ],
         "type" : "object"
       },
       "Integrity" : {
@@ -930,7 +1974,18 @@
             "format" : "int64",
             "type" : "integer"
           },
+          "category" : {
+            "type" : "string"
+          },
           "collector" : {
+            "type" : "string"
+          },
+          "commission" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "deliveredAt" : {
+            "format" : "date-time",
             "type" : "string"
           },
           "description" : {
@@ -963,6 +2018,10 @@
             "type" : "string"
           },
           "pending" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "processingFee" : {
             "format" : "int64",
             "type" : "integer"
           },
@@ -1119,6 +2178,127 @@
         },
         "type" : "object"
       },
+      "LowStockAlert" : {
+        "properties" : {
+          "productName" : {
+            "type" : "string"
+          },
+          "quantityOnHand" : {
+            "type" : "number"
+          },
+          "reorderPoint" : {
+            "type" : "number"
+          },
+          "severity" : {
+            "type" : "string"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "variantName" : {
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseName" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Mandate" : {
+        "properties" : {
+          "consentReference" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "customerId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "frequency" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "maxAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "maxAmountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "updatedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "MandateCharge" : {
+        "properties" : {
+          "amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "attemptCount" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "failureReason" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "idempotencyKey" : {
+            "type" : "string"
+          },
+          "mandateId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "nextRetryAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Member" : {
         "properties" : {
           "branchId" : {
@@ -1204,6 +2384,84 @@
         },
         "type" : "object"
       },
+      "OfflineOrderPayload" : {
+        "properties" : {
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "cashierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "conflictStrategy" : {
+            "type" : "string"
+          },
+          "customerId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "discountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "idempotencyKey" : {
+            "type" : "string"
+          },
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/OrderItemInput"
+            },
+            "type" : "array"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "offlineTxId" : {
+            "type" : "string"
+          },
+          "payments" : {
+            "items" : {
+              "$ref" : "#/components/schemas/OfflinePayment"
+            },
+            "type" : "array"
+          },
+          "taxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "tipPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "OfflinePayment" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "reference" : {
+            "type" : "string"
+          },
+          "tenderType" : {
+            "enum" : [ "CASH", "MOMO", "CARD", "WALLET" ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "OpenDispute" : {
         "properties" : {
           "amount" : {
@@ -1231,6 +2489,30 @@
           }
         },
         "required" : [ "checkout", "reason" ],
+        "type" : "object"
+      },
+      "OpenShiftRequest" : {
+        "properties" : {
+          "cashierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "openingBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "Operation" : {
@@ -1261,6 +2543,188 @@
           },
           "status" : {
             "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "OrderItemInput" : {
+        "properties" : {
+          "course" : {
+            "type" : "string"
+          },
+          "discountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "itemName" : {
+            "type" : "string"
+          },
+          "modifiersJson" : {
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "number"
+          },
+          "seatNumber" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "taxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "unitPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PairTerminalRequest" : {
+        "properties" : {
+          "hardwareFingerprint" : {
+            "type" : "string"
+          },
+          "pairingCode" : {
+            "type" : "string"
+          },
+          "serialNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PairingResult" : {
+        "properties" : {
+          "authToken" : {
+            "type" : "string"
+          },
+          "serialNumber" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PartnerCertRequest" : {
+        "properties" : {
+          "checklist" : {
+            "additionalProperties" : { },
+            "type" : "object"
+          },
+          "partnerName" : {
+            "maxLength" : 128,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "partnerType" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "required" : [ "partnerName", "partnerType" ],
+        "type" : "object"
+      },
+      "PartnerCertificationView" : {
+        "properties" : {
+          "certificationLevel" : {
+            "type" : "string"
+          },
+          "certifiedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "complianceChecklist" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "expiresAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "partnerName" : {
+            "type" : "string"
+          },
+          "partnerType" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "testRunsPassed" : {
+            "format" : "int32",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "PartnerRoute" : {
+        "properties" : {
+          "active" : {
+            "type" : "boolean"
+          },
+          "avgDeliveryMinutes" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "compositeScore" : {
+            "format" : "double",
+            "type" : "number"
+          },
+          "corridor" : {
+            "type" : "string"
+          },
+          "costBps" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "fixedCost" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "liquidityScore" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "partner" : {
+            "type" : "string"
+          },
+          "priority" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "successRateBps" : {
+            "format" : "int32",
+            "type" : "integer"
           }
         },
         "type" : "object"
@@ -1389,6 +2853,216 @@
         },
         "type" : "object"
       },
+      "PoItemInput" : {
+        "properties" : {
+          "quantityOrdered" : {
+            "type" : "number"
+          },
+          "unitCostPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PosOrder" : {
+        "properties" : {
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "cashierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "changePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "customerId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "discountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "orderNumber" : {
+            "type" : "string"
+          },
+          "orderType" : {
+            "type" : "string"
+          },
+          "paidPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "subtotalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "taxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "tipPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "PosOrderItem" : {
+        "properties" : {
+          "course" : {
+            "type" : "string"
+          },
+          "discountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "itemName" : {
+            "type" : "string"
+          },
+          "modifiersJson" : {
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "number"
+          },
+          "seatNumber" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "taxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "unitPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PosReceipt" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "digitalReceiptUrl" : {
+            "type" : "string"
+          },
+          "escposFormattedText" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "qrPayload" : {
+            "type" : "string"
+          },
+          "receiptNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PosTerminal" : {
+        "properties" : {
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "hardwareFingerprint" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "model" : {
+            "type" : "string"
+          },
+          "pairedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "pairingCode" : {
+            "type" : "string"
+          },
+          "secretKey" : {
+            "type" : "string"
+          },
+          "serialNumber" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Preview" : {
         "properties" : {
           "amount" : {
@@ -1421,6 +3095,97 @@
             "type" : "integer"
           },
           "verifiedName" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PricingRequest" : {
+        "properties" : {
+          "baseRate" : {
+            "type" : "number"
+          },
+          "corridor" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "customerTier" : {
+            "type" : "string"
+          },
+          "sourceAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "required" : [ "baseRate", "corridor" ],
+        "type" : "object"
+      },
+      "PricingResult" : {
+        "properties" : {
+          "baseRate" : {
+            "type" : "number"
+          },
+          "destinationAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "effectiveRate" : {
+            "type" : "number"
+          },
+          "fixedFee" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "marginBps" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "marginRate" : {
+            "type" : "number"
+          },
+          "sourceAmount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalFee" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "variableFee" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "Product" : {
+        "properties" : {
+          "brand" : {
+            "type" : "string"
+          },
+          "categoryId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "isActive" : {
+            "type" : "boolean"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
             "type" : "string"
           }
         },
@@ -1491,6 +3256,63 @@
         },
         "type" : "object"
       },
+      "PurchaseOrder" : {
+        "properties" : {
+          "completedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "issuedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "poNumber" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "supplierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "totalCostPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "QrDecodeRequest" : {
+        "properties" : {
+          "payload" : {
+            "type" : "string"
+          },
+          "qr" : {
+            "type" : "string"
+          },
+          "qrPayload" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Quote" : {
         "properties" : {
           "corridor" : {
@@ -1551,6 +3373,50 @@
           }
         },
         "required" : [ "corridor" ],
+        "type" : "object"
+      },
+      "RailHealth" : {
+        "properties" : {
+          "averageLatencyMs" : {
+            "format" : "double",
+            "type" : "number"
+          },
+          "circuitState" : {
+            "enum" : [ "CLOSED", "OPEN", "HALF_OPEN" ],
+            "type" : "string"
+          },
+          "errorRate" : {
+            "format" : "double",
+            "type" : "number"
+          },
+          "failedRequests" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "lastStateChange" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "p95LatencyMs" : {
+            "format" : "double",
+            "type" : "number"
+          },
+          "rail" : {
+            "type" : "string"
+          },
+          "successfulRequests" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "timeoutRequests" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "totalRequests" : {
+            "format" : "int32",
+            "type" : "integer"
+          }
+        },
         "type" : "object"
       },
       "RailPay" : {
@@ -1633,6 +3499,43 @@
           },
           "status" : {
             "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "RateSource" : {
+        "properties" : {
+          "askRate" : {
+            "type" : "number"
+          },
+          "bidRate" : {
+            "type" : "number"
+          },
+          "capturedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "destinationCurrency" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "midRate" : {
+            "type" : "number"
+          },
+          "source" : {
+            "type" : "string"
+          },
+          "sourceCurrency" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "weight" : {
+            "type" : "number"
           }
         },
         "type" : "object"
@@ -1722,6 +3625,10 @@
             "format" : "int32",
             "type" : "integer"
           },
+          "platformFeeReturned" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
           "reference" : {
             "type" : "string"
           },
@@ -1744,6 +3651,66 @@
           }
         },
         "required" : [ "reason" ],
+        "type" : "object"
+      },
+      "RegisterCashierRequest" : {
+        "properties" : {
+          "badgeNumber" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          },
+          "pin" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "RegisterTerminalRequest" : {
+        "properties" : {
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "model" : {
+            "type" : "string"
+          },
+          "serialNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "ReplayResult" : {
+        "properties" : {
+          "durationMs" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "newLogId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "responseBody" : {
+            "type" : "string"
+          },
+          "statusCode" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "success" : {
+            "type" : "boolean"
+          }
+        },
         "type" : "object"
       },
       "Resolution" : {
@@ -1804,6 +3771,100 @@
           }
         },
         "required" : [ "decision" ],
+        "type" : "object"
+      },
+      "RotateKeyRequest" : {
+        "properties" : {
+          "label" : {
+            "maxLength" : 100,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "SdkSnippet" : {
+        "properties" : {
+          "action" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "string"
+          },
+          "language" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "SeatSplitGroup" : {
+        "properties" : {
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/PosOrderItem"
+            },
+            "type" : "array"
+          },
+          "seatNumber" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "subtotalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "SeatSplitResult" : {
+        "properties" : {
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "seatGroups" : {
+            "items" : {
+              "$ref" : "#/components/schemas/SeatSplitGroup"
+            },
+            "type" : "array"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "SelectedRoute" : {
+        "properties" : {
+          "channel" : {
+            "type" : "string"
+          },
+          "estimatedFee" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "healthState" : {
+            "enum" : [ "CLOSED", "OPEN", "HALF_OPEN" ],
+            "type" : "string"
+          },
+          "network" : {
+            "type" : "string"
+          },
+          "rail" : {
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "secondaryRail" : {
+            "type" : "string"
+          },
+          "successRate" : {
+            "format" : "double",
+            "type" : "number"
+          }
+        },
         "type" : "object"
       },
       "Seller" : {
@@ -1879,6 +3940,57 @@
         },
         "type" : "object"
       },
+      "Shift" : {
+        "properties" : {
+          "cashDiscrepancyPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "cashierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "closingBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "expectedCashPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "openingBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "shiftEnd" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "shiftStart" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "StatementLine" : {
         "properties" : {
           "destinationAmount" : {
@@ -1904,6 +4016,52 @@
         },
         "type" : "object"
       },
+      "StatementLineInput" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "externalReference" : {
+            "type" : "string"
+          },
+          "feePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "rawDescription" : {
+            "type" : "string"
+          },
+          "transactionTime" : {
+            "format" : "date-time",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "StatementUploadRequest" : {
+        "properties" : {
+          "filename" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "lines" : {
+            "items" : {
+              "$ref" : "#/components/schemas/StatementLineInput"
+            },
+            "type" : "array"
+          },
+          "rail" : {
+            "minLength" : 1,
+            "type" : "string"
+          }
+        },
+        "required" : [ "filename", "lines", "rail" ],
+        "type" : "object"
+      },
       "StatusChange" : {
         "properties" : {
           "reason" : {
@@ -1917,6 +4075,343 @@
           }
         },
         "required" : [ "reason", "status" ],
+        "type" : "object"
+      },
+      "Stock" : {
+        "properties" : {
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "quantityOnHand" : {
+            "type" : "number"
+          },
+          "quantityReserved" : {
+            "type" : "number"
+          },
+          "reorderPoint" : {
+            "type" : "number"
+          },
+          "reorderQuantity" : {
+            "type" : "number"
+          },
+          "updatedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "StockAdjustmentRequest" : {
+        "properties" : {
+          "movementType" : {
+            "enum" : [ "RECEIVED", "DAMAGED", "LOST", "ADJUSTMENT", "SALE_DEDUCTION", "TRANSFER_OUT", "TRANSFER_IN", "RECIPE_USAGE" ],
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "quantityChange" : {
+            "type" : "number"
+          },
+          "referenceId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Supplier" : {
+        "properties" : {
+          "address" : {
+            "type" : "string"
+          },
+          "contactEmail" : {
+            "type" : "string"
+          },
+          "contactPhone" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "SuspenseItem" : {
+        "properties" : {
+          "agingBucket" : {
+            "type" : "string"
+          },
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "approvedBy" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "proposedAction" : {
+            "type" : "string"
+          },
+          "proposedBy" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "proposedTargetAccount" : {
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "resolvedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "source" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "SuspenseProposalRequest" : {
+        "properties" : {
+          "action" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "targetAccount" : {
+            "minLength" : 1,
+            "type" : "string"
+          }
+        },
+        "required" : [ "action", "id", "targetAccount" ],
+        "type" : "object"
+      },
+      "SyncResult" : {
+        "properties" : {
+          "idempotencyKey" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "offlineTxId" : {
+            "type" : "string"
+          },
+          "resolutionApplied" : {
+            "type" : "string"
+          },
+          "serverOrderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "SynthesizeRateRequest" : {
+        "properties" : {
+          "destinationCurrency" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "maxAgeMinutes" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "sourceCurrency" : {
+            "minLength" : 1,
+            "type" : "string"
+          }
+        },
+        "required" : [ "destinationCurrency", "sourceCurrency" ],
+        "type" : "object"
+      },
+      "TenderPaymentRequest" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "reference" : {
+            "type" : "string"
+          },
+          "tenderType" : {
+            "enum" : [ "CASH", "MOMO", "CARD", "WALLET" ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "ThreeDSSession" : {
+        "properties" : {
+          "amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "cardToken" : {
+            "type" : "string"
+          },
+          "cavv" : {
+            "type" : "string"
+          },
+          "challengeUrl" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "dsTransId" : {
+            "type" : "string"
+          },
+          "eci" : {
+            "type" : "string"
+          },
+          "flowType" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "liabilityShift" : {
+            "type" : "boolean"
+          },
+          "reference" : {
+            "type" : "string"
+          },
+          "riskScore" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "sessionId" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "TokenizeRequest" : {
+        "properties" : {
+          "cardholderName" : {
+            "type" : "string"
+          },
+          "cvv" : {
+            "type" : "string"
+          },
+          "expiryMonth" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "expiryYear" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "pan" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "TokenizedCard" : {
+        "properties" : {
+          "cardType" : {
+            "type" : "string"
+          },
+          "cardholderName" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "customerId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "expiryMonth" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "expiryYear" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "issuerBank" : {
+            "type" : "string"
+          },
+          "maskedPan" : {
+            "type" : "string"
+          },
+          "scheme" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "token" : {
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "TopUp" : {
@@ -1963,6 +4458,60 @@
         "required" : [ "recipient" ],
         "type" : "object"
       },
+      "TransferItemInput" : {
+        "properties" : {
+          "quantity" : {
+            "type" : "number"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "TransferOrder" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "destinationWarehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "dispatchedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "receivedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "sourceWarehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "trackingNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "TransferRequest" : {
         "properties" : {
           "quoteId" : {
@@ -1977,6 +4526,128 @@
           }
         },
         "required" : [ "quoteId", "recipient" ],
+        "type" : "object"
+      },
+      "UploadResult" : {
+        "properties" : {
+          "feeDiscrepancies" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "filename" : {
+            "type" : "string"
+          },
+          "matchedExact" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "matchedFuzzy" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "rail" : {
+            "type" : "string"
+          },
+          "totalLines" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "unmatched" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "uploadId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Variant" : {
+        "properties" : {
+          "attributesJson" : {
+            "type" : "string"
+          },
+          "barcode" : {
+            "type" : "string"
+          },
+          "costPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "productId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "retailPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "trackInventory" : {
+            "type" : "boolean"
+          },
+          "variantName" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "VariantDetail" : {
+        "properties" : {
+          "attributesJson" : {
+            "type" : "string"
+          },
+          "barcode" : {
+            "type" : "string"
+          },
+          "costPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "productId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "productName" : {
+            "type" : "string"
+          },
+          "retailPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "trackInventory" : {
+            "type" : "boolean"
+          },
+          "variantName" : {
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "Wallet" : {
@@ -1994,6 +4665,207 @@
         },
         "type" : "object"
       },
+      "Warehouse" : {
+        "properties" : {
+          "address" : {
+            "type" : "string"
+          },
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "isActive" : {
+            "type" : "boolean"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "WebhookDeliveryLogView" : {
+        "properties" : {
+          "attemptNumber" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "deliveryId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "durationMs" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "endpointId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "eventId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "eventType" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "isManualRetry" : {
+            "type" : "boolean"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "requestHeaders" : {
+            "type" : "string"
+          },
+          "requestPayload" : {
+            "type" : "string"
+          },
+          "requestUrl" : {
+            "type" : "string"
+          },
+          "responseBody" : {
+            "type" : "string"
+          },
+          "responseCode" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "responseHeaders" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "WebhookEndpointCreated" : {
+        "properties" : {
+          "active" : {
+            "type" : "boolean"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "environment" : {
+            "type" : "string"
+          },
+          "eventTypes" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "secret" : {
+            "type" : "string"
+          },
+          "url" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "WebhookEndpointView" : {
+        "properties" : {
+          "active" : {
+            "type" : "boolean"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "environment" : {
+            "type" : "string"
+          },
+          "eventTypes" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "failureCount" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "lastDeliveryAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "secret" : {
+            "type" : "string"
+          },
+          "url" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "WebhookRegisterRequest" : {
+        "properties" : {
+          "description" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "environment" : {
+            "pattern" : "live|test",
+            "type" : "string"
+          },
+          "eventTypes" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "url" : {
+            "maxLength" : 500,
+            "minLength" : 0,
+            "pattern" : "https?://.+",
+            "type" : "string"
+          }
+        },
+        "required" : [ "url" ],
+        "type" : "object"
+      },
       "WebhookRequest" : {
         "properties" : {
           "url" : {
@@ -2004,6 +4876,31 @@
           }
         },
         "required" : [ "url" ],
+        "type" : "object"
+      },
+      "WebhookUpdateRequest" : {
+        "properties" : {
+          "active" : {
+            "type" : "boolean"
+          },
+          "description" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "eventTypes" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "url" : {
+            "maxLength" : 500,
+            "minLength" : 0,
+            "pattern" : "https?://.+",
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "Withdrawal" : {
@@ -2074,6 +4971,725 @@
         "tags" : [ "public-checkouts" ]
       }
     },
+    "/v1/customers/mandates" : {
+      "get" : {
+        "operationId" : "listCustomerMandates",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/Mandate"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "mandate-service" ]
+      },
+      "post" : {
+        "operationId" : "createMandate",
+        "parameters" : [ {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateMandateRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Mandate"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "mandate-service" ]
+      }
+    },
+    "/v1/customers/mandates/{id}/cancel" : {
+      "post" : {
+        "operationId" : "cancelMandate",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Mandate"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "mandate-service" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/certifications" : {
+      "get" : {
+        "operationId" : "listCertifications",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/PartnerCertificationView"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      },
+      "post" : {
+        "operationId" : "submitCertification",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PartnerCertRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PartnerCertificationView"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/certifications/{certId}/test" : {
+      "post" : {
+        "operationId" : "runCertificationTests",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "certId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PartnerCertificationView"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/keys" : {
+      "get" : {
+        "operationId" : "listKeys",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "environment",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/ApiKeyView"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      },
+      "post" : {
+        "operationId" : "createKey_1",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/KeyRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiKeyCreated"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/keys/{keyId}" : {
+      "delete" : {
+        "operationId" : "revokeKey_1",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "keyId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/keys/{keyId}/rotate" : {
+      "post" : {
+        "operationId" : "rotateKey",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "keyId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RotateKeyRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiKeyCreated"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/webhooks" : {
+      "get" : {
+        "operationId" : "listWebhooks_1",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "environment",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/WebhookEndpointView"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      },
+      "post" : {
+        "operationId" : "registerWebhook",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/WebhookRegisterRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WebhookEndpointCreated"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/webhooks/deliveries" : {
+      "get" : {
+        "operationId" : "listDeliveryLogs",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "endpointId",
+          "required" : false,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "status",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "limit",
+          "required" : false,
+          "schema" : {
+            "default" : 50,
+            "format" : "int32",
+            "type" : "integer"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/WebhookDeliveryLogView"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/webhooks/deliveries/{logId}" : {
+      "get" : {
+        "operationId" : "getDeliveryLog",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "logId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WebhookDeliveryLogView"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/webhooks/deliveries/{logId}/replay" : {
+      "post" : {
+        "operationId" : "replayDelivery",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "logId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ReplayResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/webhooks/{endpointId}" : {
+      "put" : {
+        "operationId" : "updateWebhook",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "endpointId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/WebhookUpdateRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/webhooks/{endpointId}/ping" : {
+      "post" : {
+        "operationId" : "pingWebhook",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "endpointId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ReplayResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/merchants/{merchantId}/webhooks/{endpointId}/secret/rotate" : {
+      "post" : {
+        "operationId" : "rotateWebhookSecret",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "endpointId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/openapi-summary" : {
+      "get" : {
+        "operationId" : "openApiSummary",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
+    "/v1/developer/snippets" : {
+      "get" : {
+        "operationId" : "getSnippet",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "action",
+          "required" : false,
+          "schema" : {
+            "default" : "create_checkout",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "language",
+          "required" : false,
+          "schema" : {
+            "default" : "curl",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "apiKey",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "baseUrl",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SdkSnippet"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "developer-controller" ]
+      }
+    },
     "/v1/fx/corridors" : {
       "get" : {
         "operationId" : "corridors",
@@ -2084,6 +5700,84 @@
                 "schema" : {
                   "items" : {
                     "$ref" : "#/components/schemas/Corridor"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "fx-api" ]
+      }
+    },
+    "/v1/fx/corridors/{code}/delivery-estimate" : {
+      "get" : {
+        "operationId" : "deliveryEstimate",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "code",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "deliveryMethod",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "network",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DeliveryEstimate"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "fx-api" ]
+      }
+    },
+    "/v1/fx/corridors/{code}/routes" : {
+      "get" : {
+        "operationId" : "routes_1",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "code",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "amount",
+          "required" : false,
+          "schema" : {
+            "default" : 10000,
+            "format" : "int64",
+            "type" : "integer"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/PartnerRoute"
                   },
                   "type" : "array"
                 }
@@ -2170,6 +5864,34 @@
         "tags" : [ "fx-api" ]
       }
     },
+    "/v1/fx/pricing" : {
+      "post" : {
+        "operationId" : "price",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PricingRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PricingResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "fx-api" ]
+      }
+    },
     "/v1/fx/quotes" : {
       "post" : {
         "operationId" : "quote",
@@ -2189,6 +5911,39 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/Quote"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "fx-api" ]
+      }
+    },
+    "/v1/fx/rates/latest" : {
+      "get" : {
+        "operationId" : "latestRate",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "from",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "to",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/BlendedRate"
                 }
               }
             },
@@ -2258,6 +6013,518 @@
           }
         },
         "tags" : [ "fx-api" ]
+      }
+    },
+    "/v1/inventory/batches" : {
+      "post" : {
+        "operationId" : "createBatch",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateBatchRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Batch"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/categories" : {
+      "post" : {
+        "operationId" : "createCategory",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateCategoryRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Category"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/products" : {
+      "post" : {
+        "operationId" : "createProduct",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateProductRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Product"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/purchase-orders" : {
+      "post" : {
+        "operationId" : "createPo",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreatePoRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PurchaseOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/purchase-orders/{id}/issue" : {
+      "post" : {
+        "operationId" : "issuePo",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PurchaseOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/purchase-orders/{id}/receive" : {
+      "post" : {
+        "operationId" : "receivePo",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "additionalProperties" : {
+                  "type" : "number"
+                },
+                "type" : "object"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PurchaseOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/scan/barcode" : {
+      "get" : {
+        "operationId" : "scanBarcode",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "barcode",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/VariantDetail"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/scan/sku" : {
+      "get" : {
+        "operationId" : "scanSku",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "sku",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/VariantDetail"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/stock/adjust" : {
+      "post" : {
+        "operationId" : "adjustStock",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/StockAdjustmentRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Stock"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/stock/alerts/{merchantId}" : {
+      "get" : {
+        "operationId" : "listAlerts",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/LowStockAlert"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/suppliers" : {
+      "post" : {
+        "operationId" : "createSupplier",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateSupplierRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Supplier"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/transfers" : {
+      "post" : {
+        "operationId" : "createTransfer",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateTransferRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TransferOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/transfers/{id}/dispatch" : {
+      "post" : {
+        "operationId" : "dispatchTransfer",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TransferOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/transfers/{id}/receive" : {
+      "post" : {
+        "operationId" : "receiveTransfer",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "additionalProperties" : {
+                  "type" : "number"
+                },
+                "type" : "object"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TransferOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/variants" : {
+      "post" : {
+        "operationId" : "createVariant",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateVariantRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Variant"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/warehouses" : {
+      "post" : {
+        "operationId" : "createWarehouse",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateWarehouseRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Warehouse"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/warehouses/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listWarehouses",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/Warehouse"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
       }
     },
     "/v1/merchants" : {
@@ -3246,6 +7513,49 @@
         "tags" : [ "checkouts" ]
       }
     },
+    "/v1/merchants/{merchantId}/checkouts/{reference}/deliveries" : {
+      "post" : {
+        "operationId" : "delivered",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "reference",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/DeliveryRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/CheckoutSummary"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "checkouts" ]
+      }
+    },
     "/v1/merchants/{merchantId}/disputes" : {
       "get" : {
         "operationId" : "disputes_1",
@@ -3274,6 +7584,150 @@
           }
         },
         "tags" : [ "checkouts" ]
+      }
+    },
+    "/v1/merchants/{merchantId}/fee-schedule" : {
+      "get" : {
+        "operationId" : "feeSchedule",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/FeeSchedule"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "checkouts" ]
+      },
+      "put" : {
+        "operationId" : "saveFeeSchedule",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/FeeScheduleInput"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/FeeSchedule"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "checkouts" ]
+      }
+    },
+    "/v1/merchants/{merchantId}/mandates" : {
+      "get" : {
+        "operationId" : "listMerchantMandates",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/Mandate"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "mandate-service" ]
+      }
+    },
+    "/v1/merchants/{merchantId}/mandates/{mandateId}/charge" : {
+      "post" : {
+        "operationId" : "chargeMandate",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "mandateId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ChargeRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MandateCharge"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "mandate-service" ]
       }
     },
     "/v1/merchants/{merchantId}/orders/{orderReference}" : {
@@ -3547,7 +8001,7 @@
         }, {
           "in" : "header",
           "name" : "Idempotency-Key",
-          "required" : true,
+          "required" : false,
           "schema" : {
             "type" : "string"
           }
@@ -4099,6 +8553,124 @@
         "tags" : [ "fx-api" ]
       }
     },
+    "/v1/ops/fx/exposure/{currency}" : {
+      "get" : {
+        "operationId" : "exposure",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "currency",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ExposureStatus"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "fx-api" ]
+      }
+    },
+    "/v1/ops/fx/rates/sources" : {
+      "post" : {
+        "operationId" : "ingestRate",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/IngestRateRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RateSource"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "fx-api" ]
+      }
+    },
+    "/v1/ops/fx/rates/synthesize" : {
+      "post" : {
+        "operationId" : "synthesizeRate",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SynthesizeRateRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/BlendedRate"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "fx-api" ]
+      }
+    },
+    "/v1/ops/fx/reconcile-dual/{partner}" : {
+      "post" : {
+        "operationId" : "reconcileDual",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "partner",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/DualReconRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DualReconReport"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "fx-api" ]
+      }
+    },
     "/v1/ops/fx/reconcile/{partner}" : {
       "post" : {
         "operationId" : "reconcile",
@@ -4186,7 +8758,6 @@
           "name" : "status",
           "required" : false,
           "schema" : {
-            "default" : "pending_review",
             "type" : "string"
           }
         } ],
@@ -4281,6 +8852,25 @@
           }
         },
         "tags" : [ "merchants" ]
+      }
+    },
+    "/v1/ops/metrics/financial" : {
+      "get" : {
+        "operationId" : "financialMetrics",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "observability-controller" ]
       }
     },
     "/v1/ops/overview" : {
@@ -4394,6 +8984,32 @@
         "tags" : [ "operations" ]
       }
     },
+    "/v1/ops/rails/health/{rail}" : {
+      "get" : {
+        "operationId" : "getHealth",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "rail",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RailHealth"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      }
+    },
     "/v1/ops/rails/open" : {
       "get" : {
         "operationId" : "open_1",
@@ -4459,6 +9075,34 @@
         "tags" : [ "operations" ]
       }
     },
+    "/v1/ops/reconciliation/statements" : {
+      "post" : {
+        "operationId" : "uploadAndReconcile",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/StatementUploadRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UploadResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "reconciliation-service" ]
+      }
+    },
     "/v1/ops/settlements/run" : {
       "post" : {
         "operationId" : "settle",
@@ -4487,6 +9131,658 @@
           }
         },
         "tags" : [ "checkout-operations" ]
+      }
+    },
+    "/v1/ops/suspense" : {
+      "get" : {
+        "operationId" : "listSuspense",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "status",
+          "required" : false,
+          "schema" : {
+            "default" : "OPEN",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/SuspenseItem"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "reconciliation-service" ]
+      }
+    },
+    "/v1/ops/suspense/aging" : {
+      "get" : {
+        "operationId" : "suspenseAgingSummary",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/AgingSummary"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "reconciliation-service" ]
+      }
+    },
+    "/v1/ops/suspense/propose" : {
+      "post" : {
+        "operationId" : "proposeClearing",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SuspenseProposalRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SuspenseItem"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "reconciliation-service" ]
+      }
+    },
+    "/v1/ops/suspense/{id}/approve" : {
+      "post" : {
+        "operationId" : "approveClearing",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SuspenseItem"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "reconciliation-service" ]
+      }
+    },
+    "/v1/pos/carts/held/{cartId}/recall" : {
+      "post" : {
+        "operationId" : "recallHeldCart",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "cartId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/HeldCart"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/carts/held/{terminalId}" : {
+      "get" : {
+        "operationId" : "listHeldCarts",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "terminalId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/HeldCart"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/carts/hold" : {
+      "post" : {
+        "operationId" : "holdCart",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/HoldCartRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/HeldCart"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/cashiers/auth" : {
+      "post" : {
+        "operationId" : "authenticateCashier",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/AuthenticateCashierRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/cashiers/register" : {
+      "post" : {
+        "operationId" : "registerCashier",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegisterCashierRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Cashier"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/orders" : {
+      "post" : {
+        "operationId" : "createOrder",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateOrderRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PosOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/orders/{orderId}" : {
+      "get" : {
+        "operationId" : "getOrder",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PosOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/orders/{orderId}/payments" : {
+      "post" : {
+        "operationId" : "addPayment",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/TenderPaymentRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PosOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/orders/{orderId}/receipt" : {
+      "get" : {
+        "operationId" : "getReceipt",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PosReceipt"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      },
+      "post" : {
+        "operationId" : "generateReceipt",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PosReceipt"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/orders/{orderId}/split/even" : {
+      "post" : {
+        "operationId" : "splitBillEven",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "count",
+          "required" : true,
+          "schema" : {
+            "format" : "int32",
+            "type" : "integer"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/EvenSplitResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/orders/{orderId}/split/seats" : {
+      "post" : {
+        "operationId" : "splitBillBySeats",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SeatSplitResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/shifts/active/{terminalId}" : {
+      "get" : {
+        "operationId" : "getActiveShift",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "terminalId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Shift"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/shifts/open" : {
+      "post" : {
+        "operationId" : "openShift",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/OpenShiftRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Shift"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/shifts/{shiftId}/close" : {
+      "post" : {
+        "operationId" : "closeShift",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "shiftId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CloseShiftRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Shift"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/sync" : {
+      "post" : {
+        "operationId" : "syncOfflineOrder",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/OfflineOrderPayload"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SyncResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/terminals/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listTerminals",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/PosTerminal"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/terminals/pair" : {
+      "post" : {
+        "operationId" : "pairTerminal",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PairTerminalRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PairingResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/terminals/register" : {
+      "post" : {
+        "operationId" : "registerTerminal",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegisterTerminalRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PosTerminal"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
       }
     },
     "/v1/public/checkouts/{reference}" : {
@@ -4723,6 +10019,254 @@
         "tags" : [ "public-checkouts" ]
       }
     },
+    "/v1/public/qr/decode" : {
+      "post" : {
+        "operationId" : "decodeQr",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/QrDecodeRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Decoded"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "public-checkouts" ]
+      }
+    },
+    "/v1/rails/card/3ds/challenge/{sessionId}" : {
+      "post" : {
+        "operationId" : "completeChallenge",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "sessionId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ChallengeRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ThreeDSSession"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      }
+    },
+    "/v1/rails/card/3ds/{sessionId}" : {
+      "get" : {
+        "operationId" : "getSession",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "sessionId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ThreeDSSession"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      }
+    },
+    "/v1/rails/card/bins/{bin}" : {
+      "get" : {
+        "operationId" : "lookupBin",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "bin",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/CardBin"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      }
+    },
+    "/v1/rails/card/tokens" : {
+      "post" : {
+        "operationId" : "tokenizeCard",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/TokenizeRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TokenizedCard"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      }
+    },
+    "/v1/rails/card/tokens/{token}" : {
+      "delete" : {
+        "operationId" : "revokeToken",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "token",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      },
+      "get" : {
+        "operationId" : "getToken",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "token",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TokenizedCard"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      }
+    },
+    "/v1/rails/routes/select" : {
+      "get" : {
+        "operationId" : "selectRoute",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "channel",
+          "required" : false,
+          "schema" : {
+            "default" : "momo",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "network",
+          "required" : false,
+          "schema" : {
+            "default" : "mtn",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "amount",
+          "required" : false,
+          "schema" : {
+            "default" : 1000,
+            "format" : "int64",
+            "type" : "integer"
+          }
+        }, {
+          "in" : "query",
+          "name" : "currency",
+          "required" : false,
+          "schema" : {
+            "default" : "GHS",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SelectedRoute"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      }
+    },
     "/v1/rails/{rail}/callbacks" : {
       "post" : {
         "operationId" : "callback",
@@ -4908,7 +10452,7 @@
         "parameters" : [ {
           "in" : "query",
           "name" : "from",
-          "required" : true,
+          "required" : false,
           "schema" : {
             "format" : "date-time",
             "type" : "string"
@@ -4916,7 +10460,7 @@
         }, {
           "in" : "query",
           "name" : "to",
-          "required" : true,
+          "required" : false,
           "schema" : {
             "format" : "date-time",
             "type" : "string"

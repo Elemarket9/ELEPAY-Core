@@ -157,6 +157,12 @@ class MarketplaceCheckoutIT extends PostgresTestBase {
         assertThat(bal("merchant", merchantB, "pending")).isZero();
         assertThat(bal("merchant", merchantA, "pending")).isEqualTo(7880);
 
+        // Marketplace lines wait for delivery: a forced run releases nothing until the marketplace confirms.
+        api.call("POST", "/v1/ops/settlements/run", ops, null, Map.of("ignoreDelay", true));
+        assertThat(bal("merchant", merchantA, "available")).isZero();
+        assertThat(api.call("POST", "/v1/merchants/" + marketplace + "/checkouts/" + reference + "/deliveries",
+                mpOwner, null, Map.of()).status()).isEqualTo(200);
+
         // Settle the remaining proceeds.
         JsonNode batches = api.call("POST", "/v1/ops/settlements/run", ops, null, Map.of("ignoreDelay", true)).body();
         assertThat(batches.findValues("merchantId").stream().map(JsonNode::asString).toList())
