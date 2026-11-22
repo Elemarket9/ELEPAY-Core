@@ -16,7 +16,7 @@ class DeveloperPlatformTest {
 
     @Test
     void testSnippetGenerationForMultipleLanguagesAndActions() {
-        DeveloperService service = new DeveloperService(null, null, null, json);
+        DeveloperService service = new DeveloperService(null, null, null, json, null, null);
 
         String apiKey = "ek_live_abcdef1234567890abcdef12";
         String baseUrl = "https://api.elepay.com";
@@ -75,7 +75,7 @@ class DeveloperPlatformTest {
 
     @Test
     void testOpenApiSummary() {
-        DeveloperService service = new DeveloperService(null, null, null, json);
+        DeveloperService service = new DeveloperService(null, null, null, json, null, null);
         DeveloperController controller = new DeveloperController(service);
 
         Map<String, Object> summary = controller.openApiSummary();

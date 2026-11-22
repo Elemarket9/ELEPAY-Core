@@ -101,24 +101,36 @@ class WalletFunding {
     }
 
     private Operation operation(UUID id) {
-        return db.sql("""
-                SELECT o.id, o.reference,
-                       CASE WHEN p.client_reference LIKE 'transfer-%' THEN 'transfer_out' ELSE o.kind END,
-                       o.amount,
-                       CASE p.status
-                           WHEN 'succeeded' THEN 'completed'
-                           WHEN 'failed' THEN 'failed'
-                           WHEN 'rejected' THEN 'failed'
-                           WHEN 'returned' THEN 'returned'
-                           ELSE o.status
-                       END, o.counterparty,
-                       CASE WHEN t.status = 'pending' THEN t.redirect_url END, o.created_at
-                FROM wallet_operation o LEFT JOIN rail_transaction t ON t.id = o.rail_tx
-                LEFT JOIN payout p ON p.id = o.related_id AND p.owner_type = 'customer' AND p.owner_id = o.customer_id
-                WHERE o.id = :id""")
-                .param("id", id).query((rs, i) -> new Operation(rs.getObject(1, UUID.class), rs.getString(2),
-                        rs.getString(3), rs.getLong(4), rs.getString(5), rs.getString(6), rs.getString(7),
+        record Row(UUID id, String reference, String kind, long amount, String status, String counterparty,
+                   UUID railTx, java.time.OffsetDateTime createdAt) {}
+        Row o = db.sql("""
+                SELECT id, reference, kind, amount, status, counterparty, rail_tx, created_at
+                FROM wallet_operation WHERE id = :id""")
+                .param("id", id).query((rs, i) -> new Row(rs.getObject(1, UUID.class), rs.getString(2),
+                        rs.getString(3), rs.getLong(4), rs.getString(5), rs.getString(6), rs.getObject(7, UUID.class),
                         rs.getObject(8, java.time.OffsetDateTime.class))).single();
+        // A pending top-up shows where to finish paying (card 3-D Secure page).
+        String redirect = o.railTx() == null ? null : rails.find(o.railTx())
+                .filter(t -> t.status().equals("pending")).map(RailTransactions.RailTx::redirectUrl).orElse(null);
+        return new Operation(o.id(), o.reference(), o.kind(), o.amount(), o.status(), o.counterparty(), redirect,
+                o.createdAt());
+    }
+
+    /** Keeps wallet history in step with the payout module (withdrawals and transfers out of ELEPAY). */
+    @EventListener
+    void onPayoutStatus(com.elepay.payout.PayoutEvents.StatusChanged event) {
+        if (!event.ownerType().equals("customer")) return;
+        String status = switch (event.status()) {
+            case "succeeded" -> "completed";
+            case "failed", "rejected" -> "failed";
+            case "returned" -> "returned";
+            default -> null;
+        };
+        if (status == null) return;
+        db.sql("""
+                UPDATE wallet_operation SET status = :s, updated_at = now()
+                WHERE related_id = :p AND customer_id = :c AND kind IN ('withdrawal', 'transfer_out')""")
+                .param("s", status).param("p", event.payoutId()).param("c", event.ownerId()).update();
     }
 
     @EventListener

@@ -95,6 +95,53 @@ public class MerchantAccess {
                 FROM merchant WHERE id = :id""").param("id", id).query(MerchantAccess::map).optional();
     }
 
+    /** The merchant's contact phone, for notifications. */
+    public Optional<String> contactPhone(UUID merchant) {
+        return db.sql("SELECT contact_phone FROM merchant WHERE id = :id").param("id", merchant)
+                .query(String.class).optional();
+    }
+
+    /** Marketplaces in which this merchant is an active seller or delivery partner. */
+    public List<UUID> activeMarketplacesOf(UUID seller) {
+        return db.sql("""
+                SELECT marketplace_id FROM marketplace_seller WHERE seller_id = :s AND status = 'active'
+                ORDER BY marketplace_id""").param("s", seller).query(UUID.class).list();
+    }
+
+    /** The status of a marketplace-seller relationship (invited, active, removed), if one exists. */
+    public Optional<String> relationship(UUID marketplace, UUID seller) {
+        return db.sql("SELECT status FROM marketplace_seller WHERE marketplace_id = :m AND seller_id = :s")
+                .param("m", marketplace).param("s", seller).query(String.class).optional();
+    }
+
+    /** A merchant's own bank or MoMo account for settlement and withdrawals. */
+    public record SettlementDestination(UUID id, String type, String network, String accountNumber, String accountName,
+                                        String verification, String verifiedName) {
+        public boolean verified() { return "verified".equals(verification); }
+    }
+
+    private static SettlementDestination destination(java.sql.ResultSet rs, int i) throws java.sql.SQLException {
+        return new SettlementDestination(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getString(4),
+                rs.getString(5), rs.getString(6), rs.getString(7));
+    }
+
+    /** An active destination owned by this merchant. */
+    public Optional<SettlementDestination> activeDestination(UUID merchant, UUID id) {
+        return db.sql("""
+                SELECT id, type, network, account_number, account_name, verification, verified_name
+                FROM settlement_destination
+                WHERE id = :id AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'""")
+                .param("id", id).param("m", merchant).query(MerchantAccess::destination).optional();
+    }
+
+    public List<SettlementDestination> verifiedDestinations(UUID merchant) {
+        return db.sql("""
+                SELECT id, type, network, account_number, account_name, verification, verified_name
+                FROM settlement_destination
+                WHERE owner_type = 'merchant' AND owner_id = :m AND status = 'active' AND verification = 'verified'
+                ORDER BY created_at""").param("m", merchant).query(MerchantAccess::destination).list();
+    }
+
     public Optional<Merchant> findByCode(String code) {
         return db.sql("""
                 SELECT id, trading_name, kind, status, merchant_code, fee_bps, fee_fixed, settlement_delay_hours

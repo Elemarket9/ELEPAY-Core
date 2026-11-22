@@ -18,7 +18,10 @@ class CheckoutNotifications implements OutboxConsumer {
     private final JdbcClient db;
     private final ObjectMapper json;
 
-    CheckoutNotifications(JdbcClient db, ObjectMapper json) {
+    private final com.elepay.merchant.MerchantAccess merchants;
+
+    CheckoutNotifications(JdbcClient db, ObjectMapper json, com.elepay.merchant.MerchantAccess merchants) {
+        this.merchants = merchants;
         this.db = db;
         this.json = json;
     }
@@ -34,11 +37,13 @@ class CheckoutNotifications implements OutboxConsumer {
         for (JsonNode allocation : data.path("allocations")) {
             UUID merchant = UUID.fromString(allocation.path("merchantId").asString());
             long amount = allocation.path("amount").asLong();
+            var phone = merchants.contactPhone(merchant);
+            if (phone.isEmpty()) continue;
             db.sql("""
                     INSERT INTO notification (id, event_id, channel, recipient, body)
-                    SELECT :id, :event, 'sms', contact_phone, :body FROM merchant WHERE id = :m
+                    VALUES (:id, :event, 'sms', :phone, :body)
                     ON CONFLICT (event_id, channel, recipient) DO NOTHING""")
-                    .param("id", UUID.randomUUID()).param("event", event.id()).param("m", merchant)
+                    .param("id", UUID.randomUUID()).param("event", event.id()).param("phone", phone.get())
                     .param("body", "ELEPAY: payment received GHS %d.%02d ref %s".formatted(amount / 100, amount % 100, reference))
                     .update();
         }

@@ -52,14 +52,10 @@ class MerchantPayouts {
         var a = access.require(merchantId, WITHDRAW);
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("merchant-withdrawal:" + merchantId, key, request,
                 Payouts.Batch.class, () -> {
-                    var d = db.sql("""
-                            SELECT type, network, account_number, account_name, verification, verified_name
-                            FROM settlement_destination
-                            WHERE id = :id AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'""")
-                            .param("id", request.destinationId()).param("m", merchantId)
-                            .query((rs, i) -> new Object[]{new Payouts.Destination(rs.getString(1), rs.getString(2),
-                                    rs.getString(3), rs.getString(4)), rs.getString(5), rs.getString(6)}).optional()
+                    var dest = access.activeDestination(merchantId, request.destinationId())
                             .orElseThrow(() -> ApiException.notFound("Settlement destination not found"));
+                    Object[] d = {new Payouts.Destination(dest.type(), dest.network(), dest.accountNumber(),
+                            dest.accountName()), dest.verification(), dest.verifiedName()};
                     if (!"verified".equals(d[1])) {
                         throw ApiException.conflict("destination_unverified",
                                 "Withdrawals go only to a verified destination owned by this merchant");

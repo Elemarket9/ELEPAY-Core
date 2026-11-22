@@ -24,8 +24,11 @@ class FxApi {
     private final ObjectMapper json;
     private final TransactionTemplate tx;
 
+    private final com.elepay.rails.RailTransactions rails;
+
     FxApi(FxService fx, CustomerDirectory customers, Idempotency idempotency, JdbcClient db, ObjectMapper json,
-          PlatformTransactionManager tm) {
+          PlatformTransactionManager tm, com.elepay.rails.RailTransactions rails) {
+        this.rails = rails;
         this.fx = fx;
         this.customers = customers;
         this.idempotency = idempotency;
@@ -109,11 +112,7 @@ class FxApi {
         } catch (SecurityException e) {
             throw new ApiException(org.springframework.http.HttpStatus.UNAUTHORIZED, "invalid_callback", e.getMessage());
         }
-        Boolean fresh = tx.execute(s -> db.sql("""
-                INSERT INTO rail_callback (id, rail, dedupe_key, reference, event_type, payload)
-                VALUES (:id, :rail, :key, :ref, 'fx', CAST(:payload AS jsonb)) ON CONFLICT (rail, dedupe_key) DO NOTHING""")
-                .param("id", UUID.randomUUID()).param("rail", "fx:" + partner).param("key", n.dedupeKey())
-                .param("ref", n.reference()).param("payload", body).update() == 1);
+        Boolean fresh = tx.execute(s -> rails.recordCallbackOnce("fx:" + partner, n.dedupeKey(), n.reference(), "fx", body));
         if (!Boolean.TRUE.equals(fresh)) return Map.of("status", "duplicate");
         fx.apply(n.reference(), n.status(), null, n.message());
         return Map.of("status", "accepted");

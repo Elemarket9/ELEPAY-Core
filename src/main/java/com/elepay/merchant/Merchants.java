@@ -34,9 +34,12 @@ class Merchants {
     private final Webhooks webhooks;
     private final com.elepay.rails.NameVerifications verifications;
     private final tools.jackson.databind.ObjectMapper json;
+    private final com.elepay.outbox.Outbox outbox;
 
     Merchants(JdbcClient db, MerchantAccess access, Ledger ledger, Audit audit, ApiKeys apiKeys, Webhooks webhooks,
-              com.elepay.rails.NameVerifications verifications, tools.jackson.databind.ObjectMapper json) {
+              com.elepay.rails.NameVerifications verifications, tools.jackson.databind.ObjectMapper json,
+              com.elepay.outbox.Outbox outbox) {
+        this.outbox = outbox;
         this.db = db;
         this.access = access;
         this.ledger = ledger;
@@ -444,11 +447,7 @@ class Merchants {
     public List<Event> events(@PathVariable UUID id, @RequestParam(defaultValue = "0") long after,
                               @RequestParam(defaultValue = "100") int limit) {
         access.require(id, VIEW);
-        return db.sql("""
-                SELECT id, sequence, event_type, aggregate_id, created_at, payload::text FROM outbox_event
-                WHERE :m = ANY(merchant_ids) AND sequence > :after ORDER BY sequence LIMIT :limit""")
-                .param("m", id).param("after", after).param("limit", Math.min(Math.max(limit, 1), 500))
-                .query((rs, i) -> new Event(rs.getObject(1, UUID.class), rs.getLong(2), rs.getString(3), rs.getString(4),
-                        rs.getObject(5, java.time.OffsetDateTime.class), json.readTree(rs.getString(6)))).list();
+        return outbox.eventsFor(id, after, limit).stream().map(e -> new Event(e.id(), e.sequence(), e.type(),
+                e.aggregateId(), e.createdAt(), json.readTree(e.payload()))).toList();
     }
 }

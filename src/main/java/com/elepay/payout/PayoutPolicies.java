@@ -66,16 +66,17 @@ public class PayoutPolicies {
     }
 
     List<Governor> governors(UUID merchant) {
-        return db.sql("""
-                SELECT ms.marketplace_id, coalesce(o.mode, p.mode), coalesce(o.min_amount, p.min_amount), o.mode IS NOT NULL
-                FROM marketplace_seller ms
-                LEFT JOIN platform_payout_policy p ON p.marketplace_id = ms.marketplace_id
-                LEFT JOIN platform_seller_payout_policy o
-                       ON o.marketplace_id = ms.marketplace_id AND o.seller_id = ms.seller_id
-                WHERE ms.seller_id = :m AND ms.status = 'active' AND coalesce(o.mode, p.mode) IS NOT NULL
-                ORDER BY ms.marketplace_id""").param("m", merchant)
-                .query((rs, i) -> new Governor(rs.getObject(1, UUID.class), rs.getString(2), rs.getLong(3),
-                        rs.getBoolean(4))).list();
+        List<Governor> out = new ArrayList<>();
+        for (UUID marketplace : merchants.activeMarketplacesOf(merchant)) {
+            var override = db.sql("""
+                    SELECT mode, min_amount FROM platform_seller_payout_policy
+                    WHERE marketplace_id = :m AND seller_id = :s""").param("m", marketplace).param("s", merchant)
+                    .query((rs, i) -> new Rule(rs.getString(1), rs.getLong(2))).optional();
+            var rule = override.or(() -> db.sql("SELECT mode, min_amount FROM platform_payout_policy WHERE marketplace_id = :m")
+                    .param("m", marketplace).query((rs, i) -> new Rule(rs.getString(1), rs.getLong(2))).optional());
+            rule.ifPresent(r -> out.add(new Governor(marketplace, r.mode(), r.minAmount(), override.isPresent())));
+        }
+        return out;
     }
 
     public Effective effective(UUID merchant) {
@@ -166,10 +167,8 @@ public class PayoutPolicies {
     public PlatformPolicy saveSellerOverride(UUID marketplace, UUID seller, String mode, long minAmount, String actor) {
         return tx.execute(s -> {
             requireMarketplace(marketplace);
-            boolean related = db.sql("""
-                    SELECT count(*) FROM marketplace_seller WHERE marketplace_id = :m AND seller_id = :s
-                    AND status IN ('invited', 'active')""").param("m", marketplace).param("s", seller)
-                    .query(Long.class).single() > 0;
+            boolean related = merchants.relationship(marketplace, seller)
+                    .filter(s2 -> s2.equals("invited") || s2.equals("active")).isPresent();
             if (!related) throw ApiException.notFound("Seller not found in this marketplace");
             if (mode == null) {
                 db.sql("DELETE FROM platform_seller_payout_policy WHERE marketplace_id = :m AND seller_id = :s")
@@ -191,16 +190,16 @@ public class PayoutPolicies {
 
     // ---- automatic withdrawals ---------------------------------------------------------------
 
-    record DestinationRow(UUID id, Payouts.Destination destination, String verifiedName) {}
+    record DestinationRow(UUID id, Payouts.Destination destination, String verifiedName) {
+        static DestinationRow of(MerchantAccess.SettlementDestination d) {
+            return new DestinationRow(d.id(), new Payouts.Destination(d.type(), d.network(), d.accountNumber(),
+                    d.accountName()), d.verifiedName());
+        }
+    }
 
     private Optional<DestinationRow> verifiedDestination(UUID merchant, UUID id) {
-        return db.sql("""
-                SELECT id, type, network, account_number, account_name, verified_name FROM settlement_destination
-                WHERE id = :id AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'
-                  AND verification = 'verified'""").param("m", merchant).param("id", id)
-                .query((rs, i) -> new DestinationRow(rs.getObject(1, UUID.class), new Payouts.Destination(
-                        rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)), rs.getString(6)))
-                .optional();
+        return merchants.activeDestination(merchant, id).filter(MerchantAccess.SettlementDestination::verified)
+                .map(DestinationRow::of);
     }
 
     private void requireVerifiedDestination(UUID merchant, UUID id) {
@@ -216,21 +215,13 @@ public class PayoutPolicies {
      */
     Optional<DestinationRow> autoDestination(UUID merchant, UUID chosen) {
         if (chosen != null) return verifiedDestination(merchant, chosen);
-        List<DestinationRow> all = db.sql("""
-                SELECT id, type, network, account_number, account_name, verified_name FROM settlement_destination
-                WHERE owner_type = 'merchant' AND owner_id = :m AND status = 'active' AND verification = 'verified'""")
-                .param("m", merchant)
-                .query((rs, i) -> new DestinationRow(rs.getObject(1, UUID.class), new Payouts.Destination(
-                        rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)), rs.getString(6))).list();
-        return all.size() == 1 ? Optional.of(all.get(0)) : Optional.empty();
+        var all = merchants.verifiedDestinations(merchant);
+        return all.size() == 1 ? Optional.of(DestinationRow.of(all.get(0))) : Optional.empty();
     }
 
     /** Pays out the available balance of every merchant on automatic withdrawal. Returns the batches created. */
     public List<Payouts.Batch> runAutomatic() {
-        List<UUID> candidates = db.sql("""
-                SELECT owner_id FROM ledger_account
-                WHERE owner_type = 'merchant' AND bucket = 'available' AND currency = 'GHS' AND balance > 0
-                ORDER BY owner_id""").query(UUID.class).list();
+        List<UUID> candidates = ledger.ownersWithBalance("merchant", "available", Ledger.GHS);
         List<Payouts.Batch> created = new ArrayList<>();
         for (UUID merchant : candidates) {
             Effective policy = effective(merchant);

@@ -47,12 +47,14 @@ class FxService {
     private final FxDeliveryEstimator deliveryEstimator;
     private final FxExposureService exposureService;
     private final FxDualReconciliationService dualReconciliationService;
+    private final CustomerDirectory customers;
 
     FxService(JdbcClient db, Ledger ledger, List<FxPartner> partners, Outbox outbox, Audit audit, OpsQueue ops,
               ObjectMapper json, PlatformTransactionManager tm, FxRateService rateService,
               FxPricingService pricingService, FxRoutingService routingService,
               FxDeliveryEstimator deliveryEstimator, FxExposureService exposureService,
-              FxDualReconciliationService dualReconciliationService) {
+              FxDualReconciliationService dualReconciliationService, CustomerDirectory customers) {
+        this.customers = customers;
         this.db = db;
         this.ledger = ledger;
         this.partners = partners.stream().collect(Collectors.toMap(FxPartner::name, Function.identity()));
@@ -94,11 +96,7 @@ class FxService {
 
     String partnerClearing(String partner, String currency) {
         String code = "system:clearing:fx-" + partner + ":" + currency;
-        db.sql("""
-                INSERT INTO ledger_account (code, owner_type, bucket, currency, allow_negative)
-                VALUES (:c, 'system', 'clearing', :cur, true) ON CONFLICT (code) DO NOTHING""")
-                .param("c", code).param("cur", currency).update();
-        return code;
+        return ledger.openSystem(code, "clearing", currency, true);
     }
 
     int exponent(String currency) {
@@ -400,8 +398,7 @@ class FxService {
             if (!c.deliveryMethod().equals("wallet")) {
                 throw ApiException.unprocessable("delivery_unsupported", "Only wallet delivery is automated for inbound remittances");
             }
-            UUID customer = db.sql("SELECT id FROM customer WHERE phone = :p AND status = 'active'")
-                    .param("p", References.msisdn(in.recipientPhone())).query(UUID.class).optional()
+            UUID customer = customers.activeCustomerByPhone(References.msisdn(in.recipientPhone()))
                     .orElseThrow(() -> ApiException.unprocessable("recipient_not_found", "No active ELEPAY wallet for this number"));
             UUID id = UUID.randomUUID();
             String reference = References.next("FX");
@@ -424,12 +421,8 @@ class FxService {
                     .param("recipient", json.writeValueAsString(Map.of("phone", in.recipientPhone(),
                             "sender", String.valueOf(in.senderName()))))
                     .param("tx", posted.transactionId()).update();
-            db.sql("""
-                    INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status, counterparty, journal_tx)
-                    VALUES (:id, :ref, :c, 'topup', :amount, 'completed', :cp, :tx)""")
-                    .param("id", UUID.randomUUID()).param("ref", reference).param("c", customer)
-                    .param("amount", in.destinationAmount()).param("cp", "Remittance from " + in.senderName())
-                    .param("tx", posted.transactionId()).update();
+            customers.recordOperation(reference, customer, "topup", in.destinationAmount(), "completed",
+                    "Remittance from " + in.senderName(), posted.transactionId(), null);
             return transfer(id);
         });
     }

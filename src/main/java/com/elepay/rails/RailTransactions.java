@@ -103,6 +103,19 @@ public class RailTransactions {
         return find(id).orElseThrow();
     }
 
+    /**
+     * Records an inbound partner callback once per (rail, dedupe key). Returns false for a duplicate, so the
+     * caller processes each notification exactly once.
+     */
+    @Transactional
+    public boolean recordCallbackOnce(String rail, String dedupeKey, String reference, String eventType, String payload) {
+        return db.sql("""
+                INSERT INTO rail_callback (id, rail, dedupe_key, reference, event_type, payload)
+                VALUES (:id, :rail, :key, :ref, :type, CAST(:payload AS jsonb)) ON CONFLICT (rail, dedupe_key) DO NOTHING""")
+                .param("id", UUID.randomUUID()).param("rail", rail).param("key", dedupeKey).param("ref", reference)
+                .param("type", eventType).param("payload", payload).update() == 1;
+    }
+
     public Optional<RailTx> find(UUID id) {
         return db.sql("SELECT * FROM rail_transaction WHERE id = :id").param("id", id)
                 .query(RailTransactions::map).optional();
@@ -220,8 +233,7 @@ public class RailTransactions {
                         WHERE id = :id""")
                         .param("id", id).param("pref", result.railReference()).param("fee", fee).update();
                 if (fee > 0) {
-                    db.sql("INSERT INTO ledger_account (code, owner_type, bucket, currency, allow_negative) VALUES (:c, 'system', 'clearing', 'GHS', true) ON CONFLICT (code) DO NOTHING")
-                            .param("c", Ledger.clearing(t.rail())).update();
+                    ledger.openSystem(Ledger.clearing(t.rail()), "clearing", Ledger.GHS, true);
                     ledger.post(Ledger.Posting.of("rail-fee", t.reference(), "rail_fee", List.of(
                             Ledger.Leg.debit("system:rail_fees:GHS", fee),
                             Ledger.Leg.credit(Ledger.clearing(t.rail()), fee))));

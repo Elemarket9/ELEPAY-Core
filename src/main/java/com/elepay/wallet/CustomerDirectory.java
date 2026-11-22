@@ -36,6 +36,22 @@ public class CustomerDirectory {
                 .query(Long.class).single() > 0;
     }
 
+    /**
+     * Adds a line to a customer's wallet history. Other modules record wallet payments, refunds and
+     * remittances through this method; the wallet module owns the table.
+     */
+    @org.springframework.transaction.annotation.Transactional(
+            propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void recordOperation(String reference, UUID customer, String kind, long amount, String status,
+                                String counterparty, UUID journalTx, UUID relatedId) {
+        db.sql("""
+                INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status, counterparty, journal_tx, related_id)
+                VALUES (:id, :ref, :cust, :kind, :amount, :status, :cp, :tx, :related)""")
+                .param("id", UUID.randomUUID()).param("ref", reference).param("cust", customer).param("kind", kind)
+                .param("amount", amount).param("status", status).param("cp", counterparty).param("tx", journalTx)
+                .param("related", relatedId).update();
+    }
+
     public static String available(UUID customer) {
         return Ledger.code("customer", customer, "available", Ledger.GHS);
     }

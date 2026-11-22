@@ -32,7 +32,11 @@ public class WalletChannel {
     private final Wallets wallets;
     private final Audit audit;
 
-    WalletChannel(JdbcClient db, RecipientConfirmations confirmations, Wallets wallets, Audit audit) {
+    private final com.elepay.ledger.Ledger ledger;
+
+    WalletChannel(JdbcClient db, RecipientConfirmations confirmations, Wallets wallets, Audit audit,
+                  com.elepay.ledger.Ledger ledger) {
+        this.ledger = ledger;
         this.db = db;
         this.confirmations = confirmations;
         this.wallets = wallets;
@@ -97,8 +101,7 @@ public class WalletChannel {
     }
 
     public long availableBalance(UUID customer) {
-        return db.sql("SELECT balance FROM ledger_account WHERE code = :c").param("c", CustomerDirectory.available(customer))
-                .query(Long.class).optional().orElse(0L);
+        return ledger.balance(CustomerDirectory.available(customer));
     }
 
     public Recipient lookupWallet(Customer sender, String phone) {

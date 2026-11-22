@@ -68,9 +68,7 @@ class PayoutPolicyApi {
     @GetMapping("/merchants/{merchantId}/sellers/{sellerId}/payout-policy")
     public PayoutPolicies.Effective seller(@PathVariable UUID merchantId, @PathVariable UUID sellerId) {
         access.require(merchantId, VIEW);
-        boolean related = db.sql("SELECT count(*) FROM marketplace_seller WHERE marketplace_id = :m AND seller_id = :s")
-                .param("m", merchantId).param("s", sellerId).query(Long.class).single() > 0;
-        if (!related) throw ApiException.notFound("Seller not found in this marketplace");
+        if (access.relationship(merchantId, sellerId).isEmpty()) throw ApiException.notFound("Seller not found in this marketplace");
         var e = policies.effective(sellerId);
         // The marketplace sees the outcome, not the seller's bank details.
         return new PayoutPolicies.Effective(e.merchantId(), e.mode(), e.minAmount(), e.source(), e.governedBy(), null);

@@ -55,6 +55,77 @@ public class Webhooks implements OutboxConsumer {
         return endpoint;
     }
 
+    // ---- developer portal: endpoint management --------------------------------------------------
+
+    public record EndpointView(UUID id, String url, String secret, String environment, String description,
+                               List<String> eventTypes, boolean active, int failureCount,
+                               java.time.OffsetDateTime lastDeliveryAt, java.time.OffsetDateTime createdAt) {}
+
+    public void registerEndpoint(UUID id, UUID merchantId, String url, String secret, String environment,
+                                 String description, List<String> eventTypes) {
+        db.sql("""
+                INSERT INTO webhook_endpoint (id, merchant_id, url, secret, active, environment, description, event_types)
+                VALUES (:id, :m, :url, :secret, true, :env, :desc, :events)""")
+                .param("id", id).param("m", merchantId).param("url", url).param("secret", secret)
+                .param("env", environment).param("desc", description)
+                .param("events", eventTypes.toArray(String[]::new)).update();
+    }
+
+    private static EndpointView endpointView(java.sql.ResultSet rs, int i) throws java.sql.SQLException {
+        return new EndpointView(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getString(4),
+                rs.getString(5), List.of((String[]) rs.getArray(6).getArray()), rs.getBoolean(7), rs.getInt(8),
+                rs.getObject(9, java.time.OffsetDateTime.class), rs.getObject(10, java.time.OffsetDateTime.class));
+    }
+
+    private static final String ENDPOINT_COLUMNS = """
+            SELECT id, url, secret, COALESCE(environment, 'live'), description,
+                   COALESCE(event_types, '{checkout.paid,payment.failed,payout.completed,refund.created,mandate.active}'),
+                   active, COALESCE(failure_count, 0), last_delivery_at, created_at
+            FROM webhook_endpoint""";
+
+    public List<EndpointView> endpoints(UUID merchantId, String environment) {
+        boolean filter = environment != null && !environment.isBlank();
+        var client = db.sql(ENDPOINT_COLUMNS + " WHERE merchant_id = :m"
+                + (filter ? " AND COALESCE(environment, 'live') = :env" : "") + " ORDER BY created_at DESC")
+                .param("m", merchantId);
+        if (filter) client = client.param("env", environment.toLowerCase());
+        return client.query(Webhooks::endpointView).list();
+    }
+
+    public java.util.Optional<EndpointView> endpoint(UUID merchantId, UUID id) {
+        return db.sql(ENDPOINT_COLUMNS + " WHERE id = :id AND merchant_id = :m")
+                .param("id", id).param("m", merchantId).query(Webhooks::endpointView).optional();
+    }
+
+    public boolean updateEndpoint(UUID merchantId, UUID id, String url, List<String> eventTypes, Boolean active,
+                                  String description) {
+        StringBuilder sql = new StringBuilder("UPDATE webhook_endpoint SET updated_at = now() ");
+        if (url != null) sql.append(", url = :url ");
+        if (eventTypes != null) sql.append(", event_types = :events ");
+        if (active != null) sql.append(", active = :active ");
+        if (description != null) sql.append(", description = :desc ");
+        sql.append(" WHERE id = :id AND merchant_id = :m");
+        var client = db.sql(sql.toString()).param("id", id).param("m", merchantId);
+        if (url != null) client = client.param("url", url);
+        if (eventTypes != null) client = client.param("events", eventTypes.toArray(String[]::new));
+        if (active != null) client = client.param("active", active);
+        if (description != null) client = client.param("desc", description);
+        return client.update() > 0;
+    }
+
+    public boolean setSecret(UUID merchantId, UUID id, String secret) {
+        return db.sql("UPDATE webhook_endpoint SET secret = :secret, updated_at = now() WHERE id = :id AND merchant_id = :m")
+                .param("secret", secret).param("id", id).param("m", merchantId).update() > 0;
+    }
+
+    /** Health counters shown in the developer portal. */
+    public void recordDeliveryOutcome(UUID endpointId, boolean delivered) {
+        db.sql(delivered
+                        ? "UPDATE webhook_endpoint SET failure_count = 0, last_delivery_at = now() WHERE id = :id"
+                        : "UPDATE webhook_endpoint SET failure_count = failure_count + 1 WHERE id = :id")
+                .param("id", endpointId).update();
+    }
+
     public List<Endpoint> list(UUID merchantId) {
         return db.sql("SELECT id, url, '' AS secret, active FROM webhook_endpoint WHERE merchant_id = :m ORDER BY created_at")
                 .param("m", merchantId)

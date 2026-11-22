@@ -197,6 +197,32 @@ public class Ledger {
     public static final String SUSPENSE = "system:suspense:GHS";
     public static final String REFUNDS_IN_FLIGHT = "system:refunds_in_flight:GHS";
 
+    /** Creates a system account with an explicit code (clearing, partner accounts) if needed. */
+    @Transactional
+    public String openSystem(String code, String bucket, String currency, boolean allowNegative) {
+        db.sql("""
+                INSERT INTO ledger_account (code, owner_type, bucket, currency, allow_negative)
+                VALUES (:c, 'system', :b, :cur, :neg) ON CONFLICT (code) DO NOTHING""")
+                .param("c", code).param("b", bucket).param("cur", currency).param("neg", allowNegative).update();
+        return code;
+    }
+
+    /** Codes of system accounts in a bucket whose code starts with {@code prefix}. */
+    public List<String> systemCodes(String prefix, String bucket, String currency) {
+        return db.sql("""
+                SELECT code FROM ledger_account
+                WHERE owner_type = 'system' AND bucket = :b AND currency = :c AND starts_with(code, :p) ORDER BY code""")
+                .param("b", bucket).param("c", currency).param("p", prefix).query(String.class).list();
+    }
+
+    /** Owners whose account in this bucket holds a positive balance. */
+    public List<UUID> ownersWithBalance(String ownerType, String bucket, String currency) {
+        return db.sql("""
+                SELECT owner_id FROM ledger_account
+                WHERE owner_type = :t AND bucket = :b AND currency = :c AND balance > 0 ORDER BY owner_id""")
+                .param("t", ownerType).param("b", bucket).param("c", currency).query(UUID.class).list();
+    }
+
     /** Creates the account if needed and returns its code. */
     @Transactional
     public String open(String ownerType, UUID ownerId, String bucket, String currency) {

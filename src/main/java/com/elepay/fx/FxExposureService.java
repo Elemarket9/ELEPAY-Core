@@ -50,10 +50,7 @@ public class FxExposureService {
         long inFlight = ledger.balance("system:fx_in_flight:" + currency);
 
         // Sum across partner clearing accounts for this currency
-        List<String> partnerAccounts = db.sql("""
-                SELECT code FROM ledger_account
-                WHERE bucket = 'clearing' AND currency = :c AND code LIKE 'system:clearing:fx-%'""")
-                .param("c", currency).query(String.class).list();
+        List<String> partnerAccounts = ledger.systemCodes("system:clearing:fx-", "clearing", currency);
 
         long partnerClearingTotal = 0;
         for (String acct : partnerAccounts) {

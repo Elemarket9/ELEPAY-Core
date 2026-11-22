@@ -123,12 +123,14 @@ class PublicCheckouts {
 
     @GetMapping("/v1/public/links/{slug}")
     public Map<String, Object> link(@PathVariable String slug) {
-        return db.sql("""
-                SELECT l.title, l.amount, m.trading_name FROM payment_link l JOIN merchant m ON m.id = l.merchant_id
-                WHERE l.slug = :s AND l.active AND m.status = 'active'""").param("s", slug)
-                .query((rs, i) -> Map.<String, Object>of("title", rs.getString(1),
-                        "amount", rs.getObject(2) == null ? "open" : rs.getLong(2), "merchant", rs.getString(3)))
+        record LinkRow(String title, Long amount, UUID merchant) {}
+        var link = db.sql("SELECT title, amount, merchant_id FROM payment_link WHERE slug = :s AND active").param("s", slug)
+                .query((rs, i) -> new LinkRow(rs.getString(1), (Long) rs.getObject(2), rs.getObject(3, UUID.class)))
                 .optional().orElseThrow(() -> ApiException.notFound("Payment link not found"));
+        var merchant = merchants.find(link.merchant()).filter(m -> m.status().equals("active"))
+                .orElseThrow(() -> ApiException.notFound("Payment link not found"));
+        return Map.of("title", link.title(), "amount", link.amount() == null ? "open" : link.amount(),
+                "merchant", merchant.tradingName());
     }
 
     @PostMapping("/v1/public/links/{slug}/checkouts")

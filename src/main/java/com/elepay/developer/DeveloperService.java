@@ -38,12 +38,17 @@ public class DeveloperService {
     private final Audit audit;
     private final RestClient http;
     private final ObjectMapper json;
+    private final com.elepay.identity.ApiKeys apiKeys;
+    private final Webhooks webhooks;
 
-    public DeveloperService(JdbcClient db, MerchantAccess access, Audit audit, ObjectMapper json) {
+    public DeveloperService(JdbcClient db, MerchantAccess access, Audit audit, ObjectMapper json,
+                            com.elepay.identity.ApiKeys apiKeys, Webhooks webhooks) {
         this.db = db;
         this.access = access;
         this.audit = audit;
         this.json = json;
+        this.apiKeys = apiKeys;
+        this.webhooks = webhooks;
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(5));
         factory.setReadTimeout(Duration.ofSeconds(10));
@@ -93,56 +98,24 @@ public class DeveloperService {
             throw ApiException.badRequest("invalid_scope", "Valid scopes: " + ALLOWED_SCOPES);
         }
 
-        byte[] bytes = new byte[24];
-        RANDOM.nextBytes(bytes);
-        String envTag = env.equals("test") ? "test" : "live";
-        String randomHex = HexFormat.of().formatHex(bytes);
-        String prefix = "ek_" + envTag + "_" + randomHex.substring(0, 8);
-        String secret = prefix + "_" + randomHex.substring(8);
-        UUID id = UUID.randomUUID();
-
-        db.sql("""
-                INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes, environment)
-                VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes, :env)""")
-                .param("id", id).param("prefix", prefix).param("hash", Idempotency.sha256(secret))
-                .param("merchant", merchantId).param("label", label).param("by", createdBy)
-                .param("scopes", scopes.stream().distinct().sorted().toArray(String[]::new))
-                .param("env", env).update();
+        var key = apiKeys.createForEnvironment(merchantId, label, env, scopes, createdBy);
 
         audit.record(createdBy, "developer.api_key_created", "merchant:" + merchantId,
-                Map.of("prefix", prefix, "environment", env, "scopes", String.join(",", scopes)));
+                Map.of("prefix", key.prefix(), "environment", env, "scopes", String.join(",", key.scopes())));
 
-        return new ApiKeyCreated(id, prefix, secret, env, label, scopes.stream().distinct().sorted().toList(), OffsetDateTime.now());
+        return new ApiKeyCreated(key.id(), key.prefix(), key.secret(), env, label, key.scopes(), OffsetDateTime.now());
     }
 
     public List<ApiKeyView> listApiKeys(UUID merchantId, String environment) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
-        String envClause = (environment != null && !environment.isBlank()) ? " AND environment = :env " : "";
-        var client = db.sql("""
-                SELECT id, prefix, COALESCE(environment, 'live'), label, scopes, created_at, revoked_at, last_used_at
-                FROM api_credential WHERE merchant_id = :m """ + envClause + " ORDER BY created_at DESC")
-                .param("m", merchantId);
-        if (!envClause.isEmpty()) {
-            client = client.param("env", environment.toLowerCase());
-        }
-        return client.query((rs, i) -> new ApiKeyView(
-                rs.getObject(1, UUID.class),
-                rs.getString(2),
-                rs.getString(3),
-                rs.getString(4),
-                List.of((String[]) rs.getArray(5).getArray()),
-                rs.getObject(6, OffsetDateTime.class),
-                rs.getObject(7, OffsetDateTime.class),
-                rs.getObject(8, OffsetDateTime.class)
-        )).list();
+        return apiKeys.listWithEnvironment(merchantId, environment).stream().map(k -> new ApiKeyView(k.id(),
+                k.prefix(), k.environment(), k.label(), k.scopes(), k.createdAt(), k.revokedAt(), k.lastUsedAt())).toList();
     }
 
     @Transactional
     public boolean revokeApiKey(UUID merchantId, UUID keyId, String revokedBy) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
-        int rows = db.sql("UPDATE api_credential SET revoked_at = now() WHERE id = :id AND merchant_id = :m AND revoked_at IS NULL")
-                .param("id", keyId).param("m", merchantId).update();
-        if (rows > 0) {
+        if (apiKeys.revoke(merchantId, keyId)) {
             audit.record(revokedBy, "developer.api_key_revoked", "merchant:" + merchantId, Map.of("keyId", keyId.toString()));
             return true;
         }
@@ -152,10 +125,8 @@ public class DeveloperService {
     @Transactional
     public ApiKeyCreated rotateApiKey(UUID merchantId, UUID oldKeyId, String label, String rotatedBy) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
-        var old = db.sql("SELECT COALESCE(environment, 'live'), scopes FROM api_credential WHERE id = :id AND merchant_id = :m AND revoked_at IS NULL")
-                .param("id", oldKeyId).param("m", merchantId)
-                .query((rs, i) -> Map.entry(rs.getString(1), List.of((String[]) rs.getArray(2).getArray())))
-                .optional().orElseThrow(() -> ApiException.notFound("Active API key not found to rotate"));
+        var old = apiKeys.activeKey(merchantId, oldKeyId)
+                .orElseThrow(() -> ApiException.notFound("Active API key not found to rotate"));
 
         revokeApiKey(merchantId, oldKeyId, rotatedBy);
         String newLabel = (label != null && !label.isBlank()) ? label : "Rotated key";
@@ -184,11 +155,7 @@ public class DeveloperService {
         String secret = "whsec_" + HexFormat.of().formatHex(bytes);
         UUID id = UUID.randomUUID();
 
-        db.sql("""
-                INSERT INTO webhook_endpoint (id, merchant_id, url, secret, active, environment, description, event_types)
-                VALUES (:id, :m, :url, :secret, true, :env, :desc, :events)""")
-                .param("id", id).param("m", merchantId).param("url", url).param("secret", secret)
-                .param("env", env).param("desc", description).param("events", events.toArray(String[]::new)).update();
+        webhooks.registerEndpoint(id, merchantId, url, secret, env, description, events);
 
         audit.record(createdBy, "developer.webhook_endpoint_registered", "merchant:" + merchantId,
                 Map.of("endpointId", id.toString(), "url", url, "environment", env));
@@ -198,56 +165,20 @@ public class DeveloperService {
 
     public List<WebhookEndpointView> listWebhooks(UUID merchantId, String environment) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
-        String envClause = (environment != null && !environment.isBlank()) ? " AND COALESCE(environment, 'live') = :env " : "";
-        var client = db.sql("""
-                SELECT id, url, secret, COALESCE(environment, 'live'), description,
-                       COALESCE(event_types, '{checkout.paid,payment.failed,payout.completed,refund.created,mandate.active}'),
-                       active, COALESCE(failure_count, 0), last_delivery_at, created_at
-                FROM webhook_endpoint WHERE merchant_id = :m """ + envClause + " ORDER BY created_at DESC")
-                .param("m", merchantId);
-        if (!envClause.isEmpty()) {
-            client = client.param("env", environment.toLowerCase());
-        }
-        return client.query((rs, i) -> new WebhookEndpointView(
-                rs.getObject(1, UUID.class),
-                rs.getString(2),
-                rs.getString(3),
-                rs.getString(4),
-                rs.getString(5),
-                List.of((String[]) rs.getArray(6).getArray()),
-                rs.getBoolean(7),
-                rs.getInt(8),
-                rs.getObject(9, OffsetDateTime.class),
-                rs.getObject(10, OffsetDateTime.class)
-        )).list();
+        return webhooks.endpoints(merchantId, environment).stream().map(e -> new WebhookEndpointView(e.id(), e.url(),
+                e.secret(), e.environment(), e.description(), e.eventTypes(), e.active(), e.failureCount(),
+                e.lastDeliveryAt(), e.createdAt())).toList();
     }
 
     @Transactional
     public boolean updateWebhook(UUID merchantId, UUID endpointId, String url, List<String> eventTypes,
                                  Boolean active, String description) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
-        var existing = db.sql("SELECT id FROM webhook_endpoint WHERE id = :id AND merchant_id = :m")
-                .param("id", endpointId).param("m", merchantId).query((rs, i) -> rs.getObject(1, UUID.class)).optional();
-        if (existing.isEmpty()) throw ApiException.notFound("Webhook endpoint not found");
-
+        if (webhooks.endpoint(merchantId, endpointId).isEmpty()) throw ApiException.notFound("Webhook endpoint not found");
         if (url != null && !url.matches("^https?://.+")) {
             throw ApiException.badRequest("invalid_url", "URL must start with http:// or https://");
         }
-
-        StringBuilder sql = new StringBuilder("UPDATE webhook_endpoint SET updated_at = now() ");
-        if (url != null) sql.append(", url = :url ");
-        if (eventTypes != null) sql.append(", event_types = :events ");
-        if (active != null) sql.append(", active = :active ");
-        if (description != null) sql.append(", description = :desc ");
-        sql.append(" WHERE id = :id AND merchant_id = :m");
-
-        var client = db.sql(sql.toString()).param("id", endpointId).param("m", merchantId);
-        if (url != null) client = client.param("url", url);
-        if (eventTypes != null) client = client.param("events", eventTypes.toArray(String[]::new));
-        if (active != null) client = client.param("active", active);
-        if (description != null) client = client.param("desc", description);
-
-        return client.update() > 0;
+        return webhooks.updateEndpoint(merchantId, endpointId, url, eventTypes, active, description);
     }
 
     @Transactional
@@ -256,19 +187,16 @@ public class DeveloperService {
         byte[] bytes = new byte[24];
         RANDOM.nextBytes(bytes);
         String newSecret = "whsec_" + HexFormat.of().formatHex(bytes);
-        int rows = db.sql("UPDATE webhook_endpoint SET secret = :secret, updated_at = now() WHERE id = :id AND merchant_id = :m")
-                .param("secret", newSecret).param("id", endpointId).param("m", merchantId).update();
-        if (rows == 0) throw ApiException.notFound("Webhook endpoint not found");
+        if (!webhooks.setSecret(merchantId, endpointId, newSecret)) throw ApiException.notFound("Webhook endpoint not found");
         audit.record(updatedBy, "developer.webhook_secret_rotated", "merchant:" + merchantId, Map.of("endpointId", endpointId.toString()));
         return newSecret;
     }
 
     public ReplayResult pingWebhook(UUID merchantId, UUID endpointId) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
-        var ep = db.sql("SELECT id, url, secret FROM webhook_endpoint WHERE id = :id AND merchant_id = :m")
-                .param("id", endpointId).param("m", merchantId)
-                .query((rs, i) -> Map.of("id", rs.getObject(1, UUID.class).toString(), "url", rs.getString(2), "secret", rs.getString(3)))
-                .optional().orElseThrow(() -> ApiException.notFound("Webhook endpoint not found"));
+        var e = webhooks.endpoint(merchantId, endpointId)
+                .orElseThrow(() -> ApiException.notFound("Webhook endpoint not found"));
+        var ep = Map.of("id", e.id().toString(), "url", e.url(), "secret", e.secret());
 
         String eventId = UUID.randomUUID().toString();
         String payload = """
@@ -358,10 +286,8 @@ public class DeveloperService {
     public ReplayResult replayDelivery(UUID merchantId, UUID logId, String replayedBy) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
         var old = getDeliveryLog(merchantId, logId);
-        var ep = db.sql("SELECT secret FROM webhook_endpoint WHERE id = :id AND merchant_id = :m")
-                .param("id", old.endpointId()).param("m", merchantId)
-                .query((rs, i) -> rs.getString(1))
-                .optional().orElseThrow(() -> ApiException.badRequest("endpoint_missing", "Associated webhook endpoint no longer exists"));
+        var ep = webhooks.endpoint(merchantId, old.endpointId()).map(Webhooks.EndpointView::secret)
+                .orElseThrow(() -> ApiException.badRequest("endpoint_missing", "Associated webhook endpoint no longer exists"));
 
         audit.record(replayedBy, "developer.webhook_delivery_replayed", "merchant:" + merchantId,
                 Map.of("originalLogId", logId.toString(), "endpointId", old.endpointId().toString()));
@@ -422,13 +348,7 @@ public class DeveloperService {
                 .param("dur", durationMs).param("status", status).param("retry", isManualRetry).update();
 
         // Update endpoint stats
-        if ("DELIVERED".equals(status)) {
-            db.sql("UPDATE webhook_endpoint SET failure_count = 0, last_delivery_at = now() WHERE id = :id")
-                    .param("id", endpointId).update();
-        } else {
-            db.sql("UPDATE webhook_endpoint SET failure_count = failure_count + 1 WHERE id = :id")
-                    .param("id", endpointId).update();
-        }
+        webhooks.recordDeliveryOutcome(endpointId, "DELIVERED".equals(status));
 
         return new ReplayResult(logId, "DELIVERED".equals(status), statusCode, responseBody, durationMs);
     }

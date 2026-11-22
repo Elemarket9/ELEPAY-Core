@@ -48,8 +48,10 @@ class CheckoutService {
     private final Map<String, int[]> customerFees;
     private final boolean jobsEnabled;
 
+    private final CustomerDirectory customers;
+
     CheckoutService(JdbcClient db, Ledger ledger, MerchantAccess merchants, RailTransactions rails, Outbox outbox,
-                    Audit audit, OpsQueue ops,
+                    Audit audit, OpsQueue ops, CustomerDirectory customers,
                     @Value("${elepay.fees.customer.wallet-bps:0}") int walletBps,
                     @Value("${elepay.fees.customer.wallet-fixed:0}") int walletFixed,
                     @Value("${elepay.fees.customer.momo-bps:0}") int momoBps,
@@ -58,6 +60,7 @@ class CheckoutService {
                     @Value("${elepay.fees.customer.card-fixed:0}") int cardFixed,
                     @Value("${elepay.checkout.jobs-enabled:true}") boolean jobsEnabled) {
         this.db = db;
+        this.customers = customers;
         this.ledger = ledger;
         this.merchants = merchants;
         this.rails = rails;
@@ -82,6 +85,13 @@ class CheckoutService {
                       long settledAmount, OffsetDateTime settledAt, String category, long commission,
                       long processingFee, long refundedPlatformFee, long disputedFee, long disputedPlatformFee,
                       long platformPending, long feeDeferred, boolean holdUntilDelivered, OffsetDateTime deliveredAt) {
+        Allocation withMerchantName(String name) {
+            return new Allocation(line, merchantId, name, kind, description, amount, merchantFee, refunded, refundedFee,
+                    disputed, pendingAmount, settledAmount, settledAt, category, commission, processingFee,
+                    refundedPlatformFee, disputedFee, disputedPlatformFee, platformPending, feeDeferred,
+                    holdUntilDelivered, deliveredAt);
+        }
+
         /** The marketplace's share: category commission plus processing fee. */
         long platformFee() { return commission + processingFee; }
 
@@ -115,10 +125,10 @@ class CheckoutService {
 
     Checkout load(UUID id, boolean lock) {
         var head = db.sql("""
-                SELECT c.id, c.reference, c.collector_id, m.trading_name, c.branch_id, c.status, c.subtotal, c.description,
+                SELECT c.id, c.reference, c.collector_id, NULL, c.branch_id, c.status, c.subtotal, c.description,
                        c.payment_method, c.customer_fee, c.total_paid, c.customer_id, c.journal_tx, c.expires_at,
                        c.paid_at, c.created_at, c.delivery_deadline
-                FROM checkout c JOIN merchant m ON m.id = c.collector_id WHERE c.id = :id""" + (lock ? " FOR UPDATE OF c" : ""))
+                FROM checkout c WHERE c.id = :id""" + (lock ? " FOR UPDATE OF c" : ""))
                 .param("id", id).query((rs, i) -> new Object[]{
                         rs.getObject(1, UUID.class), rs.getString(2), rs.getObject(3, UUID.class), rs.getString(4),
                         rs.getObject(5, UUID.class), rs.getString(6), rs.getLong(7), rs.getString(8), rs.getString(9),
@@ -127,12 +137,12 @@ class CheckoutService {
                         rs.getObject(16, OffsetDateTime.class), rs.getObject(17, OffsetDateTime.class)})
                 .optional().orElseThrow(() -> ApiException.notFound("Checkout not found"));
         List<Allocation> lines = db.sql("""
-                SELECT a.line, a.merchant_id, m.trading_name, a.kind, a.description, a.amount, a.merchant_fee, a.refunded,
+                SELECT a.line, a.merchant_id, NULL, a.kind, a.description, a.amount, a.merchant_fee, a.refunded,
                        a.refunded_fee, a.disputed, a.pending_amount, a.settled_amount, a.settled_at, a.category,
                        a.commission, a.processing_fee, a.refunded_platform_fee, a.disputed_fee,
                        a.disputed_platform_fee, a.platform_pending, a.fee_deferred, a.hold_until_delivered,
                        a.delivered_at
-                FROM checkout_allocation a JOIN merchant m ON m.id = a.merchant_id
+                FROM checkout_allocation a
                 WHERE a.checkout_id = :id ORDER BY a.line""" + (lock ? " FOR UPDATE OF a" : ""))
                 .param("id", id).query((rs, i) -> new Allocation(rs.getInt(1), rs.getObject(2, UUID.class),
                         rs.getString(3), rs.getString(4), rs.getString(5), rs.getLong(6), rs.getLong(7), rs.getLong(8),
@@ -140,10 +150,19 @@ class CheckoutService {
                         rs.getObject(13, OffsetDateTime.class), rs.getString(14), rs.getLong(15), rs.getLong(16),
                         rs.getLong(17), rs.getLong(18), rs.getLong(19), rs.getLong(20), rs.getLong(21),
                         rs.getBoolean(22), rs.getObject(23, OffsetDateTime.class))).list();
+        // Merchant names come from the merchant module, not a join on its table.
+        Map<UUID, String> names = new HashMap<>();
+        lines = lines.stream().map(a -> a.withMerchantName(names.computeIfAbsent(a.merchantId(), this::tradingName)))
+                .toList();
+        head[3] = names.computeIfAbsent((UUID) head[2], this::tradingName);
         return new Checkout((UUID) head[0], (String) head[1], (UUID) head[2], (String) head[3], (UUID) head[4],
                 (String) head[5], (long) head[6], (String) head[7], (String) head[8], (long) head[9], (Long) head[10],
                 (UUID) head[11], (UUID) head[12], (OffsetDateTime) head[13], (OffsetDateTime) head[14],
                 (OffsetDateTime) head[15], (OffsetDateTime) head[16], lines);
+    }
+
+    private String tradingName(UUID merchant) {
+        return merchants.find(merchant).map(MerchantAccess.Merchant::tradingName).orElse(null);
     }
 
     /** One row of a marketplace's commission grid. */
@@ -323,11 +342,9 @@ class CheckoutService {
         db.sql("INSERT INTO payment_attempt (id, checkout_id, method, status) VALUES (:id, :c, 'wallet', 'succeeded')")
                 .param("id", attempt).param("c", c.id()).update();
         complete(c, "wallet", CustomerDirectory.available(customer), customer, fee, total);
-        db.sql("""
-                INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status, counterparty, journal_tx, related_id)
-                VALUES (:id, :ref, :cust, 'payment', :amount, 'completed', :cp, (SELECT journal_tx FROM checkout WHERE id = :c), :c)""")
-                .param("id", UUID.randomUUID()).param("ref", References.next("WLT")).param("cust", customer)
-                .param("amount", total).param("cp", c.collectorName() + " " + c.reference()).param("c", c.id()).update();
+        UUID journal = db.sql("SELECT journal_tx FROM checkout WHERE id = :c").param("c", c.id()).query(UUID.class).single();
+        customers.recordOperation(References.next("WLT"), customer, "payment", total, "completed",
+                c.collectorName() + " " + c.reference(), journal, c.id());
         return new PaymentResult(c.reference(), "paid", "wallet", c.subtotal(), fee, total, attempt, null, null, null);
     }
 
@@ -510,10 +527,9 @@ class CheckoutService {
 
     /** Starts returning money to the customer through the rail that took the payment. */
     private UUID railRefund(Checkout c, UUID refundId, long amount) {
-        String railRef = db.sql("""
-                SELECT t.reference FROM payment_attempt p JOIN rail_transaction t ON t.id = p.rail_tx
-                WHERE p.checkout_id = :c AND p.status = 'succeeded'""").param("c", c.id()).query(String.class).single();
-        var original = rails.findByReference(railRef).orElseThrow();
+        UUID charge = db.sql("SELECT rail_tx FROM payment_attempt WHERE checkout_id = :c AND status = 'succeeded'")
+                .param("c", c.id()).query(UUID.class).single();
+        var original = rails.find(charge).orElseThrow();
         return rails.create(original.rail(), "refund", "refund", refundId, amount, new RailTransactions.Request(
                 original.channel(), original.msisdn(), null, null, null, "Refund " + c.reference(), null, null,
                 null, null, original.reference(), original.railReference())).id();
@@ -564,12 +580,8 @@ class CheckoutService {
                 .param("status", toWallet ? "completed" : "pending").param("tx", posted.transactionId())
                 .param("rail", railTx).param("reason", reason).param("by", access.actor().subject()).update();
         if (toWallet) {
-            db.sql("""
-                    INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status, counterparty, journal_tx, related_id)
-                    VALUES (:id, :ref, :cust, 'refund', :amount, 'completed', :cp, :tx, :refund)""")
-                    .param("id", UUID.randomUUID()).param("ref", refundRef).param("cust", c.customerId())
-                    .param("amount", amount).param("cp", a.merchantName() + " " + c.reference())
-                    .param("tx", posted.transactionId()).param("refund", id).update();
+            customers.recordOperation(refundRef, c.customerId(), "refund", amount, "completed",
+                    a.merchantName() + " " + c.reference(), posted.transactionId(), id);
         }
         audit.record(access.actor().subject(), "refund.created", "checkout:" + c.reference(),
                 Map.of("line", line, "amount", amount, "refund", refundRef, "reason", String.valueOf(reason)));
@@ -774,12 +786,8 @@ class CheckoutService {
                     .param("tx", posted.transactionId()).param("rail", railTx)
                     .param("reason", "Dispute " + id + " resolved for the customer").param("by", actor).update();
             if (toWallet) {
-                db.sql("""
-                        INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status, counterparty, journal_tx, related_id)
-                        VALUES (:id, :ref, :cust, 'refund', :amount, 'completed', :cp, :tx, :refund)""")
-                        .param("id", UUID.randomUUID()).param("ref", refundRef).param("cust", c.customerId())
-                        .param("amount", d.amount()).param("cp", a.merchantName() + " " + c.reference())
-                        .param("tx", posted.transactionId()).param("refund", refundId).update();
+                customers.recordOperation(refundRef, c.customerId(), "refund", d.amount(), "completed",
+                        a.merchantName() + " " + c.reference(), posted.transactionId(), refundId);
             }
         }
         db.sql("""
@@ -832,24 +840,46 @@ class CheckoutService {
     List<SettlementBatch> settleDue(boolean force, UUID onlyMerchant, UUID onlyCheckout) {
         record Due(UUID checkout, int line, UUID merchant, UUID collector, long pending, long platform, long fee,
                    boolean autoDelivered) {}
-        List<Due> due = db.sql("""
+        record Candidate(UUID checkout, int line, UUID merchant, UUID collector, long pending, long platform, long fee,
+                         boolean held, OffsetDateTime deliveredAt, OffsetDateTime paidAt, OffsetDateTime deadline,
+                         OffsetDateTime now) {}
+        List<Candidate> candidates = db.sql("""
                 SELECT a.checkout_id, a.line, a.merchant_id, c.collector_id, a.pending_amount, a.platform_pending,
-                       a.fee_deferred, (a.hold_until_delivered AND a.delivered_at IS NULL)
-                FROM checkout_allocation a JOIN checkout c ON c.id = a.checkout_id JOIN merchant m ON m.id = a.merchant_id
+                       a.fee_deferred, a.hold_until_delivered, a.delivered_at, c.paid_at, c.delivery_deadline, now()
+                FROM checkout_allocation a JOIN checkout c ON c.id = a.checkout_id
                 WHERE c.status = 'paid' AND (a.pending_amount > 0 OR a.platform_pending > 0 OR a.fee_deferred > 0)
-                  AND CASE WHEN a.hold_until_delivered
-                           THEN (a.delivered_at IS NOT NULL
-                                 AND (:force OR a.delivered_at + make_interval(hours => m.settlement_delay_hours) <= now()))
-                                OR c.delivery_deadline <= now()
-                           ELSE :force OR c.paid_at + make_interval(hours => m.settlement_delay_hours) <= now() END
+                  AND (NOT a.hold_until_delivered OR a.delivered_at IS NOT NULL OR c.delivery_deadline <= now())
                   AND (CAST(:merchant AS uuid) IS NULL OR a.merchant_id = CAST(:merchant AS uuid))
                   AND (CAST(:checkout AS uuid) IS NULL OR a.checkout_id = CAST(:checkout AS uuid))
                 ORDER BY a.merchant_id, a.checkout_id, a.line
                 FOR UPDATE OF a SKIP LOCKED""")
-                .param("force", force).param("merchant", onlyMerchant).param("checkout", onlyCheckout)
-                .query((rs, i) -> new Due(rs.getObject(1, UUID.class), rs.getInt(2), rs.getObject(3, UUID.class),
-                        rs.getObject(4, UUID.class), rs.getLong(5), rs.getLong(6), rs.getLong(7), rs.getBoolean(8)))
+                .param("merchant", onlyMerchant).param("checkout", onlyCheckout)
+                .query((rs, i) -> new Candidate(rs.getObject(1, UUID.class), rs.getInt(2), rs.getObject(3, UUID.class),
+                        rs.getObject(4, UUID.class), rs.getLong(5), rs.getLong(6), rs.getLong(7), rs.getBoolean(8),
+                        rs.getObject(9, OffsetDateTime.class), rs.getObject(10, OffsetDateTime.class),
+                        rs.getObject(11, OffsetDateTime.class), rs.getObject(12, OffsetDateTime.class)))
                 .list();
+        // Each seller's settlement delay comes from the merchant module.
+        Map<UUID, Integer> delays = new HashMap<>();
+        List<Due> due = new ArrayList<>();
+        for (Candidate x : candidates) {
+            int hours = delays.computeIfAbsent(x.merchant(),
+                    m -> merchants.find(m).map(MerchantAccess.Merchant::settlementDelayHours).orElse(24));
+            boolean isDue;
+            boolean autoDelivered = false;
+            if (x.held()) {
+                boolean delivered = x.deliveredAt() != null && (force || !x.deliveredAt().plusHours(hours).isAfter(x.now()));
+                boolean deadlinePassed = x.deadline() != null && !x.deadline().isAfter(x.now());
+                isDue = delivered || deadlinePassed;
+                autoDelivered = x.deliveredAt() == null && deadlinePassed;
+            } else {
+                isDue = force || !x.paidAt().plusHours(hours).isAfter(x.now());
+            }
+            if (isDue) {
+                due.add(new Due(x.checkout(), x.line(), x.merchant(), x.collector(), x.pending(), x.platform(), x.fee(),
+                        autoDelivered));
+            }
+        }
         if (due.isEmpty()) return List.of();
         // Seller nets go to the seller's batch, marketplace shares to the marketplace's batch.
         Map<UUID, Long> totals = new LinkedHashMap<>();

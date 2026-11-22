@@ -276,14 +276,14 @@ class RecipientConfirmations {
                     request.amount(), new Payouts.Destination(c.rail(), c.network(), c.destination(), c.name()), null,
                     c.name())), "Transfer to " + c.name(), actorSubject);
             var item = batch.items().get(0);
-            UUID reservation = db.sql("SELECT reservation_tx FROM payout WHERE id = :id").param("id", item.id())
-                    .query(UUID.class).single();
+            UUID reservation = payouts.reservationTx(item.id()).orElse(null);
             markUsed(c.id(), reservation);
             db.sql("""
                     INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status, counterparty, journal_tx, related_id)
-                    VALUES (:id, :ref, :c, 'transfer_out', :amount, 'pending', :cp, :tx, :payout)""")
+                    VALUES (:id, :ref, :c, 'transfer_out', :amount, :status, :cp, :tx, :payout)""")
                     .param("id", UUID.randomUUID()).param("ref", item.reference()).param("c", sender)
-                    .param("amount", request.amount()).param("cp", c.name() + " " + display(c))
+                    .param("amount", request.amount()).param("status", item.status().equals("rejected") ? "failed" : "pending")
+                    .param("cp", c.name() + " " + display(c))
                     .param("tx", reservation).param("payout", item.id()).update();
             return new ConfirmedReceipt(reservation, item.reference(), request.amount(), fee, request.amount() + fee,
                     Ledger.GHS, c.name(), display(c), "submitted", batch.id());

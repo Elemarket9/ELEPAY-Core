@@ -23,6 +23,19 @@ public class Outbox {
     public record Event(UUID id, long sequence, String aggregateType, String aggregateId, String type,
                         String payload, UUID[] merchantIds) {}
 
+    /** A merchant's events in delivery order after {@code after}, for integrations recovering missed webhooks. */
+    public record MerchantEvent(UUID id, long sequence, String type, String aggregateId,
+                                java.time.OffsetDateTime createdAt, String payload) {}
+
+    public java.util.List<MerchantEvent> eventsFor(UUID merchant, long after, int limit) {
+        return db.sql("""
+                SELECT id, sequence, event_type, aggregate_id, created_at, payload::text FROM outbox_event
+                WHERE :m = ANY(merchant_ids) AND sequence > :after ORDER BY sequence LIMIT :limit""")
+                .param("m", merchant).param("after", after).param("limit", Math.min(Math.max(limit, 1), 500))
+                .query((rs, i) -> new MerchantEvent(rs.getObject(1, UUID.class), rs.getLong(2), rs.getString(3),
+                        rs.getString(4), rs.getObject(5, java.time.OffsetDateTime.class), rs.getString(6))).list();
+    }
+
     @Transactional(propagation = Propagation.MANDATORY)
     public UUID publish(String aggregateType, Object aggregateId, String type, Map<String, ?> payload,
                         Collection<UUID> merchants) {

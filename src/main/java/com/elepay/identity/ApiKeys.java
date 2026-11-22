@@ -4,6 +4,7 @@ import com.elepay.common.Idempotency;
 import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -64,6 +65,58 @@ public class ApiKeys {
                 .param("scopes", scopes.stream().distinct().sorted().toArray(String[]::new))
                 .param("signing_secret", signingSecret).update();
         return new Created(id, prefix, secret, scopes.stream().distinct().sorted().toList(), signingSecret);
+    }
+
+    // ---- developer portal: live and test keys ------------------------------------------------
+
+    public record EnvironmentKey(UUID id, String prefix, String secret, String environment, List<String> scopes) {}
+
+    public record EnvironmentListed(UUID id, String prefix, String environment, String label, List<String> scopes,
+                                    java.time.OffsetDateTime createdAt, java.time.OffsetDateTime revokedAt,
+                                    java.time.OffsetDateTime lastUsedAt) {}
+
+    /** A key tagged with its environment ({@code ek_live_…} or {@code ek_test_…}). Scopes are already validated. */
+    @Transactional
+    public EnvironmentKey createForEnvironment(UUID merchantId, String label, String environment, List<String> scopes,
+                                               String createdBy) {
+        String env = "test".equalsIgnoreCase(environment) ? "test" : "live";
+        byte[] bytes = new byte[24];
+        RANDOM.nextBytes(bytes);
+        String randomHex = HexFormat.of().formatHex(bytes);
+        String prefix = "ek_" + env + "_" + randomHex.substring(0, 8);
+        String secret = prefix + "_" + randomHex.substring(8);
+        UUID id = UUID.randomUUID();
+        List<String> sorted = scopes.stream().distinct().sorted().toList();
+        db.sql("""
+                INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes, environment)
+                VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes, :env)""")
+                .param("id", id).param("prefix", prefix).param("hash", Idempotency.sha256(secret))
+                .param("merchant", merchantId).param("label", label).param("by", createdBy)
+                .param("scopes", sorted.toArray(String[]::new)).param("env", env).update();
+        return new EnvironmentKey(id, prefix, secret, env, sorted);
+    }
+
+    public List<EnvironmentListed> listWithEnvironment(UUID merchantId, String environment) {
+        boolean filter = environment != null && !environment.isBlank();
+        var client = db.sql("""
+                SELECT id, prefix, COALESCE(environment, 'live'), label, scopes, created_at, revoked_at, last_used_at
+                FROM api_credential WHERE merchant_id = :m""" + (filter ? " AND environment = :env" : "")
+                + " ORDER BY created_at DESC").param("m", merchantId);
+        if (filter) client = client.param("env", environment.toLowerCase());
+        return client.query((rs, i) -> new EnvironmentListed(rs.getObject(1, UUID.class), rs.getString(2),
+                rs.getString(3), rs.getString(4), List.of((String[]) rs.getArray(5).getArray()),
+                rs.getObject(6, java.time.OffsetDateTime.class), rs.getObject(7, java.time.OffsetDateTime.class),
+                rs.getObject(8, java.time.OffsetDateTime.class))).list();
+    }
+
+    /** Environment and scopes of an active key, for rotation. */
+    public Optional<Map.Entry<String, List<String>>> activeKey(UUID merchantId, UUID id) {
+        return db.sql("""
+                SELECT COALESCE(environment, 'live'), scopes FROM api_credential
+                WHERE id = :id AND merchant_id = :m AND revoked_at IS NULL""")
+                .param("id", id).param("m", merchantId)
+                .query((rs, i) -> Map.entry(rs.getString(1), List.of((String[]) rs.getArray(2).getArray())))
+                .optional();
     }
 
     public List<Listed> list(UUID merchantId) {

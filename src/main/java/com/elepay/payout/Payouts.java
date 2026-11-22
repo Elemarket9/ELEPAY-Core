@@ -42,8 +42,11 @@ public class Payouts {
     private final OpsQueue ops;
     private final ObjectMapper json;
 
+    private final org.springframework.context.ApplicationEventPublisher events;
+
     Payouts(JdbcClient db, Ledger ledger, RailTransactions rails, NameVerifications verifications, Outbox outbox,
-            Audit audit, OpsQueue ops, ObjectMapper json) {
+            Audit audit, OpsQueue ops, ObjectMapper json, org.springframework.context.ApplicationEventPublisher events) {
+        this.events = events;
         this.db = db;
         this.ledger = ledger;
         this.rails = rails;
@@ -174,15 +177,38 @@ public class Payouts {
 
     /** Submits every reserved item of a batch. Call after the creating transaction commits. */
     public void submit(UUID batchId) {
-        List<UUID> pending = db.sql("""
-                SELECT p.rail_tx FROM payout p JOIN rail_transaction t ON t.id = p.rail_tx
-                WHERE p.batch_id = :b AND t.status = 'created'""").param("b", batchId).query(UUID.class).list();
-        for (UUID railTx : pending) {
-            rails.submit(railTx);
+        List<UUID> railTxs = db.sql("SELECT rail_tx FROM payout WHERE batch_id = :b AND rail_tx IS NOT NULL")
+                .param("b", batchId).query(UUID.class).list();
+        for (UUID railTx : railTxs) {
+            if (rails.find(railTx).map(t -> t.status().equals("created")).orElse(false)) rails.submit(railTx);
         }
+        for (UUID railTx : railTxs) {
+            boolean sent = rails.find(railTx).map(t -> !t.status().equals("created")).orElse(false);
+            if (sent) {
+                db.sql("UPDATE payout SET status = 'submitted' WHERE batch_id = :b AND status = 'reserved' AND rail_tx = :t")
+                        .param("b", batchId).param("t", railTx).update();
+            }
+        }
+    }
+
+    /** Status and client reference of an owner's payouts, for modules that show them (wallet history). */
+    public record PayoutState(UUID id, String status, String clientReference) {}
+
+    public Map<UUID, PayoutState> states(String ownerType, UUID owner, Collection<UUID> ids) {
+        if (ids == null || ids.isEmpty()) return Map.of();
+        Map<UUID, PayoutState> out = new HashMap<>();
         db.sql("""
-                UPDATE payout SET status = 'submitted' WHERE batch_id = :b AND status = 'reserved'
-                AND rail_tx IN (SELECT id FROM rail_transaction WHERE status <> 'created')""").param("b", batchId).update();
+                SELECT id, status, client_reference FROM payout
+                WHERE owner_type = :t AND owner_id = :o AND id IN (:ids)""")
+                .param("t", ownerType).param("o", owner).param("ids", ids)
+                .query((rs, i) -> new PayoutState(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3)))
+                .list().forEach(p -> out.put(p.id(), p));
+        return out;
+    }
+
+    /** The ledger transaction that reserved a payout's funds. */
+    public Optional<UUID> reservationTx(UUID payoutId) {
+        return db.sql("SELECT reservation_tx FROM payout WHERE id = :id").param("id", payoutId).query(UUID.class).optional();
     }
 
     /**
@@ -282,6 +308,8 @@ public class Payouts {
         if (reason != null) data.put("reason", reason);
         outbox.publish("payout", p.reference(), type, data,
                 p.ownerType().equals("merchant") ? Set.of(p.owner()) : Set.of());
+        events.publishEvent(new PayoutEvents.StatusChanged(p.id(), p.ownerType(), p.owner(),
+                type.substring(type.indexOf('.') + 1)));
     }
 
     // ---- reads ------------------------------------------------------------------------------

@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 public class TransferLimits {
     private final JdbcClient db;
+    private final com.elepay.ledger.Ledger ledger;
     private final long perTransfer;
     private final long perDay;
     private final int perMinute;
@@ -41,7 +42,7 @@ public class TransferLimits {
         }
     }
 
-    public TransferLimits(JdbcClient db,
+    public TransferLimits(JdbcClient db, com.elepay.ledger.Ledger ledger,
                           @Value("${elepay.wallet.limits.transfer-pesewas:0}") long perTransfer,
                           @Value("${elepay.wallet.limits.daily-pesewas:0}") long perDay,
                           @Value("${elepay.wallet.limits.transfers-per-minute:0}") int perMinute) {
@@ -49,6 +50,7 @@ public class TransferLimits {
             throw new IllegalArgumentException("Wallet transfer limits must be non-negative");
         }
         this.db = db;
+        this.ledger = ledger;
         this.perTransfer = perTransfer;
         this.perDay = perDay;
         this.perMinute = perMinute;
@@ -79,15 +81,13 @@ public class TransferLimits {
         Usage usage = db.sql("""
                 SELECT coalesce(sum(o.amount) FILTER (WHERE o.created_at >=
                            date_trunc('day', statement_timestamp(), 'Africa/Accra')
-                           AND coalesce(p.status, o.status) NOT IN ('failed', 'returned', 'rejected')), 0),
+                           AND o.status NOT IN ('failed', 'returned')), 0),
                        coalesce(sum(o.amount) FILTER (WHERE o.created_at >=
                            date_trunc('month', statement_timestamp(), 'Africa/Accra')
-                           AND coalesce(p.status, o.status) NOT IN ('failed', 'returned', 'rejected')), 0),
+                           AND o.status NOT IN ('failed', 'returned')), 0),
                        count(*) FILTER (WHERE o.created_at >= statement_timestamp() - interval '1 minute')
                 FROM wallet_operation o
-                LEFT JOIN payout p ON p.id = o.related_id AND p.owner_type = 'customer' AND p.owner_id = o.customer_id
-                WHERE o.customer_id = :sender
-                  AND (o.kind = 'transfer_out' OR (o.kind = 'withdrawal' AND p.client_reference LIKE 'transfer-%'))
+                WHERE o.customer_id = :sender AND o.kind = 'transfer_out'
                   AND o.created_at >= date_trunc('month', statement_timestamp(), 'Africa/Accra')
                 """).param("sender", sender)
                 .query((row, index) -> new Usage(row.getBigDecimal(1), row.getBigDecimal(2), row.getLong(3)))
@@ -121,14 +121,10 @@ public class TransferLimits {
 
         record RecipientInfo(int kycTier, long balance) {}
         RecipientInfo rec = db.sql("""
-                SELECT c.kyc_tier, coalesce(a.balance, 0)
-                FROM customer c
-                LEFT JOIN ledger_account a ON a.owner_type = 'customer' AND a.owner_id = c.id
-                                           AND a.bucket = 'available' AND a.currency = 'GHS'
-                WHERE c.id = :recipient
+                SELECT kyc_tier FROM customer WHERE id = :recipient
                 """)
                 .param("recipient", recipient)
-                .query((rs, i) -> new RecipientInfo(rs.getInt(1), rs.getLong(2)))
+                .query((rs, i) -> new RecipientInfo(rs.getInt(1), ledger.balance(CustomerDirectory.available(recipient))))
                 .optional()
                 .orElseThrow(() -> ApiException.conflict("wallet_unavailable", "Recipient wallet is unavailable"));
 
