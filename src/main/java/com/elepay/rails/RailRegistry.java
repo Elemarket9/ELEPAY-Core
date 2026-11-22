@@ -28,6 +28,20 @@ public class RailRegistry {
         return rail;
     }
 
+    /** Select by explicit channel/network; never cross networks merely because one adapter is installed. */
+    public String select(String direction, String channel, String network) {
+        if ("sandbox".equals(defaultName)) return "sandbox"; // Only a test-classpath bean can supply this name.
+        String name = switch (channel == null ? "" : channel.toLowerCase(java.util.Locale.ROOT)) {
+            case "momo" -> network == null ? "" : network.toLowerCase(java.util.Locale.ROOT);
+            case "bank" -> "ghipss";
+            case "card" -> "card";
+            default -> "";
+        };
+        if (name.isBlank() || !get(name).supports(direction, channel, network))
+            throw ApiException.unprocessable("rail_unavailable", "No supported operational connection for this transaction");
+        return name;
+    }
+
     public String defaultName() {
         return defaultName;
     }

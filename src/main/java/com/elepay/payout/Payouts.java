@@ -168,7 +168,7 @@ public class Payouts {
                 VALUES (:id, :ref, :ot, :o, CAST(:dest AS jsonb), :amount, :rail, 'reserved', :rtx, :railtx, :by, :batch,
                     :cref, :platform, :verification, :vname, :retry)""")
                 .param("id", id).param("ref", reference).param("ot", ownerType).param("o", owner).param("dest", destination)
-                .param("amount", item.amount()).param("rail", rail).param("rtx", reserved.transactionId())
+                .param("amount", item.amount()).param("rail", railTx.rail()).param("rtx", reserved.transactionId())
                 .param("railtx", railTx.id()).param("by", actor).param("batch", batchId).param("cref", item.clientReference())
                 .param("platform", item.platform()).param("verification", verification).param("vname", verifiedName)
                 .param("retry", retryOf).update();

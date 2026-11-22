@@ -42,6 +42,9 @@ public interface PaymentRail {
 
     String name();
 
+    /** Provider capabilities are checked before creating or reserving a transaction. */
+    default boolean supports(String direction, String channel, String network) { return true; }
+
     Result charge(Charge charge);
 
     Result payout(Payout payout);

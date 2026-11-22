@@ -81,10 +81,18 @@ public class RailTransactions {
         return rails.defaultName();
     }
 
+    public boolean available(String direction, String channel, String network) {
+        try { rails.select(direction, channel, network); return true; }
+        catch (ApiException unavailable) { return false; }
+    }
+
     @Transactional(propagation = Propagation.MANDATORY)
     public RailTx create(String rail, String direction, String purpose, UUID purposeId, long amount,
                              Request request) {
-        rails.get(rail);
+        if (!"refund".equals(direction)) rail = rails.select(direction, request.channel(), request.network());
+        if (!rails.get(rail).supports(direction, request.channel(), request.network()))
+            throw ApiException.unprocessable("rail_operation_unavailable", "This network does not support the requested operation");
+        if (amount <= 0) throw ApiException.badRequest("invalid_amount", "Amount must be positive");
         UUID id = UUID.randomUUID();
         String reference = References.next(switch (direction) {
             case "charge" -> "EPC";
