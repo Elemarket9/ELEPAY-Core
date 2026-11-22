@@ -214,7 +214,7 @@ public class ReliabilityPlatformTest extends PostgresTestBase {
                 throw new SQLException("Connection lost during failover", "08006");
             }
             return "RECOVERED";
-        }, 3, 20L);
+        }, 3, 20L, failure -> true); // Test callable has no financial side effects.
 
         assertThat(result).isEqualTo("RECOVERED");
         assertThat(attempts.get()).isEqualTo(2);
