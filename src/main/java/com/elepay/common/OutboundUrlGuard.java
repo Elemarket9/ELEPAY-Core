@@ -65,7 +65,7 @@ public class OutboundUrlGuard {
         }
         InetAddress[] addresses;
         try {
-            addresses = InetAddress.getAllByName(host);
+            addresses = resolveForConnection(host);
         } catch (UnknownHostException e) {
             return "The host name does not resolve";
         }
@@ -73,6 +73,18 @@ public class OutboundUrlGuard {
             if (!isPublic(a)) return "The URL must point to a public host";
         }
         return null;
+    }
+
+    /** The HTTP client's connection-time DNS resolver uses exactly these validated addresses. */
+    public InetAddress[] resolveForConnection(String host) throws UnknownHostException {
+        InetAddress[] addresses = InetAddress.getAllByName(host);
+        if (addresses.length == 0) throw new UnknownHostException("Destination did not resolve");
+        if (!allowPrivateHosts) {
+            for (InetAddress address : addresses) {
+                if (!isPublic(address)) throw new UnknownHostException("Non-public destination refused");
+            }
+        }
+        return addresses;
     }
 
     static boolean isPublic(InetAddress a) {
@@ -90,6 +102,8 @@ public class OutboundUrlGuard {
             if (o0 == 198 && (o1 == 18 || o1 == 19)) return false;      // benchmarking
             if (o0 == 198 && o1 == 51 && o2 == 100) return false;       // TEST-NET-2
             if (o0 == 203 && o1 == 0 && o2 == 113) return false;        // TEST-NET-3
+            if (o0 == 192 && o1 == 88 && o2 == 99) return false;
+            if (o0 == 168 && o1 == 63 && o2 == 129 && (b[3] & 0xff) == 16) return false;
             if (o0 >= 240) return false;                                // reserved and broadcast
             return true;
         }
@@ -108,6 +122,10 @@ public class OutboundUrlGuard {
                     return false;
                 }
             }
+            // Only ordinary global-unicast IPv6. Exclude transition, special-purpose and NAT64 ranges.
+            if ((b[0] & 0xe0) != 0x20) return false;
+            if ((b[0] & 0xff) == 0x20 && (b[1] & 0xff) == 0x02) return false; // 6to4
+            if ((b[0] & 0xff) == 0x20 && (b[1] & 0xff) == 0x01 && (b[2] & 0xfe) == 0) return false; // IETF special-purpose
             return true;
         }
         return false;

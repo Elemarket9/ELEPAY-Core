@@ -42,10 +42,11 @@ public class DistributedNonceStore {
         // A database failure must propagate rather than accept a replay on a different node.
         if (db != null) {
             int inserted = db.sql("""
-                    INSERT INTO request_nonce (nonce, created_at, expires_at) VALUES (:n, :c, :e)
+                    INSERT INTO request_nonce (nonce, created_at, expires_at)
+                    VALUES (:n, clock_timestamp(), clock_timestamp() + make_interval(secs => :seconds))
                     ON CONFLICT (nonce) DO UPDATE SET created_at = EXCLUDED.created_at,
-                    expires_at = EXCLUDED.expires_at WHERE request_nonce.expires_at <= :c
-                    """).param("n", nonce).param("c", now).param("e", expiresAt).update();
+                    expires_at = EXCLUDED.expires_at WHERE request_nonce.expires_at <= clock_timestamp()
+                    """).param("n", nonce).param("seconds", ttl.toSeconds()).update();
             return inserted == 1;
         }
         // Explicit unit-test instances only; the application constructor requires JdbcClient.
@@ -59,6 +60,11 @@ public class DistributedNonceStore {
             return previous;
         });
         return accepted.get();
+    }
+
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelayString = "${elepay.nonces.cleanup-ms:3600000}")
+    void pruneExpired() {
+        if (db != null) db.sql("DELETE FROM request_nonce WHERE expires_at < clock_timestamp()").update();
     }
 
     public void clear() {

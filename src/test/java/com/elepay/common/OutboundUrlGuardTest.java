@@ -32,4 +32,12 @@ class OutboundUrlGuardTest {
     void developmentMayCallLocalReceivers() {
         assertThat(new OutboundUrlGuard(true, true).problem("http://127.0.0.1:9/hook")).isNull();
     }
+
+    @Test
+    void connectionTimeDnsResolutionRejectsPrivateAndTransitionAddresses() throws Exception {
+        for (String host : java.util.List.of("127.0.0.1", "169.254.169.254", "168.63.129.16", "64:ff9b::7f00:1", "2002:7f00:1::")) {
+            assertThatThrownBy(() -> prod.resolveForConnection(host)).isInstanceOf(java.net.UnknownHostException.class);
+        }
+        assertThat(prod.resolveForConnection("93.184.216.34")).hasSize(1);
+    }
 }

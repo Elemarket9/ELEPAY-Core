@@ -32,6 +32,7 @@ public class Webhooks implements OutboxConsumer {
 
     private final JdbcClient db;
     private final RestClient http;
+    private final org.apache.hc.client5.http.impl.classic.CloseableHttpClient transport;
     private final boolean enabled;
 
     private final com.elepay.common.OutboundUrlGuard guard;
@@ -41,11 +42,31 @@ public class Webhooks implements OutboxConsumer {
         this.db = db;
         this.enabled = enabled;
         this.guard = guard;
-        var factory = noRedirects();
-        factory.setConnectTimeout(Duration.ofSeconds(5));
-        factory.setReadTimeout(Duration.ofSeconds(10));
-        this.http = RestClient.builder().requestFactory(factory).build();
+        var dns = new org.apache.hc.client5.http.DnsResolver() {
+            @Override public java.net.InetAddress[] resolve(String host) throws java.net.UnknownHostException {
+                return guard.resolveForConnection(host);
+            }
+            @Override public String resolveCanonicalHostname(String host) throws java.net.UnknownHostException {
+                guard.resolveForConnection(host);
+                return host; // Keep original TLS hostname, never substitute an unvalidated canonical destination.
+            }
+        };
+        var manager = org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder.create()
+                .setDnsResolver(dns)
+                .setDefaultConnectionConfig(org.apache.hc.client5.http.config.ConnectionConfig.custom()
+                        .setConnectTimeout(org.apache.hc.core5.util.Timeout.ofSeconds(5))
+                        .setSocketTimeout(org.apache.hc.core5.util.Timeout.ofSeconds(10)).build()).build();
+        this.transport = org.apache.hc.client5.http.impl.classic.HttpClients.custom()
+                .setConnectionManager(manager).disableRedirectHandling().disableAutomaticRetries().disableCookieManagement()
+                .setDefaultRequestConfig(org.apache.hc.client5.http.config.RequestConfig.custom()
+                        .setConnectionRequestTimeout(org.apache.hc.core5.util.Timeout.ofSeconds(5))
+                        .setResponseTimeout(org.apache.hc.core5.util.Timeout.ofSeconds(10)).build()).build();
+        this.http = RestClient.builder()
+                .requestFactory(new org.springframework.http.client.HttpComponentsClientHttpRequestFactory(transport)).build();
     }
+
+    @jakarta.annotation.PreDestroy
+    void closeTransport() throws java.io.IOException { transport.close(); }
 
     public record Endpoint(UUID id, String url, String secret, boolean active) {}
 
@@ -186,14 +207,17 @@ public class Webhooks implements OutboxConsumer {
                 error = "Blocked destination: " + unsafe;
             } else try {
                 long t = System.currentTimeMillis() / 1000;
-                status = http.post().uri(p.url())
+                status = http.post().uri(java.net.URI.create(p.url().trim()))
                         .header("Content-Type", "application/json")
                         .header("Elepay-Event-Id", p.event().toString())
                         .header("Elepay-Signature", "t=" + t + ",v1=" + sign(p.secret(), t + "." + p.body()))
                         .body(p.body())
                         .retrieve().toBodilessEntity().getStatusCode().value();
+            } catch (org.springframework.web.client.RestClientResponseException e) {
+                status = e.getStatusCode().value();
+                error = "Receiver returned an error";
             } catch (RuntimeException e) {
-                error = e.getClass().getSimpleName() + ": " + e.getMessage();
+                error = "Webhook transport failed: " + e.getClass().getSimpleName();
             }
             boolean ok = status != null && status >= 200 && status < 300;
             if (ok) delivered++;
@@ -205,7 +229,7 @@ public class Webhooks implements OutboxConsumer {
                     WHERE event_id = :e AND endpoint_id = :w""")
                     .param("status", next).param("code", status).param("err", error).param("ok", ok)
                     .param("e", p.event()).param("w", p.endpoint()).update();
-            if (!ok) log.info("Webhook {} to {} failed: {} {}", p.event(), p.url(), status, error);
+            if (!ok) log.info("Webhook {} endpoint {} failed: {} {}", p.event(), p.endpoint(), status, error);
         }
         return delivered;
     }
