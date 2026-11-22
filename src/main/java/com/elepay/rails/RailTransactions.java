@@ -279,6 +279,14 @@ public class RailTransactions {
                 }
             }
             case NOT_FOUND -> handleNotFound(t);
+            case UNAVAILABLE -> {
+                db.sql("""
+                        UPDATE rail_transaction SET status = 'failed', updated_at = now(), completed_at = now(),
+                                failure_reason = :reason WHERE id = :id""")
+                        .param("id", id).param("reason", result.message()).update();
+                events.publishEvent(new RailEvents.Failed(id, t.rail(), t.direction(), t.purpose(),
+                        t.purposeId(), t.amount(), result.message()));
+            }
         }
     }
 

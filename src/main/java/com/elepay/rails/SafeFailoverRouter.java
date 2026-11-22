@@ -110,6 +110,12 @@ public class SafeFailoverRouter {
             return new FailoverDecision(true, primaryRail, secondaryRail, "pre_submission_failure_no_funds_movement");
         }
 
+        // Rule 7: Primary rail unconfigured or unavailable before funds movement -> safe to failover
+        if (primaryStatus == PaymentRail.Status.UNAVAILABLE && !partnerReceived) {
+            recordFailover(reference, primaryRail, secondaryRail, "primary_rail_unavailable_no_funds_movement");
+            return new FailoverDecision(true, primaryRail, secondaryRail, "primary_rail_unavailable_no_funds_movement");
+        }
+
         return new FailoverDecision(false, primaryRail, secondaryRail, "unsupported_failover_condition");
     }
 
