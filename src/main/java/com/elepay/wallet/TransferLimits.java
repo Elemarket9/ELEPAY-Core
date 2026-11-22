@@ -21,11 +21,10 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Component
 public class TransferLimits {
-    private final JdbcClient db;
-    private final com.elepay.ledger.Ledger ledger;
-    private final long perTransfer;
-    private final long perDay;
-    private final int perMinute;
+    public interface PersonalizedLimitProvider {
+        record Limit(long maxDailyPesewas, long maxTransactionPesewas, long policyCeilingDailyPesewas) {}
+        java.util.Optional<Limit> findPersonalizedLimit(UUID customerId);
+    }
 
     public record TierLimit(int tier, long maxBalance, long dailyLimit, long monthlyLimit) {
         public static final TierLimit TIER_1 = new TierLimit(1, 100_000L, 100_000L, 1_000_000L);
@@ -42,7 +41,16 @@ public class TransferLimits {
         }
     }
 
+    private final JdbcClient db;
+    private final com.elepay.ledger.Ledger ledger;
+    private final PersonalizedLimitProvider personalizedLimitProvider;
+    private final long perTransfer;
+    private final long perDay;
+    private final int perMinute;
+
+    @org.springframework.beans.factory.annotation.Autowired
     public TransferLimits(JdbcClient db, com.elepay.ledger.Ledger ledger,
+                          @org.springframework.beans.factory.annotation.Autowired(required = false) PersonalizedLimitProvider personalizedLimitProvider,
                           @Value("${elepay.wallet.limits.transfer-pesewas:0}") long perTransfer,
                           @Value("${elepay.wallet.limits.daily-pesewas:0}") long perDay,
                           @Value("${elepay.wallet.limits.transfers-per-minute:0}") int perMinute) {
@@ -51,9 +59,17 @@ public class TransferLimits {
         }
         this.db = db;
         this.ledger = ledger;
+        this.personalizedLimitProvider = personalizedLimitProvider;
         this.perTransfer = perTransfer;
         this.perDay = perDay;
         this.perMinute = perMinute;
+    }
+
+    public TransferLimits(JdbcClient db, com.elepay.ledger.Ledger ledger,
+                          @Value("${elepay.wallet.limits.transfer-pesewas:0}") long perTransfer,
+                          @Value("${elepay.wallet.limits.daily-pesewas:0}") long perDay,
+                          @Value("${elepay.wallet.limits.transfers-per-minute:0}") int perMinute) {
+        this(db, ledger, null, perTransfer, perDay, perMinute);
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -63,6 +79,18 @@ public class TransferLimits {
         }
         if (perTransfer > 0 && amount > perTransfer) {
             throw ApiException.conflict("transfer_limit", "Amount exceeds the limit for one transfer");
+        }
+
+        java.util.Optional<PersonalizedLimitProvider.Limit> personalized = personalizedLimitProvider != null
+                ? personalizedLimitProvider.findPersonalizedLimit(sender)
+                : java.util.Optional.empty();
+
+        if (personalized.isPresent()) {
+            PersonalizedLimitProvider.Limit p = personalized.get();
+            if (p.maxTransactionPesewas() > 0 && amount > p.maxTransactionPesewas()) {
+                throw ApiException.conflict("transfer_limit",
+                        "Amount exceeds the personalized transaction limit of " + p.maxTransactionPesewas() + " pesewas");
+            }
         }
 
         // Hold the sender row and query kyc_tier and status
@@ -98,8 +126,9 @@ public class TransferLimits {
                     "transfer_rate_limit", "Too many recent transfers. Wait a minute and try again.");
         }
 
-        // Check sender daily limit (BoG statutory limit, constrained by perDay if configured)
-        long effectiveDailyLimit = perDay > 0 ? Math.min(perDay, tierLimit.dailyLimit()) : tierLimit.dailyLimit();
+        // Check sender daily limit (personalized if present, constrained by BoG statutory tier ceiling & perDay)
+        long dailyBaseline = personalized.map(PersonalizedLimitProvider.Limit::maxDailyPesewas).orElse(tierLimit.dailyLimit());
+        long effectiveDailyLimit = perDay > 0 ? Math.min(perDay, dailyBaseline) : dailyBaseline;
         if (usage.daily().add(BigDecimal.valueOf(amount)).compareTo(BigDecimal.valueOf(effectiveDailyLimit)) > 0) {
             throw ApiException.conflict("daily_transfer_limit",
                     "Amount exceeds the remaining daily transfer limit for KYC Tier " + status.kycTier());

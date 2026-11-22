@@ -115,4 +115,43 @@ class TransferLimitsTest extends PostgresTestBase {
                 tx.executeWithoutResult(status -> limits.check(sender, recipient, 40_001L)));
         assertEquals("daily_transfer_limit", ex.code());
     }
+
+    @Autowired(required = false)
+    private com.elepay.growth.PersonalizedLimitService personalizedLimitService;
+
+    @Test
+    void personalizedLimitActivelyEnforced() {
+        if (personalizedLimitService == null) return;
+        UUID sender = createCustomer(TestApi.uniquePhone(), 2);
+        UUID recipient = createCustomer(TestApi.uniquePhone(), 3);
+
+        // Tier 2 baseline is 200,000. Curtailed to 50% = 100,000 max daily, 50,000 max txn
+        personalizedLimitService.computePersonalizedLimit(sender, 2, 40, 30, 2);
+
+        // Per-transaction limit check: 50,000 succeeds
+        tx.executeWithoutResult(status -> limits.check(sender, recipient, 50_000L));
+
+        // Exceeding per-transaction limit (50,001) fails with transfer_limit
+        ApiException exTxn = assertThrows(ApiException.class, () ->
+                tx.executeWithoutResult(status -> limits.check(sender, recipient, 50_001L)));
+        assertEquals("transfer_limit", exTxn.code());
+
+        // Within daily limit (100,000): Record 60,000 transferred out
+        db.sql("""
+                INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status)
+                VALUES (:id, :ref, :c, 'transfer_out', 60000, 'completed')
+                """)
+                .param("id", UUID.randomUUID())
+                .param("ref", "WLT-TEST-" + UUID.randomUUID())
+                .param("c", sender)
+                .update();
+
+        // 40,000 remaining on 100,000 daily limit: 40,000 succeeds
+        tx.executeWithoutResult(status -> limits.check(sender, recipient, 40_000L));
+
+        // 40,001 exceeds 100,000 daily limit -> daily_transfer_limit
+        ApiException exDaily = assertThrows(ApiException.class, () ->
+                tx.executeWithoutResult(status -> limits.check(sender, recipient, 40_001L)));
+        assertEquals("daily_transfer_limit", exDaily.code());
+    }
 }

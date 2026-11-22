@@ -57,8 +57,10 @@ public class WalletChannel {
     @PutMapping("/v1/wallet/ussd-pin")
     @Transactional
     public Map<String, String> setPin(@Valid @RequestBody PinRequest request) {
-        if (request.pin() == null) throw ApiException.badRequest("invalid_pin", "Use 4 to 6 digits");
-        if (request.pin().chars().distinct().count() == 1 || "123456".startsWith(request.pin())) {
+        if (request.pin() == null || !request.pin().matches("[0-9]{4,6}")) {
+            throw ApiException.badRequest("invalid_pin", "Use 4 to 6 digits");
+        }
+        if (isWeakPin(request.pin())) {
             throw ApiException.badRequest("weak_pin", "Choose a PIN that is not repeated or sequential digits");
         }
         Actor actor = Actor.current();
@@ -67,6 +69,41 @@ public class WalletChannel {
                 .param("h", encoder.encode(request.pin())).param("id", customer).update();
         audit.record(actor.subject(), "customer.ussd_pin_set", "customer:" + customer, Map.of());
         return Map.of("status", "set");
+    }
+
+    /**
+     * Validates PIN strength (Algorithm 074).
+     * Rejects PINs with repeated digits or sliding-window sequential ascending/descending digits.
+     */
+    public static boolean isWeakPin(String pin) {
+        if (pin == null || pin.length() < 4) {
+            return true;
+        }
+        if (pin.chars().distinct().count() == 1) {
+            return true;
+        }
+        for (int i = 0; i <= pin.length() - 4; i++) {
+            char c0 = pin.charAt(i);
+            char c1 = pin.charAt(i + 1);
+            char c2 = pin.charAt(i + 2);
+            char c3 = pin.charAt(i + 3);
+
+            // Repeated digits in window: e.g. "1111", "9999"
+            if (c0 == c1 && c1 == c2 && c2 == c3) {
+                return true;
+            }
+
+            // Consecutive ascending digits in window: e.g. "1234", "2345", "6789"
+            if (c1 - c0 == 1 && c2 - c1 == 1 && c3 - c2 == 1) {
+                return true;
+            }
+
+            // Consecutive descending digits in window: e.g. "4321", "6543", "9876"
+            if (c0 - c1 == 1 && c1 - c2 == 1 && c2 - c3 == 1) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public Optional<Customer> activeCustomerByPhone(String msisdn) {

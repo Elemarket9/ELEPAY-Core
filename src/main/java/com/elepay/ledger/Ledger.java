@@ -163,16 +163,34 @@ public class Ledger {
 
     private Map<String, Account> lock(Collection<String> codes) {
         List<String> distinct = codes.stream().distinct().sorted().toList();
-        List<Account> found = db.sql("""
-                SELECT id, code, owner_type, owner_id, bucket, currency, allow_negative, balance
-                FROM ledger_account WHERE code IN (:codes) ORDER BY id FOR UPDATE""")
-                .param("codes", distinct).query(Ledger::account).list();
-        if (found.size() != distinct.size()) {
-            throw ApiException.badRequest("unknown_account", "Posting references an unknown ledger account");
+        int maxAttempts = 3;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                List<Account> found = db.sql("""
+                        SELECT id, code, owner_type, owner_id, bucket, currency, allow_negative, balance
+                        FROM ledger_account WHERE code IN (:codes) ORDER BY id FOR UPDATE""")
+                        .param("codes", distinct).query(Ledger::account).list();
+                if (found.size() != distinct.size()) {
+                    throw ApiException.badRequest("unknown_account", "Posting references an unknown ledger account");
+                }
+                Map<String, Account> byCode = new HashMap<>();
+                found.forEach(a -> byCode.put(a.code(), a));
+                return byCode;
+            } catch (org.springframework.dao.PessimisticLockingFailureException e) {
+                if (attempt == maxAttempts) {
+                    throw ApiException.conflict("lock_contention", "Failed to acquire ordered row locks after " + maxAttempts + " attempts: " + e.getMessage());
+                }
+                try {
+                    Thread.sleep(25L * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw ApiException.conflict("lock_contention", "Lock acquisition interrupted: " + ie.getMessage());
+                }
+            } catch (org.springframework.dao.ConcurrencyFailureException e) {
+                throw ApiException.conflict("concurrency_failure", "Concurrency failure during ordered row lock acquisition: " + e.getMessage());
+            }
         }
-        Map<String, Account> byCode = new HashMap<>();
-        found.forEach(a -> byCode.put(a.code(), a));
-        return byCode;
+        throw ApiException.conflict("lock_contention", "Failed to acquire row locks due to concurrent contention");
     }
 
     private static Account account(java.sql.ResultSet rs, int i) throws java.sql.SQLException {
@@ -191,6 +209,7 @@ public class Ledger {
         return "system:clearing:" + provider + ":" + GHS;
     }
 
+    public static final String CLEARING_MOMO = "system:clearing:sandbox:GHS";
     public static final String REVENUE = "system:revenue:GHS";
     public static final String DEFERRED_REVENUE = "system:deferred_revenue:GHS";
     public static final String REVENUE_EARNED = "system:revenue:earned:GHS";

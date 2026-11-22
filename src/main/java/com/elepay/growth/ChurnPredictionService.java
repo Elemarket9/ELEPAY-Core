@@ -48,8 +48,9 @@ public class ChurnPredictionService {
         double scaleDays = Math.max(7.0, Math.min(30.0, cycleDays * 2.0));
         double lambda = 1.0 / scaleDays;
         double p = 1.35; // Shape parameter > 1: increasing hazard over time
-
-        double lt = lambda * daysSinceLastTxn;
+        // Guard against negative time deltas returning NaN in Weibull math (Algorithm 098)
+        int nonNegativeDays = Math.max(0, daysSinceLastTxn);
+        double lt = Math.max(0.0, lambda * nonNegativeDays);
         // Survival S(t) = exp(-(lt)^p)
         double survival = Math.exp(-Math.pow(lt, p));
         double dormancyProb = Math.max(0.001, Math.min(0.999, 1.0 - survival));

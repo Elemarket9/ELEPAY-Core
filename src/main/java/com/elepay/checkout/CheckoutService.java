@@ -47,11 +47,11 @@ class CheckoutService {
     private final OpsQueue ops;
     private final Map<String, int[]> customerFees;
     private final boolean jobsEnabled;
-
     private final CustomerDirectory customers;
+    private final CheckoutConfigService config;
 
     CheckoutService(JdbcClient db, Ledger ledger, MerchantAccess merchants, RailTransactions rails, Outbox outbox,
-                    Audit audit, OpsQueue ops, CustomerDirectory customers,
+                    Audit audit, OpsQueue ops, CustomerDirectory customers, CheckoutConfigService config,
                     @Value("${elepay.fees.customer.wallet-bps:0}") int walletBps,
                     @Value("${elepay.fees.customer.wallet-fixed:0}") int walletFixed,
                     @Value("${elepay.fees.customer.momo-bps:0}") int momoBps,
@@ -67,6 +67,7 @@ class CheckoutService {
         this.outbox = outbox;
         this.audit = audit;
         this.ops = ops;
+        this.config = config;
         this.customerFees = Map.of("wallet", new int[]{walletBps, walletFixed},
                 "momo", new int[]{momoBps, momoFixed}, "card", new int[]{cardBps, cardFixed});
         this.jobsEnabled = jobsEnabled;
@@ -74,9 +75,13 @@ class CheckoutService {
 
     // ---- model ------------------------------------------------------------------------------
 
-    record AllocationRequest(UUID merchantId, String kind, long amount, String description, String category) {
+    record AllocationRequest(UUID merchantId, String kind, long amount, String description, String category,
+                             Integer reserveBps, String releaseCondition) {
+        AllocationRequest(UUID merchantId, String kind, long amount, String description, String category) {
+            this(merchantId, kind, amount, description, category, null, null);
+        }
         AllocationRequest(UUID merchantId, String kind, long amount, String description) {
-            this(merchantId, kind, amount, description, null);
+            this(merchantId, kind, amount, description, null, null, null);
         }
     }
 
@@ -84,18 +89,30 @@ class CheckoutService {
                       long merchantFee, long refunded, long refundedFee, long disputed, long pendingAmount,
                       long settledAmount, OffsetDateTime settledAt, String category, long commission,
                       long processingFee, long refundedPlatformFee, long disputedFee, long disputedPlatformFee,
-                      long platformPending, long feeDeferred, boolean holdUntilDelivered, OffsetDateTime deliveredAt) {
+                      long platformPending, long feeDeferred, boolean holdUntilDelivered, OffsetDateTime deliveredAt,
+                      long reserveAmount, long reserveReleased, String releaseCondition, String releaseStatus) {
+        Allocation(int line, UUID merchantId, String merchantName, String kind, String description, long amount,
+                   long merchantFee, long refunded, long refundedFee, long disputed, long pendingAmount,
+                   long settledAmount, OffsetDateTime settledAt, String category, long commission,
+                   long processingFee, long refundedPlatformFee, long disputedFee, long disputedPlatformFee,
+                   long platformPending, long feeDeferred, boolean holdUntilDelivered, OffsetDateTime deliveredAt) {
+            this(line, merchantId, merchantName, kind, description, amount, merchantFee, refunded, refundedFee,
+                    disputed, pendingAmount, settledAmount, settledAt, category, commission, processingFee,
+                    refundedPlatformFee, disputedFee, disputedPlatformFee, platformPending, feeDeferred,
+                    holdUntilDelivered, deliveredAt, 0L, 0L, "DELIVERY_CONFIRMED", holdUntilDelivered ? "HELD" : "RELEASED");
+        }
+
         Allocation withMerchantName(String name) {
             return new Allocation(line, merchantId, name, kind, description, amount, merchantFee, refunded, refundedFee,
                     disputed, pendingAmount, settledAmount, settledAt, category, commission, processingFee,
                     refundedPlatformFee, disputedFee, disputedPlatformFee, platformPending, feeDeferred,
-                    holdUntilDelivered, deliveredAt);
+                    holdUntilDelivered, deliveredAt, reserveAmount, reserveReleased, releaseCondition, releaseStatus);
         }
 
         /** The marketplace's share: category commission plus processing fee. */
         long platformFee() { return commission + processingFee; }
 
-        long net() { return amount - merchantFee - platformFee(); }
+        long net() { return amount - merchantFee - platformFee() - reserveAmount; }
 
         boolean awaitingDelivery() { return holdUntilDelivered && deliveredAt == null; }
 
@@ -141,7 +158,8 @@ class CheckoutService {
                        a.refunded_fee, a.disputed, a.pending_amount, a.settled_amount, a.settled_at, a.category,
                        a.commission, a.processing_fee, a.refunded_platform_fee, a.disputed_fee,
                        a.disputed_platform_fee, a.platform_pending, a.fee_deferred, a.hold_until_delivered,
-                       a.delivered_at
+                       a.delivered_at, COALESCE(a.reserve_amount, 0), COALESCE(a.reserve_released, 0),
+                       COALESCE(a.release_condition, 'DELIVERY_CONFIRMED'), COALESCE(a.release_status, 'RELEASED')
                 FROM checkout_allocation a
                 WHERE a.checkout_id = :id ORDER BY a.line""" + (lock ? " FOR UPDATE OF a" : ""))
                 .param("id", id).query((rs, i) -> new Allocation(rs.getInt(1), rs.getObject(2, UUID.class),
@@ -149,7 +167,8 @@ class CheckoutService {
                         rs.getLong(9), rs.getLong(10), rs.getLong(11), rs.getLong(12),
                         rs.getObject(13, OffsetDateTime.class), rs.getString(14), rs.getLong(15), rs.getLong(16),
                         rs.getLong(17), rs.getLong(18), rs.getLong(19), rs.getLong(20), rs.getLong(21),
-                        rs.getBoolean(22), rs.getObject(23, OffsetDateTime.class))).list();
+                        rs.getBoolean(22), rs.getObject(23, OffsetDateTime.class),
+                        rs.getLong(24), rs.getLong(25), rs.getString(26), rs.getString(27))).list();
         // Merchant names come from the merchant module, not a join on its table.
         Map<UUID, String> names = new HashMap<>();
         lines = lines.stream().map(a -> a.withMerchantName(names.computeIfAbsent(a.merchantId(), this::tradingName)))
@@ -166,11 +185,18 @@ class CheckoutService {
     }
 
     /** One row of a marketplace's commission grid. */
-    record FeeRule(String category, int commissionBps, long commissionMin, long processingFee) {
-        static final FeeRule NONE = new FeeRule("*", 0, 0, 0);
+    record FeeRule(String category, int commissionBps, long commissionMin, long processingFee, int reserveBps) {
+        FeeRule(String category, int commissionBps, long commissionMin, long processingFee) {
+            this(category, commissionBps, commissionMin, processingFee, 0);
+        }
+        static final FeeRule NONE = new FeeRule("*", 0, 0, 0, 0);
 
         long commission(long amount) {
-            return Math.max(Math.multiplyExact(amount, commissionBps) / 10_000, commissionMin);
+            return Math.max(Math.multiplyExact(amount, (long) commissionBps) / 10_000L, commissionMin);
+        }
+
+        long reserve(long amount) {
+            return reserveBps > 0 ? Math.multiplyExact(amount, (long) reserveBps) / 10_000L : 0L;
         }
     }
 
@@ -188,23 +214,23 @@ class CheckoutService {
     /** The category's rule, else the marketplace's default ('*') rule, else no commission. */
     FeeRule feeRule(UUID marketplace, String category) {
         return db.sql("""
-                SELECT category, commission_bps, commission_min, processing_fee FROM marketplace_fee_rule
+                SELECT category, commission_bps, commission_min, processing_fee, COALESCE(reserve_bps, 0)
+                FROM marketplace_fee_rule
                 WHERE marketplace_id = :m AND category IN (:c, '*')
                 ORDER BY (category = '*') LIMIT 1""")
                 .param("m", marketplace).param("c", category == null ? "*" : category)
-                .query((rs, i) -> new FeeRule(rs.getString(1), rs.getInt(2), rs.getLong(3), rs.getLong(4)))
+                .query((rs, i) -> new FeeRule(rs.getString(1), rs.getInt(2), rs.getLong(3), rs.getLong(4), rs.getInt(5)))
                 .optional().orElse(FeeRule.NONE);
     }
 
     int deliveryConfirmDays(UUID marketplace) {
         return db.sql("SELECT delivery_confirm_days FROM marketplace_fee_schedule WHERE marketplace_id = :m")
-                .param("m", marketplace).query(Integer.class).optional().orElse(14);
+                .param("m", marketplace).query(Integer.class).optional()
+                .orElseGet(config::defaultDeliveryConfirmDays);
     }
 
     long customerFee(String method, long subtotal) {
-        int[] f = customerFees.get(method);
-        if (f == null) throw ApiException.badRequest("invalid_method", "Choose wallet, momo or card");
-        return Math.addExact(Math.multiplyExact(subtotal, f[0]) / 10_000, f[1]);
+        return config.calculateCustomerFee(method, subtotal);
     }
 
     // ---- creation ---------------------------------------------------------------------------
@@ -224,8 +250,10 @@ class CheckoutService {
         }
         var collector = merchants.find(collectorId).orElseThrow();
         if (!collector.status().equals("active")) throw ApiException.conflict("merchant_not_active", "Merchant is not active");
-        if (requested == null || requested.isEmpty() || requested.size() > MAX_ALLOCATIONS) {
-            throw ApiException.badRequest("invalid_allocations", "A checkout needs 1 to " + MAX_ALLOCATIONS + " allocations");
+        int maxAllocations = config.maxAllocations();
+        long maxTotal = config.maxTotal();
+        if (requested == null || requested.isEmpty() || requested.size() > maxAllocations) {
+            throw ApiException.badRequest("invalid_allocations", "A checkout needs 1 to " + maxAllocations + " allocations");
         }
         if (expiresInMinutes < 1 || expiresInMinutes > 7 * 24 * 60) {
             throw ApiException.badRequest("invalid_expiry", "Expiry must be between 1 minute and 7 days");
@@ -257,20 +285,24 @@ class CheckoutService {
             long merchantFee = MerchantAccess.fee(recipient, a.amount());
             long commission = 0;
             long processing = 0;
+            long reserve = 0;
             if (marketplaceLine && kind.equals("sale")) {
                 FeeRule rule = feeRule(collectorId, category);
                 commission = rule.commission(a.amount());
                 processing = rule.processingFee();
+                reserve = a.reserveBps() != null ? Math.multiplyExact(a.amount(), (long) a.reserveBps()) / 10000L : rule.reserve(a.amount());
+            } else if (a.reserveBps() != null && a.reserveBps() > 0) {
+                reserve = Math.multiplyExact(a.amount(), (long) a.reserveBps()) / 10000L;
             }
-            if (Math.addExact(Math.addExact(merchantFee, commission), processing) > a.amount()) {
-                throw ApiException.badRequest("fees_exceed_amount", "Commission and fees exceed the price of "
+            if (Math.addExact(Math.addExact(merchantFee, commission), Math.addExact(processing, reserve)) > a.amount()) {
+                throw ApiException.badRequest("fees_exceed_amount", "Commission, fees and reserves exceed the price of "
                         + (a.description() == null ? "an item" : a.description()));
             }
             subtotal = Math.addExact(subtotal, a.amount());
-            fees.add(new long[]{merchantFee, commission, processing, marketplaceLine ? 1 : 0});
+            fees.add(new long[]{merchantFee, commission, processing, marketplaceLine ? 1 : 0, reserve});
             categories.add(category);
         }
-        if (subtotal > MAX_TOTAL) throw ApiException.badRequest("amount_too_large", "Checkout total exceeds the limit");
+        if (subtotal > maxTotal) throw ApiException.badRequest("amount_too_large", "Checkout total exceeds the limit");
         UUID id = UUID.randomUUID();
         String reference = References.next("EP");
         db.sql("""
@@ -283,15 +315,20 @@ class CheckoutService {
                 .param("mins", expiresInMinutes).param("by", createdBy).param("order", orderReference).update();
         for (int line = 0; line < requested.size(); line++) {
             AllocationRequest a = requested.get(line);
+            long[] f = fees.get(line);
             db.sql("""
                     INSERT INTO checkout_allocation (checkout_id, line, merchant_id, kind, description, amount, merchant_fee,
-                        category, commission, processing_fee, hold_until_delivered)
-                    VALUES (:id, :line, :m, :kind, :d, :amount, :fee, :category, :commission, :processing, :hold)""")
+                        category, commission, processing_fee, hold_until_delivered, reserve_amount, reserve_released,
+                        release_condition, release_status)
+                    VALUES (:id, :line, :m, :kind, :d, :amount, :fee, :category, :commission, :processing, :hold,
+                        :res, 0, :cond, :rstat)""")
                     .param("id", id).param("line", line).param("m", a.merchantId())
                     .param("kind", a.kind() == null ? "sale" : a.kind()).param("d", a.description())
-                    .param("amount", a.amount()).param("fee", fees.get(line)[0]).param("category", categories.get(line))
-                    .param("commission", fees.get(line)[1]).param("processing", fees.get(line)[2])
-                    .param("hold", fees.get(line)[3] == 1).update();
+                    .param("amount", a.amount()).param("fee", f[0]).param("category", categories.get(line))
+                    .param("commission", f[1]).param("processing", f[2])
+                    .param("hold", f[3] == 1).param("res", f[4])
+                    .param("cond", a.releaseCondition() != null ? a.releaseCondition() : "DELIVERY_CONFIRMED")
+                    .param("rstat", f[3] == 1 || f[4] > 0 ? "HELD" : "RELEASED").update();
         }
         return load(id, false);
     }
@@ -418,6 +455,7 @@ class CheckoutService {
         boolean held = false;
         for (Allocation a : c.allocations()) {
             if (a.net() > 0) legs.add(Leg.credit(Ledger.code("merchant", a.merchantId(), "pending", Ledger.GHS), a.net()));
+            if (a.reserveAmount() > 0) legs.add(Leg.credit(Ledger.code("merchant", a.merchantId(), "reserved", Ledger.GHS), a.reserveAmount()));
             platform += a.platformFee();
             deferred += a.merchantFee();
             held |= a.holdUntilDelivered();
@@ -838,13 +876,14 @@ class CheckoutService {
      */
     @Transactional
     List<SettlementBatch> settleDue(boolean force, UUID onlyMerchant, UUID onlyCheckout) {
-        record Due(UUID checkout, int line, UUID merchant, UUID collector, long pending, long platform, long fee) {}
+        record Due(UUID checkout, int line, UUID merchant, UUID collector, long pending, long platform, long fee, String currency) {}
         record Candidate(UUID checkout, int line, UUID merchant, UUID collector, long pending, long platform, long fee,
                          boolean held, OffsetDateTime deliveredAt, OffsetDateTime paidAt, OffsetDateTime deadline,
-                         OffsetDateTime now) {}
+                         OffsetDateTime now, String currency) {}
         List<Candidate> candidates = db.sql("""
                 SELECT a.checkout_id, a.line, a.merchant_id, c.collector_id, a.pending_amount, a.platform_pending,
-                       a.fee_deferred, a.hold_until_delivered, a.delivered_at, c.paid_at, c.delivery_deadline, now()
+                       a.fee_deferred, a.hold_until_delivered, a.delivered_at, c.paid_at, c.delivery_deadline, now(),
+                       c.currency
                 FROM checkout_allocation a JOIN checkout c ON c.id = a.checkout_id
                 WHERE c.status = 'paid' AND (a.pending_amount > 0 OR a.platform_pending > 0 OR a.fee_deferred > 0)
                   AND (NOT a.hold_until_delivered OR a.delivered_at IS NOT NULL)
@@ -856,14 +895,16 @@ class CheckoutService {
                 .query((rs, i) -> new Candidate(rs.getObject(1, UUID.class), rs.getInt(2), rs.getObject(3, UUID.class),
                         rs.getObject(4, UUID.class), rs.getLong(5), rs.getLong(6), rs.getLong(7), rs.getBoolean(8),
                         rs.getObject(9, OffsetDateTime.class), rs.getObject(10, OffsetDateTime.class),
-                        rs.getObject(11, OffsetDateTime.class), rs.getObject(12, OffsetDateTime.class)))
+                        rs.getObject(11, OffsetDateTime.class), rs.getObject(12, OffsetDateTime.class),
+                        rs.getString(13) != null ? rs.getString(13).trim() : Ledger.GHS))
                 .list();
         // Each seller's settlement delay comes from the merchant module.
         Map<UUID, Integer> delays = new HashMap<>();
         List<Due> due = new ArrayList<>();
         for (Candidate x : candidates) {
             int hours = delays.computeIfAbsent(x.merchant(),
-                    m -> merchants.find(m).map(MerchantAccess.Merchant::settlementDelayHours).orElse(24));
+                    m -> merchants.find(m).map(MerchantAccess.Merchant::settlementDelayHours)
+                            .orElseGet(config::defaultSettlementDelayHours));
             boolean isDue;
             if (x.held()) {
                 boolean delivered = x.deliveredAt() != null && (force || !x.deliveredAt().plusHours(hours).isAfter(x.now()));
@@ -872,40 +913,43 @@ class CheckoutService {
                 isDue = force || !x.paidAt().plusHours(hours).isAfter(x.now());
             }
             if (isDue) {
-                due.add(new Due(x.checkout(), x.line(), x.merchant(), x.collector(), x.pending(), x.platform(), x.fee()));
+                due.add(new Due(x.checkout(), x.line(), x.merchant(), x.collector(), x.pending(), x.platform(), x.fee(), x.currency()));
             }
         }
         if (due.isEmpty()) return List.of();
-        // Seller nets go to the seller's batch, marketplace shares to the marketplace's batch.
-        Map<UUID, Long> totals = new LinkedHashMap<>();
-        Map<UUID, Integer> parts = new LinkedHashMap<>();
+        // Seller nets go to the seller's batch, marketplace shares to the marketplace's batch, grouped by currency.
+        record BatchKey(UUID merchant, String currency) {}
+        Map<BatchKey, Long> totals = new LinkedHashMap<>();
+        Map<BatchKey, Integer> parts = new LinkedHashMap<>();
         for (Due d : due) {
             if (d.pending() > 0) {
-                totals.merge(d.merchant(), d.pending(), Math::addExact);
-                parts.merge(d.merchant(), 1, Integer::sum);
+                totals.merge(new BatchKey(d.merchant(), d.currency()), d.pending(), Math::addExact);
+                parts.merge(new BatchKey(d.merchant(), d.currency()), 1, Integer::sum);
             }
             if (d.platform() > 0) {
-                totals.merge(d.collector(), d.platform(), Math::addExact);
-                parts.merge(d.collector(), 1, Integer::sum);
+                totals.merge(new BatchKey(d.collector(), d.currency()), d.platform(), Math::addExact);
+                parts.merge(new BatchKey(d.collector(), d.currency()), 1, Integer::sum);
             }
         }
-        Map<UUID, SettlementBatch> byMerchant = new LinkedHashMap<>();
+        Map<BatchKey, SettlementBatch> byBatch = new LinkedHashMap<>();
         for (var entry : totals.entrySet()) {
-            UUID merchant = entry.getKey();
+            UUID merchant = entry.getKey().merchant();
+            String currency = entry.getKey().currency();
             long total = entry.getValue();
             UUID id = UUID.randomUUID();
             String reference = References.next("ST");
             var posted = ledger.post(Ledger.Posting.of("settlement", id.toString(), "settlement", List.of(
-                    Leg.debit(Ledger.code("merchant", merchant, "pending", Ledger.GHS), total),
-                    Leg.credit(Ledger.code("merchant", merchant, "available", Ledger.GHS), total))).describedAs(reference));
+                    Leg.debit(Ledger.code("merchant", merchant, "pending", currency), total),
+                    Leg.credit(Ledger.code("merchant", merchant, "available", currency), total))).describedAs(reference));
             db.sql("""
                     INSERT INTO settlement_batch (id, reference, merchant_id, amount, lines, journal_tx)
                     VALUES (:id, :ref, :m, :amount, :lines, :tx)""")
                     .param("id", id).param("ref", reference).param("m", merchant).param("amount", total)
-                    .param("lines", parts.get(merchant)).param("tx", posted.transactionId()).update();
+                    .param("lines", parts.get(entry.getKey())).param("tx", posted.transactionId()).update();
             outbox.publish("settlement", reference, "settlement.completed", Map.of("settlement", reference,
-                    "merchantId", merchant.toString(), "amount", total, "lines", parts.get(merchant)), Set.of(merchant));
-            byMerchant.put(merchant, settlementBatch(id));
+                    "merchantId", merchant.toString(), "amount", total, "lines", parts.get(entry.getKey()),
+                    "currency", currency), Set.of(merchant));
+            byBatch.put(entry.getKey(), settlementBatch(id));
         }
         long fees = due.stream().mapToLong(Due::fee).sum();
         UUID feeTx = null;
@@ -916,7 +960,7 @@ class CheckoutService {
                     .describedAs("Fees earned on settled lines")).transactionId();
         }
         for (Due d : due) {
-            SettlementBatch batch = byMerchant.get(d.pending() > 0 ? d.merchant() : d.collector());
+            SettlementBatch batch = byBatch.get(new BatchKey(d.pending() > 0 ? d.merchant() : d.collector(), d.currency()));
             db.sql("""
                     UPDATE checkout_allocation SET settled_amount = settled_amount + pending_amount, pending_amount = 0,
                            platform_settled = platform_settled + platform_pending, platform_pending = 0,
@@ -927,7 +971,7 @@ class CheckoutService {
                     .param("batch", batch != null ? batch.id() : null)
                     .param("c", d.checkout()).param("l", d.line()).update();
         }
-        return new ArrayList<>(byMerchant.values());
+        return new ArrayList<>(byBatch.values());
     }
 
     SettlementBatch settlementBatch(UUID id) {
@@ -939,20 +983,32 @@ class CheckoutService {
 
     // ---- marketplace fee schedule -----------------------------------------------------------
 
-    record FeeSchedule(UUID marketplaceId, int deliveryConfirmDays, List<FeeRule> rules) {}
-
-    FeeSchedule feeSchedule(UUID marketplace) {
-        List<FeeRule> rules = db.sql("""
-                SELECT category, commission_bps, commission_min, processing_fee FROM marketplace_fee_rule
-                WHERE marketplace_id = :m ORDER BY (category = '*') DESC, category""")
-                .param("m", marketplace)
-                .query((rs, i) -> new FeeRule(rs.getString(1), rs.getInt(2), rs.getLong(3), rs.getLong(4))).list();
-        return new FeeSchedule(marketplace, deliveryConfirmDays(marketplace), rules);
+    record FeeSchedule(UUID marketplaceId, int deliveryConfirmDays, int reserveBps, int version, List<FeeRule> rules) {
+        FeeSchedule(UUID marketplaceId, int deliveryConfirmDays, List<FeeRule> rules) {
+            this(marketplaceId, deliveryConfirmDays, 0, 1, rules);
+        }
     }
 
-    /** Replaces a marketplace's commission grid. Applies to checkouts created afterwards. */
+    FeeSchedule feeSchedule(UUID marketplace) {
+        var sched = db.sql("""
+                SELECT delivery_confirm_days, COALESCE(reserve_bps, 0), COALESCE(version, 1)
+                FROM marketplace_fee_schedule WHERE marketplace_id = :m""")
+                .param("m", marketplace)
+                .query((rs, i) -> new int[]{rs.getInt(1), rs.getInt(2), rs.getInt(3)})
+                .optional().orElse(new int[]{config.defaultDeliveryConfirmDays(), 0, 1});
+
+        List<FeeRule> rules = db.sql("""
+                SELECT category, commission_bps, commission_min, processing_fee, COALESCE(reserve_bps, 0)
+                FROM marketplace_fee_rule
+                WHERE marketplace_id = :m ORDER BY (category = '*') DESC, category""")
+                .param("m", marketplace)
+                .query((rs, i) -> new FeeRule(rs.getString(1), rs.getInt(2), rs.getLong(3), rs.getLong(4), rs.getInt(5))).list();
+        return new FeeSchedule(marketplace, sched[0], sched[1], sched[2], rules);
+    }
+
+    /** Replaces a marketplace's commission grid with versioning and audit history. */
     @Transactional
-    FeeSchedule saveFeeSchedule(UUID marketplace, int deliveryConfirmDays, List<FeeRule> rules, String actor) {
+    FeeSchedule saveFeeSchedule(UUID marketplace, int deliveryConfirmDays, int reserveBps, List<FeeRule> rules, String reason, String actor) {
         var m = merchants.find(marketplace).orElseThrow(() -> ApiException.notFound("Merchant not found"));
         if (!m.kind().equals("marketplace")) {
             throw ApiException.conflict("not_marketplace", "Only marketplaces set a commission grid");
@@ -960,32 +1016,112 @@ class CheckoutService {
         if (deliveryConfirmDays < 1 || deliveryConfirmDays > 60) {
             throw ApiException.badRequest("invalid_delivery_days", "Delivery confirmation window must be 1 to 60 days");
         }
+        if (reserveBps < 0 || reserveBps > 5000) {
+            throw ApiException.badRequest("invalid_reserve_bps", "Reserve must be 0 to 50%");
+        }
         Set<String> seen = new HashSet<>();
         List<FeeRule> clean = new ArrayList<>();
         for (FeeRule r : rules == null ? List.<FeeRule>of() : rules) {
             String category = r.category() == null || r.category().equals("*") ? "*" : normalizeCategory(r.category());
             if (!seen.add(category)) throw ApiException.badRequest("duplicate_category", "Category listed twice: " + category);
-            if (r.commissionBps() < 0 || r.commissionBps() > 5000 || r.commissionMin() < 0 || r.processingFee() < 0) {
-                throw ApiException.badRequest("invalid_rule", "Commission must be 0 to 50% and fees non-negative");
+            if (r.commissionBps() < 0 || r.commissionBps() > 5000 || r.commissionMin() < 0 || r.processingFee() < 0
+                    || r.reserveBps() < 0 || r.reserveBps() > 5000) {
+                throw ApiException.badRequest("invalid_rule", "Commission and reserve must be 0 to 50% and fees non-negative");
             }
-            clean.add(new FeeRule(category, r.commissionBps(), r.commissionMin(), r.processingFee()));
+            clean.add(new FeeRule(category, r.commissionBps(), r.commissionMin(), r.processingFee(), r.reserveBps()));
         }
+
+        int currentVersion = db.sql("SELECT COALESCE(version, 0) FROM marketplace_fee_schedule WHERE marketplace_id = :m")
+                .param("m", marketplace).query(Integer.class).optional().orElse(0);
+        int nextVersion = currentVersion + 1;
+
         db.sql("""
-                INSERT INTO marketplace_fee_schedule (marketplace_id, delivery_confirm_days, updated_by)
-                VALUES (:m, :d, :by) ON CONFLICT (marketplace_id)
-                DO UPDATE SET delivery_confirm_days = :d, updated_by = :by, updated_at = now()""")
-                .param("m", marketplace).param("d", deliveryConfirmDays).param("by", actor).update();
+                INSERT INTO marketplace_fee_schedule (marketplace_id, delivery_confirm_days, reserve_bps, version, updated_by)
+                VALUES (:m, :d, :res, :v, :by) ON CONFLICT (marketplace_id)
+                DO UPDATE SET delivery_confirm_days = :d, reserve_bps = :res, version = :v, updated_by = :by, updated_at = now()""")
+                .param("m", marketplace).param("d", deliveryConfirmDays).param("res", reserveBps)
+                .param("v", nextVersion).param("by", actor).update();
         db.sql("DELETE FROM marketplace_fee_rule WHERE marketplace_id = :m").param("m", marketplace).update();
         for (FeeRule r : clean) {
             db.sql("""
-                    INSERT INTO marketplace_fee_rule (marketplace_id, category, commission_bps, commission_min, processing_fee)
-                    VALUES (:m, :c, :bps, :min, :fee)""")
+                    INSERT INTO marketplace_fee_rule (marketplace_id, category, commission_bps, commission_min, processing_fee, reserve_bps)
+                    VALUES (:m, :c, :bps, :min, :fee, :res)""")
                     .param("m", marketplace).param("c", r.category()).param("bps", r.commissionBps())
-                    .param("min", r.commissionMin()).param("fee", r.processingFee()).update();
+                    .param("min", r.commissionMin()).param("fee", r.processingFee()).param("res", r.reserveBps()).update();
         }
+
+        UUID historyId = UUID.randomUUID();
+        String rulesSummary = clean.stream().map(r -> r.category() + ":" + r.commissionBps() + "bps+" + r.processingFee() + "+" + r.reserveBps() + "res")
+                .reduce((a, b) -> a + ";" + b).orElse("none");
+        db.sql("""
+                INSERT INTO marketplace_fee_schedule_history (id, marketplace_id, version, delivery_confirm_days, reserve_bps, rules_json, change_reason, created_by)
+                VALUES (:id, :m, :v, :d, :res, :rules, :reason, :by)""")
+                .param("id", historyId).param("m", marketplace).param("v", nextVersion).param("d", deliveryConfirmDays)
+                .param("res", reserveBps).param("rules", rulesSummary).param("reason", reason != null ? reason : "Fee schedule update")
+                .param("by", actor).update();
+
         audit.record(actor, "marketplace.fee_schedule.updated", "merchant:" + marketplace,
-                Map.of("rules", clean.size(), "deliveryConfirmDays", deliveryConfirmDays));
+                Map.of("rules", clean.size(), "deliveryConfirmDays", deliveryConfirmDays, "reserveBps", reserveBps, "version", nextVersion));
         return feeSchedule(marketplace);
+    }
+
+    FeeSchedule saveFeeSchedule(UUID marketplace, int deliveryConfirmDays, List<FeeRule> rules, String actor) {
+        return saveFeeSchedule(marketplace, deliveryConfirmDays, 0, rules, null, actor);
+    }
+
+    record ReserveRelease(UUID id, UUID checkoutId, int line, UUID merchantId, long amount, UUID journalTx, String status) {}
+
+    @Transactional
+    ReserveRelease releaseReserve(UUID merchantId, String reference, int line, long amount, String reason, String actor) {
+        Checkout c = load(reference, true);
+        Allocation a = allocation(c, line);
+        if (!a.merchantId().equals(merchantId) && !c.collectorId().equals(merchantId)) {
+            throw ApiException.notFound("Allocation not found");
+        }
+        if (!c.status().equals("paid")) {
+            throw ApiException.conflict("not_paid", "Only paid checkouts have retained reserves");
+        }
+        if (amount <= 0) {
+            throw ApiException.badRequest("invalid_amount", "Release amount must be positive");
+        }
+        long availableReserve = a.reserveAmount() - a.reserveReleased();
+        if (amount > availableReserve) {
+            throw ApiException.conflict("reserve_exceeded", "Release amount exceeds remaining reserve of " + availableReserve);
+        }
+
+        boolean settled = a.settledAt() != null && !a.awaitingDelivery();
+        String reserved = Ledger.code("merchant", a.merchantId(), "reserved", Ledger.GHS);
+        String target = Ledger.code("merchant", a.merchantId(), settled ? "available" : "pending", Ledger.GHS);
+
+        UUID releaseId = UUID.randomUUID();
+        List<Leg> legs = List.of(
+                Leg.debit(reserved, amount),
+                Leg.credit(target, amount)
+        );
+
+        var posted = ledger.post(Ledger.Posting.of("reserve-release", releaseId.toString(), "reserve_release", legs)
+                .describedAs("Reserve release for checkout " + reference + " line " + line)
+                .withMetadata(Map.of("checkout", reference, "line", String.valueOf(line), "merchant", a.merchantId().toString())));
+
+        db.sql("""
+                UPDATE checkout_allocation
+                SET reserve_released = reserve_released + :amt,
+                    release_status = CASE WHEN reserve_released + :amt >= reserve_amount THEN 'RELEASED' ELSE 'PARTIALLY_RELEASED' END
+                WHERE checkout_id = :c AND line = :l""")
+                .param("amt", amount).param("c", c.id()).param("l", line).update();
+
+        db.sql("""
+                INSERT INTO settlement_reserve_release (id, checkout_id, line, merchant_id, amount, journal_tx, reason, released_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """).params(releaseId, c.id(), line, a.merchantId(), amount, posted.transactionId(), reason, actor)
+                .update();
+
+        audit.record(actor, "checkout.reserve.released", "checkout:" + reference,
+                Map.of("line", line, "amount", amount, "reason", String.valueOf(reason)));
+        outbox.publish("checkout", reference, "checkout.reserve.released",
+                Map.of("reference", reference, "line", line, "amount", amount), setOf(a.merchantId(), c.collectorId()));
+
+        return new ReserveRelease(releaseId, c.id(), line, a.merchantId(), amount, posted.transactionId(), "RELEASED");
     }
 
     @Scheduled(fixedDelayString = "${elepay.checkout.job-ms:60000}")

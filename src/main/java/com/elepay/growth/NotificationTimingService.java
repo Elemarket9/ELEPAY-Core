@@ -43,7 +43,9 @@ public class NotificationTimingService {
     private static final LocalTime QUIET_HOURS_END = LocalTime.of(7, 0);   // 7:00 AM
 
     public boolean isQuietHours(LocalTime time) {
-        return time.isAfter(QUIET_HOURS_START) || time.isBefore(QUIET_HOURS_END);
+        if (time == null) return false;
+        // Quiet hours: 21:00 to 07:00 (inclusive of transition points 21:00 and 07:00)
+        return !time.isBefore(QUIET_HOURS_START) || !time.isAfter(QUIET_HOURS_END);
     }
 
     /**
@@ -63,9 +65,9 @@ public class NotificationTimingService {
             immediate = true;
             status = "SENT";
         } else {
-            // Defer to next 08:00 AM
+            // Defer to morning (08:00 AM) following quiet hours
             OffsetDateTime target = currentTime.toLocalDate().atTime(8, 0).atOffset(ZoneOffset.UTC);
-            if (timeOfDay.isAfter(QUIET_HOURS_START)) {
+            if (!timeOfDay.isBefore(QUIET_HOURS_START)) {
                 target = target.plusDays(1);
             }
             deliveryTime = target;
@@ -83,5 +85,37 @@ public class NotificationTimingService {
         .update();
 
         return new QueuedNotification(id, customerId, title, message, urgency, immediate, deliveryTime, status);
+    }
+
+    /**
+     * Scheduled background poller and dispatcher to deliver queued notifications when their scheduled time arrives.
+     * Eliminates the operational black hole where queued notifications remained stuck indefinitely.
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelayString = "${elepay.growth.notification-poll-ms:60000}")
+    @Transactional
+    public int dispatchDueNotifications() {
+        return dispatchDueNotifications(OffsetDateTime.now(ZoneOffset.UTC));
+    }
+
+    /**
+     * Dispatches queued notifications that are due as of the specified timestamp using row-level locking.
+     */
+    @Transactional
+    public int dispatchDueNotifications(OffsetDateTime asOfTime) {
+        java.util.List<UUID> dueIds = db.sql("""
+            SELECT id FROM notification_delivery_queue
+            WHERE status = 'QUEUED' AND scheduled_delivery_time <= :asOf
+            FOR UPDATE SKIP LOCKED
+        """).param("asOf", asOfTime).query(UUID.class).list();
+
+        if (dueIds.isEmpty()) {
+            return 0;
+        }
+
+        return db.sql("""
+            UPDATE notification_delivery_queue
+            SET status = 'SENT', sent_at = :now
+            WHERE id IN (:ids)
+        """).param("now", asOfTime).param("ids", dueIds).update();
     }
 }
