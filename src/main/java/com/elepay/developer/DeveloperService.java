@@ -36,7 +36,6 @@ public class DeveloperService {
     private final JdbcClient db;
     private final MerchantAccess access;
     private final Audit audit;
-    private final RestClient http;
     private final ObjectMapper json;
     private final com.elepay.identity.ApiKeys apiKeys;
     private final Webhooks webhooks;
@@ -49,16 +48,13 @@ public class DeveloperService {
         this.json = json;
         this.apiKeys = apiKeys;
         this.webhooks = webhooks;
-        var factory = Webhooks.noRedirects();
-        factory.setConnectTimeout(Duration.ofSeconds(5));
-        factory.setReadTimeout(Duration.ofSeconds(10));
-        this.http = RestClient.builder().requestFactory(factory).build();
+
     }
 
     // --- Records / DTOs ---
 
     public record ApiKeyCreated(UUID id, String prefix, String apiKey, String environment, String label,
-                                List<String> scopes, OffsetDateTime createdAt) {}
+                                List<String> scopes, OffsetDateTime createdAt, String signingSecret) {}
 
     public record ApiKeyView(UUID id, String prefix, String environment, String label, List<String> scopes,
                              OffsetDateTime createdAt, OffsetDateTime revokedAt, OffsetDateTime lastUsedAt) {}
@@ -103,7 +99,7 @@ public class DeveloperService {
         audit.record(createdBy, "developer.api_key_created", "merchant:" + merchantId,
                 Map.of("prefix", key.prefix(), "environment", env, "scopes", String.join(",", key.scopes())));
 
-        return new ApiKeyCreated(key.id(), key.prefix(), key.secret(), env, label, key.scopes(), OffsetDateTime.now());
+        return new ApiKeyCreated(key.id(), key.prefix(), key.secret(), env, label, key.scopes(), OffsetDateTime.now(), key.signingSecret());
     }
 
     public List<ApiKeyView> listApiKeys(UUID merchantId, String environment) {
@@ -315,26 +311,19 @@ public class DeveloperService {
         Integer statusCode = null;
         String responseBody = null;
         String status = "FAILED";
-        String unsafe = webhooks == null ? null : webhooks.destinationProblem(url);
+        String unsafe = webhooks.destinationProblem(url);
         if (unsafe != null) {
             responseBody = "Blocked destination: " + unsafe;
             statusCode = 400;
         } else try {
-            var entity = http.post().uri(url)
-                    .header("Content-Type", "application/json")
-                    .header("Elepay-Event-Id", eventId.toString())
-                    .header("Elepay-Signature", signature)
-                    .body(payload)
-                    .retrieve()
-                    .toEntity(String.class);
-            statusCode = entity.getStatusCode().value();
-            responseBody = entity.getBody();
+            statusCode = webhooks.sendSigned(url, eventId, signature, payload);
+            responseBody = "Receiver returned HTTP " + statusCode;
             if (statusCode >= 200 && statusCode < 300) {
                 status = "DELIVERED";
             }
         } catch (Exception e) {
-            log.warn("Webhook delivery error to {}: {}", url, e.getMessage());
-            responseBody = e.getClass().getSimpleName() + ": " + e.getMessage();
+            log.warn("Webhook delivery failed for endpoint {}", endpointId);
+            responseBody = "Webhook transport failed";
             statusCode = (statusCode != null) ? statusCode : 500;
         }
         int durationMs = (int) (System.currentTimeMillis() - start);
@@ -648,7 +637,7 @@ public class DeveloperService {
         db.sql("""
                 INSERT INTO partner_certification (id, merchant_id, partner_name, partner_type, certification_level,
                        test_runs_passed, compliance_checklist, status)
-                VALUES (:id, :m, :name, :type, 'SANDBOX_VERIFIED', 1, :checklist::jsonb, 'IN_PROGRESS')""")
+                VALUES (:id, :m, :name, :type, 'PENDING_REVIEW', 0, :checklist::jsonb, 'IN_PROGRESS')""")
                 .param("id", id).param("m", merchantId).param("name", partnerName)
                 .param("type", partnerType.toUpperCase()).param("checklist", checklistJson).update();
 
@@ -705,22 +694,8 @@ public class DeveloperService {
     @Transactional
     public PartnerCertificationView runCertificationTests(UUID merchantId, UUID certId, String actorSubject) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
-        var cert = getCertification(merchantId, certId);
-        int runs = cert.testRunsPassed() + 3;
-        OffsetDateTime certifiedAt = OffsetDateTime.now();
-        OffsetDateTime expiresAt = certifiedAt.plusYears(1);
-
-        db.sql("""
-                UPDATE partner_certification
-                SET test_runs_passed = :runs, certification_level = 'PRODUCTION_CERTIFIED',
-                    status = 'APPROVED', certified_at = :certAt, expires_at = :expAt
-                WHERE id = :id AND merchant_id = :m""")
-                .param("runs", runs).param("certAt", certifiedAt).param("expAt", expiresAt)
-                .param("id", certId).param("m", merchantId).update();
-
-        audit.record(actorSubject, "developer.partner_certified", "merchant:" + merchantId,
-                Map.of("certId", certId.toString(), "level", "PRODUCTION_CERTIFIED"));
-
-        return getCertification(merchantId, certId);
+        getCertification(merchantId, certId); // Verify ownership before returning any status.
+        throw ApiException.unprocessable("certification_evidence_required",
+                "Production certification requires verified partner test evidence and an authorized reviewer");
     }
 }

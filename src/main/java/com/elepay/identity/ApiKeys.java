@@ -19,6 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class ApiKeys {
     private static final SecureRandom RANDOM = new SecureRandom();
     private final JdbcClient db;
+    @org.springframework.beans.factory.annotation.Value("${elepay.rails.sandbox.enabled:false}")
+    private boolean testEnvironment;
 
     public ApiKeys(JdbcClient db) {
         this.db = db;
@@ -69,7 +71,7 @@ public class ApiKeys {
 
     // ---- developer portal: live and test keys ------------------------------------------------
 
-    public record EnvironmentKey(UUID id, String prefix, String secret, String environment, List<String> scopes) {}
+    public record EnvironmentKey(UUID id, String prefix, String secret, String environment, List<String> scopes, String signingSecret) {}
 
     public record EnvironmentListed(UUID id, String prefix, String environment, String label, List<String> scopes,
                                     java.time.OffsetDateTime createdAt, java.time.OffsetDateTime revokedAt,
@@ -79,7 +81,12 @@ public class ApiKeys {
     @Transactional
     public EnvironmentKey createForEnvironment(UUID merchantId, String label, String environment, List<String> scopes,
                                                String createdBy) {
-        String env = "test".equalsIgnoreCase(environment) ? "test" : "live";
+        if (!"test".equalsIgnoreCase(environment) && !"live".equalsIgnoreCase(environment))
+            throw com.elepay.common.ApiException.badRequest("invalid_environment", "Use live or test");
+        String env = environment.toLowerCase(java.util.Locale.ROOT);
+        if ("test".equals(env) && !testEnvironment) throw com.elepay.common.ApiException.unprocessable("test_environment_disabled", "Test credentials require an isolated test deployment");
+        if (scopes == null || scopes.isEmpty() || !SCOPES.containsAll(scopes))
+            throw com.elepay.common.ApiException.badRequest("invalid_scope", "Invalid API scopes");
         byte[] bytes = new byte[24];
         RANDOM.nextBytes(bytes);
         String randomHex = HexFormat.of().formatHex(bytes);
@@ -87,13 +94,16 @@ public class ApiKeys {
         String secret = prefix + "_" + randomHex.substring(8);
         UUID id = UUID.randomUUID();
         List<String> sorted = scopes.stream().distinct().sorted().toList();
+        byte[] signingBytes = new byte[32];
+        RANDOM.nextBytes(signingBytes);
+        String signingSecret = "sec_" + HexFormat.of().formatHex(signingBytes);
         db.sql("""
-                INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes, environment)
-                VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes, :env)""")
+                INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes, environment, signing_secret)
+                VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes, :env, :signing)""")
                 .param("id", id).param("prefix", prefix).param("hash", Idempotency.sha256(secret))
                 .param("merchant", merchantId).param("label", label).param("by", createdBy)
-                .param("scopes", sorted.toArray(String[]::new)).param("env", env).update();
-        return new EnvironmentKey(id, prefix, secret, env, sorted);
+                .param("scopes", sorted.toArray(String[]::new)).param("env", env).param("signing", signingSecret).update();
+        return new EnvironmentKey(id, prefix, secret, env, sorted, signingSecret);
     }
 
     public List<EnvironmentListed> listWithEnvironment(UUID merchantId, String environment) {
@@ -135,9 +145,9 @@ public class ApiKeys {
     }
 
     public Optional<ApiKeyAuthentication> authenticate(String secret) {
-        if (secret == null || !secret.startsWith("ek_") || secret.length() > 100) return Optional.empty();
-        return db.sql("SELECT id, merchant_id, scopes, signing_secret FROM api_credential WHERE secret_hash = :hash AND revoked_at IS NULL")
-                .param("hash", Idempotency.sha256(secret))
+        if (secret == null || !secret.startsWith("ek_") || secret.length() > 100 || (!testEnvironment && secret.startsWith("ek_test_"))) return Optional.empty();
+        return db.sql("SELECT id, merchant_id, scopes, signing_secret FROM api_credential WHERE secret_hash = :hash AND revoked_at IS NULL AND (environment = 'live' OR :test)")
+                .param("hash", Idempotency.sha256(secret)).param("test", testEnvironment)
                 .query((rs, i) -> new ApiKeyAuthentication(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class),
                         java.util.Set.of((String[]) rs.getArray(3).getArray()), rs.getString(4)))
                 .optional();
@@ -153,8 +163,8 @@ public class ApiKeys {
 
     public Optional<String> getSigningSecretForApiKey(String apiKey) {
         if (apiKey == null || !apiKey.startsWith("ek_") || apiKey.length() > 100) return Optional.empty();
-        return db.sql("SELECT signing_secret FROM api_credential WHERE secret_hash = :hash AND revoked_at IS NULL")
-                .param("hash", Idempotency.sha256(apiKey))
+        return db.sql("SELECT signing_secret FROM api_credential WHERE secret_hash = :hash AND revoked_at IS NULL AND (environment = 'live' OR :test)")
+                .param("hash", Idempotency.sha256(apiKey)).param("test", testEnvironment)
                 .query((rs, i) -> rs.getString(1))
                 .optional();
     }

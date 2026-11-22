@@ -68,6 +68,20 @@ public class Webhooks implements OutboxConsumer {
     @jakarta.annotation.PreDestroy
     void closeTransport() throws java.io.IOException { transport.close(); }
 
+    /** Shared guarded transport for scheduled deliveries and developer operations. */
+    public int sendSigned(String url, UUID event, String signature, String body) {
+        guard.validate(url);
+        try {
+            return http.post().uri(java.net.URI.create(url.trim()))
+                    .header("Content-Type", "application/json")
+                    .header("Elepay-Event-Id", event.toString())
+                    .header("Elepay-Signature", signature)
+                    .body(body).retrieve().toBodilessEntity().getStatusCode().value();
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            return e.getStatusCode().value();
+        }
+    }
+
     public record Endpoint(UUID id, String url, String secret, boolean active) {}
 
     @Transactional
@@ -175,7 +189,7 @@ public class Webhooks implements OutboxConsumer {
         if (event.merchantIds().length == 0) return;
         db.sql("""
                 INSERT INTO webhook_delivery (event_id, endpoint_id)
-                SELECT :event, id FROM webhook_endpoint WHERE active AND merchant_id = ANY(:merchants)
+                SELECT :event, id FROM webhook_endpoint WHERE active AND environment = 'live' AND merchant_id = ANY(:merchants)
                 ON CONFLICT DO NOTHING""")
                 .param("event", event.id()).param("merchants", event.merchantIds()).update();
     }
@@ -192,7 +206,7 @@ public class Webhooks implements OutboxConsumer {
                 SELECT d.event_id, d.endpoint_id, w.url, w.secret, e.payload::text, d.attempts
                 FROM webhook_delivery d JOIN webhook_endpoint w ON w.id = d.endpoint_id
                 JOIN outbox_event e ON e.id = d.event_id
-                WHERE d.status = 'pending' AND d.next_attempt_at <= now()
+                WHERE d.status = 'pending' AND w.active AND w.environment = 'live' AND d.next_attempt_at <= now()
                 ORDER BY d.next_attempt_at LIMIT :limit FOR UPDATE OF d SKIP LOCKED""")
                 .param("limit", limit)
                 .query((rs, i) -> new Pending(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class),
