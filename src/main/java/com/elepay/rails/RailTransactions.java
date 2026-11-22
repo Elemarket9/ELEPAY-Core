@@ -212,8 +212,10 @@ public class RailTransactions {
         }
         switch (status) {
             case SUCCEEDED -> {
-                if ((result.amount() != null && result.amount() != t.amount())
-                        || (result.currency() != null && !result.currency().equalsIgnoreCase(t.currency()))) {
+                if (result.amount() == null || result.amount() != t.amount()
+                        || result.currency() == null || !result.currency().equalsIgnoreCase(t.currency())
+                        || result.railReference() == null || result.railReference().isBlank()
+                        || (result.fee() != null && result.fee() < 0)) {
                     db.sql("""
                             UPDATE rail_transaction SET status = 'mismatch', updated_at = now(), completed_at = now(),
                                    rail_reference = coalesce(:pref, rail_reference),
@@ -387,6 +389,10 @@ public class RailTransactions {
         int resolved = 0;
         for (UUID id : due) {
             RailTx t = find(id).orElseThrow();
+            if (!rails.names().contains(t.rail())) {
+                ops.raise("rail_not_configured", "high", "rail_tx:" + t.reference(), Map.of("rail", t.rail()));
+                continue; // Historic records remain intact; never reroute without authoritative evidence.
+            }
             if (t.status().equals("created")) {
                 // Either never submitted (crash before call) or reset after NOT_FOUND.
                 boolean stale = t.createdAt().isBefore(OffsetDateTime.now().minusSeconds(30));

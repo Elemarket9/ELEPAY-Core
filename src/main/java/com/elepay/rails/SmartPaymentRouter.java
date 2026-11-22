@@ -64,8 +64,10 @@ public class SmartPaymentRouter {
         if (configs.isEmpty()) {
             // Default fallback
             String railName = defaultRailFor(cleanChannel, cleanNetwork);
-            return new SelectedRoute(railName, cleanChannel, cleanNetwork, 0L, 1.0,
-                    healthDetector.getHealth(railName).circuitState(), "sandbox", "default_routing");
+            if (!rails.names().contains(railName) || !healthDetector.isRailAvailable(railName))
+                throw ApiException.unprocessable("rail_unavailable", "No operational payment connection for this route");
+            return new SelectedRoute(railName, cleanChannel, cleanNetwork, 0L, 0.0,
+                    healthDetector.getHealth(railName).circuitState(), null, "configured_routing");
         }
 
         // Rank candidates
@@ -76,7 +78,7 @@ public class SmartPaymentRouter {
         for (RouteConfig cfg : configs) {
             String primary = cfg.primaryRail();
             var health = healthDetector.getHealth(primary);
-            boolean available = healthDetector.isRailAvailable(primary);
+            boolean available = rails.names().contains(primary) && healthDetector.isRailAvailable(primary);
 
             if (!available) {
                 log.warn("Primary rail {} for {}/{} is unavailable (circuit OPEN)", primary, cleanChannel, cleanNetwork);
@@ -85,7 +87,7 @@ public class SmartPaymentRouter {
 
             // Success rate (0.0 to 1.0)
             double successRate = health.totalRequests() == 0 ? 1.0 : (1.0 - health.errorRate());
-            long estimatedFee = (amount * cfg.costBps()) / 10000L + cfg.costFixed();
+            long estimatedFee = Math.addExact(Math.multiplyExact(amount, cfg.costBps()) / 10000L, cfg.costFixed());
 
             // Scoring: prioritize high success rate, then lower cost, then configured priority
             double score = (successRate * 100.0) - (cfg.costBps() / 100.0) + (cfg.priority() * 10.0);
@@ -99,26 +101,20 @@ public class SmartPaymentRouter {
         if (best == null) {
             // All primary routes are down, check if secondary is healthy
             RouteConfig first = (configs != null && !configs.isEmpty()) ? configs.get(0) : null;
-            if (first != null && first.secondaryRail() != null && healthDetector.isRailAvailable(first.secondaryRail())) {
+            if (first != null && first.secondaryRail() != null && rails.names().contains(first.secondaryRail()) && healthDetector.isRailAvailable(first.secondaryRail())) {
                 log.info("Failing over routing to healthy secondary rail {}", first.secondaryRail());
                 var h = healthDetector.getHealth(first.secondaryRail());
                 return new SelectedRoute(
                         first.secondaryRail(), cleanChannel, cleanNetwork,
-                        (amount * first.costBps()) / 10000L + first.costFixed(),
+                        Math.addExact(Math.multiplyExact(amount, first.costBps()) / 10000L, first.costFixed()),
                         1.0 - h.errorRate(), h.circuitState(), null, "primary_circuit_open_fallback"
                 );
             }
-            // Use default if nothing else
-            String fallback = (first != null && first.primaryRail() != null) ? first.primaryRail() : defaultRailFor(cleanChannel, cleanNetwork);
-            var h = healthDetector.getHealth(fallback);
-            return new SelectedRoute(
-                    fallback, cleanChannel, cleanNetwork, 0L, 1.0 - h.errorRate(),
-                    h.circuitState(), first != null ? first.secondaryRail() : "sandbox", "exhausted_candidates_default"
-            );
+            throw ApiException.unprocessable("rail_unavailable", "No healthy operational payment connection for this route");
         }
 
         var h = healthDetector.getHealth(best.primaryRail());
-        long fee = (amount * best.costBps()) / 10000L + best.costFixed();
+        long fee = Math.addExact(Math.multiplyExact(amount, best.costBps()) / 10000L, best.costFixed());
         return new SelectedRoute(
                 best.primaryRail(), cleanChannel, cleanNetwork, fee,
                 1.0 - h.errorRate(), h.circuitState(), best.secondaryRail(), selectionReason
@@ -145,28 +141,27 @@ public class SmartPaymentRouter {
 
     private List<RouteConfig> defaultConfigsFor(String channel, String network) {
         if ("momo".equals(channel) && "mtn".equals(network)) {
-            return List.of(new RouteConfig(UUID.randomUUID(), "momo", "mtn", "mtn", "sandbox", 100, 0, 1, true));
+            return List.of(new RouteConfig(UUID.randomUUID(), "momo", "mtn", "mtn", null, 100, 0, 1, true));
         }
         if ("momo".equals(channel) && "telecel".equals(network)) {
-            return List.of(new RouteConfig(UUID.randomUUID(), "momo", "telecel", "telecel", "sandbox", 75, 0, 1, true));
+            return List.of(new RouteConfig(UUID.randomUUID(), "momo", "telecel", "telecel", null, 75, 0, 1, true));
         }
         if ("momo".equals(channel) && "airteltigo".equals(network)) {
-            return List.of(new RouteConfig(UUID.randomUUID(), "momo", "airteltigo", "airteltigo", "sandbox", 50, 0, 1, true));
+            return List.of(new RouteConfig(UUID.randomUUID(), "momo", "airteltigo", "airteltigo", null, 50, 0, 1, true));
         }
         if ("bank".equals(channel)) {
-            return List.of(new RouteConfig(UUID.randomUUID(), "bank", "ghipss", "ghipss", "sandbox", 0, 50, 1, true));
+            return List.of(new RouteConfig(UUID.randomUUID(), "bank", "ghipss", "ghipss", null, 0, 50, 1, true));
         }
         if ("card".equals(channel)) {
-            return List.of(new RouteConfig(UUID.randomUUID(), "card", "card", "card", "sandbox", 150, 0, 1, true));
+            return List.of(new RouteConfig(UUID.randomUUID(), "card", "card", "card", null, 150, 0, 1, true));
         }
         return List.of();
     }
 
     private String defaultRailFor(String channel, String network) {
-        if ("card".equals(channel)) return rails.names().contains("card") ? "card" : "sandbox";
-        if ("bank".equals(channel)) return rails.names().contains("ghipss") ? "ghipss" : "sandbox";
-        if (rails.names().contains(network)) return network;
-        return "sandbox";
+        if ("card".equals(channel)) return "card";
+        if ("bank".equals(channel)) return "ghipss";
+        return network;
     }
 
     private RouteConfig mapConfig(java.sql.ResultSet rs, int i) throws java.sql.SQLException {

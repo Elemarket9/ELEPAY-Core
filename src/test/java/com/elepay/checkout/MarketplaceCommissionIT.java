@@ -206,7 +206,7 @@ class MarketplaceCommissionIT extends PostgresTestBase {
     }
 
     @Test
-    void sellerWinsDisputeBeforeDeliveryAndUnconfirmedOrdersReleaseAtTheDeadline() {
+    void sellerWinsDisputeBeforeDeliveryAndUnconfirmedOrdersStayHeldAtTheDeadline() {
         fund(10000);
         String ref = cart(List.of(Map.of("merchantId", sellerA, "kind", "sale", "amount", 10000,
                 "description", "Dress", "category", "fashion")));
@@ -224,20 +224,22 @@ class MarketplaceCommissionIT extends PostgresTestBase {
         assertThat(bal(marketplace, "pending")).isEqualTo(2200);
         assertThat(bal(sellerA, "reserved")).isZero();
 
-        // Not confirmed by the delivery deadline: treated as delivered and released.
+        // A deadline alone is not evidence of fulfillment; neither funds nor fees may release.
         settleForced();
         assertThat(bal(sellerA, "available")).isZero();
         db.sql("UPDATE checkout SET delivery_deadline = now() - interval '1 minute' WHERE reference = :r")
                 .param("r", ref).update();
         api.call("POST", "/v1/ops/settlements/run", ops, null, Map.of());
-        assertThat(bal(sellerA, "available")).isEqualTo(7650);
-        assertThat(bal(marketplace, "available")).isEqualTo(2200);
-        assertThat(feeRecognized(ref)).isEqualTo(150);
-        assertThat(feeDeferred(ref)).isZero();
+        assertThat(bal(sellerA, "available")).isZero();
+        assertThat(bal(marketplace, "available")).isZero();
+        assertThat(bal(sellerA, "pending")).isEqualTo(7650);
+        assertThat(bal(marketplace, "pending")).isEqualTo(2200);
+        assertThat(feeRecognized(ref)).isZero();
+        assertThat(feeDeferred(ref)).isEqualTo(150);
         assertThat(db.sql("""
                 SELECT a.delivery_confirmed_by FROM checkout_allocation a JOIN checkout c ON c.id = a.checkout_id
                 WHERE c.reference = :r""").param("r", ref).query(String.class).single())
-                .isEqualTo("auto:delivery_deadline");
+                .isNull();
         assertThat(ledger.integrity().ok()).isTrue();
     }
 

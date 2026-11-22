@@ -8,7 +8,7 @@ import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/** Rails enabled in this deployment. Only the simulated rail ships today. */
+/** Registered network adapters only. An absent connection is never treated as an operational rail. */
 @Component
 public class RailRegistry {
     private final Map<String, PaymentRail> rails;
@@ -16,13 +16,10 @@ public class RailRegistry {
 
     RailRegistry(List<PaymentRail> adapters, @Value("${elepay.rails.default:}") String configuredDefault) {
         this.rails = adapters.stream().collect(Collectors.toMap(PaymentRail::name, Function.identity()));
-        if (!configuredDefault.isBlank()) {
-            this.defaultName = configuredDefault;
-        } else if (rails.containsKey("sandbox")) {
-            this.defaultName = "sandbox";
-        } else {
-            this.defaultName = rails.keySet().stream().sorted().findFirst().orElse("none");
-        }
+        if (!configuredDefault.isBlank() && !rails.containsKey(configuredDefault))
+            throw new IllegalStateException("Configured default payment rail is not registered");
+        this.defaultName = !configuredDefault.isBlank() ? configuredDefault
+                : rails.size() == 1 ? rails.keySet().iterator().next() : "none";
     }
 
     public PaymentRail get(String name) {

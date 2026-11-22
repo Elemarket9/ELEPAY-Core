@@ -838,8 +838,7 @@ class CheckoutService {
      */
     @Transactional
     List<SettlementBatch> settleDue(boolean force, UUID onlyMerchant, UUID onlyCheckout) {
-        record Due(UUID checkout, int line, UUID merchant, UUID collector, long pending, long platform, long fee,
-                   boolean autoDelivered) {}
+        record Due(UUID checkout, int line, UUID merchant, UUID collector, long pending, long platform, long fee) {}
         record Candidate(UUID checkout, int line, UUID merchant, UUID collector, long pending, long platform, long fee,
                          boolean held, OffsetDateTime deliveredAt, OffsetDateTime paidAt, OffsetDateTime deadline,
                          OffsetDateTime now) {}
@@ -848,7 +847,7 @@ class CheckoutService {
                        a.fee_deferred, a.hold_until_delivered, a.delivered_at, c.paid_at, c.delivery_deadline, now()
                 FROM checkout_allocation a JOIN checkout c ON c.id = a.checkout_id
                 WHERE c.status = 'paid' AND (a.pending_amount > 0 OR a.platform_pending > 0 OR a.fee_deferred > 0)
-                  AND (NOT a.hold_until_delivered OR a.delivered_at IS NOT NULL OR c.delivery_deadline <= now())
+                  AND (NOT a.hold_until_delivered OR a.delivered_at IS NOT NULL)
                   AND (CAST(:merchant AS uuid) IS NULL OR a.merchant_id = CAST(:merchant AS uuid))
                   AND (CAST(:checkout AS uuid) IS NULL OR a.checkout_id = CAST(:checkout AS uuid))
                 ORDER BY a.merchant_id, a.checkout_id, a.line
@@ -866,18 +865,14 @@ class CheckoutService {
             int hours = delays.computeIfAbsent(x.merchant(),
                     m -> merchants.find(m).map(MerchantAccess.Merchant::settlementDelayHours).orElse(24));
             boolean isDue;
-            boolean autoDelivered = false;
             if (x.held()) {
                 boolean delivered = x.deliveredAt() != null && (force || !x.deliveredAt().plusHours(hours).isAfter(x.now()));
-                boolean deadlinePassed = x.deadline() != null && !x.deadline().isAfter(x.now());
-                isDue = delivered || deadlinePassed;
-                autoDelivered = x.deliveredAt() == null && deadlinePassed;
+                isDue = delivered;
             } else {
                 isDue = force || !x.paidAt().plusHours(hours).isAfter(x.now());
             }
             if (isDue) {
-                due.add(new Due(x.checkout(), x.line(), x.merchant(), x.collector(), x.pending(), x.platform(), x.fee(),
-                        autoDelivered));
+                due.add(new Due(x.checkout(), x.line(), x.merchant(), x.collector(), x.pending(), x.platform(), x.fee()));
             }
         }
         if (due.isEmpty()) return List.of();
@@ -926,14 +921,10 @@ class CheckoutService {
                     UPDATE checkout_allocation SET settled_amount = settled_amount + pending_amount, pending_amount = 0,
                            platform_settled = platform_settled + platform_pending, platform_pending = 0,
                            fee_recognized = fee_recognized + fee_deferred, fee_deferred = 0,
-                           settled_at = now(), settlement_tx = :tx, settlement_batch = :batch,
-                           delivered_at = CASE WHEN :auto THEN (SELECT delivery_deadline FROM checkout WHERE id = :c)
-                                               ELSE delivered_at END,
-                           delivery_confirmed_by = CASE WHEN :auto THEN 'auto:delivery_deadline'
-                                                        ELSE delivery_confirmed_by END
+                           settled_at = now(), settlement_tx = :tx, settlement_batch = :batch
                     WHERE checkout_id = :c AND line = :l""")
                     .param("tx", batch != null ? batch.journalTx() : feeTx)
-                    .param("batch", batch != null ? batch.id() : null).param("auto", d.autoDelivered())
+                    .param("batch", batch != null ? batch.id() : null)
                     .param("c", d.checkout()).param("l", d.line()).update();
         }
         return new ArrayList<>(byMerchant.values());

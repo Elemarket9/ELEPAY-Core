@@ -7,7 +7,8 @@ import java.util.Map;
  * leaves the ELEPAY ledger (mobile money cash-in/cash-out, card acceptance,
  * bank transfer). ELEPAY is the ledger and the processor; there is no
  * third-party payment aggregator in the path. Each rail implementation
- * connects ELEPAY's processing to the corresponding network.
+ * connects ELEPAY's processing to the corresponding network. A success result must carry the exact
+ * amount, currency and non-empty authoritative provider transaction reference.
  *
  * <p>Every call carries ELEPAY's own unique reference so retries and status
  * queries are idempotent. Implementations never throw for transport failures:
