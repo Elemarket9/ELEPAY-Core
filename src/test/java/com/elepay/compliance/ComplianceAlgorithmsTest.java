@@ -19,7 +19,7 @@ class ComplianceAlgorithmsTest {
     @Test
     @DisplayName("040: Validates Ghana Card format and check digit, and performs simulated NIA matching")
     void testGhanaCardVerification() {
-        GhanaCardVerificationService service = new GhanaCardVerificationService(null, null);
+        GhanaCardVerificationService service = new GhanaCardVerificationService(null, new GhanaCardVerificationService.SimulatedNiaClient());
 
         // Calculate a valid check digit for "123456789"
         int checkDigit = GhanaCardVerificationService.calculateLuhnCheckDigit("123456789");

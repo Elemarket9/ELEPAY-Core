@@ -27,17 +27,24 @@ class RateLimitFilter extends OncePerRequestFilter {
 
     private final List<Rule> rules;
     private final boolean enabled;
+    private final boolean sharedRequired;
 
+    @org.springframework.beans.factory.annotation.Autowired
     RateLimitFilter(@Value("${elepay.rate-limits.enabled:true}") boolean enabled,
-                    @Value("${elepay.rate-limits.multiplier:1}") int multiplier) {
+                    @Value("${elepay.rate-limits.multiplier:1}") int multiplier,
+                    org.springframework.data.redis.core.StringRedisTemplate redis,
+                    @Value("${elepay.rate-limits.shared-required:false}") boolean sharedRequired) {
         this.enabled = enabled;
+        this.sharedRequired = sharedRequired;
         int m = Math.max(1, multiplier);
         this.rules = List.of(
-                new Rule("POST", "/v1/rails/card/tokens", "card-tokenize", TokenBucketRateLimiter.perMinute(10 * m, 10 * m)),
-                new Rule(null, "/v1/wallet/recipients/lookup", "recipient-lookup", TokenBucketRateLimiter.perMinute(20 * m, 20 * m)),
-                new Rule(null, "/v1/public/", "public", TokenBucketRateLimiter.perMinute(120 * m, 120 * m)),
-                new Rule("POST", "/v1/ussd/", "ussd", TokenBucketRateLimiter.perMinute(300 * m, 300 * m)));
+                new Rule("POST", "/v1/rails/card/tokens", "card-tokenize", TokenBucketRateLimiter.perMinute(10 * m, 10 * m, redis)),
+                new Rule(null, "/v1/wallet/recipients/lookup", "recipient-lookup", TokenBucketRateLimiter.perMinute(20 * m, 20 * m, redis)),
+                new Rule(null, "/v1/public/", "public", TokenBucketRateLimiter.perMinute(120 * m, 120 * m, redis)),
+                new Rule("POST", "/v1/ussd/", "ussd", TokenBucketRateLimiter.perMinute(300 * m, 300 * m, redis)));
     }
+
+    RateLimitFilter(boolean enabled, int multiplier) { this(enabled, multiplier, null, false); }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
@@ -46,7 +53,8 @@ class RateLimitFilter extends OncePerRequestFilter {
             for (Rule rule : rules) {
                 if (rule.matches(request)) {
                     // getRemoteAddr is the real client only when the ingress is a trusted proxy (forward-headers=native).
-                    if (!rule.limiter().tryAcquire(rule.name() + ":" + request.getRemoteAddr())) {
+                    String key = rule.name() + ":" + request.getRemoteAddr();
+                    if (!(sharedRequired ? rule.limiter().tryAcquireShared(key) : rule.limiter().tryAcquire(key))) {
                         response.setStatus(429);
                         response.setHeader("Retry-After", "60");
                         response.setContentType("application/json");

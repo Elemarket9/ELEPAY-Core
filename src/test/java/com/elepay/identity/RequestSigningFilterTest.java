@@ -241,4 +241,56 @@ class RequestSigningFilterTest {
         strictFilter.doFilter(getReq, getRes, new MockFilterChain());
         assertThat(getRes.getStatus()).isEqualTo(200);
     }
+
+    @Test
+    void versionTwoRejectsChangedNonceAndQuery() throws Exception {
+        String timestamp = String.valueOf(Instant.now().getEpochSecond());
+        String path = "/v1/payouts";
+        String nonce = "unique-" + UUID.randomUUID();
+        String signature = RequestSigningFilter.computeSignatureV2(globalSecret, timestamp, "POST",
+                path, "mode=standard", nonce, "idem-1", "{}");
+        for (String changed : List.of("nonce", "query", "idempotency")) {
+            MockHttpServletRequest req = new MockHttpServletRequest("POST", path);
+            req.setQueryString(changed.equals("query") ? "mode=other" : "mode=standard");
+            req.setContent("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            req.addHeader(RequestSigningFilter.HEADER_SIGNATURE, signature);
+            req.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, timestamp);
+            req.addHeader(RequestSigningFilter.HEADER_NONCE, changed.equals("nonce") ? "other-nonce" : nonce);
+            req.addHeader("X-Elepay-Signature-Version", "2");
+            req.addHeader("Idempotency-Key", changed.equals("idempotency") ? "idem-2" : "idem-1");
+            MockHttpServletResponse res = new MockHttpServletResponse();
+            filter.doFilter(req, res, new MockFilterChain());
+            assertThat(res.getStatus()).isEqualTo(401);
+        }
+        MockHttpServletRequest valid = new MockHttpServletRequest("POST", path);
+        valid.setQueryString("mode=standard");
+        valid.setContent("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        valid.addHeader(RequestSigningFilter.HEADER_SIGNATURE, signature);
+        valid.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, timestamp);
+        valid.addHeader(RequestSigningFilter.HEADER_NONCE, nonce);
+        valid.addHeader("X-Elepay-Signature-Version", "2");
+        valid.addHeader("Idempotency-Key", "idem-1");
+        MockHttpServletResponse res = new MockHttpServletResponse();
+        filter.doFilter(valid, res, new MockFilterChain());
+        assertThat(res.getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void replayStoreFailureStopsRequest() throws Exception {
+        DistributedNonceStore store = mock(DistributedNonceStore.class);
+        when(store.recordNonceIfAbsent(anyString(), org.mockito.ArgumentMatchers.any(java.time.Duration.class)))
+                .thenThrow(new IllegalStateException("database unavailable"));
+        RequestSigningFilter guarded = new RequestSigningFilter(globalSecret, false, store, apiKeys);
+        String ts = String.valueOf(Instant.now().getEpochSecond());
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/v1/payouts");
+        req.addHeader(RequestSigningFilter.HEADER_SIGNATURE,
+                RequestSigningFilter.computeSignature(globalSecret, ts, "POST", "/v1/payouts", ""));
+        req.addHeader(RequestSigningFilter.HEADER_TIMESTAMP, ts);
+        req.addHeader(RequestSigningFilter.HEADER_NONCE, "outage-nonce");
+        MockHttpServletResponse res = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+        guarded.doFilter(req, res, chain);
+        assertThat(res.getStatus()).isEqualTo(503);
+        assertThat(chain.getRequest()).isNull();
+    }
 }

@@ -88,6 +88,19 @@ public class TokenBucketRateLimiter {
         return new TokenBucketRateLimiter(capacity, tokensPerMinute / 60.0, redisTemplate);
     }
 
+    /** Production abuse limits must not reset independently on every application node. */
+    public boolean tryAcquireShared(String key) {
+        if (redisTemplate == null || key == null) return false;
+        try {
+            Long result = redisTemplate.execute(SCRIPT, Collections.singletonList("elepay:ratelimit:" + key),
+                    String.valueOf(capacity), String.valueOf(refillTokensPerSecond), "1",
+                    String.valueOf(System.currentTimeMillis()));
+            return Long.valueOf(1L).equals(result);
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
     public boolean tryAcquire(String key) {
         return tryAcquire(key, 1);
     }

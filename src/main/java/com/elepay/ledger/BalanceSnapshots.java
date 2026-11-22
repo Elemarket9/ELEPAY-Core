@@ -195,11 +195,13 @@ public class BalanceSnapshots {
         } else if (sigMeta.version() == 2) {
             sigMatch = keys.verifyMac(sigMeta.keyId(), canonical(row.id(), row.accountId(), row.currency(),
                     row.snapshotBalance(), row.sequenceId(), row.snapshotAt()), row.signature());
-        } else {
+        } else if (sigMeta.version() == 1) {
             String expectedSignature = computeSignature(row.id(), row.accountId(), row.currency(),
                     row.snapshotBalance(), row.sequenceId(), row.snapshotAt());
             sigMatch = MessageDigest.isEqual(row.signature().getBytes(StandardCharsets.UTF_8),
                     expectedSignature.getBytes(StandardCharsets.UTF_8));
+        } else {
+            sigMatch = false;
         }
 
         if (!sigMatch) {

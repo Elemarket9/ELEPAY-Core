@@ -57,7 +57,7 @@ public class GhanaCardVerificationService {
 
     public GhanaCardVerificationService(JdbcClient db, NiaClient niaClient) {
         this.db = db;
-        this.niaClient = niaClient != null ? niaClient : new SimulatedNiaClient();
+        this.niaClient = Objects.requireNonNull(niaClient, "Explicit NIA client required; never default to simulated verification");
     }
 
     public static boolean isValidFormat(String idNumber) {
@@ -78,7 +78,7 @@ public class GhanaCardVerificationService {
 
         String normalizedId = idNumber.trim().toUpperCase();
         if (!isValidFormat(normalizedId)) {
-            throw ApiException.badRequest("invalid_ghana_card_format", "Invalid Ghana Card number format or check digit: " + idNumber);
+            throw ApiException.badRequest("invalid_ghana_card_format", "Invalid Ghana Card number format or check digit");
         }
 
         NiaResponse response = niaClient.queryNia(normalizedId, fullName, dateOfBirth);
@@ -121,7 +121,9 @@ public class GhanaCardVerificationService {
                             result.details()
                     )
                     .update();
-            } catch (Exception ignored) {}
+            } catch (RuntimeException failure) {
+                throw new IllegalStateException("Unable to persist identity verification", failure);
+            }
         }
 
         return result;
