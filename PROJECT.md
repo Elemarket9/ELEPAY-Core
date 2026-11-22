@@ -138,11 +138,11 @@ ELEPAY is a Ghana-first financial platform designed as a modular monolith in Jav
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
 | M1 | Core Financial Journey & Ledger Hardening | Setup toolchain / compilation fixes, algorithms 001-007, 010, 037-039, 050, 073-074, 080, 085, 088, 095. Complete 12-step wallet transfer flow. | None | DONE (Gate passed 5/5 verifiers, 18 algorithms Built, commits: 65d3279, 0884620) |
-| M2 | Commercial Checkout, Refunds, Disputes & Settlement | Algorithms 009, 020-022, 049, 051-055, 077, 079. Multi-allocation checkout, payment links, QR, settlement batches, disputes, maker-checker. | M1 | IN_PROGRESS |
-| M3 | FX, Cross-Border Remittances & Payouts | Algorithms 059-064, Payout batching, multi-currency clearing, quote engine, corridor routing. | M1 | IN_PROGRESS (Fast-Track) |
-| M4 | Direct Partner Rail Adapters & Simulators | Algorithms 011-019. Direct MoMo (MTN, Telecel, AirtelTigo), GHIPSS/NIP, Card acquirer simulators, tokenization boundary. Paystack/Hubtel excluded. | M1 | PLANNED |
-| M5 | Risk, Fraud, Compliance & Platform Security | Algorithms 023-034, 040-048, 075-076, 078, 081-084, 086-087, 089-094. Sanctions, PEP, AML, Ghana Card, envelope encryption, circuit breakers, rate limiting. | M1, M2 | PLANNED |
-| M6 | Advanced Analytics, Credit Models, Growth & Final Readiness | Algorithms 008, 035-036, 056-058, 065-072, 096-100. Credit engine (disabled live), ML models, float forecasting, scorecard completion, E2E 100% pass, adversarial hardening. | M1-M5, TEST_READY | PLANNED |
+| M2 | Commercial Checkout, Refunds, Disputes & Settlement | Algorithms 009, 020-022, 049, 051-055, 077, 079. Multi-allocation checkout, payment links, QR, settlement batches, disputes, maker-checker. | M1 | DONE (12 algorithms Built, commits: 53b229b, 11b69f9) |
+| M3 | FX, Cross-Border Remittances & Payouts | Algorithms 059-064, Payout batching, multi-currency clearing, quote engine, corridor routing. | M1 | IN_PROGRESS (Worker 1 conv: 249e4c89d53c56b0213b87e8dcb78a9b) |
+| M4 | Direct Partner Rail Adapters & Simulators | Algorithms 011-019. Direct MoMo (MTN, Telecel, AirtelTigo), GHIPSS/NIP, Card acquirer simulators, tokenization boundary. Paystack/Hubtel excluded. | M1 | IN_PROGRESS (Worker 2 conv: 7264b48e7ed39e52b0f236f7ff0f0861) |
+| M5 | Risk, Fraud, Compliance & Platform Security | Algorithms 023-034, 040-048, 075-076, 078, 081-084, 086-087, 089-094. Sanctions, PEP, AML, Ghana Card, envelope encryption, circuit breakers, rate limiting. | M1, M2 | IN_PROGRESS (Workers 3 & 4 conv: c74a1ba022b95a586248c982d7ed49ac, bd115b54c3cbbe07f131fe3b32716bb7) |
+| M6 | Advanced Analytics, Credit Models, Growth & Final Readiness | Algorithms 008, 035-036, 056-058, 065-072, 096-100. Credit engine (disabled live), ML models, float forecasting, scorecard completion, E2E 100% pass, adversarial hardening. | M1-M5, TEST_READY | IN_PROGRESS (Worker 5 conv: e7630539cfa4d01533854e69101f9be9) |
 
 ## Interface Contracts
 

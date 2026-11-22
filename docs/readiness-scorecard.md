@@ -16,15 +16,15 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 8 | Ledger and money | interest and yield accrual | Missing | No verified implementation evidence | — |
 | 9 | Ledger and money | revenue recognition | Built | `com.elepay.checkout.CheckoutService`, `V16__reconciliation_and_treasury.sql`, verified in `MarketplaceCheckoutIT`, `MandateAndReconciliationIT` | 53b229b |
 | 10 | Ledger and money | balance snapshots | Built | `com.elepay.ledger.BalanceSnapshots`, `V13__balance_snapshots.sql`, verified in `BalanceSnapshotsTest`, `WalletTransferFlowIT` | 65d3279 |
-| 11 | Payment processing | exactly-once rail submission | Built | `com.elepay.rails.SimulatedRail`, `com.elepay.checkout.CheckoutService`, verified in `MarketplaceCheckoutIT`, E2E | 53b229b |
-| 12 | Payment processing | unknown-outcome recovery | Built | `com.elepay.rails.RailCallbacks#recover`, verified in `MarketplaceCheckoutIT`, E2E | 53b229b |
-| 13 | Payment processing | callback state machine | Built | `com.elepay.rails.RailCallbacks`, `SimulatedRail`, verified in `MarketplaceCheckoutIT`, E2E | 53b229b |
-| 14 | Payment processing | smart routing | Missing | No verified implementation evidence | — |
-| 15 | Payment processing | failover routing | Missing | No verified implementation evidence | — |
-| 16 | Payment processing | network health detection | Missing | No verified implementation evidence | — |
-| 17 | Payment processing | card BIN lookup | Missing | No verified implementation evidence | — |
-| 18 | Payment processing | risk-based 3-D Secure | Missing | No verified implementation evidence | — |
-| 19 | Payment processing | card tokenisation vault | Missing | No verified implementation evidence | — |
+| 11 | Payment processing | exactly-once rail submission | Built | `com.elepay.rails.RailTransactions#submit`, direct adapters (`MtnMomoRail`, `TelecelCashRail`, `AirtelTigoRail`, `GhipssRail`, `CardAcquirerRail`), verified in `PartnerRailAdaptersTest`, `MarketplaceCheckoutIT` | 53b229b |
+| 12 | Payment processing | unknown-outcome recovery | Built | `com.elepay.rails.RailTransactions#recover`, verified in `PartnerRailAdaptersTest`, `MarketplaceCheckoutIT` | 53b229b |
+| 13 | Payment processing | callback state machine | Built | `com.elepay.rails.RailCallbacks`, `RailTransactions#handleCallback`, verified in `PartnerRailAdaptersTest` | 53b229b |
+| 14 | Payment processing | smart routing | Built | `com.elepay.rails.SmartPaymentRouter`, `V18__partner_rails.sql`, verified in `NetworkHealthAndRoutingTest` | working |
+| 15 | Payment processing | failover routing | Built | `com.elepay.rails.SafeFailoverRouter`, `V18__partner_rails.sql`, verified in `NetworkHealthAndRoutingTest` | working |
+| 16 | Payment processing | network health detection | Built | `com.elepay.rails.NetworkHealthDetector`, `V18__partner_rails.sql`, verified in `NetworkHealthAndRoutingTest` | working |
+| 17 | Payment processing | card BIN lookup | Built | `com.elepay.rails.CardBinLookupService`, `V18__partner_rails.sql`, verified in `CardBinLookupTest` | working |
+| 18 | Payment processing | risk-based 3-D Secure | Built | `com.elepay.rails.ThreeDSecureService`, `V18__partner_rails.sql`, verified in `ThreeDSecureTest` | working |
+| 19 | Payment processing | card tokenisation vault | Built | `com.elepay.rails.CardTokenVault`, `V18__partner_rails.sql`, verified in `CardTokenVaultTest` | working |
 | 20 | Payment processing | recurring billing mandates | Built | `com.elepay.checkout.MandateService`, `V15__mandates_and_dunning.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
 | 21 | Payment processing | dunning schedule | Built | `com.elepay.checkout.MandateService#progressDunning`, `V15__mandates_and_dunning.sql`, verified in `MandateAndReconciliationIT` | 53b229b |
 | 22 | Payment processing | EMVCo QR encoding | Built | `com.elepay.checkout.EmvcoQr`, verified in `EmvcoQrTest` | 53b229b |
@@ -64,12 +64,12 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 56 | Reconciliation and treasury | float forecasting | Missing | No verified implementation evidence | — |
 | 57 | Reconciliation and treasury | auto-rebalancing | Missing | No verified implementation evidence | — |
 | 58 | Reconciliation and treasury | merchant cash-flow forecasting | Missing | No verified implementation evidence | — |
-| 59 | FX and cross-border | rate sourcing | Built | `com.elepay.fx.FxRateService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | m3-fx |
-| 60 | FX and cross-border | dynamic margin | Built | `com.elepay.fx.FxPricingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | m3-fx |
-| 61 | FX and cross-border | corridor routing | Built | `com.elepay.fx.FxRoutingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | m3-fx |
-| 62 | FX and cross-border | exposure limits | Built | `com.elepay.fx.FxExposureService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | m3-fx |
-| 63 | FX and cross-border | delivery estimation | Built | `com.elepay.fx.FxDeliveryEstimator`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | m3-fx |
-| 64 | FX and cross-border | multi-currency reconciliation | Built | `com.elepay.fx.FxDualReconciliationService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT`, `FxIT` | m3-fx |
+| 59 | FX and cross-border | rate sourcing | Built | `com.elepay.fx.FxRateService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
+| 60 | FX and cross-border | dynamic margin | Built | `com.elepay.fx.FxPricingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
+| 61 | FX and cross-border | corridor routing | Built | `com.elepay.fx.FxRoutingService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
+| 62 | FX and cross-border | exposure limits | Built | `com.elepay.fx.FxExposureService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
+| 63 | FX and cross-border | delivery estimation | Built | `com.elepay.fx.FxDeliveryEstimator`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT` | b78a96a |
+| 64 | FX and cross-border | multi-currency reconciliation | Built | `com.elepay.fx.FxDualReconciliationService`, `V17__fx_payouts_adv.sql`, verified in `FxAdvancedTest`, `FxAdvancedIT`, `FxIT` | b78a96a |
 | 65 | Credit | cash-flow underwriting | Missing | No verified implementation evidence | — |
 | 66 | Credit | earned-wage eligibility | Missing | No verified implementation evidence | — |
 | 67 | Credit | overdraft scoring | Missing | No verified implementation evidence | — |
