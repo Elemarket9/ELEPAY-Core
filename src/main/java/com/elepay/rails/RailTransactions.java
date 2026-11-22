@@ -220,6 +220,8 @@ public class RailTransactions {
                         WHERE id = :id""")
                         .param("id", id).param("pref", result.railReference()).param("fee", fee).update();
                 if (fee > 0) {
+                    db.sql("INSERT INTO ledger_account (code, owner_type, bucket, currency, allow_negative) VALUES (:c, 'system', 'clearing', 'GHS', true) ON CONFLICT (code) DO NOTHING")
+                            .param("c", Ledger.clearing(t.rail())).update();
                     ledger.post(Ledger.Posting.of("rail-fee", t.reference(), "rail_fee", List.of(
                             Ledger.Leg.debit("system:rail_fees:GHS", fee),
                             Ledger.Leg.credit(Ledger.clearing(t.rail()), fee))));

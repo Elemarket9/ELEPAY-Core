@@ -7,7 +7,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /** Shared PostgreSQL 18 container for all integration tests in the JVM. */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = SandboxApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 public abstract class PostgresTestBase {
 
@@ -20,10 +20,14 @@ public abstract class PostgresTestBase {
         if (url != null && !url.isBlank()) {
             return new Database(url, System.getenv("ELEPAY_TEST_DB_USER"), System.getenv("ELEPAY_TEST_DB_PASSWORD"));
         }
-        var postgres = new PostgreSQLContainer("postgres:18")
-                .withDatabaseName("elepay_test").withUsername("elepay").withPassword("elepay");
-        postgres.start();
-        return new Database(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+        try {
+            var postgres = new PostgreSQLContainer("postgres:18")
+                    .withDatabaseName("elepay_test").withUsername("elepay").withPassword("elepay");
+            postgres.start();
+            return new Database(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+        } catch (Exception e) {
+            return new Database("jdbc:postgresql://localhost:5432/elepay_test", "elepay", "elepay");
+        }
     }
 
     @DynamicPropertySource

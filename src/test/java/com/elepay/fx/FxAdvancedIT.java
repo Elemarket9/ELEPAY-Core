@@ -49,6 +49,7 @@ class FxAdvancedIT extends PostgresTestBase {
     @Test
     @DisplayName("059: Rate sourcing and blending filters statistical outliers and synthesizes mid-market rate")
     void testRateSourcingAndBlending() {
+        db.sql("DELETE FROM fx_rate_source WHERE source_currency = 'GHS' AND destination_currency = 'USD'").update();
         // Ingest rate sources: 2 normal + 1 outlier
         api.call("POST", "/v1/ops/fx/rates/sources", ops, null, Map.of(
                 "source", "bloomberg", "sourceCurrency", "GHS", "destinationCurrency", "USD",

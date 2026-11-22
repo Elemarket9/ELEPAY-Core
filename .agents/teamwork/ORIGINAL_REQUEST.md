@@ -683,3 +683,55 @@ Action required immediately:
 
 ## Follow-up — 2026-11-22T03:52:18Z
 add the 5 subagents to the coding task to complete early
+
+## 2026-11-22T04:36:49Z
+NEW MISSION EXPANSION: ELEPAY CORE — GAP CLOSURE AND FINTECH EXPANSION
+
+Target branch: main
+Baseline commit: 16e61d235ff3cb871cb798c918bbf8dcefe6bcf9
+
+The user has issued the next major phase of the mission:
+Extend ELEPAY into a complete independent financial and business-management platform.
+DO NOT rebuild the 100 algorithms, ledger, wallets, checkout, settlements, FX, fraud, or working components.
+Complete backend and responsive web platform (NO native mobile).
+
+KEY DOMAINS TO IMPLEMENT & EXPAND:
+1. ELEPAY POS: dedicated POS business domain integrated with checkout, merchant, ledger, settlement. Quick sales, inventory-based, barcode, search, multiple/saved/suspended carts, orders, variants, discounts, manager approval, tax, tips, cash recording, split, deposit, credit sales, returns/exchanges, receipts, shifts, cash drawer, offline sync, certified terminal interfaces.
+2. Complete Business BackOffice: Extend Merchant.tsx. Performance dashboards, multi-business switching, analytics, employee permissions, attendance, cashier PINs, owner approvals (expenses, suppliers, payroll), branch inventory, consolidated reports, profitability, exports, notifications.
+3. Inventory & Warehouse Management: New inventory domain. Catalogs, SKU, barcodes, variants, bundles, pricing, warehouses, branch inventory, reservations, stock movements/transfers, POs, suppliers, receiving, stocktaking, adjustments, damaged/lost, returns, batches, serials, expiry, low-stock, FIFO/weighted COGS, CSV/Excel import/export, reorders. Atomically integrated with POS sales.
+4. Restaurant Management: Extend POS engine. Menus, modifiers, combos, tables, floor plans, waiters, open tabs, KDS, kitchen printing, timers, split/combine bills, reservations, dine-in/takeaway, recipe costing, ingredients, wastage, ELESEND delivery integration.
+5. Business Accounting & Invoicing: Merchant general ledger (separate from safeguarded customer ledger). Invoices, quotes, recurring, credit/debit notes, bills, AR/AP, expenses, COA, trial balance, P&L, balance sheet, cash-flow, bank statement import, period close, tax rules, GRA invoicing integration, accountant permissions.
+6. Payroll & Supplier Payments: Salary records, payroll periods, calculations, statutory deductions, payslips, advances, commissions, approval workflows, bulk payroll, supplier invoices/scheduling/approvals, contractor payments, failed payment recovery, reconciliation.
+7. CRM: Customer profiles, purchase histories, segmentation, loyalty, memberships, gift cards, coupons, vouchers, store credits, referral rewards, feedback, consent, SMS/email/WhatsApp campaigns, retention analytics.
+8. Complete Lending Lifecycle: Extend com.elepay.credit (preserve existing 8 algorithms). Personal/business loan applications, income/employment verification, credit bureau interfaces, affordability, loan products, offers, lending capital management, approvals, digital agreements, consent, origination, accounts, disbursement, repayment schedules, interest/fee accounting, automatic repayments with atomic ledger movements, partial/early, restructuring, hardship, delinquency, collections, loss provisioning, write-offs, credit reporting, portfolio risk, dashboards, partner portal. Keep live lending disabled until authorized.
+9. Everyday Financial Services: Bill payment domain (airtime, data, electricity, water, internet, TV, school fees, insurance, gov, saved accounts, scheduled/recurring, reminders, provider verification, receipts, reconciliation, recovery).
+10. Complete Card Infrastructure: Virtual/physical issuing interfaces, expense cards, employee cards, activation/freeze/cancel/replace, spending controls, MCC restrictions, history, notifications, settlement reconciliation, chargebacks.
+11. Authorized Agent Banking Platform: Agent onboarding, verification, accounts, cash-in/cash-out, float, commissions, settlement, liquidity, limits, receipts, location discovery, fraud, supervision, reports, suspension, regional management, agent web portal. Keep live disabled until authorized.
+12. Complete Developer & Partner Portals: Developer registration, dashboard, interactive API docs, credentials, webhook monitoring & replay, usage reporting, key rotation, SDKs (Java, TS, Python, PHP, Go, .NET), WooCommerce plugin, partner certification, status page, partner dashboards.
+13. Customer & Operations Web Interfaces: Extend Wallet.tsx, Merchant.tsx, Ops.tsx, Checkout.tsx with all customer self-service, savings, requests, bills, lending, international transfer, statements, sessions, notifications; extend Ops with compliance cases, fraud investigation, lending portfolio, partner/treasury, adjustment approvals, incident response, reconciliation, regulatory returns, support ticket system.
+14. Correct Existing Financial & Security Defects: Audit and resolve Java 17 vs 25 alignment, recipient balance exposure, optional confirmation, request signing enforcement, signing secrets, in-memory replay protection, distributed rate limiting, floating-point checks, lending ledger connection, fraud enforcement at entry points, tenant/branch isolation.
+15. Complete Production Infrastructure: PostgreSQL HA, Redis distributed controls, automated backups, PITR, failover, disaster recovery, OpenTelemetry, Prometheus, Grafana, CI/CD, secret management, health checks, rollback, capacity monitoring.
+16. Execution Rules: Delta-based matrix, assign parallel engineering agents across non-overlapping modules, central Flyway migration numbering starting after latest existing migration (V22+), commit and push increments to main immediately. Exclude native mobile. Exclude Paystack & Hubtel.
+
+## Follow-up — 2026-11-22T04:38:19Z
+NEW MISSION EXPANSION: ELEPAY CORE — GAP CLOSURE AND FINTECH EXPANSION
+Extend ELEPAY into a complete independent financial and business-management platform.
+DO NOT rebuild the 100 algorithms, ledger, wallets, checkout, settlements, FX, fraud, or working components.
+Complete backend and responsive web platform (NO native mobile).
+Key domains:
+1. ELEPAY POS (dedicated POS business domain integrated with checkout, merchant, ledger, settlement)
+2. Complete Business BackOffice (extend Merchant.tsx)
+3. Inventory & Warehouse Management (catalogs, SKU, barcodes, warehouses, stock movements, POs, batches)
+4. Restaurant Management & KDS (menus, modifiers, tables, floor plans, KDS, bills, recipe costing)
+5. Business Accounting & Invoicing (Merchant GL separate from customer ledger, invoices, quotes, AR/AP, P&L, balance sheet, GRA integration)
+6. Payroll & Supplier Payments (salary records, statutory deductions, payslips, bulk payroll, supplier invoices)
+7. CRM, Loyalty & Campaigns (customer profiles, loyalty, gift cards, coupons, store credits, campaigns)
+8. Complete Lending Lifecycle (extend com.elepay.credit: origination, loan products, disbursements, repayments, delinquency; keep live lending disabled)
+9. Everyday Financial Services & Bill Payments (airtime, data, utilities, school fees, scheduled payments)
+10. Complete Card Infrastructure (virtual/physical issuing interfaces, expense cards, spending controls)
+11. Authorized Agent Banking Platform (agent onboarding, float, cash-in/out, commissions, portal; keep live disabled)
+12. Developer & Partner Portals (registration, interactive docs, credentials, webhook replay, SDKs, WooCommerce plugin)
+13. Customer & Operations Web Interfaces (extend Wallet.tsx, Merchant.tsx, Ops.tsx, Checkout.tsx)
+14. Correct Existing Financial & Security Defects (Java 17/25 alignment, recipient balance exposure, request signing enforcement, signing secrets, distributed rate limiting)
+15. Complete Production Infrastructure (PostgreSQL HA, Redis distributed controls, OTEL, Prometheus, Grafana, CI/CD)
+Execution rules: Delta-based matrix, assign parallel engineering agents across non-overlapping modules, central Flyway migration numbering (V22+), commit and push increments to main immediately as ready, exclude native mobile, exclude Paystack & Hubtel.

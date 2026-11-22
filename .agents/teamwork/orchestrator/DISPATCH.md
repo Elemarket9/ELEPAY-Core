@@ -50,3 +50,39 @@ Action required:
 2. All 5 agents write code and Flyway migrations directly.
 3. Commit and push directly to origin/main as increments are completed without intermediate auditing or review blocks.
 4. Accelerate implementation to maximum parallelism.
+
+## 2026-11-22T04:38:19Z
+From: Sentinel
+To: Project Orchestrator
+
+NEW MISSION EXPANSION: ELEPAY CORE — GAP CLOSURE AND FINTECH EXPANSION
+
+Target branch: main
+Baseline commit: 16e61d235ff3cb871cb798c918bbf8dcefe6bcf9
+
+Extend ELEPAY into a complete independent financial and business-management platform.
+DO NOT rebuild the 100 algorithms, ledger, wallets, checkout, settlements, FX, fraud, or working components.
+Complete backend and responsive web platform (NO native mobile).
+
+KEY DOMAINS TO IMPLEMENT & EXPAND:
+1. ELEPAY POS (dedicated POS business domain integrated with checkout, merchant, ledger, settlement)
+2. Complete Business BackOffice (extend Merchant.tsx)
+3. Inventory & Warehouse Management (catalogs, SKU, barcodes, warehouses, stock movements, POs, batches)
+4. Restaurant Management & KDS (menus, modifiers, tables, floor plans, KDS, bills, recipe costing)
+5. Business Accounting & Invoicing (Merchant GL separate from customer ledger, invoices, quotes, AR/AP, P&L, balance sheet, GRA integration)
+6. Payroll & Supplier Payments (salary records, statutory deductions, payslips, bulk payroll, supplier invoices)
+7. CRM, Loyalty & Campaigns (customer profiles, loyalty, gift cards, coupons, store credits, campaigns)
+8. Complete Lending Lifecycle (extend com.elepay.credit: origination, loan products, disbursements, repayments, delinquency; keep live lending disabled)
+9. Everyday Financial Services & Bill Payments (airtime, data, utilities, school fees, scheduled payments)
+10. Complete Card Infrastructure (virtual/physical issuing interfaces, expense cards, spending controls)
+11. Authorized Agent Banking Platform (agent onboarding, float, cash-in/out, commissions, portal; keep live disabled)
+12. Developer & Partner Portals (registration, interactive docs, credentials, webhook replay, SDKs, WooCommerce plugin)
+13. Customer & Operations Web Interfaces (extend Wallet.tsx, Merchant.tsx, Ops.tsx, Checkout.tsx)
+14. Correct Existing Financial & Security Defects (Java 17/25 alignment, recipient balance exposure, request signing enforcement, signing secrets, distributed rate limiting)
+15. Complete Production Infrastructure (PostgreSQL HA, Redis distributed controls, OTEL, Prometheus, Grafana, CI/CD)
+
+EXECUTION RULES:
+- Delta-based matrix, assign parallel engineering agents across non-overlapping modules.
+- Central Flyway migration numbering starting after latest existing migration (V22+).
+- Commit and push increments to main immediately as ready.
+- Exclude native mobile. Exclude Paystack & Hubtel.
