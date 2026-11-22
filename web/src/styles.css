@@ -31,3 +31,31 @@ fieldset { border: 1px solid var(--line); border-radius: 6px; } .choice { displa
 .confirm dl { display: grid; grid-template-columns: auto 1fr; gap: .3rem 1rem; }
 .confirm dt { color: var(--muted); }
 .sev-high { color: #a12a1f; font-weight: 700; } .sev-medium { color: #8a5a00; }
+
+/* Additional responsive & component styles for BackOffice, Developer & Customer Portals */
+.tag { display: inline-block; padding: .2rem .5rem; border-radius: 4px; font-size: .75rem; font-weight: 600; text-transform: uppercase; }
+.tag.active, .tag.paid, .tag.delivered, .tag.ok { background: #e3f4ea; color: #0b5d3b; }
+.tag.pending, .tag.cooking, .tag.warn { background: #fff4d6; color: #8a5a00; }
+.tag.failed, .tag.dead, .tag.cancelled, .tag.error { background: #fde8e7; color: #a12a1f; }
+.tag.info { background: #e8f0fe; color: #1a73e8; }
+
+.flex-row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+.flex-between { display: flex; justify-content: space-between; align-items: center; }
+.gap-1 { gap: 1rem; }
+
+.modal-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
+.modal-content { background: #fff; border-radius: 8px; max-width: 650px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 1.25rem; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+
+.code-box { background: #1e2422; color: #e8f0eb; padding: 1rem; border-radius: 6px; font-family: ui-monospace, monospace; font-size: .85rem; overflow-x: auto; white-space: pre; }
+
+.progress-bar { width: 100%; background: #dfe5e2; border-radius: 999px; height: 10px; overflow: hidden; margin: .5rem 0; }
+.progress-fill { background: var(--green); height: 100%; border-radius: 999px; transition: width .3s ease; }
+
+.kds-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; margin-top: 1rem; }
+.kds-card { border-top: 5px solid var(--green); background: #fff; border-radius: 6px; padding: .8rem; box-shadow: 0 2px 4px rgba(0,0,0,0.06); }
+.kds-card.urgent { border-top-color: #a12a1f; }
+.kds-card.cooking { border-top-color: #f5c542; }
+
+.virtual-card { width: 340px; height: 200px; border-radius: 14px; background: linear-gradient(135deg, #0b5d3b 0%, #154530 50%, #083b25 100%); color: #fff; padding: 1.25rem; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 8px 20px rgba(11,93,59,0.3); margin: 1rem 0; position: relative; }
+.virtual-card.frozen { filter: grayscale(1); opacity: .7; }
+.chip { width: 40px; height: 30px; background: linear-gradient(135deg, #f5c542, #e0b028); border-radius: 5px; }

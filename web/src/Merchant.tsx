@@ -12,9 +12,50 @@ interface Line {
 interface Payout { reference: string; amount: number; status: string; clientReference: string; createdAt: string; failureReason: string | null }
 interface Destination { id: string; type: string; network: string; accountNumber: string; accountName: string; verification: string }
 
-const TABS = ["Overview", "Transactions", "Settlements", "Refunds", "Disputes", "Payouts", "Collect"] as const;
+// POS & Retail
+interface CatalogItem { id: string; sku: string; name: string; category: string; pricePesewas: number; stock: number; barcode: string }
+interface CartItem { item: CatalogItem; quantity: number }
 
-/** Merchant dashboard backed by the merchant APIs; the server enforces every scope shown here. */
+// Inventory
+interface InventoryItem {
+  id: string; sku: string; name: string; category: string; stock: number; minThreshold: number;
+  reorderPoint: number; unitCostPesewas: number; location: string; lastRestocked: string;
+}
+
+// Restaurant & KDS
+interface DiningTable { id: number; name: string; seats: number; status: "AVAILABLE" | "OCCUPIED" | "RESERVED" | "BILLING"; server?: string; orderTotal?: number }
+interface KdsTicket {
+  id: string; ticketNumber: number; table: string; items: { name: string; qty: number; notes?: string }[];
+  status: "PENDING" | "COOKING" | "READY" | "SERVED"; elapsedMinutes: number; createdAt: string;
+}
+
+// Invoices & Quotes
+interface Invoice {
+  id: string; number: string; customerName: string; customerContact: string;
+  subtotal: number; vat: number; total: number; status: "DRAFT" | "SENT" | "PAID" | "OVERDUE";
+  dueDate: string; createdAt: string; isQuote: boolean;
+}
+
+// Payroll & Employees
+interface Employee {
+  id: string; name: string; role: string; department: string; baseSalaryPesewas: number;
+  ssnitTier1: number; ssnitTier2: number; payeTax: number; netSalaryPesewas: number;
+}
+
+// Customers & Loyalty
+interface CustomerProfile {
+  id: string; name: string; phone: string; email: string; totalSpendPesewas: number;
+  visitCount: number; loyaltyPoints: number; tier: "BRONZE" | "SILVER" | "GOLD" | "PLATINUM";
+  storeCreditPesewas: number;
+}
+
+const TABS = [
+  "Overview", "POS Register", "Orders & Receipts", "Inventory & Stock", "Restaurant & KDS",
+  "Invoices & Quotes", "Payroll & Employees", "Customers & Loyalty", "Business Accounting",
+  "Transactions", "Settlements", "Refunds", "Disputes", "Payouts", "Collect"
+] as const;
+
+/** Merchant BackOffice & Business Management Dashboard */
 export function MerchantDashboard() {
   const [merchants, setMerchants] = useState<MerchantView[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
@@ -40,7 +81,16 @@ export function MerchantDashboard() {
         <>
           <p className="muted">{merchant.tradingName} · code {merchant.merchantCode} · {merchant.status} · your role: {merchant.role}</p>
           <nav className="tabs">{TABS.map((t) => <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}</nav>
+
           {tab === "Overview" && <Overview id={merchant.id} />}
+          {tab === "POS Register" && <PosRegister merchant={merchant} />}
+          {tab === "Orders & Receipts" && <OrdersAndReceipts merchantId={merchant.id} />}
+          {tab === "Inventory & Stock" && <InventoryAndStock merchantId={merchant.id} />}
+          {tab === "Restaurant & KDS" && <RestaurantAndKds merchantId={merchant.id} />}
+          {tab === "Invoices & Quotes" && <InvoicesAndQuotes merchantId={merchant.id} />}
+          {tab === "Payroll & Employees" && <PayrollAndEmployees merchantId={merchant.id} />}
+          {tab === "Customers & Loyalty" && <CustomersAndLoyalty merchantId={merchant.id} />}
+          {tab === "Business Accounting" && <BusinessAccounting merchantId={merchant.id} />}
           {tab === "Transactions" && <Transactions id={merchant.id} />}
           {tab === "Settlements" && <Rows id={merchant.id} path="settlements" columns={["reference", "amount", "lines", "createdAt"]} />}
           {tab === "Refunds" && <Rows id={merchant.id} path="refunds" columns={["reference", "checkout", "line", "amount", "status", "reason"]} />}
@@ -52,6 +102,986 @@ export function MerchantDashboard() {
     </main>
   );
 }
+
+// -------------------------------------------------------------------------------------------------
+// 1. POS Register View
+// -------------------------------------------------------------------------------------------------
+const SAMPLE_CATALOG: CatalogItem[] = [
+  { id: "1", sku: "DRK-001", name: "Fresh Hibiscus Juice (Sobolo)", category: "Drinks", pricePesewas: 1500, stock: 45, barcode: "6001001" },
+  { id: "2", sku: "DRK-002", name: "Club Premium Beer 500ml", category: "Drinks", pricePesewas: 2200, stock: 80, barcode: "6001002" },
+  { id: "3", sku: "FOD-101", name: "Jollof Rice with Fried Chicken", category: "Food", pricePesewas: 4500, stock: 30, barcode: "6001003" },
+  { id: "4", sku: "FOD-102", name: "Grilled Tilapia with Banku", category: "Food", pricePesewas: 6500, stock: 25, barcode: "6001004" },
+  { id: "5", sku: "FOD-103", name: "Crispy Fried Yam & Spicy Pepper", category: "Food", pricePesewas: 2000, stock: 50, barcode: "6001005" },
+  { id: "6", sku: "GRC-201", name: "Gifty Parboiled Rice 5kg", category: "Groceries", pricePesewas: 12000, stock: 18, barcode: "6001006" },
+  { id: "7", sku: "GRC-202", name: "Frytol Vegetable Cooking Oil 1L", category: "Groceries", pricePesewas: 3800, stock: 32, barcode: "6001007" },
+  { id: "8", sku: "ELC-301", name: "USB-C Fast Charging Cable 2m", category: "Electronics", pricePesewas: 3500, stock: 15, barcode: "6001008" },
+];
+
+function PosRegister({ merchant }: { merchant: MerchantView }) {
+  const [catalog] = useState<CatalogItem[]>(SAMPLE_CATALOG);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("All");
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [discountPercent, setDiscountPercent] = useState(0);
+  const [receipt, setReceipt] = useState<{ ref: string; total: number; method: string } | null>(null);
+  const [splitMode, setSplitMode] = useState(false);
+  const [momoAmount, setMomoAmount] = useState(0);
+  const [cashAmount, setCashAmount] = useState(0);
+
+  const filtered = catalog.filter((item) => {
+    const matchCat = category === "All" || item.category === category;
+    const matchSearch = item.name.toLowerCase().includes(search.toLowerCase()) ||
+                        item.barcode.includes(search) || item.sku.toLowerCase().includes(search.toLowerCase());
+    return matchCat && matchSearch;
+  });
+
+  function addToCart(item: CatalogItem) {
+    setCart((prev) => {
+      const ex = prev.find((x) => x.item.id === item.id);
+      if (ex) return prev.map((x) => x.item.id === item.id ? { ...x, quantity: x.quantity + 1 } : x);
+      return [...prev, { item, quantity: 1 }];
+    });
+  }
+
+  function updateQty(id: string, delta: number) {
+    setCart((prev) => prev.map((x) => {
+      if (x.item.id === id) {
+        const next = x.quantity + delta;
+        return next > 0 ? { ...x, quantity: next } : null;
+      }
+      return x;
+    }).filter(Boolean) as CartItem[]);
+  }
+
+  const subtotal = cart.reduce((acc, c) => acc + c.item.pricePesewas * c.quantity, 0);
+  const discountPesewas = Math.round(subtotal * (discountPercent / 100));
+  const netBeforeTax = subtotal - discountPesewas;
+  const vatPesewas = Math.round(netBeforeTax * 0.15); // GRA Standard VAT 15%
+  const total = netBeforeTax + vatPesewas;
+
+  function checkout(method: string) {
+    if (cart.length === 0) return;
+    const ref = "pos_" + Math.random().toString(36).substring(2, 9).toUpperCase();
+    setReceipt({ ref, total, method });
+    setCart([]);
+    setDiscountPercent(0);
+    setSplitMode(false);
+  }
+
+  return (
+    <div className="cards" style={{ gridTemplateColumns: "1.3fr 1fr", alignItems: "start" }}>
+      {/* Product Catalog */}
+      <section className="panel">
+        <div className="flex-between">
+          <h3>POS Product Catalog</h3>
+          <input
+            placeholder="Search by name, SKU or barcode…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ maxWidth: "260px" }}
+          />
+        </div>
+
+        <div className="flex-row" style={{ margin: ".5rem 0" }}>
+          {["All", "Drinks", "Food", "Groceries", "Electronics"].map((cat) => (
+            <button
+              key={cat}
+              className={`small ${category === cat ? "" : "secondary"}`}
+              onClick={() => setCategory(cat)}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: ".6rem", marginTop: ".8rem" }}>
+          {filtered.map((item) => (
+            <div
+              key={item.id}
+              onClick={() => addToCart(item)}
+              style={{
+                border: "1px solid var(--line)", borderRadius: "6px", padding: ".6rem",
+                cursor: "pointer", background: "#fff", display: "flex", flexDirection: "column", justifyContent: "space-between"
+              }}
+            >
+              <div>
+                <div className="small muted mono">{item.sku}</div>
+                <strong>{item.name}</strong>
+              </div>
+              <div className="flex-between" style={{ marginTop: ".5rem" }}>
+                <span className="big" style={{ fontSize: "1.1rem" }}>{formatMoney(item.pricePesewas)}</span>
+                <span className="small muted">Stock: {item.stock}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Cart & Register Summary */}
+      <section className="panel">
+        <h3>Current Sale / Register</h3>
+        {cart.length === 0 ? (
+          <p className="muted" style={{ padding: "2rem 0", textAlign: "center" }}>Cart is empty. Tap items on the left to add.</p>
+        ) : (
+          <div>
+            <table className="lines">
+              <tbody>
+                {cart.map((c) => (
+                  <tr key={c.item.id}>
+                    <td>
+                      <div><strong>{c.item.name}</strong></div>
+                      <div className="small muted">{formatMoney(c.item.pricePesewas)} each</div>
+                    </td>
+                    <td>
+                      <div className="flex-row">
+                        <button className="small secondary" onClick={() => updateQty(c.item.id, -1)}>-</button>
+                        <span>{c.quantity}</span>
+                        <button className="small secondary" onClick={() => updateQty(c.item.id, 1)}>+</button>
+                      </div>
+                    </td>
+                    <td className="num">{formatMoney(c.item.pricePesewas * c.quantity)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <hr style={{ border: "0", borderTop: "1px solid var(--line)", margin: ".8rem 0" }} />
+
+            <div className="flex-between">
+              <span>Subtotal:</span>
+              <span>{formatMoney(subtotal)}</span>
+            </div>
+            <div className="flex-between" style={{ marginTop: ".3rem" }}>
+              <span>Discount ({discountPercent}%):</span>
+              <span>-{formatMoney(discountPesewas)}</span>
+            </div>
+            <div className="flex-between" style={{ marginTop: ".3rem" }}>
+              <span>GRA VAT (15%):</span>
+              <span>{formatMoney(vatPesewas)}</span>
+            </div>
+            <div className="flex-between" style={{ marginTop: ".5rem", fontSize: "1.2rem", fontWeight: "700" }}>
+              <span>Total Payable:</span>
+              <span>{formatMoney(total)}</span>
+            </div>
+
+            <div className="flex-row" style={{ marginTop: ".5rem" }}>
+              {[0, 5, 10, 15].map((d) => (
+                <button
+                  key={d}
+                  className={`small ${discountPercent === d ? "" : "secondary"}`}
+                  onClick={() => setDiscountPercent(d)}
+                >
+                  {d === 0 ? "No Disc" : `${d}% Disc`}
+                </button>
+              ))}
+            </div>
+
+            {splitMode ? (
+              <div style={{ marginTop: "1rem", background: "#f7f9f8", padding: ".75rem", borderRadius: "6px" }}>
+                <h4>Split Tender Payment</h4>
+                <label>Cash Amount (GH₵)
+                  <input
+                    type="number"
+                    value={cashAmount ? cashAmount / 100 : ""}
+                    onChange={(e) => {
+                      const p = Math.round(Number(e.target.value) * 100);
+                      setCashAmount(p);
+                      setMomoAmount(Math.max(0, total - p));
+                    }}
+                  />
+                </label>
+                <label>Mobile Money / Card Remainder (GH₵)
+                  <input
+                    type="number"
+                    value={momoAmount ? momoAmount / 100 : ""}
+                    disabled
+                  />
+                </label>
+                <button onClick={() => checkout(`Split (Cash ${formatMoney(cashAmount)} + MoMo ${formatMoney(momoAmount)})`)}>
+                  Complete Split Sale
+                </button>
+                <button className="secondary" onClick={() => setSplitMode(false)}>Cancel Split</button>
+              </div>
+            ) : (
+              <div style={{ marginTop: "1rem" }}>
+                <h4>Tender Payment</h4>
+                <div className="flex-row">
+                  <button onClick={() => checkout("Cash")}>💵 Cash</button>
+                  <button onClick={() => checkout("Mobile Money")}>📱 MoMo</button>
+                  <button onClick={() => checkout("Card")}>💳 Card</button>
+                  <button className="secondary" onClick={() => { setSplitMode(true); setCashAmount(Math.round(total / 2)); setMomoAmount(total - Math.round(total / 2)); }}>
+                    ⚖️ Split Tender
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* Printed Receipt Modal */}
+      {receipt && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: "400px", textAlign: "center" }}>
+            <h3>ELEPAY SALES RECEIPT</h3>
+            <p className="small muted">{merchant.tradingName} · Code {merchant.merchantCode}</p>
+            <p className="mono small">Receipt Ref: {receipt.ref}</p>
+            <p className="small">{new Date().toLocaleString()}</p>
+            <hr style={{ border: "0", borderTop: "1px dashed #ccc", margin: ".8rem 0" }} />
+            <div className="flex-between">
+              <span>Paid via {receipt.method}:</span>
+              <strong>{formatMoney(receipt.total)}</strong>
+            </div>
+            <p className="small muted" style={{ marginTop: "1rem" }}>Thank you for your business!<br />Ghana Revenue Authority e-VAT Registered</p>
+            <div style={{ marginTop: "1rem" }}>
+              <button onClick={() => window.print()}>🖨️ Print Receipt</button>
+              <button className="secondary" onClick={() => setReceipt(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------------------------
+// 2. Orders & Receipts View
+// -------------------------------------------------------------------------------------------------
+function OrdersAndReceipts({ merchantId }: { merchantId: string }) {
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [searchRef, setSearchRef] = useState("");
+  const [selectedReceipt, setSelectedReceipt] = useState<Line | null>(null);
+  const [orders, setOrders] = useState<Line[]>([]);
+
+  useEffect(() => {
+    api<Line[]>(`/v1/merchants/${merchantId}/transactions`)
+      .then(setOrders)
+      .catch(() => setOrders([]));
+  }, [merchantId]);
+
+  const filtered = orders.filter((o) => {
+    const matchStatus = filterStatus === "all" || o.status.toLowerCase() === filterStatus.toLowerCase();
+    const matchRef = o.reference.toLowerCase().includes(searchRef.toLowerCase()) ||
+                     (o.description && o.description.toLowerCase().includes(searchRef.toLowerCase()));
+    return matchStatus && matchRef;
+  });
+
+  return (
+    <div>
+      <div className="flex-between">
+        <div className="flex-row">
+          <label className="choice">Filter:
+            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={{ width: "auto" }}>
+              <option value="all">All Orders</option>
+              <option value="settled">Settled</option>
+              <option value="pending">Pending</option>
+              <option value="refunded">Refunded</option>
+            </select>
+          </label>
+          <input
+            placeholder="Search receipt ref or item…"
+            value={searchRef}
+            onChange={(e) => setSearchRef(e.target.value)}
+            style={{ width: "240px" }}
+          />
+        </div>
+      </div>
+
+      <table className="grid" style={{ marginTop: "1rem" }}>
+        <thead>
+          <tr>
+            <th>Receipt Ref</th>
+            <th>Description</th>
+            <th>Payer</th>
+            <th className="num">Gross</th>
+            <th className="num">Fee</th>
+            <th className="num">Net</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filtered.map((o) => (
+            <tr key={o.reference + o.line}>
+              <td className="mono">{o.reference}</td>
+              <td>{o.kind} {o.description || "Order item"}</td>
+              <td>{o.collector}</td>
+              <td className="num">{formatMoney(o.amount)}</td>
+              <td className="num">{formatMoney(o.fee)}</td>
+              <td className="num">{formatMoney(o.net)}</td>
+              <td><span className={`tag ${o.status === "settled" ? "active" : "pending"}`}>{o.status}</span></td>
+              <td>
+                <button className="small secondary" onClick={() => setSelectedReceipt(o)}>View Receipt</button>
+              </td>
+            </tr>
+          ))}
+          {filtered.length === 0 && (
+            <tr><td colSpan={8} className="muted">No orders match the current filter.</td></tr>
+          )}
+        </tbody>
+      </table>
+
+      {selectedReceipt && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: "450px" }}>
+            <div className="flex-between">
+              <h3>Receipt Details</h3>
+              <button className="small secondary" onClick={() => setSelectedReceipt(null)}>✕</button>
+            </div>
+            <p className="mono small">Reference: {selectedReceipt.reference}</p>
+            <table className="lines">
+              <tbody>
+                <tr><td>Item Description</td><td className="num">{selectedReceipt.description || "Sales Item"}</td></tr>
+                <tr><td>Gross Amount</td><td className="num">{formatMoney(selectedReceipt.amount)}</td></tr>
+                <tr><td>Platform & Processing Fee</td><td className="num">{formatMoney(selectedReceipt.fee)}</td></tr>
+                <tr className="total"><td>Merchant Net Receivable</td><td className="num">{formatMoney(selectedReceipt.net)}</td></tr>
+              </tbody>
+            </table>
+            <div style={{ marginTop: "1rem" }}>
+              <button onClick={() => window.print()}>Print Receipt</button>
+              <button className="secondary" onClick={() => setSelectedReceipt(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------------------------
+// 3. Inventory & Stock Levels View
+// -------------------------------------------------------------------------------------------------
+const SAMPLE_INVENTORY: InventoryItem[] = [
+  { id: "1", sku: "DRK-001", name: "Fresh Hibiscus Juice (Sobolo)", category: "Drinks", stock: 45, minThreshold: 20, reorderPoint: 50, unitCostPesewas: 700, location: "Main Cold Storage", lastRestocked: "2026-11-20" },
+  { id: "2", sku: "DRK-002", name: "Club Premium Beer 500ml", category: "Drinks", stock: 12, minThreshold: 24, reorderPoint: 60, unitCostPesewas: 1400, location: "Main Bar Warehouse", lastRestocked: "2026-11-18" },
+  { id: "3", sku: "FOD-101", name: "Imported Jasmine Rice 25kg", category: "Food Raw", stock: 8, minThreshold: 10, reorderPoint: 25, unitCostPesewas: 35000, location: "Pantry Dry Store", lastRestocked: "2026-11-15" },
+  { id: "4", sku: "FOD-102", name: "Fresh Lake Volta Tilapia (Large)", category: "Food Raw", stock: 4, minThreshold: 15, reorderPoint: 30, unitCostPesewas: 3200, location: "Deep Freezer #2", lastRestocked: "2026-11-21" },
+  { id: "5", sku: "GRC-201", name: "Frytol Vegetable Cooking Oil 20L", category: "Groceries", stock: 16, minThreshold: 5, reorderPoint: 20, unitCostPesewas: 28000, location: "Kitchen Stockroom", lastRestocked: "2026-11-19" },
+];
+
+function InventoryAndStock({ merchantId: _mId }: { merchantId: string }) {
+  const [items, setItems] = useState<InventoryItem[]>(SAMPLE_INVENTORY);
+  const [restockItem, setRestockItem] = useState<InventoryItem | null>(null);
+  const [addQty, setAddQty] = useState(10);
+  const [note, setNote] = useState("");
+
+  const lowStockCount = items.filter((x) => x.stock <= x.minThreshold).length;
+  const totalValue = items.reduce((acc, x) => acc + x.stock * x.unitCostPesewas, 0);
+
+  function executeRestock() {
+    if (!restockItem) return;
+    setItems((prev) => prev.map((x) => x.id === restockItem.id ? { ...x, stock: x.stock + addQty, lastRestocked: new Date().toISOString().substring(0, 10) } : x));
+    setRestockItem(null);
+    setNote("");
+  }
+
+  return (
+    <div>
+      <div className="cards">
+        <div className="card"><div className="muted">Total Tracked SKUs</div><div className="big">{items.length}</div></div>
+        <div className="card"><div className="muted">Low Stock Alerts</div><div className="big" style={{ color: lowStockCount > 0 ? "#a12a1f" : "inherit" }}>{lowStockCount}</div></div>
+        <div className="card"><div className="muted">Total Inventory Valuation</div><div className="big">{formatMoney(totalValue)}</div></div>
+      </div>
+
+      <h3>Stock Inventory Levels</h3>
+      <table className="grid">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>Item Name</th>
+            <th>Category</th>
+            <th>Storage Location</th>
+            <th className="num">Stock on Hand</th>
+            <th className="num">Min Threshold</th>
+            <th className="num">Unit Cost</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it) => {
+            const isLow = it.stock <= it.minThreshold;
+            return (
+              <tr key={it.id}>
+                <td className="mono">{it.sku}</td>
+                <td><strong>{it.name}</strong></td>
+                <td>{it.category}</td>
+                <td>{it.location}</td>
+                <td className="num font-bold">{it.stock}</td>
+                <td className="num muted">{it.minThreshold}</td>
+                <td className="num">{formatMoney(it.unitCostPesewas)}</td>
+                <td>
+                  <span className={`tag ${isLow ? "failed" : "active"}`}>
+                    {isLow ? "Low Stock" : "In Stock"}
+                  </span>
+                </td>
+                <td>
+                  <button className="small" onClick={() => { setRestockItem(it); setAddQty(it.reorderPoint - it.stock > 0 ? it.reorderPoint - it.stock : 20); }}>
+                    + Restock
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {restockItem && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: "450px" }}>
+            <h3>Restock {restockItem.name}</h3>
+            <p className="muted">Current Stock: {restockItem.stock} · Reorder Target: {restockItem.reorderPoint}</p>
+            <label>Quantity to Receive
+              <input type="number" min="1" value={addQty} onChange={(e) => setAddQty(Number(e.target.value))} />
+            </label>
+            <label>Supplier / Delivery Note
+              <input placeholder="e.g. Received from Accra Central Market" value={note} onChange={(e) => setNote(e.target.value)} />
+            </label>
+            <div style={{ marginTop: "1rem" }}>
+              <button onClick={() => executeRestock()}>Confirm Restock (+{addQty})</button>
+              <button className="secondary" onClick={() => setRestockItem(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------------------------
+// 4. Restaurant Floor & KDS View
+// -------------------------------------------------------------------------------------------------
+const SAMPLE_TABLES: DiningTable[] = [
+  { id: 1, name: "Table 1", seats: 2, status: "OCCUPIED", server: "Kofi", orderTotal: 8500 },
+  { id: 2, name: "Table 2", seats: 4, status: "AVAILABLE" },
+  { id: 3, name: "Table 3", seats: 4, status: "BILLING", server: "Ama", orderTotal: 14500 },
+  { id: 4, name: "Table 4", seats: 6, status: "OCCUPIED", server: "Kofi", orderTotal: 22000 },
+  { id: 5, name: "Table 5", seats: 2, status: "RESERVED" },
+  { id: 6, name: "Table 6", seats: 8, status: "AVAILABLE" },
+];
+
+const SAMPLE_KDS: KdsTicket[] = [
+  {
+    id: "t1", ticketNumber: 104, table: "Table 1", elapsedMinutes: 8, status: "COOKING", createdAt: "12:14 PM",
+    items: [{ name: "Jollof Rice with Grilled Chicken", qty: 2 }, { name: "Sobolo Drink", qty: 2 }]
+  },
+  {
+    id: "t2", ticketNumber: 105, table: "Table 4", elapsedMinutes: 22, status: "PENDING", createdAt: "12:00 PM",
+    items: [{ name: "Grilled Tilapia with Banku", qty: 2, notes: "Extra spicy shito" }, { name: "Crispy Fried Yam", qty: 2 }]
+  },
+  {
+    id: "t3", ticketNumber: 106, table: "Table 3", elapsedMinutes: 5, status: "READY", createdAt: "12:17 PM",
+    items: [{ name: "Kelewele & Peanuts", qty: 3 }]
+  },
+];
+
+function RestaurantAndKds({ merchantId: _mId }: { merchantId: string }) {
+  const [subTab, setSubTab] = useState<"floor" | "kds">("floor");
+  const [tables, setTables] = useState<DiningTable[]>(SAMPLE_TABLES);
+  const [tickets, setTickets] = useState<KdsTicket[]>(SAMPLE_KDS);
+
+  function advanceTicket(id: string) {
+    setTickets((prev) => prev.map((t) => {
+      if (t.id === id) {
+        const nextStatus = t.status === "PENDING" ? "COOKING" : t.status === "COOKING" ? "READY" : "SERVED";
+        return { ...t, status: nextStatus };
+      }
+      return t;
+    }));
+  }
+
+  return (
+    <div>
+      <div className="flex-row" style={{ marginBottom: "1rem" }}>
+        <button className={subTab === "floor" ? "" : "secondary"} onClick={() => setSubTab("floor")}>
+          🍽️ Table Floor Plan
+        </button>
+        <button className={subTab === "kds" ? "" : "secondary"} onClick={() => setSubTab("kds")}>
+          👨‍🍳 Kitchen Display System (KDS)
+        </button>
+      </div>
+
+      {subTab === "floor" && (
+        <div>
+          <h3>Restaurant Dining Floor Layout</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "1rem", marginTop: ".8rem" }}>
+            {tables.map((t) => (
+              <div
+                key={t.id}
+                style={{
+                  border: "1px solid var(--line)", borderRadius: "8px", padding: "1rem",
+                  background: "#fff", borderLeft: `6px solid ${
+                    t.status === "AVAILABLE" ? "#0b5d3b" : t.status === "OCCUPIED" ? "#f5c542" : t.status === "BILLING" ? "#a12a1f" : "#1a73e8"
+                  }`
+                }}
+              >
+                <div className="flex-between">
+                  <strong>{t.name}</strong>
+                  <span className={`tag ${t.status === "AVAILABLE" ? "active" : t.status === "OCCUPIED" ? "pending" : "failed"}`}>
+                    {t.status}
+                  </span>
+                </div>
+                <div className="muted small" style={{ margin: ".4rem 0" }}>Capacity: {t.seats} Guests</div>
+                {t.server && <div className="small">Server: <strong>{t.server}</strong></div>}
+                {t.orderTotal && <div className="big" style={{ fontSize: "1.2rem", marginTop: ".3rem" }}>{formatMoney(t.orderTotal)}</div>}
+                <div style={{ marginTop: ".8rem" }}>
+                  {t.status === "AVAILABLE" ? (
+                    <button className="small" onClick={() => setTables(tables.map((x) => x.id === t.id ? { ...x, status: "OCCUPIED", server: "Kwame" } : x))}>
+                      Seat Guests
+                    </button>
+                  ) : t.status === "OCCUPIED" ? (
+                    <button className="small secondary" onClick={() => setTables(tables.map((x) => x.id === t.id ? { ...x, status: "BILLING" } : x))}>
+                      Request Bill
+                    </button>
+                  ) : (
+                    <button className="small" onClick={() => setTables(tables.map((x) => x.id === t.id ? { ...x, status: "AVAILABLE", server: undefined, orderTotal: undefined } : x))}>
+                      Clear Table
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {subTab === "kds" && (
+        <div>
+          <div className="flex-between">
+            <h3>Kitchen Display System (KDS) Real-Time Tickets</h3>
+            <span className="muted small">Auto-refreshes · Live cooking orders</span>
+          </div>
+
+          <div className="kds-grid">
+            {tickets.map((tk) => {
+              const isUrgent = tk.elapsedMinutes >= 20;
+              return (
+                <div key={tk.id} className={`kds-card ${isUrgent ? "urgent" : tk.status === "COOKING" ? "cooking" : ""}`}>
+                  <div className="flex-between">
+                    <div>
+                      <strong>#{tk.ticketNumber} · {tk.table}</strong>
+                      <div className="small muted">{tk.createdAt}</div>
+                    </div>
+                    <span className={`tag ${isUrgent ? "failed" : "pending"}`}>
+                      ⏱️ {tk.elapsedMinutes} mins
+                    </span>
+                  </div>
+
+                  <hr style={{ border: "0", borderTop: "1px solid var(--line)", margin: ".5rem 0" }} />
+
+                  <ul style={{ paddingLeft: "1.2rem", margin: ".5rem 0" }}>
+                    {tk.items.map((it, i) => (
+                      <li key={i} style={{ margin: ".3rem 0" }}>
+                        <strong>{it.qty}x</strong> {it.name}
+                        {it.notes && <div className="small" style={{ color: "#a12a1f" }}>Note: {it.notes}</div>}
+                      </li>
+                    ))}
+                  </ul>
+
+                  <div className="flex-between" style={{ marginTop: "1rem" }}>
+                    <span className="tag info">{tk.status}</span>
+                    {tk.status !== "SERVED" && (
+                      <button className="small" onClick={() => advanceTicket(tk.id)}>
+                        {tk.status === "PENDING" ? "Start Cooking" : tk.status === "COOKING" ? "Mark Ready" : "Served"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------------------------
+// 5. Invoices & Quotes View
+// -------------------------------------------------------------------------------------------------
+const SAMPLE_INVOICES: Invoice[] = [
+  { id: "1", number: "INV-2026-001", customerName: "Acme Corp Ghana", customerContact: "billing@acme.gh", subtotal: 1000000, vat: 150000, total: 1150000, status: "PAID", dueDate: "2026-11-20", createdAt: "2026-11-05", isQuote: false },
+  { id: "2", number: "INV-2026-002", customerName: "Golden Pod Cocoa Ltd", customerContact: "+233241234567", subtotal: 450000, vat: 67500, total: 517500, status: "SENT", dueDate: "2026-11-30", createdAt: "2026-11-15", isQuote: false },
+  { id: "3", number: "QTE-2026-003", customerName: "Tema Logistics Hub", customerContact: "procure@temalog.com", subtotal: 820000, vat: 123000, total: 943000, status: "DRAFT", dueDate: "2026-12-05", createdAt: "2026-11-21", isQuote: true },
+];
+
+function InvoicesAndQuotes({ merchantId: _mId }: { merchantId: string }) {
+  const [invoices, setInvoices] = useState<Invoice[]>(SAMPLE_INVOICES);
+  const [showCreate, setShowCreate] = useState(false);
+  const [custName, setCustName] = useState("");
+  const [custContact, setCustContact] = useState("");
+  const [amount, setAmount] = useState("");
+  const [isQuote, setIsQuote] = useState(false);
+
+  function createDoc() {
+    const pesewas = parseMoney(amount);
+    if (!custName || !pesewas) return;
+    const vat = Math.round(pesewas * 0.15);
+    const newDoc: Invoice = {
+      id: String(Date.now()),
+      number: `${isQuote ? "QTE" : "INV"}-2026-${String(invoices.length + 1).padStart(3, "0")}`,
+      customerName: custName,
+      customerContact: custContact,
+      subtotal: pesewas,
+      vat,
+      total: pesewas + vat,
+      status: "SENT",
+      dueDate: "2026-12-15",
+      createdAt: new Date().toISOString().substring(0, 10),
+      isQuote,
+    };
+    setInvoices([newDoc, ...invoices]);
+    setShowCreate(false);
+    setCustName(""); setCustContact(""); setAmount("");
+  }
+
+  function convertQuote(id: string) {
+    setInvoices(invoices.map((inv) => inv.id === id ? { ...inv, isQuote: false, number: inv.number.replace("QTE", "INV"), status: "SENT" } : inv));
+  }
+
+  return (
+    <div>
+      <div className="flex-between">
+        <h3>Customer Invoices &amp; Quotes</h3>
+        <button onClick={() => setShowCreate(true)}>+ Create Invoice / Quote</button>
+      </div>
+
+      <table className="grid" style={{ marginTop: "1rem" }}>
+        <thead>
+          <tr>
+            <th>Number</th>
+            <th>Type</th>
+            <th>Customer</th>
+            <th>Due Date</th>
+            <th className="num">Subtotal</th>
+            <th className="num">VAT (15%)</th>
+            <th className="num">Total</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {invoices.map((inv) => (
+            <tr key={inv.id}>
+              <td className="mono">{inv.number}</td>
+              <td><span className="tag info">{inv.isQuote ? "Quote" : "Invoice"}</span></td>
+              <td>
+                <strong>{inv.customerName}</strong>
+                <div className="small muted">{inv.customerContact}</div>
+              </td>
+              <td>{inv.dueDate}</td>
+              <td className="num">{formatMoney(inv.subtotal)}</td>
+              <td className="num">{formatMoney(inv.vat)}</td>
+              <td className="num font-bold">{formatMoney(inv.total)}</td>
+              <td>
+                <span className={`tag ${inv.status === "PAID" ? "active" : inv.status === "SENT" ? "pending" : "failed"}`}>
+                  {inv.status}
+                </span>
+              </td>
+              <td>
+                {inv.isQuote && (
+                  <button className="small secondary" onClick={() => convertQuote(inv.id)}>Convert to Invoice</button>
+                )}
+                <button className="small" onClick={() => window.print()}>Download PDF</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {showCreate && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: "450px" }}>
+            <h3>Create {isQuote ? "Quote" : "Invoice"}</h3>
+            <label className="choice">
+              <input type="checkbox" checked={isQuote} onChange={(e) => setIsQuote(e.target.checked)} />
+              Issue as Quotation / Pro-Forma (instead of Tax Invoice)
+            </label>
+            <label>Customer Name / Business
+              <input value={custName} onChange={(e) => setCustName(e.target.value)} required />
+            </label>
+            <label>Customer Email or Phone
+              <input value={custContact} onChange={(e) => setCustContact(e.target.value)} />
+            </label>
+            <label>Amount in GH₵ (excl. VAT)
+              <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="e.g. 500.00" />
+            </label>
+            <div style={{ marginTop: "1rem" }}>
+              <button onClick={() => createDoc()}>Issue {isQuote ? "Quote" : "Invoice"}</button>
+              <button className="secondary" onClick={() => setShowCreate(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------------------------
+// 6. Payroll & Employees View
+// -------------------------------------------------------------------------------------------------
+const SAMPLE_EMPLOYEES: Employee[] = [
+  { id: "1", name: "Kwame Mensah", role: "Store Manager", department: "Operations", baseSalaryPesewas: 600000, ssnitTier1: 81000, ssnitTier2: 30000, payeTax: 72000, netSalaryPesewas: 417000 },
+  { id: "2", name: "Abena Osei", role: "Head Chef", department: "Kitchen", baseSalaryPesewas: 500000, ssnitTier1: 67500, ssnitTier2: 25000, payeTax: 55000, netSalaryPesewas: 352500 },
+  { id: "3", name: "Emmanuel Darko", role: "POS Cashier", department: "Retail", baseSalaryPesewas: 250000, ssnitTier1: 33750, ssnitTier2: 12500, payeTax: 18000, netSalaryPesewas: 185750 },
+  { id: "4", name: "Grace Quaye", role: "Waitress / Server", department: "Front of House", baseSalaryPesewas: 220000, ssnitTier1: 29700, ssnitTier2: 11000, payeTax: 14000, netSalaryPesewas: 165300 },
+];
+
+function PayrollAndEmployees({ merchantId: _mId }: { merchantId: string }) {
+  const [employees] = useState<Employee[]>(SAMPLE_EMPLOYEES);
+  const [payslipEmployee, setPayslipEmployee] = useState<Employee | null>(null);
+  const [payrollRan, setPayrollRan] = useState(false);
+
+  const grossTotal = employees.reduce((acc, e) => acc + e.baseSalaryPesewas, 0);
+  const deductionsTotal = employees.reduce((acc, e) => acc + e.ssnitTier1 + e.ssnitTier2 + e.payeTax, 0);
+  const netTotal = employees.reduce((acc, e) => acc + e.netSalaryPesewas, 0);
+
+  return (
+    <div>
+      <div className="cards">
+        <div className="card"><div className="muted">Total Headcount</div><div className="big">{employees.length}</div></div>
+        <div className="card"><div className="muted">Gross Monthly Payroll</div><div className="big">{formatMoney(grossTotal)}</div></div>
+        <div className="card"><div className="muted">Statutory Deductions (GRA &amp; SSNIT)</div><div className="big">{formatMoney(deductionsTotal)}</div></div>
+        <div className="card"><div className="muted">Net Payable via ELEPAY</div><div className="big" style={{ color: "#0b5d3b" }}>{formatMoney(netTotal)}</div></div>
+      </div>
+
+      <div className="flex-between">
+        <h3>Staff Roster &amp; Statutory Remittances</h3>
+        <button onClick={() => setPayrollRan(true)} disabled={payrollRan}>
+          {payrollRan ? "✓ Payroll Processed This Month" : "🚀 Run Monthly Payroll"}
+        </button>
+      </div>
+
+      {payrollRan && (
+        <div className="notice ok">
+          Payroll successfully executed. Net salaries paid directly to employees' mobile wallets or bank accounts via ELEPAY Payout Rails.
+        </div>
+      )}
+
+      <table className="grid" style={{ marginTop: "1rem" }}>
+        <thead>
+          <tr>
+            <th>Employee</th>
+            <th>Role</th>
+            <th>Department</th>
+            <th className="num">Gross Base</th>
+            <th className="num">SSNIT 13.5%</th>
+            <th className="num">SSNIT 5%</th>
+            <th className="num">GRA PAYE</th>
+            <th className="num">Net Pay</th>
+            <th>Payslip</th>
+          </tr>
+        </thead>
+        <tbody>
+          {employees.map((emp) => (
+            <tr key={emp.id}>
+              <td><strong>{emp.name}</strong></td>
+              <td>{emp.role}</td>
+              <td>{emp.department}</td>
+              <td className="num">{formatMoney(emp.baseSalaryPesewas)}</td>
+              <td className="num muted">{formatMoney(emp.ssnitTier1)}</td>
+              <td className="num muted">{formatMoney(emp.ssnitTier2)}</td>
+              <td className="num muted">{formatMoney(emp.payeTax)}</td>
+              <td className="num font-bold">{formatMoney(emp.netSalaryPesewas)}</td>
+              <td>
+                <button className="small secondary" onClick={() => setPayslipEmployee(emp)}>View Slip</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {payslipEmployee && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: "420px" }}>
+            <div className="flex-between">
+              <h3>Monthly Payslip</h3>
+              <button className="small secondary" onClick={() => setPayslipEmployee(null)}>✕</button>
+            </div>
+            <p><strong>{payslipEmployee.name}</strong> · {payslipEmployee.role} ({payslipEmployee.department})</p>
+            <p className="small muted">Pay Period: November 2026</p>
+            <hr style={{ border: "0", borderTop: "1px solid var(--line)", margin: ".8rem 0" }} />
+            <table className="lines">
+              <tbody>
+                <tr><td>Basic Salary</td><td className="num">{formatMoney(payslipEmployee.baseSalaryPesewas)}</td></tr>
+                <tr><td>SSNIT Tier 1 (Employer 13.5%)</td><td className="num">-{formatMoney(payslipEmployee.ssnitTier1)}</td></tr>
+                <tr><td>SSNIT Tier 2 (Employee 5%)</td><td className="num">-{formatMoney(payslipEmployee.ssnitTier2)}</td></tr>
+                <tr><td>GRA Income Tax (PAYE)</td><td className="num">-{formatMoney(payslipEmployee.payeTax)}</td></tr>
+                <tr className="total"><td>Net Take-Home Salary</td><td className="num">{formatMoney(payslipEmployee.netSalaryPesewas)}</td></tr>
+              </tbody>
+            </table>
+            <div style={{ marginTop: "1rem" }}>
+              <button onClick={() => window.print()}>Print Payslip</button>
+              <button className="secondary" onClick={() => setPayslipEmployee(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------------------------
+// 7. Customers & Loyalty View
+// -------------------------------------------------------------------------------------------------
+const SAMPLE_CUSTOMERS: CustomerProfile[] = [
+  { id: "1", name: "Yaw Boateng", phone: "+233 24 999 1111", email: "yaw.boateng@gmail.com", totalSpendPesewas: 350000, visitCount: 24, loyaltyPoints: 450, tier: "GOLD", storeCreditPesewas: 5000 },
+  { id: "2", name: "Akua Konadu", phone: "+233 20 888 2222", email: "akua.k@yahoo.com", totalSpendPesewas: 180000, visitCount: 14, loyaltyPoints: 210, tier: "SILVER", storeCreditPesewas: 0 },
+  { id: "3", name: "Kofi Owusu", phone: "+233 55 777 3333", email: "kowusu@outlook.com", totalSpendPesewas: 95000, visitCount: 6, loyaltyPoints: 95, tier: "BRONZE", storeCreditPesewas: 1500 },
+];
+
+function CustomersAndLoyalty({ merchantId: _mId }: { merchantId: string }) {
+  const [customers, setCustomers] = useState<CustomerProfile[]>(SAMPLE_CUSTOMERS);
+  const [activeCust, setActiveCust] = useState<CustomerProfile | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  function issueCredit(id: string) {
+    setCustomers(customers.map((c) => c.id === id ? { ...c, storeCreditPesewas: c.storeCreditPesewas + 2000 } : c));
+    setMsg("GH₵ 20.00 Store Credit issued to customer!");
+    setActiveCust(null);
+  }
+
+  return (
+    <div>
+      <div className="flex-between">
+        <h3>Customer CRM, Loyalty &amp; Rewards</h3>
+        <p className="muted small">Track customer lifetime value, loyalty tiers, and issue store credit.</p>
+      </div>
+
+      {msg && <p className="notice ok">{msg}</p>}
+
+      <table className="grid" style={{ marginTop: "1rem" }}>
+        <thead>
+          <tr>
+            <th>Customer</th>
+            <th>Contact</th>
+            <th className="num">Visits</th>
+            <th className="num">Lifetime Spend</th>
+            <th>Tier</th>
+            <th className="num">Loyalty Points</th>
+            <th className="num">Store Credit</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {customers.map((c) => (
+            <tr key={c.id}>
+              <td><strong>{c.name}</strong></td>
+              <td className="small">{c.phone}<br />{c.email}</td>
+              <td className="num">{c.visitCount}</td>
+              <td className="num font-bold">{formatMoney(c.totalSpendPesewas)}</td>
+              <td>
+                <span className={`tag ${c.tier === "GOLD" ? "warn" : c.tier === "SILVER" ? "info" : "pending"}`}>
+                  {c.tier}
+                </span>
+              </td>
+              <td className="num">{c.loyaltyPoints} pts</td>
+              <td className="num font-bold">{formatMoney(c.storeCreditPesewas)}</td>
+              <td>
+                <button className="small secondary" onClick={() => setActiveCust(c)}>Manage</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {activeCust && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: "420px" }}>
+            <h3>Manage Customer: {activeCust.name}</h3>
+            <p>Tier: <strong>{activeCust.tier}</strong> · Points: {activeCust.loyaltyPoints}</p>
+            <div style={{ marginTop: "1rem" }}>
+              <button onClick={() => issueCredit(activeCust.id)}>+ Issue GH₵ 20 Store Credit</button>
+              <button className="secondary" onClick={() => setActiveCust(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------------------------
+// 8. Business Accounting (P&L and Balance Sheet)
+// -------------------------------------------------------------------------------------------------
+function BusinessAccounting({ merchantId: _mId }: { merchantId: string }) {
+  const [statement, setStatement] = useState<"pl" | "bs">("pl");
+
+  return (
+    <div>
+      <div className="flex-row" style={{ marginBottom: "1rem" }}>
+        <button className={statement === "pl" ? "" : "secondary"} onClick={() => setStatement("pl")}>
+          📊 Profit &amp; Loss (P&amp;L) Statement
+        </button>
+        <button className={statement === "bs" ? "" : "secondary"} onClick={() => setStatement("bs")}>
+          📑 Balance Sheet
+        </button>
+      </div>
+
+      {statement === "pl" ? (
+        <section className="panel" style={{ maxWidth: "650px" }}>
+          <h3>Profit &amp; Loss Statement</h3>
+          <p className="muted small">For Year-to-Date 2026 (Currency: Ghana Cedi GH₵)</p>
+          <table className="lines">
+            <tbody>
+              <tr><td colSpan={2}><strong>REVENUE</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Gross POS &amp; Checkout Sales</td><td className="num">GH₵ 128,500.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Less: Returns &amp; Customer Discounts</td><td className="num">-GH₵ 2,100.00</td></tr>
+              <tr className="total"><td>Net Revenue</td><td className="num">GH₵ 126,400.00</td></tr>
+
+              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>COST OF GOODS SOLD (COGS)</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Raw Materials &amp; Wholesale Stock</td><td className="num">GH₵ 52,000.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Packaging &amp; Supplier Freight</td><td className="num">GH₵ 4,300.00</td></tr>
+              <tr className="total"><td>Gross Profit (52.2% Margin)</td><td className="num">GH₵ 70,100.00</td></tr>
+
+              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>OPERATING EXPENSES</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Salaries &amp; Wages (Payroll)</td><td className="num">GH₵ 28,500.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Store Rent &amp; Utilities</td><td className="num">GH₵ 12,000.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>ELEPAY Processing Fees</td><td className="num">GH₵ 1,890.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Marketing &amp; Promotions</td><td className="num">GH₵ 3,200.00</td></tr>
+              <tr className="total"><td>Total Operating Expenses</td><td className="num">GH₵ 45,590.00</td></tr>
+
+              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>NET INCOME</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Operating Income (EBITDA)</td><td className="num">GH₵ 24,510.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Estimated Corporate Tax (25%)</td><td className="num">-GH₵ 6,127.50</td></tr>
+              <tr className="total" style={{ fontSize: "1.1rem", color: "#0b5d3b" }}><td>NET PROFIT AFTER TAX</td><td className="num">GH₵ 18,382.50</td></tr>
+            </tbody>
+          </table>
+          <button style={{ marginTop: "1rem" }} onClick={() => window.print()}>Export Statement (PDF)</button>
+        </section>
+      ) : (
+        <section className="panel" style={{ maxWidth: "650px" }}>
+          <h3>Balance Sheet</h3>
+          <p className="muted small">As of November 2026 (Currency: Ghana Cedi GH₵)</p>
+          <table className="lines">
+            <tbody>
+              <tr><td colSpan={2}><strong>ASSETS</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Cash &amp; ELEPAY Settlement Balance</td><td className="num">GH₵ 42,150.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Accounts Receivable (Unpaid Invoices)</td><td className="num">GH₵ 14,605.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Merchandise Inventory</td><td className="num">GH₵ 31,450.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Store Fixtures &amp; Equipment</td><td className="num">GH₵ 25,000.00</td></tr>
+              <tr className="total"><td>TOTAL ASSETS</td><td className="num">GH₵ 113,205.00</td></tr>
+
+              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>LIABILITIES</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Accounts Payable (Supplier Invoices)</td><td className="num">GH₵ 18,200.00</td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Accrued Statutory Taxes (GRA VAT &amp; PAYE)</td><td className="num">GH₵ 7,420.00</td></tr>
+              <tr className="total"><td>TOTAL LIABILITIES</td><td className="num">GH₵ 25,620.00</td></tr>
+
+              <tr><td colSpan={2} style={{ paddingTop: "1rem" }}><strong>EQUITY</strong></td></tr>
+              <tr><td style={{ paddingLeft: "1.5rem" }}>Owner Capital &amp; Retained Earnings</td><td className="num">GH₵ 87,585.00</td></tr>
+              <tr className="total" style={{ fontSize: "1.1rem", color: "#0b5d3b" }}><td>TOTAL LIABILITIES &amp; EQUITY</td><td className="num">GH₵ 113,205.00</td></tr>
+            </tbody>
+          </table>
+          <button style={{ marginTop: "1rem" }} onClick={() => window.print()}>Export Balance Sheet (PDF)</button>
+        </section>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------------------------
+// Existing Merchant Views (Overview, Transactions, Rows, Payouts, Collect)
+// -------------------------------------------------------------------------------------------------
 
 function Overview({ id }: { id: string }) {
   const [b, setB] = useState<Balances | null>(null);

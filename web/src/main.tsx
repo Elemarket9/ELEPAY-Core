@@ -7,6 +7,7 @@ import { completeSignIn, getToken, oidcEnabled, signIn, signOut } from "./auth";
 const MerchantDashboard = lazy(() => import("./Merchant").then((m) => ({ default: m.MerchantDashboard })));
 const OpsConsole = lazy(() => import("./Ops").then((m) => ({ default: m.OpsConsole })));
 const Wallet = lazy(() => import("./Wallet").then((m) => ({ default: m.Wallet })));
+const DeveloperPortal = lazy(() => import("./Developer").then((m) => ({ default: m.DeveloperPortal })));
 import "./styles.css";
 
 function SignedIn({ children, roles = [] }: { children: React.ReactNode; roles?: string[] }) {
@@ -47,11 +48,12 @@ function App() {
   const header = (
     <header>
       <a href="/" className="brand">ELEPAY</a>
-      <nav><a href="/app">Wallet</a><a href="/merchant">Merchant</a><a href="/ops">Operations</a>
+      <nav><a href="/app">Wallet</a><a href="/merchant">Merchant</a><a href="/developer">Developer</a><a href="/ops">Operations</a>
         <button className="link" onClick={() => void signOut().then(() => window.location.assign("/"))}>Sign out</button></nav>
     </header>
   );
   if (path.startsWith("/merchant")) return <>{header}<SignedIn><MerchantDashboard /></SignedIn></>;
+  if (path.startsWith("/developer")) return <>{header}<SignedIn><DeveloperPortal /></SignedIn></>;
   if (path.startsWith("/ops")) return <>{header}<SignedIn roles={["ops"]}><OpsConsole /></SignedIn></>;
   if (path.startsWith("/app")) return <>{header}<SignedIn><Wallet /></SignedIn></>;
   return (

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40" width="120" height="40">
+  <rect width="120" height="40" rx="6" fill="#0b5d3b"/>
+  <text x="14" y="26" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="800" fill="#f5c542" letter-spacing="1">ELEPAY</text>
+  <circle cx="102" cy="20" r="7" fill="#f5c542" opacity="0.9"/>
+  <circle cx="95" cy="20" r="7" fill="#ffffff" opacity="0.5"/>
+</svg>

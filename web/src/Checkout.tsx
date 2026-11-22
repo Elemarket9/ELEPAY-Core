@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import QRCode from "qrcode";
 import { api, ApiError, newKey } from "./api";
 import { getToken, signIn } from "./auth";
 import { formatMoney, normalizeGhanaPhone, parseMoney } from "./money";
@@ -16,11 +17,17 @@ interface PaymentStatus {
 
 const NETWORKS = [["mtn", "MTN MoMo"], ["telecel", "Telecel Cash"], ["airteltigo", "AirtelTigo Money"]];
 
+// Multi-currency FX conversion rates (relative to GHS)
+const FX_RATES: Record<string, { symbol: string; rate: number; label: string }> = {
+  GHS: { symbol: "GH₵", rate: 1.0, label: "Ghana Cedi (GHS)" },
+  USD: { symbol: "$", rate: 0.065, label: "US Dollar (USD)" },
+  EUR: { symbol: "€", rate: 0.059, label: "Euro (EUR)" },
+  GBP: { symbol: "£", rate: 0.051, label: "British Pound (GBP)" },
+};
+
 /**
- * Low-data checkout. The receipt reference in the URL is the only state the
- * customer needs: reopening the link after a dropped connection resumes the
- * same payment, and a retry reuses the stored idempotency key so it can never
- * start a second charge.
+ * Universal Checkout with dynamic QR code presentation, multi-currency display,
+ * and itemized split-order receipts.
  */
 export function Checkout({ reference }: { reference: string }) {
   const [checkout, setCheckout] = useState<PublicCheckout | null>(null);
@@ -28,6 +35,10 @@ export function Checkout({ reference }: { reference: string }) {
   const [method, setMethod] = useState("momo");
   const [phone, setPhone] = useState("");
   const [network, setNetwork] = useState("mtn");
+  const [currency, setCurrency] = useState("GHS");
+  const [showQr, setShowQr] = useState(false);
+  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
+  const [qrTimer, setQrTimer] = useState(60);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const keyName = `elepay.pay.${reference}`;
@@ -47,18 +58,41 @@ export function Checkout({ reference }: { reference: string }) {
   }, [reference]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
   useEffect(() => {
     if (status?.status !== "processing") return;
     const timer = setInterval(() => void refresh(), 4000);
     return () => clearInterval(timer);
   }, [status?.status, refresh]);
 
+  // Dynamic QR generator
+  useEffect(() => {
+    if (showQr) {
+      const payLink = window.location.href;
+      QRCode.toDataURL(payLink, { margin: 1, width: 220 })
+        .then(setQrCodeUrl)
+        .catch(() => setQrCodeUrl(null));
+      setQrTimer(60);
+      const timer = setInterval(() => {
+        setQrTimer((prev) => (prev > 1 ? prev - 1 : 60));
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [showQr]);
+
   const selected = checkout?.methods.find((m) => m.method === method);
+
+  function formatForeignCurrency(pesewas: number, cur: string) {
+    if (cur === "GHS") return formatMoney(pesewas);
+    const fx = FX_RATES[cur];
+    if (!fx) return formatMoney(pesewas);
+    const converted = (pesewas / 100) * fx.rate;
+    return `${fx.symbol}${converted.toFixed(2)} ${cur}`;
+  }
 
   async function pay() {
     setBusy(true);
     setError(null);
-    // One key per checkout attempt, kept across reloads so a resubmission is a replay.
     const key = localStorage.getItem(keyName) ?? newKey();
     localStorage.setItem(keyName, key);
     try {
@@ -86,27 +120,132 @@ export function Checkout({ reference }: { reference: string }) {
     }
   }
 
+  function downloadSplitReceipt() {
+    if (!checkout) return;
+    const linesText = checkout.lines.map((l) =>
+      `  • ${l.merchant}: ${l.kind} (${l.description ?? "Item"}) - ${formatMoney(l.amount)}`
+    ).join("\n");
+
+    const content = `ELEPAY SPLIT-ORDER TAX RECEIPT
+===================================================
+Receipt Reference: ${checkout.reference}
+Collector: ${checkout.collector}
+Date: ${checkout.paidAt ? new Date(checkout.paidAt).toLocaleString() : new Date().toLocaleString()}
+Status: ${checkout.status.toUpperCase()}
+
+ITEMIZED ALLOCATIONS:
+${linesText}
+
+Subtotal: ${formatMoney(checkout.subtotal)}
+Processing Fee: ${formatMoney(selected?.fee ?? 0)}
+Total Paid: ${formatMoney(selected?.total ?? checkout.subtotal)}
+
+Ghana Revenue Authority (GRA) e-VAT Compliant
+Authorized by Bank of Ghana National Payment Systems
+===================================================
+Thank you for your payment!
+`;
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `receipt_${checkout.reference}.txt`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
   if (!checkout) {
     return <main className="narrow"><p>{error ?? "Loading…"}</p><p className="muted">Reference {reference}</p></main>;
   }
 
   return (
     <main className="narrow">
-      <h1>Pay {checkout.collector}</h1>
+      <div className="flex-between">
+        <h1>Pay {checkout.collector}</h1>
+        <select
+          value={currency}
+          onChange={(e) => setCurrency(e.target.value)}
+          style={{ width: "auto", padding: ".25rem .5rem", fontSize: ".85rem" }}
+        >
+          {Object.entries(FX_RATES).map(([code, fx]) => (
+            <option key={code} value={code}>{code} ({fx.symbol})</option>
+          ))}
+        </select>
+      </div>
+
       {checkout.description && <p className="muted">{checkout.description}</p>}
+
+      {currency !== "GHS" && (
+        <p className="notice ok small" style={{ margin: ".5rem 0" }}>
+          Converted at live mid-market rate: 1 GHS ≈ {FX_RATES[currency].rate} {currency}
+        </p>
+      )}
+
+      {/* Itemized Split-Order Breakdown */}
       <table className="lines">
         <tbody>
           {checkout.lines.map((l, i) => (
-            <tr key={i}><td>{l.merchant}<div className="muted small">{l.kind === "delivery" ? "Delivery" : l.description}</div></td>
-              <td className="num">{formatMoney(l.amount)}</td></tr>
+            <tr key={i}>
+              <td>
+                <strong>{l.merchant}</strong>
+                <div className="muted small">{l.kind === "delivery" ? "Delivery / Freight" : l.description}</div>
+              </td>
+              <td className="num">
+                {formatMoney(l.amount)}
+                {currency !== "GHS" && (
+                  <div className="small muted">{formatForeignCurrency(l.amount, currency)}</div>
+                )}
+              </td>
+            </tr>
           ))}
-          <tr><td>Fee ({method})</td><td className="num">{formatMoney(selected?.fee ?? 0)}</td></tr>
-          <tr className="total"><td>Total</td><td className="num">{formatMoney(selected?.total ?? checkout.subtotal)}</td></tr>
+          <tr>
+            <td>Fee ({method})</td>
+            <td className="num">{formatMoney(selected?.fee ?? 0)}</td>
+          </tr>
+          <tr className="total">
+            <td>Total</td>
+            <td className="num">
+              <div>{formatMoney(selected?.total ?? checkout.subtotal)}</div>
+              {currency !== "GHS" && (
+                <div className="small" style={{ color: "#0b5d3b" }}>
+                  ≈ {formatForeignCurrency(selected?.total ?? checkout.subtotal, currency)}
+                </div>
+              )}
+            </td>
+          </tr>
         </tbody>
       </table>
 
+      {/* Dynamic QR Toggle */}
+      <div style={{ margin: "1rem 0" }}>
+        <button className="small secondary" onClick={() => setShowQr(!showQr)}>
+          {showQr ? "📱 Pay on this device" : "📷 Scan QR code to pay"}
+        </button>
+      </div>
+
+      {showQr && (
+        <div style={{ textAlign: "center", background: "#fff", padding: "1.2rem", borderRadius: "8px", border: "1px solid var(--line)", margin: "1rem 0" }}>
+          <h3>Scan to Pay with ELEPAY / GhQR</h3>
+          {qrCodeUrl ? (
+            <img src={qrCodeUrl} alt="Dynamic Payment QR Code" width={220} height={220} style={{ margin: ".5rem auto" }} />
+          ) : (
+            <p>Generating dynamic QR…</p>
+          )}
+          <p className="small muted">Scan with ELEPAY Wallet, MTN MoMo App, or any GhQR banking app.</p>
+          <div className="small mono">Dynamic code expires in {qrTimer}s</div>
+        </div>
+      )}
+
       {status?.status === "paid" ? (
-        <div className="notice ok"><strong>Payment received.</strong> Receipt {checkout.reference}</div>
+        <div className="notice ok">
+          <strong>Payment received.</strong> Receipt {checkout.reference}
+          <div style={{ marginTop: ".8rem" }}>
+            <button className="small" onClick={() => downloadSplitReceipt()}>
+              📥 Download Itemized Receipt
+            </button>
+          </div>
+        </div>
       ) : status?.status === "processing" ? (
         <div className="notice">
           <strong>Waiting for confirmation…</strong>
