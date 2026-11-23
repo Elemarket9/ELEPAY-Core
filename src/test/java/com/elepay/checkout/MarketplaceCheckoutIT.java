@@ -34,7 +34,7 @@ class MarketplaceCheckoutIT extends PostgresTestBase {
         aOwner = api.token("a-" + s);
         bOwner = api.token("b-" + s);
         dOwner = api.token("d-" + s);
-        marketplace = merchant(mpOwner, "ELEMARKET " + s, "marketplace", 0);
+        marketplace = merchant(mpOwner, "Sample Marketplace " + s, "marketplace", 0);
         merchantA = merchant(aOwner, "Seller A " + s, "merchant", 150);
         merchantB = merchant(bOwner, "Seller B " + s, "merchant", 100);
         delivery = merchant(dOwner, "Rider D " + s, "delivery", 0);

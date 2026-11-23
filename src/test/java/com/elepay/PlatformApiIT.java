@@ -26,7 +26,7 @@ class PlatformApiIT extends PostgresTestBase {
         ops = api.token("ops-" + s, "ops");
         mpOwner = api.token("mp-" + s);
         sellerOwner = api.token("seller-" + s);
-        marketplace = merchant(mpOwner, "ELEMARKET " + s, "marketplace");
+        marketplace = merchant(mpOwner, "Sample Marketplace " + s, "marketplace");
         seller = merchant(sellerOwner, "Seller " + s, "merchant");
         String code = api.call("GET", "/v1/merchants/" + seller, sellerOwner, null, null).body().get("merchantCode").asString();
         api.call("POST", "/v1/merchants/" + marketplace + "/sellers", mpOwner, null, Map.of("merchantCode", code));
@@ -65,7 +65,7 @@ class PlatformApiIT extends PostgresTestBase {
     @Test
     void platformCreatesQueriesAndCancelsOrdersAndRecoversEvents() {
         String collect = key(marketplace, mpOwner, "view", "collect", "refund");
-        Map<String, Object> order = Map.of("orderReference", "ELM-1001", "description", "ELEMARKET order 1001",
+        Map<String, Object> order = Map.of("orderReference", "ELM-1001", "description", "Sample Marketplace order 1001",
                 "allocations", List.of(Map.of("merchantId", seller, "kind", "sale", "amount", 2500)));
         String idem = UUID.randomUUID().toString();
         var created = withKey("POST", "/v1/merchants/" + marketplace + "/checkouts", collect, idem, order);

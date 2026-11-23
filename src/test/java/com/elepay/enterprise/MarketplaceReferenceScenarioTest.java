@@ -221,7 +221,7 @@ class MarketplaceReferenceScenarioTest extends PostgresTestBase {
         );
 
         List<DeliveryAllocation> deliveryAllocations = List.of(
-                new DeliveryAllocation(deliveryPartnerId, "ELESEND Express Delivery", 5_000L, 200, 50, "Express Delivery")
+                new DeliveryAllocation(deliveryPartnerId, "Courier Partner Express Delivery", 5_000L, 200, 50, "Express Delivery")
         );
 
         // =========================================================================
@@ -323,7 +323,7 @@ class MarketplaceReferenceScenarioTest extends PostgresTestBase {
         for (int idx : deliveredIndices) {
             String itemRef = cartItems.get(idx).description();
             DeliveryEscrowRecord confirmed = escrowService.confirmDelivery(
-                    enterprise.id(), orderReference, itemRef, "ELESEND Tracking: DELIVERED"
+                    enterprise.id(), orderReference, itemRef, "Courier Partner Tracking: DELIVERED"
             );
             assertThat(confirmed.deliveryStatus()).isEqualTo(DeliveryStatus.DELIVERED);
             assertThat(confirmed.isEligibleForRelease()).isTrue();

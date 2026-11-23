@@ -95,9 +95,9 @@ class EnterpriseCheckoutSplitTest extends PostgresTestBase {
         long itemsSum = items.stream().mapToLong(SubMerchantItemAllocation::grossAmountPesewas).sum();
         assertThat(itemsSum).isEqualTo(147_000L);
 
-        // Delivery Partner: ELESEND Logistics GH₵50.00 (5,000 pesewas), 200 bps marketplace fee, 50 bps platform fee
+        // Delivery Partner: Courier Partner Logistics GH₵50.00 (5,000 pesewas), 200 bps marketplace fee, 50 bps platform fee
         List<DeliveryAllocation> deliveryAllocations = List.of(
-                new DeliveryAllocation(deliveryPartnerId, "ELESEND Express Delivery", 5_000L,
+                new DeliveryAllocation(deliveryPartnerId, "Courier Partner Express Delivery", 5_000L,
                         200, 50, "Courier delivery to customer address")
         );
 
