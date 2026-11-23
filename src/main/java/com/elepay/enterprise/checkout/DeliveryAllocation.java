@@ -29,6 +29,11 @@ public record DeliveryAllocation(
         }
     }
 
+    public DeliveryAllocation(UUID deliveryPartnerId, String deliveryPartnerName, long deliveryFeePesewas,
+                              Integer marketplaceCommissionBps, Integer platformFeeBps) {
+        this(deliveryPartnerId, deliveryPartnerName, deliveryFeePesewas, marketplaceCommissionBps, platformFeeBps, "Delivery fulfillment");
+    }
+
     public static DeliveryAllocation of(UUID deliveryPartnerId, String deliveryPartnerName, long deliveryFeePesewas) {
         return new DeliveryAllocation(deliveryPartnerId, deliveryPartnerName, deliveryFeePesewas, 0, 0, "Delivery fulfillment");
     }

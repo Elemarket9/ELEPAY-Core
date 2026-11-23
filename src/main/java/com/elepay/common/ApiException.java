@@ -44,6 +44,14 @@ public class ApiException extends RuntimeException {
         return conflict("insufficient_funds", "Insufficient available balance");
     }
 
+    public static ApiException internal(String code, String message) {
+        return new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, code, message);
+    }
+
+    public static ApiException tooManyRequests(String message) {
+        return new ApiException(HttpStatus.TOO_MANY_REQUESTS, "too_many_requests", message);
+    }
+
     public static ApiException idempotencyConflict() {
         return conflict("idempotency_conflict", "This idempotency key was already used for a different request");
     }

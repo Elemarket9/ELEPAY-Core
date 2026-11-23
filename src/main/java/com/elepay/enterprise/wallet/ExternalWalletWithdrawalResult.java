@@ -17,6 +17,10 @@ public record ExternalWalletWithdrawalResult(
         boolean success,
         String errorMessage
 ) {
+    public boolean isSuccessful() {
+        return success;
+    }
+
     public static ExternalWalletWithdrawalResult success(
             String withdrawalId,
             String transactionReference,

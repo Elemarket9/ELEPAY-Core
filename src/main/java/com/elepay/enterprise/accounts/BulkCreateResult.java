@@ -14,4 +14,8 @@ public record BulkCreateResult(
     public boolean hasErrors() {
         return failedCount > 0;
     }
+
+    public int successCount() {
+        return createdCount;
+    }
 }

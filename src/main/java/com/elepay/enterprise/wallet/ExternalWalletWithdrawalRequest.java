@@ -30,4 +30,19 @@ public record ExternalWalletWithdrawalRequest(
             kycTier = "TIER_1";
         }
     }
+
+    public ExternalWalletWithdrawalRequest(
+            String idempotencyKey,
+            String externalCustomerId,
+            String kycTier,
+            long amountMinorUnits,
+            String currency,
+            String destinationRail,
+            String network,
+            String destinationPhoneOrAccount,
+            String delegatedToken
+    ) {
+        this(idempotencyKey, "partner_jumiapay_gh", externalCustomerId, amountMinorUnits,
+                currency, destinationRail, destinationPhoneOrAccount, kycTier);
+    }
 }

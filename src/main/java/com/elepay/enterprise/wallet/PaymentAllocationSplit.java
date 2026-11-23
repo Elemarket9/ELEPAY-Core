@@ -27,6 +27,10 @@ public record PaymentAllocationSplit(
         }
     }
 
+    public PaymentAllocationSplit(String merchantId, long amountMinorUnits, long commissionMinorUnits, long deliveryFeeMinorUnits) {
+        this(merchantId, amountMinorUnits, commissionMinorUnits, deliveryFeeMinorUnits, null, null);
+    }
+
     public long netPayableToMerchant() {
         return amountMinorUnits - commissionMinorUnits - deliveryFeeMinorUnits;
     }

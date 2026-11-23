@@ -21,4 +21,8 @@ public record RefundAllocationItem(
             throw new IllegalArgumentException("Commission reversal cannot exceed refund amount: " + refundAmountMinorUnits);
         }
     }
+
+    public RefundAllocationItem(String itemId, java.util.UUID merchantId, long refundAmountMinorUnits, String reason) {
+        this(merchantId.toString(), itemId, refundAmountMinorUnits, 0L, reason);
+    }
 }

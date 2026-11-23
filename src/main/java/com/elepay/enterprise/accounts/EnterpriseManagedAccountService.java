@@ -371,6 +371,14 @@ public class EnterpriseManagedAccountService {
         );
     }
 
+    public BulkCreateResult bulkCreateAccounts(BulkCreateAccountsRequest request) {
+        return createAccountsBulk(request);
+    }
+
+    public EnterpriseManagedAccount getAccountByExternalId(UUID enterpriseId, String externalCustomerId) {
+        return getAccount(enterpriseId, externalCustomerId);
+    }
+
     // =========================================================================
     // Query & Identity Resolution
     // =========================================================================

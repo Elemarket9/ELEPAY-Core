@@ -2,5 +2,7 @@ package com.elepay.enterprise.accounts;
 
 public enum DuplicateAction {
     FLAG,
-    REJECT
+    REJECT;
+
+    public static final DuplicateAction FLAG_DUPLICATE = FLAG;
 }
