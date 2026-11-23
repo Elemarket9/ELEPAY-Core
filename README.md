@@ -2,7 +2,7 @@
 
 Java payment services for ELEPAY, built with Spring Boot and PostgreSQL.
 
-ELEPAY is a Ghana-first wallet and payment processor. It runs its own ledger and handles wallets, send-by-phone with recipient name confirmation, multi-merchant checkout, refunds, disputes, settlement, payouts, FX transfers and USSD.
+ELEPAY is a Ghana-first wallet and payment processor. It runs its own ledger and handles wallets, send-by-phone with recipient name confirmation, multi-merchant checkout, refunds, disputes, settlement, domestic payouts, FX conversion for merchant collections and USSD.
 
 ## Build and test
 
@@ -13,7 +13,7 @@ mvn -B verify                 # unit, Spring Modulith, PostgreSQL integration an
 cd web && npm ci && npm run typecheck && npm test && npm run build
 ```
 
-Run locally with simulated rails: `docker compose up --build`. Alternatively, run `java -jar target/elepay-core-*.jar --spring.profiles.active=sandbox,dev` against a PostgreSQL 18 database, then `python3 scripts/smoke.py` and `python3 scripts/acceptance.py`.
+Run local isolated sandbox/test fixtures with: `docker compose up --build`. Alternatively, run `java -jar target/elepay-core-*.jar --spring.profiles.active=sandbox,dev` against a PostgreSQL 18 database, then `python3 scripts/smoke.py` and `python3 scripts/acceptance.py`.
 
 ## Documentation
 
@@ -23,4 +23,5 @@ Run locally with simulated rails: `docker compose up --build`. Alternatively, ru
 
 ## Connection status
 
-All money that enters or leaves ELEPAY in this repository moves through **simulated** rails (`sandbox`) and a simulated FX partner (`sim-remit`). No bank, mobile-money operator, card acquirer, remittance partner, USSD gateway or platform payout interface (Bolt, Yango, X, TikTok) is connected. Network adapters plug in behind the rail, name-verification, FX-partner and USSD-gateway interfaces without changing the ledger or checkout rules.
+**Live bank, MoMo, card networks: NOT YET CONNECTED. Local testing uses sandbox/test fixtures only.** No real GRA submission integration exists; **GRA integration NOT IMPLEMENTED - manual submission required.** Historic e-Levy data is retained for audit only: e-Levy was repealed in April 2025 and must not be charged. International card acceptance and FX conversion remain within scope; recipient payouts and remittances abroad are excluded.
+

@@ -17,14 +17,10 @@ public class InvoiceAndQuoteService {
 
     private final JdbcClient db;
     private final MerchantGeneralLedgerService glService;
-    private final GraFiscalDataService graFiscalService;
 
-    public InvoiceAndQuoteService(JdbcClient db,
-                                  MerchantGeneralLedgerService glService,
-                                  GraFiscalDataService graFiscalService) {
+    public InvoiceAndQuoteService(JdbcClient db, MerchantGeneralLedgerService glService) {
         this.db = db;
         this.glService = glService;
-        this.graFiscalService = graFiscalService;
     }
 
     public record InvoiceItemCommand(
@@ -204,9 +200,8 @@ public class InvoiceAndQuoteService {
             .update();
         }
 
-        // GRA e-VAT fiscal data integration
-        var fiscalReceipt = graFiscalService.signFiscalInvoice(
-                cmd.merchantId(), invoiceId, cmd.customerTin(), cmd.invoiceNumber(), Math.max(0, subtotal - totalDiscount));
+        // GRA integration NOT IMPLEMENTED - manual submission required.
+        // Do not generate fiscal certification, a GRA acknowledgment, or a false submission status.
 
         // Post to General Ledger:
         // Debit: Accounts Receivable (1040) -> totalPesewas
@@ -243,7 +238,7 @@ public class InvoiceAndQuoteService {
         String paymentUrl = "https://pay.elepay.com/invoice/" + paymentLinkToken;
         return new InvoiceSummary(invoiceId, cmd.merchantId(), cmd.invoiceNumber(), cmd.customerName(),
                 cmd.issueDate(), cmd.dueDate(), currency, subtotal, totalTax, totalDiscount,
-                grandTotal, 0L, "SENT", paymentUrl, fiscalReceipt.sdcReceiptNumber());
+                grandTotal, 0L, "SENT", paymentUrl, null);
     }
 
     /**

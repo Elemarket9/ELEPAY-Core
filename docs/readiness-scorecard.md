@@ -1,5 +1,7 @@
 # ELEPAY implementation readiness scorecard
 
+> Cleanup verification notice (2026-11-23): The algorithm register is **implemented in code, not yet proven in production**. Historical "Built" or "Verified" rows are development evidence only. Neither 100/100 coverage nor live bank, MoMo, card network or GRA integration is production-proven. CI was failing on main before this cleanup; do not claim a green release without a new passing workflow.
+
 This is an evidence-first baseline created from the supplied master specification and repository README. **Partial does not mean verified**: the 18 claimed pre-existing algorithms require code, tests and runtime evidence before being promoted to Built. No claim of 85% readiness is made.
 
 ## Algorithms

@@ -22,9 +22,6 @@ public class AccountingAndInvoicingTest extends PostgresTestBase {
     @Autowired
     private AccountsReceivableAndPayableService arApService;
 
-    @Autowired
-    private GraFiscalDataService graFiscalService;
-
     @Test
     @DisplayName("Domain 5: Standard Ghanaian Chart of Accounts Initialization and Verification")
     void testStandardGhanaianChartOfAccounts() {
@@ -117,26 +114,6 @@ public class AccountingAndInvoicingTest extends PostgresTestBase {
 
         var revertedSales = glService.getAccountByCode(merchantId, "4010").orElseThrow();
         assertThat(revertedSales.balancePesewas()).isEqualTo(0L);
-    }
-
-    @Test
-    @DisplayName("Domain 5: GRA e-VAT Fiscal Data Calculation & Signature Verification")
-    void testGraFiscalDataCalculation() {
-        long taxablePesewas = 100_000L; // GHS 1,000.00
-        var breakdown = graFiscalService.calculateStatutoryTaxes(taxablePesewas);
-
-        // Standard Ghanaian statutory levies:
-        // VAT: 15% = 15,000 pesewas
-        // NHIL: 2.5% = 2,500 pesewas
-        // GETFund: 2.5% = 2,500 pesewas
-        // COVID-19 Levy: 1% = 1,000 pesewas
-        // Total Tax = 21,000 pesewas (21%)
-        assertThat(breakdown.vatAmountPesewas()).isEqualTo(15_000L);
-        assertThat(breakdown.nhilAmountPesewas()).isEqualTo(2_500L);
-        assertThat(breakdown.getfundAmountPesewas()).isEqualTo(2_500L);
-        assertThat(breakdown.covidLevyAmountPesewas()).isEqualTo(1_000L);
-        assertThat(breakdown.totalTaxPesewas()).isEqualTo(21_000L);
-        assertThat(breakdown.grossTotalPesewas()).isEqualTo(121_000L);
     }
 
     @Test

@@ -19,19 +19,12 @@ interface LoanProductSummary {
   delinquentCount: number; defaultRatePct: number; lossProvisionPesewas: number;
 }
 
-// GRA e-VAT
-interface GraEvatLog {
-  id: string; invoiceRef: string; fiscalTime: string; merchantTin: string; grossSalePesewas: number;
-  vatPesewas: number; nhilPesewas: number; getFundPesewas: number; covidLevyPesewas: number;
-  sdcFiscalSignature: string; status: "ACKNOWLEDGED" | "PENDING" | "RETRYING";
-}
-
 const TABS = [
-  "Overview", "Agent Banking", "Lending Portfolio", "GRA e-VAT Audit", "System Health",
+  "Overview", "Agent Banking", "Lending Portfolio", "System Health",
   "Exceptions", "Onboarding", "Disputes", "Reconciliation"
 ] as const;
 
-/** Operations console: agent banking, lending review, GRA e-VAT, system health, exceptions, and reconciliation. */
+/** Operations console: agent banking, lending review, system health, exceptions, and reconciliation. */
 export function OpsConsole() {
   const [tab, setTab] = useState<(typeof TABS)[number]>("Overview");
   return (
@@ -42,7 +35,6 @@ export function OpsConsole() {
       {tab === "Overview" && <Overview />}
       {tab === "Agent Banking" && <AgentBanking />}
       {tab === "Lending Portfolio" && <LendingPortfolio />}
-      {tab === "GRA e-VAT Audit" && <GraEvatAudit />}
       {tab === "System Health" && <SystemHealth />}
       {tab === "Exceptions" && <Exceptions />}
       {tab === "Onboarding" && <Onboarding />}
@@ -253,77 +245,6 @@ function LendingPortfolio() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// -------------------------------------------------------------------------------------------------
-// 3. GRA e-VAT Audit Logs
-// -------------------------------------------------------------------------------------------------
-function GraEvatAudit() {
-  const [logs] = useState<GraEvatLog[]>([]);
-
-  function exportGraCsv() {
-    const headers = "InvoiceRef,FiscalTimestamp,MerchantTIN,GrossSale(GHS),VAT15%(GHS),NHIL2.5%(GHS),GETFund2.5%(GHS),COVID1%(GHS),SDCFiscalSignature,Status\n";
-    const rows = logs.map((l) =>
-      `"${l.invoiceRef}","${l.fiscalTime}","${l.merchantTin}","${(l.grossSalePesewas / 100).toFixed(2)}","${(l.vatPesewas / 100).toFixed(2)}","${(l.nhilPesewas / 100).toFixed(2)}","${(l.getFundPesewas / 100).toFixed(2)}","${(l.covidLevyPesewas / 100).toFixed(2)}","${l.sdcFiscalSignature}","${l.status}"`
-    ).join("\n");
-
-    const blob = new Blob([headers + rows], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", `gra_evat_audit_${new Date().toISOString().substring(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  }
-
-  return (
-    <div>
-      <div className="flex-between">
-        <div>
-          <h3>Ghana Revenue Authority (GRA) e-VAT Compliance Audit</h3>
-          <p className="muted small">Statutory e-VAT, NHIL, GETFund, COVID-19 Health Recovery Levy transmission audit.</p>
-        </div>
-        <button onClick={() => exportGraCsv()} disabled={logs.length === 0}>📥 Export GRA Audit File (CSV)</button>
-      </div>
-
-      <table className="grid" style={{ marginTop: "1rem" }}>
-        <thead>
-          <tr>
-            <th>Invoice Ref</th>
-            <th>Fiscal Time</th>
-            <th>Merchant TIN</th>
-            <th className="num">Gross Sale</th>
-            <th className="num">VAT (15%)</th>
-            <th className="num">NHIL (2.5%)</th>
-            <th className="num">GETFund (2.5%)</th>
-            <th className="num">COVID (1%)</th>
-            <th>SDC Fiscal Signature</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {logs.map((l) => (
-            <tr key={l.id}>
-              <td className="mono">{l.invoiceRef}</td>
-              <td className="small">{l.fiscalTime}</td>
-              <td className="mono small">{l.merchantTin}</td>
-              <td className="num font-bold">{formatMoney(l.grossSalePesewas)}</td>
-              <td className="num">{formatMoney(l.vatPesewas)}</td>
-              <td className="num muted">{formatMoney(l.nhilPesewas)}</td>
-              <td className="num muted">{formatMoney(l.getFundPesewas)}</td>
-              <td className="num muted">{formatMoney(l.covidLevyPesewas)}</td>
-              <td className="mono small">{l.sdcFiscalSignature}</td>
-              <td><span className="tag active">{l.status}</span></td>
-            </tr>
-          ))}
-          {logs.length === 0 && (
-            <tr><td colSpan={10} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No GRA e-VAT fiscal transaction records found. Tax-stamped receipts with SDC signatures will be recorded here in real time.</td></tr>
-          )}
-        </tbody>
-      </table>
     </div>
   );
 }

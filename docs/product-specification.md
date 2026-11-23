@@ -23,15 +23,11 @@ Support Ghanaian bank accounts for verified payout destinations, bank-to-wallet 
 
 Give each payout a unique reference and track pending, completed, failed and returned outcomes. For batch payouts, track each recipient separately, including partial failures. Reconcile platform records, bank or provider records, and ledger entries. Surface unmatched or returned payouts for operations review.
 
-## International payments and remittances
+## International card acceptance, FX conversion and domestic settlement
 
-Support inbound remittances to Ghana, outbound transfers from Ghana where supported, international creator and contractor payouts, and cross-border merchant collections and settlements. Start with USD/GHS and design for GBP, EUR and other currencies as supported corridors become available.
+ELEPAY may accept foreign-issued payment cards and collect payments in supported foreign currencies through contracted acquiring and processing partners. Currency conversion must use an explicit, auditable exchange rate, transparent fees, currency-specific minor units and balanced FX clearing entries. Converted merchant proceeds settle only to authorized **domestic Ghana** destinations.
 
-Target Western Union and evaluate MoneyGram, Remitly, Wise and Payoneer for the corridors and products each can support. Connect through contracted provider or bank interfaces. Model each corridor by sending country, receiving country, source currency, destination currency and delivery method. Delivery methods may include a bank account, mobile money, an ELEPAY wallet or cash pickup where the partner supports it.
-
-Before confirmation, show the amount sent, fees, exchange rate, amount the recipient will receive, quote expiration and expected arrival. Use a provider-confirmed quote and require a fresh confirmation if the quote expires. Record the source and destination amounts, rate and fees separately. Store amounts in currency-specific minor units and balance journal entries within each currency using linked FX clearing entries.
-
-Give each transfer a traceable reference and show pending, paid, failed or returned status. Reconcile the funding, conversion and delivery records against the partner and bank statements. Support currency-specific statements and balances where the underlying account or provider explicitly supports holding that currency.
+**International payouts / remittance EXCLUDED from current scope per founder decision Nov 23 2026. Only domestic settlement.** This excludes outbound money-sending, foreign beneficiaries, foreign wallet disbursements and international recipient payout APIs. No production capability is implied until external partners are connected.
 
 ## Payment processing and network connections
 
