@@ -1,6 +1,10 @@
 package com.elepay.merchanttools.pos;
 
 import com.elepay.PostgresTestBase;
+import com.elepay.merchanttools.inventory.MovementType;
+import com.elepay.merchanttools.inventory.ProductCatalogService;
+import com.elepay.merchanttools.inventory.StockService;
+import com.elepay.merchanttools.inventory.WarehouseService;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -21,6 +25,9 @@ public class PosCommerceTest extends PostgresTestBase {
     private PosCashierService cashierService;
 
     @Autowired
+    private PosCartService cartService;
+
+    @Autowired
     private PosOrderService orderService;
 
     @Autowired
@@ -33,9 +40,19 @@ public class PosCommerceTest extends PostgresTestBase {
     private PosOfflineSyncService syncService;
 
     @Autowired
+    private WarehouseService warehouseService;
+
+    @Autowired
+    private ProductCatalogService catalogService;
+
+    @Autowired
+    private StockService stockService;
+
+    @Autowired
     private JdbcClient db;
 
     private UUID merchantId;
+    private WarehouseService.Warehouse defaultWarehouse;
 
     @BeforeEach
     void setup() {
@@ -53,6 +70,7 @@ public class PosCommerceTest extends PostgresTestBase {
             .param("code", String.format("%06d", (int)(Math.random() * 900000 + 100000)))
             .update();
 
+        defaultWarehouse = warehouseService.createWarehouse(merchantId, null, "WH-MAIN-" + UUID.randomUUID().toString().substring(0, 5), "Store Main Hub", "Accra");
     }
 
     @Test
@@ -98,7 +116,7 @@ public class PosCommerceTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("POS payment records, partial cash tenders, final settlement and receipts")
+    @DisplayName("Domain 1: Quick-sale cart, held carts, orders, multi-tender payment, and inventory stock deduction")
     void testCartOrdersAndMultiTenderPayments() {
         String sn2 = "SN-TERM-" + UUID.randomUUID().toString().substring(0, 8);
         String badge2 = "B-" + UUID.randomUUID().toString().substring(0, 6);
@@ -108,10 +126,29 @@ public class PosCommerceTest extends PostgresTestBase {
         var cashier = cashierService.registerCashier(merchantId, "Abena Osei", "4321", badge2);
         var shift = cashierService.openShift(terminal.id(), cashier.id(), merchantId, 10000L, "Shift A");
 
+        // Set up product in inventory
+        var category = catalogService.createCategory(merchantId, "Bakery");
+        var product = catalogService.createProduct(merchantId, category.id(), "Meat Pie", "Fresh baked", "EleBakery");
+        var variant = catalogService.createVariant(merchantId, product.id(), "PIE-BEEF", "9901234567890", "Beef Meat Pie", "{}", 800L, 1500L, true);
+        stockService.adjustStock(defaultWarehouse.id(), variant.id(), BigDecimal.valueOf(30), MovementType.RECEIVED, null, "Stock");
+
+        // 1. Held cart test (suspend and recall)
+        var held = cartService.holdCart(terminal.id(), cashier.id(), merchantId, "Customer Kojo", "[{\"item\":\"Beef Pie\",\"qty\":2}]", 3000L);
+        assertThat(held.customerName()).isEqualTo("Customer Kojo");
+        var heldList = cartService.listHeldCarts(terminal.id());
+        assertThat(heldList).hasSize(1);
+
+        var recalled = cartService.recallHeldCart(held.id());
+        assertThat(recalled.id()).isEqualTo(held.id());
+        assertThat(cartService.listHeldCarts(terminal.id())).isEmpty();
+
         // 2. Create POS Order: 2 Beef Pies @ 15.00 GHS each = 30.00 GHS (3000 pesewas)
         var order = orderService.createOrder(
                 merchantId, null, terminal.id(), cashier.id(), null,
-                List.of(new PosOrderService.OrderItemInput("Transaction item", BigDecimal.valueOf(2), 1500L, 0L, 0L, null)),
+                List.of(new PosOrderService.OrderItemInput(
+                        variant.id(), "Beef Meat Pie", BigDecimal.valueOf(2),
+                        1500L, 0L, 0L, "[]", 1, "MAIN", "No onion"
+                )),
                 0L, 0L, 0L, "STANDARD"
         );
         assertThat(order.status()).isEqualTo("PENDING");
@@ -130,6 +167,10 @@ public class PosCommerceTest extends PostgresTestBase {
         assertThat(finalOrder.paidPesewas()).isEqualTo(3500L);
         assertThat(finalOrder.changePesewas()).isEqualTo(500L); // 5.00 GHS change
 
+        // Verify stock automatically deducted by 2 pies: 30 - 2 = 28 pies
+        var stockAfterSale = stockService.getOrCreateStock(defaultWarehouse.id(), variant.id());
+        assertThat(stockAfterSale.quantityOnHand()).isEqualByComparingTo("28");
+
         // 4. Generate Printed & Digital Receipt
         var receipt = receiptService.generateReceipt(order.id());
         assertThat(receipt.receiptNumber()).startsWith("REC-");
@@ -140,7 +181,7 @@ public class PosCommerceTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("POS even split preserves minor units")
+    @DisplayName("Domain 1: Bill splitting (even splits with integer remainder & seat splits)")
     void testBillSplitting() {
         String sn3 = "SN-TERM-" + UUID.randomUUID().toString().substring(0, 8);
         String badge3 = "B-" + UUID.randomUUID().toString().substring(0, 6);
@@ -153,9 +194,9 @@ public class PosCommerceTest extends PostgresTestBase {
         var order = orderService.createOrder(
                 merchantId, null, terminal.id(), cashier.id(), null,
                 List.of(
-                        new PosOrderService.OrderItemInput("Payment item A", BigDecimal.ONE, 4000L, 0L, 0L, null),
-                        new PosOrderService.OrderItemInput("Payment item B", BigDecimal.ONE, 3500L, 0L, 0L, null),
-                        new PosOrderService.OrderItemInput("Payment item C", BigDecimal.ONE, 2500L, 0L, 0L, null)
+                        new PosOrderService.OrderItemInput(null, "Fried Rice", BigDecimal.ONE, 4000L, 0L, 0L, "[]", 1, "MAIN", null),
+                        new PosOrderService.OrderItemInput(null, "Grilled Chicken", BigDecimal.ONE, 3500L, 0L, 0L, "[]", 2, "MAIN", null),
+                        new PosOrderService.OrderItemInput(null, "Cocktail", BigDecimal.ONE, 2500L, 0L, 0L, "[]", 2, "BEVERAGE", null)
                 ),
                 0L, 0L, 0L, "STANDARD"
         );
@@ -168,6 +209,13 @@ public class PosCommerceTest extends PostgresTestBase {
         assertThat(evenSplit.portions().get(0).amountPesewas()).isEqualTo(3334L);
         assertThat(evenSplit.portions().get(1).amountPesewas()).isEqualTo(3333L);
 
+        // 2. Seat Split: Seat 1 has 40.00 GHS, Seat 2 has 60.00 GHS
+        var seatSplit = splitBillService.splitBillBySeats(order.id());
+        assertThat(seatSplit.seatGroups()).hasSize(2);
+        var seat1 = seatSplit.seatGroups().stream().filter(g -> g.seatNumber() == 1).findFirst().orElseThrow();
+        var seat2 = seatSplit.seatGroups().stream().filter(g -> g.seatNumber() == 2).findFirst().orElseThrow();
+        assertThat(seat1.subtotalPesewas()).isEqualTo(4000L);
+        assertThat(seat2.subtotalPesewas()).isEqualTo(6000L);
     }
 
     @Test
@@ -181,7 +229,7 @@ public class PosCommerceTest extends PostgresTestBase {
         var cashier = cashierService.registerCashier(merchantId, "Kofi Addo", "1111", badgeOff);
 
         // Payload with 1 item: 20.00 GHS (2000 pesewas)
-        var item = new PosOrderService.OrderItemInput("Bottled Water 1.5L", BigDecimal.valueOf(2), 1000L, 0L, 0L, null);
+        var item = new PosOrderService.OrderItemInput(null, "Bottled Water 1.5L", BigDecimal.valueOf(2), 1000L, 0L, 0L, "[]", 1, "MAIN", null);
         var payment = new PosOfflineSyncService.OfflinePayment(TenderType.CASH, 2000L, "OFFLINE-CASH");
 
         String txId = "OFFLINE-TX-" + UUID.randomUUID();
@@ -221,7 +269,7 @@ public class PosCommerceTest extends PostgresTestBase {
         ledger.open("merchant", merchantId, "pending", "GHS");
         ledger.open("merchant", merchantId, "available", "GHS");
         var order = orderService.createOrder(merchantId, null, null, null, null,
-                List.of(new PosOrderService.OrderItemInput("Retail item", BigDecimal.ONE, 3000L, 0L, 0L, null)),
+                List.of(new PosOrderService.OrderItemInput(null, "Retail item", BigDecimal.ONE, 3000L, 0L, 0L, "[]", null, null, null)),
                 0L, 0L, 0L, "STANDARD");
         orderService.addTenderPayment(order.id(), TenderType.CASH, 1000L, "CASH");
         var link = orderService.startDigital(order.id(), "integration-test");

@@ -3,7 +3,7 @@
 ## Product boundary
 ELEPAY is strictly fintech. Core financial functions are wallet accounts, append-only double-entry ledger, domestic Ghana payments and collections, provider-neutral multi-merchant payment allocations, financial escrow, settlement, payouts and reconciliation, FX conversion, treasury, reserves, lending, virtual cards, POS payment handling, bill payment, agent banking, compliance (KYC/AML), fraud controls, security, merchant financial BackOffice, developer APIs and webhooks.
 
-Inventory, product catalogs, purchasing, warehouses, retail POS held carts, restaurant operations, CRM, loyalty, gift cards, campaigns, marketing and non-financial merchant payroll are excluded. A POS payment record or financial receipt is in scope; ELEPAY does not manage the items sold.
+Merchant tools restored Nov 23 2026 by founder decision (`com.elepay.merchanttools`): POS held carts, inventory, product catalogs, purchasing, warehouses, restaurant/KDS, CRM, loyalty, coupons, campaigns, payroll and suppliers. These are merchant software, not regulated payment activities. Exception: gift cards and store credit hold customer value and must stay switched off for live use until BoG confirms the e-money position.
 
 **International payouts / remittance EXCLUDED from current scope per founder decision Nov 23 2026. Only domestic settlement.** International card acceptance and foreign-currency merchant collections remain in scope; FX conversion and merchant settlement must end at authorized domestic Ghana destinations.
 

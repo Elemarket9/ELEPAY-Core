@@ -1,5 +1,7 @@
 package com.elepay.merchanttools.pos;
 
+import com.elepay.merchanttools.inventory.MovementType;
+import com.elepay.merchanttools.inventory.StockService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -15,12 +17,14 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class PosOrderService {
     private final JdbcClient db;
+    private final StockService stockService;
     private final PosCashierService cashierService;
     private final com.elepay.checkout.PosCheckoutGateway checkout;
 
-    public PosOrderService(JdbcClient db, PosCashierService cashierService,
+    public PosOrderService(JdbcClient db, StockService stockService, PosCashierService cashierService,
                            com.elepay.checkout.PosCheckoutGateway checkout) {
         this.db = db;
+        this.stockService = stockService;
         this.cashierService = cashierService;
         this.checkout = checkout;
     }
@@ -48,21 +52,29 @@ public class PosOrderService {
     public record PosOrderItem(
             UUID id,
             UUID orderId,
+            UUID variantId,
             String itemName,
             BigDecimal quantity,
             long unitPricePesewas,
             long discountPesewas,
             long taxPesewas,
             long totalPesewas,
+            String modifiersJson,
+            Integer seatNumber,
+            String course,
             String notes
     ) {}
 
     public record OrderItemInput(
+            UUID variantId,
             String itemName,
             BigDecimal quantity,
             long unitPricePesewas,
             long discountPesewas,
             long taxPesewas,
+            String modifiersJson,
+            Integer seatNumber,
+            String course,
             String notes
     ) {}
 
@@ -147,21 +159,27 @@ public class PosOrderService {
 
             db.sql("""
                 INSERT INTO pos_order_item (
-                    id, order_id, item_name, quantity, unit_price_pesewas,
-                    discount_pesewas, tax_pesewas, total_pesewas, notes
+                    id, order_id, variant_id, item_name, quantity, unit_price_pesewas,
+                    discount_pesewas, tax_pesewas, total_pesewas, modifiers_json,
+                    seat_number, course, notes
                 ) VALUES (
-                    :id, :orderId, :itemName, :quantity, :unitPrice,
-                    :discount, :tax, :total, :notes
+                    :id, :orderId, :variantId, :itemName, :quantity, :unitPrice,
+                    :discount, :tax, :total, :modifiersJson,
+                    :seatNumber, :course, :notes
                 )
                 """)
                 .param("id", itemId)
                 .param("orderId", orderId)
+                .param("variantId", item.variantId())
                 .param("itemName", item.itemName())
                 .param("quantity", item.quantity())
                 .param("unitPrice", item.unitPricePesewas())
                 .param("discount", item.discountPesewas())
                 .param("tax", item.taxPesewas())
                 .param("total", itemTotal)
+                .param("modifiersJson", item.modifiersJson() == null ? "[]" : item.modifiersJson())
+                .param("seatNumber", item.seatNumber())
+                .param("course", item.course())
                 .param("notes", item.notes())
                 .update();
         }
@@ -183,8 +201,9 @@ public class PosOrderService {
 
     public List<PosOrderItem> listOrderItems(UUID orderId) {
         return db.sql("""
-            SELECT id, order_id, item_name, quantity, unit_price_pesewas,
-                   discount_pesewas, tax_pesewas, total_pesewas, notes
+            SELECT id, order_id, variant_id, item_name, quantity, unit_price_pesewas,
+                   discount_pesewas, tax_pesewas, total_pesewas, modifiers_json,
+                   seat_number, course, notes
             FROM pos_order_item WHERE order_id = :orderId
             """)
             .param("orderId", orderId)
@@ -313,6 +332,8 @@ public class PosOrderService {
                 change = newPaid - order.totalPesewas();
             }
 
+            // Deduct stock for inventory-tracked variants
+            deductInventoryForOrder(orderId, order.merchantId());
         }
 
         db.sql("""
@@ -329,4 +350,34 @@ public class PosOrderService {
         return getOrder(orderId).orElseThrow();
     }
 
+    private void deductInventoryForOrder(UUID orderId, UUID merchantId) {
+        // Find default warehouse for merchant
+        var defaultWarehouseOpt = db.sql("SELECT id FROM inventory_warehouse WHERE merchant_id = :m LIMIT 1")
+                .param("m", merchantId)
+                .query(UUID.class)
+                .optional();
+
+        if (defaultWarehouseOpt.isEmpty()) {
+            return; // No warehouse configured, skip stock deduction
+        }
+
+        UUID warehouseId = defaultWarehouseOpt.get();
+        List<PosOrderItem> items = listOrderItems(orderId);
+        for (PosOrderItem item : items) {
+            if (item.variantId() != null) {
+                try {
+                    stockService.deductStock(
+                            warehouseId,
+                            item.variantId(),
+                            item.quantity(),
+                            MovementType.SALE_DEDUCTION,
+                            orderId,
+                            "POS Sale Order " + orderId
+                    );
+                } catch (Exception e) {
+                    // Log or handle stock deduction note without breaking order completion
+                }
+            }
+        }
+    }
 }
