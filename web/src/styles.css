@@ -185,3 +185,16 @@ td.num, .lines .num { text-align: right; font-variant-numeric: tabular-nums; }
   .tabs, nav, button, .restaurant-insights label { display: none !important; }
   .insights-grid { grid-template-columns: 1fr 1fr; }
 }
+
+.table-qr-page { max-width: 960px; padding: 1rem; margin: 0 auto; }
+.table-menu, .table-qr-controls { display: grid; grid-template-columns: repeat(auto-fit,minmax(195px,1fr)); gap: .75rem; }
+.table-menu button { display: flex; flex-direction: column; text-align: left; gap: .5rem; min-height: 100px; }
+.table-cart-row { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .6rem 0; border-bottom: 1px solid #999; }
+.table-cart-row button, .table-qr-page button, .table-qr-controls button { min-height: 80px; min-width: 80px; }
+.table-cart-row input { width: 100%; }
+.table-qr-total { font-size: 1.4rem; font-weight: 700; }
+.qr-to-print { text-align: center; }
+@media print {
+  .table-qr-manager > :not(.qr-to-print) { display: none !important; }
+  .qr-to-print button { display: none !important; }
+}
