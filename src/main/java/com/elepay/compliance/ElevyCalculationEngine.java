@@ -5,29 +5,15 @@ import com.elepay.ledger.Ledger;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Ghana Revenue Authority (GRA) Electronic Transfer Levy (e-Levy) Engine.
- * Implements the Electronic Transfer Levy Act, 2022 (Act 1075 as amended):
- * 1. Statutory Rate: 1.0% (100 basis points) on taxable electronic transfers.
- * 2. Statutory Daily Exemption: First 100 GHS (10,000 pesewas) cumulative daily transfers
- *    per customer identity (across all linked accounts/wallets) is strictly tax-exempt.
- * 3. Self-Transfer Exemption: Transfers between accounts owned by the same verified tax identity.
- * 4. Commercial Merchant Exemption: Approved tax-compliant merchant payments.
- * 5. Deterministic Concurrency Protection: Pessimistic row locking on daily accumulators.
- * 6. Authoritative Double-Entry Ledger Posting: Credits system tax liability account.
- * 7. Statutory Reversal & Refund recalculation upon failed or reversed transfers.
- */
+/** Current transfers carry no E-Levy under Act 1127. Historical refunds remain available. */
 @Service
 public class ElevyCalculationEngine {
 
-    public static final int ELEVY_RATE_BPS = 100; // 1.0%
-    public static final long DAILY_EXEMPTION_THRESHOLD_PESEWAS = 10_000L; // 100.00 GHS
     public static final String ELEVY_SYSTEM_ACCOUNT = "system:clearing:elevy:GHS";
 
     private final JdbcClient db;
@@ -68,133 +54,13 @@ public class ElevyCalculationEngine {
             boolean isCommercialMerchantPayment
     ) {}
 
-    @Transactional
     public ElevyAssessment assessAndChargeElevy(TransferContext ctx) {
         if (ctx.amountPesewas() <= 0) {
             throw ApiException.badRequest("invalid_amount", "Transfer amount must be positive");
         }
 
-        LocalDate today = LocalDate.now();
-
-        // 1. Check for specific customer exemption profile
-        Optional<ExemptionProfile> profileOpt = db.sql("""
-            SELECT id, tin, ghana_card_number, is_tax_exempt, exemption_category
-            FROM elevy_exemption_profile
-            WHERE customer_id = :cid
-        """).param("cid", ctx.customerId())
-        .query((rs, rowNum) -> new ExemptionProfile(
-                rs.getObject("id", UUID.class),
-                rs.getString("tin"),
-                rs.getString("ghana_card_number"),
-                rs.getBoolean("is_tax_exempt"),
-                rs.getString("exemption_category")
-        )).optional();
-
-        if (profileOpt.isPresent() && profileOpt.get().isTaxExempt()) {
-            return recordAssessment(ctx, ctx.amountPesewas(), 0L, 0L, true,
-                    "STATUTORY_EXEMPT_CUSTOMER: " + profileOpt.get().exemptionCategory(), null);
-        }
-
-        // 2. Self-transfer check (same verified TIN or Ghana Card)
-        if (profileOpt.isPresent() && ctx.recipientTinOrGhCard() != null && !ctx.recipientTinOrGhCard().isBlank()) {
-            String recipientId = ctx.recipientTinOrGhCard().trim();
-            ExemptionProfile prof = profileOpt.get();
-            if ((prof.tin() != null && prof.tin().equalsIgnoreCase(recipientId))
-                    || (prof.ghanaCardNumber() != null && prof.ghanaCardNumber().equalsIgnoreCase(recipientId))) {
-                return recordAssessment(ctx, ctx.amountPesewas(), 0L, 0L, true,
-                        "SELF_TRANSFER_EXEMPT", null);
-            }
-        }
-
-        // 3. Commercial merchant payment exemption
-        if (ctx.isCommercialMerchantPayment()) {
-            return recordAssessment(ctx, ctx.amountPesewas(), 0L, 0L, true,
-                    "COMMERCIAL_MERCHANT_EXEMPT", null);
-        }
-
-        // 4. Lock or create daily accumulator (Pessimistic Row Lock)
-        ensureAccumulatorExists(ctx.customerId(), today);
-
-        var accum = db.sql("""
-            SELECT id, cumulative_amount_pesewas, exempt_amount_pesewas, taxable_amount_pesewas, total_levy_pesewas, transaction_count
-            FROM elevy_daily_accumulator
-            WHERE customer_id = :cid AND tax_date = :taxDate
-            FOR UPDATE
-        """)
-                .param("cid", ctx.customerId())
-                .param("taxDate", today)
-                .query((rs, rowNum) -> new AccumulatorRow(
-                        rs.getObject("id", UUID.class),
-                        rs.getLong("cumulative_amount_pesewas"),
-                        rs.getLong("exempt_amount_pesewas"),
-                        rs.getLong("taxable_amount_pesewas"),
-                        rs.getLong("total_levy_pesewas"),
-                        rs.getInt("transaction_count")
-                )).single();
-
-        long cumulative = accum.cumulativeAmount;
-        long amount = ctx.amountPesewas();
-        long exemptPortion = 0L;
-        long taxablePortion = 0L;
-
-        if (cumulative < DAILY_EXEMPTION_THRESHOLD_PESEWAS) {
-            long remainingExemption = DAILY_EXEMPTION_THRESHOLD_PESEWAS - cumulative;
-            if (amount <= remainingExemption) {
-                exemptPortion = amount;
-                taxablePortion = 0L;
-            } else {
-                exemptPortion = remainingExemption;
-                taxablePortion = amount - remainingExemption;
-            }
-        } else {
-            exemptPortion = 0L;
-            taxablePortion = amount;
-        }
-
-        // Calculate 1.0% levy on taxable portion using pure integer arithmetic
-        long rawProduct = taxablePortion * ELEVY_RATE_BPS;
-        long levyPesewas = (rawProduct / 10000L) + ((rawProduct % 10000L >= 5000L) ? 1L : 0L);
-
-        // Update accumulator
-        db.sql("""
-            UPDATE elevy_daily_accumulator
-            SET cumulative_amount_pesewas = cumulative_amount_pesewas + :amt,
-                exempt_amount_pesewas = exempt_amount_pesewas + :exempt,
-                taxable_amount_pesewas = taxable_amount_pesewas + :taxable,
-                total_levy_pesewas = total_levy_pesewas + :levy,
-                transaction_count = transaction_count + 1,
-                updated_at = now()
-            WHERE id = :id
-        """)
-                .param("amt", amount)
-                .param("exempt", exemptPortion)
-                .param("taxable", taxablePortion)
-                .param("levy", levyPesewas)
-                .param("id", accum.id)
-                .update();
-
-        // 5. Post e-Levy tax collection to Authoritative Double-Entry Ledger if levy > 0
-        UUID ledgerTxId = null;
-        if (levyPesewas > 0) {
-            ledger.openSystem(ELEVY_SYSTEM_ACCOUNT, "clearing", Ledger.GHS, true);
-            String customerAccount = Ledger.code("customer", ctx.customerId(), "available", Ledger.GHS);
-            ledger.open("customer", ctx.customerId(), "available", Ledger.GHS);
-
-            var posting = Ledger.Posting.of(
-                    "elevy_collection",
-                    "ELEV-" + ctx.transactionReference(),
-                    "GRA_E_LEVY_TAX_DEDUCTION",
-                    List.of(
-                            Ledger.Leg.debit(customerAccount, levyPesewas),
-                            Ledger.Leg.credit(ELEVY_SYSTEM_ACCOUNT, levyPesewas)
-                    )
-            ).describedAs("GRA Act 1075 e-Levy 1.0% deduction on tx " + ctx.transactionReference());
-
-            ledgerTxId = ledger.post(posting).transactionId();
-        }
-
-        return recordAssessment(ctx, exemptPortion, taxablePortion, levyPesewas,
-                taxablePortion == 0, taxablePortion == 0 ? "STATUTORY_DAILY_EXEMPTION" : null, ledgerTxId);
+        return new ElevyAssessment(ctx.transactionReference(), ctx.customerId(), ctx.recipientIdentifier(),
+                ctx.amountPesewas(), ctx.amountPesewas(), 0L, 0L, true, "LEVY_REPEALED", null, null);
     }
 
     @Transactional
@@ -279,83 +145,4 @@ public class ElevyCalculationEngine {
 
         return new ElevyReversalResult(originalTxRef, levyAmt, "REVERSED", refundLedgerTxId);
     }
-
-    private void ensureAccumulatorExists(UUID customerId, LocalDate date) {
-        db.sql("""
-            INSERT INTO elevy_daily_accumulator (
-                id, customer_id, tax_date, cumulative_amount_pesewas,
-                exempt_amount_pesewas, taxable_amount_pesewas, total_levy_pesewas,
-                transaction_count, created_at, updated_at
-            ) VALUES (
-                :id, :cid, :taxDate, 0, 0, 0, 0, 0, now(), now()
-            ) ON CONFLICT (customer_id, tax_date) DO NOTHING
-        """)
-                .param("id", UUID.randomUUID())
-                .param("cid", customerId)
-                .param("taxDate", date)
-                .update();
-    }
-
-    private ElevyAssessment recordAssessment(
-            TransferContext ctx,
-            long exemptPortion,
-            long taxablePortion,
-            long levyPesewas,
-            boolean isExempt,
-            String reason,
-            UUID ledgerTxId
-    ) {
-        String clearanceCode = "GRA-ELEV-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
-
-        db.sql("""
-            INSERT INTO elevy_transaction_log (
-                id, transaction_reference, customer_id, recipient_identifier,
-                transfer_amount_pesewas, exempt_portion_pesewas, taxable_portion_pesewas,
-                levy_rate_bps, levy_amount_pesewas, is_exempt, exemption_reason,
-                status, gra_clearance_code, ledger_tx_id, created_at
-            ) VALUES (
-                :id, :ref, :cid, :recipient,
-                :amt, :exempt, :taxable,
-                :bps, :levy, :isExempt, :reason,
-                'CHARGED', :code, :ledgerTx, now()
-            )
-        """)
-                .param("id", UUID.randomUUID())
-                .param("ref", ctx.transactionReference())
-                .param("cid", ctx.customerId())
-                .param("recipient", ctx.recipientIdentifier())
-                .param("amt", ctx.amountPesewas())
-                .param("exempt", exemptPortion)
-                .param("taxable", taxablePortion)
-                .param("bps", ELEVY_RATE_BPS)
-                .param("levy", levyPesewas)
-                .param("isExempt", isExempt)
-                .param("reason", reason)
-                .param("code", clearanceCode)
-                .param("ledgerTx", ledgerTxId)
-                .update();
-
-        return new ElevyAssessment(
-                ctx.transactionReference(), ctx.customerId(), ctx.recipientIdentifier(),
-                ctx.amountPesewas(), exemptPortion, taxablePortion, levyPesewas,
-                isExempt, reason, clearanceCode, ledgerTxId
-        );
-    }
-
-    private record ExemptionProfile(
-            UUID id,
-            String tin,
-            String ghanaCardNumber,
-            boolean isTaxExempt,
-            String exemptionCategory
-    ) {}
-
-    private record AccumulatorRow(
-            UUID id,
-            long cumulativeAmount,
-            long exemptAmount,
-            long taxableAmount,
-            long totalLevy,
-            int txCount
-    ) {}
 }
