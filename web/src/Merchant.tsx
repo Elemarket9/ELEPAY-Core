@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
+import { RestaurantInsights } from "./RestaurantInsights";
 import { api, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
 import { BusinessAccounting, CustomersAndLoyalty, FloorPlanView, InventoryAndStock, InvoicesAndQuotes, PayrollAndEmployees, PosRegister } from "./MerchantTools";
@@ -14,7 +15,7 @@ interface Payout { reference: string; amount: number; status: string; clientRefe
 interface Destination { id: string; type: string; network: string; accountNumber: string; accountName: string; verification: string }
 
 const TABS = [
-  "Overview", "POS Register", "Orders & Receipts", "Inventory & Stock", "Restaurant & KDS",
+  "Overview", "POS Register", "Orders & Receipts", "Inventory & Stock", "Restaurant & KDS", "Restaurant Insights",
   "Invoices & Quotes", "Payroll & Employees", "Customers & Loyalty", "Business Accounting",
   "Transactions", "Settlements", "Refunds", "Disputes", "Payouts", "Collect"
 ] as const;
@@ -51,6 +52,7 @@ export function MerchantDashboard() {
           {tab === "Orders & Receipts" && <OrdersAndReceipts merchantId={merchant.id} />}
           {tab === "Inventory & Stock" && <InventoryAndStock merchantId={merchant.id} />}
           {tab === "Restaurant & KDS" && <RestaurantAndKds merchantId={merchant.id} />}
+          {tab === "Restaurant Insights" && <RestaurantInsights merchantId={merchant.id} />}
           {tab === "Invoices & Quotes" && <InvoicesAndQuotes merchantId={merchant.id} />}
           {tab === "Payroll & Employees" && <PayrollAndEmployees merchantId={merchant.id} />}
           {tab === "Customers & Loyalty" && <CustomersAndLoyalty merchantId={merchant.id} />}

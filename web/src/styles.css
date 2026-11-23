@@ -174,3 +174,14 @@ td.num, .lines .num { text-align: right; font-variant-numeric: tabular-nums; }
 @media (min-width: 600px) and (max-width: 1200px) {
   .kitchen-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
+
+.insights-kpis { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit,minmax(175px,1fr)); margin: 1rem 0; }
+.insights-kpis > div { padding: 1.1rem; border: 1px solid #83909a; border-radius: 10px; display: grid; gap: .3rem; }
+.insights-kpis strong { font-size: clamp(1.3rem,2.2vw,2rem); }
+.insights-kpis span { font-size: .9rem; }
+.insights-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(330px,1fr)); gap: 1rem; }
+.insights-grid table { width: 100%; overflow-wrap: anywhere; }
+@media print {
+  .tabs, nav, button, .restaurant-insights label { display: none !important; }
+  .insights-grid { grid-template-columns: 1fr 1fr; }
+}
