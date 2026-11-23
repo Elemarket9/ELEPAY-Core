@@ -237,6 +237,7 @@ class Checkouts {
     public CheckoutService.FeeSchedule saveFeeSchedule(@PathVariable UUID merchantId,
                                                        @Valid @RequestBody FeeScheduleInput request) {
         var a = access.require(merchantId, MANAGE);
+        a.actor().requireUser();
         List<CheckoutService.FeeRule> rules = request.rules() == null ? List.of() : request.rules().stream()
                 .map(r -> new CheckoutService.FeeRule(r.category(), r.commissionBps(), r.commissionMin(), r.processingFee(),
                         r.reserveBps() != null ? r.reserveBps() : 0))

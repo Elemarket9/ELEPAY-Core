@@ -24,12 +24,13 @@ public class OpsQueue {
 
     @Transactional
     public void raise(String kind, String severity, String subject, Map<String, ?> details) {
+        String normalizedSeverity = "critical".equalsIgnoreCase(severity) ? "high" : severity;
         db.sql("""
                 INSERT INTO ops_item (id, kind, severity, subject, details)
                 VALUES (:id, :kind, :severity, :subject, CAST(:details AS jsonb))
                 ON CONFLICT (kind, subject) WHERE status = 'open'
                 DO UPDATE SET details = ops_item.details || EXCLUDED.details""")
-                .param("id", UUID.randomUUID()).param("kind", kind).param("severity", severity)
+                .param("id", UUID.randomUUID()).param("kind", kind).param("severity", normalizedSeverity)
                 .param("subject", subject).param("details", json.writeValueAsString(details)).update();
     }
 

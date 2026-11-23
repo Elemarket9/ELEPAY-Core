@@ -1,0 +1,54 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elepay-core-stage1-strict-egress
+  namespace: elepay-production
+  labels:
+    app: elepay-core
+    stage: stage1
+spec:
+  podSelector:
+    matchLabels:
+      app: elepay-core
+  policyTypes:
+    - Egress
+  egress:
+    # 1. Internal DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 2. Authoritative PostgreSQL 18 Append-Only Ledger & Audit Database
+    - to:
+        - podSelector:
+            matchLabels:
+              app: elepay-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # 3. Redis Distributed Kill-Switch, Nonce & Rate-Limit Cache
+    - to:
+        - podSelector:
+            matchLabels:
+              app: elepay-redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # 4. Regulated Stage 1 External Partners Only (Custodian Bank, MTN, Telecel, AirtelTigo, GhIPSS, Cloud KMS)
+    - to:
+        - ipBlock:
+            cidr: 196.201.0.0/16 # GhIPSS & Ghana Interbank Switch
+        - ipBlock:
+            cidr: 197.251.128.0/17 # MTN MoMo & Telecel Cash Ghana Partner Gateway
+        - ipBlock:
+            cidr: 154.160.0.0/16 # Custodian Bank FBO Trust Gateway & AirtelTigo Money
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 8443

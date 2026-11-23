@@ -46,6 +46,7 @@ class PayoutPolicyApi {
     @PutMapping("/merchants/{merchantId}/payout-policy")
     public PayoutPolicies.Effective saveMine(@PathVariable UUID merchantId, @Valid @RequestBody OwnPolicy request) {
         var a = access.require(merchantId, MANAGE);
+        a.actor().requireUser();
         return policies.saveOwn(merchantId, request.mode(), request.minAmount(), request.destinationId(),
                 a.actor().subject());
     }
@@ -60,6 +61,7 @@ class PayoutPolicyApi {
     @PutMapping("/merchants/{merchantId}/seller-payout-policy")
     public PayoutPolicies.PlatformPolicy savePlatform(@PathVariable UUID merchantId, @Valid @RequestBody RuleInput request) {
         var a = access.require(merchantId, MANAGE);
+        a.actor().requireUser();
         return policies.savePlatformDefault(merchantId, request.mode(),
                 request.minAmount() == null ? 0 : request.minAmount(), a.actor().subject());
     }
@@ -78,6 +80,7 @@ class PayoutPolicyApi {
     public PayoutPolicies.PlatformPolicy saveSeller(@PathVariable UUID merchantId, @PathVariable UUID sellerId,
                                                     @Valid @RequestBody RuleInput request) {
         var a = access.require(merchantId, MANAGE);
+        a.actor().requireUser();
         return policies.saveSellerOverride(merchantId, sellerId, request.mode(),
                 request.minAmount() == null ? 0 : request.minAmount(), a.actor().subject());
     }
@@ -86,6 +89,7 @@ class PayoutPolicyApi {
     @DeleteMapping("/merchants/{merchantId}/sellers/{sellerId}/payout-policy")
     public PayoutPolicies.PlatformPolicy clearSeller(@PathVariable UUID merchantId, @PathVariable UUID sellerId) {
         var a = access.require(merchantId, MANAGE);
+        a.actor().requireUser();
         return policies.saveSellerOverride(merchantId, sellerId, null, 0, a.actor().subject());
     }
 

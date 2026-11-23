@@ -40,12 +40,25 @@ public class ReconciliationService {
     private final Ledger ledger;
     private final OpsQueue ops;
     private final Audit audit;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     public ReconciliationService(JdbcClient db, Ledger ledger, OpsQueue ops, Audit audit) {
+        this(db, ledger, ops, audit, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ReconciliationService(
+            JdbcClient db,
+            Ledger ledger,
+            OpsQueue ops,
+            Audit audit,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) org.springframework.jdbc.core.JdbcTemplate jdbcTemplate
+    ) {
         this.db = db;
         this.ledger = ledger;
         this.ops = ops;
         this.audit = audit;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     public record StatementUploadRequest(
@@ -118,6 +131,10 @@ public class ReconciliationService {
                 .param("id", uploadId).param("rail", request.rail()).param("filename", request.filename())
                 .param("by", actorUuid).update();
 
+        if (jdbcTemplate != null && request.lines().size() > 100) {
+            return uploadAndReconcileBulk(uploadId, request, actor.subject());
+        }
+
         int matchedExact = 0;
         int matchedFuzzy = 0;
         int unmatched = 0;
@@ -170,6 +187,113 @@ public class ReconciliationService {
 
         return new UploadResult(uploadId, request.rail(), request.filename(), request.lines().size(),
                 matchedExact, matchedFuzzy, unmatched, feeDiscrepancies);
+    }
+
+    private record BulkLineEntry(UUID lineId, StatementLineInput input, String currency, OffsetDateTime txTime,
+                                 String matchStatus, String matchedInternalRef) {}
+
+    private UploadResult uploadAndReconcileBulk(UUID uploadId, StatementUploadRequest request, String actorSubject) {
+        List<StatementLineInput> lines = request.lines();
+        List<String> refs = lines.stream()
+                .map(StatementLineInput::externalReference)
+                .filter(r -> r != null && !r.isBlank())
+                .distinct()
+                .toList();
+
+        record RailRow(UUID id, String reference, long amount) {}
+        Map<String, RailRow> railMap = new HashMap<>(refs.size());
+        int chunkSize = 5000;
+        for (int start = 0; start < refs.size(); start += chunkSize) {
+            List<String> chunk = refs.subList(start, Math.min(start + chunkSize, refs.size()));
+            db.sql("""
+                    SELECT id, reference, rail_reference, amount
+                    FROM rail_transaction
+                    WHERE rail = :rail AND (reference IN (:refs) OR rail_reference IN (:refs))""")
+                    .param("rail", request.rail()).param("refs", chunk)
+                    .query((rs, i) -> {
+                        RailRow rr = new RailRow(rs.getObject(1, UUID.class), rs.getString(2), rs.getLong(4));
+                        String r1 = rs.getString(2);
+                        String r2 = rs.getString(3);
+                        if (r1 != null) railMap.putIfAbsent(r1, rr);
+                        if (r2 != null) railMap.putIfAbsent(r2, rr);
+                        return rr;
+                    }).list();
+        }
+
+        PartnerFeeSchedule schedule = getFeeSchedule(request.rail());
+        OffsetDateTime now = OffsetDateTime.now();
+        List<BulkLineEntry> entries = new ArrayList<>(lines.size());
+        List<BulkLineEntry> matchedEntries = new ArrayList<>(lines.size());
+        List<BulkLineEntry> unmatchedEntries = new ArrayList<>();
+        int matchedExact = 0;
+        int unmatched = 0;
+        int feeDiscrepancies = 0;
+
+        for (StatementLineInput line : lines) {
+            UUID lineId = UUID.randomUUID();
+            String cur = line.currency() != null ? line.currency().toUpperCase() : Ledger.GHS;
+            OffsetDateTime txTime = line.transactionTime() != null ? line.transactionTime() : now;
+            RailRow rr = line.externalReference() != null ? railMap.get(line.externalReference()) : null;
+
+            if (rr != null && rr.amount() == line.amountPesewas()) {
+                matchedExact++;
+                BulkLineEntry entry = new BulkLineEntry(lineId, line, cur, txTime, "MATCHED", rr.reference());
+                entries.add(entry);
+                matchedEntries.add(entry);
+                if (schedule != null && line.feePesewas() != calculateExpectedFee(schedule, line.amountPesewas())) {
+                    feeDiscrepancies++;
+                }
+            } else {
+                unmatched++;
+                BulkLineEntry entry = new BulkLineEntry(lineId, line, cur, txTime, "UNMATCHED", null);
+                entries.add(entry);
+                unmatchedEntries.add(entry);
+            }
+        }
+
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO statement_line (id, upload_id, external_reference, amount_pesewas, currency,
+                                            fee_pesewas, transaction_time, raw_description, match_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", entries, 2000, (ps, e) -> {
+            ps.setObject(1, e.lineId());
+            ps.setObject(2, uploadId);
+            ps.setString(3, e.input().externalReference());
+            ps.setLong(4, e.input().amountPesewas());
+            ps.setString(5, e.currency());
+            ps.setLong(6, e.input().feePesewas());
+            ps.setObject(7, e.txTime());
+            ps.setString(8, e.input().rawDescription());
+            ps.setString(9, e.matchStatus());
+        });
+
+        if (!matchedEntries.isEmpty()) {
+            jdbcTemplate.batchUpdate("""
+                    INSERT INTO reconciliation_match (id, statement_line_id, internal_reference, match_type, confidence, matched_at)
+                    VALUES (?, ?, ?, 'EXACT_4WAY', 100.00, now())""", matchedEntries, 2000, (ps, e) -> {
+                ps.setObject(1, UUID.randomUUID());
+                ps.setObject(2, e.lineId());
+                ps.setString(3, e.matchedInternalRef());
+            });
+        }
+
+        if (!unmatchedEntries.isEmpty()) {
+            String src = "reconciliation:" + request.rail();
+            jdbcTemplate.batchUpdate("""
+                    INSERT INTO suspense_item (id, source, amount_pesewas, currency, reason, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'OPEN', now())""", unmatchedEntries, 2000, (ps, e) -> {
+                ps.setObject(1, UUID.randomUUID());
+                ps.setString(2, src);
+                ps.setLong(3, e.input().amountPesewas());
+                ps.setString(4, e.currency());
+                ps.setString(5, "Unmatched statement line " + e.input().externalReference());
+            });
+        }
+
+        audit.record(actorSubject, "reconciliation.statement_uploaded", "upload:" + uploadId,
+                Map.of("total", lines.size(), "exact", matchedExact, "fuzzy", 0, "unmatched", unmatched));
+
+        return new UploadResult(uploadId, request.rail(), request.filename(), lines.size(),
+                matchedExact, 0, unmatched, feeDiscrepancies);
     }
 
     private boolean tryExact4WayMatch(UUID lineId, String rail, StatementLineInput line) {

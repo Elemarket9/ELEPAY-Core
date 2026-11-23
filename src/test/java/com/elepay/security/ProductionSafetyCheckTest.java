@@ -48,4 +48,14 @@ class ProductionSafetyCheckTest {
         assertThat(ProductionSafetyCheck.problems(env)).anyMatch(p -> p.contains("vault"))
                 .anyMatch(p -> p.contains("issuer"));
     }
+
+    @Test
+    void diskSecretFilePathsAndShortCoolingOffAreRefusedInProduction() {
+        var env = safe()
+                .withProperty("elepay.integrity.ed25519-private-key", "file:/etc/elepay/ed25519.pem")
+                .withProperty("elepay.security.destination-cooling-off-hours", "0");
+        assertThat(ProductionSafetyCheck.problems(env))
+                .anyMatch(p -> p.contains("disk secret file path"))
+                .anyMatch(p -> p.contains("destination-cooling-off-hours"));
+    }
 }

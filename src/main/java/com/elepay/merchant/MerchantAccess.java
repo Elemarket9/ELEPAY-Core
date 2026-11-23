@@ -116,29 +116,60 @@ public class MerchantAccess {
 
     /** A merchant's own bank or MoMo account for settlement and withdrawals. */
     public record SettlementDestination(UUID id, String type, String network, String accountNumber, String accountName,
-                                        String verification, String verifiedName) {
-        public boolean verified() { return "verified".equals(verification); }
+                                        String verification, String verifiedName,
+                                        java.time.OffsetDateTime coolingOffUntil, String oobVerificationStatus) {
+        public SettlementDestination(UUID id, String type, String network, String accountNumber, String accountName,
+                                     String verification, String verifiedName) {
+            this(id, type, network, accountNumber, accountName, verification, verifiedName, null, "confirmed");
+        }
+
+        public boolean verified() {
+            return "verified".equals(verification)
+                    && (oobVerificationStatus == null || "confirmed".equals(oobVerificationStatus));
+        }
+
+        public boolean isCoolingOff(java.time.OffsetDateTime now) {
+            return coolingOffUntil != null && coolingOffUntil.isAfter(now);
+        }
     }
 
     private static SettlementDestination destination(java.sql.ResultSet rs, int i) throws java.sql.SQLException {
         return new SettlementDestination(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getString(4),
-                rs.getString(5), rs.getString(6), rs.getString(7));
+                rs.getString(5), rs.getString(6), rs.getString(7),
+                rs.getObject(8, java.time.OffsetDateTime.class), rs.getString(9));
     }
 
     /** An active destination owned by this merchant. */
     public Optional<SettlementDestination> activeDestination(UUID merchant, UUID id) {
         return db.sql("""
-                SELECT id, type, network, account_number, account_name, verification, verified_name
+                SELECT id, type, network, account_number, account_name, verification, verified_name,
+                       cooling_off_until, COALESCE(oob_verification_status, 'confirmed')
                 FROM settlement_destination
                 WHERE id = :id AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'""")
                 .param("id", id).param("m", merchant).query(MerchantAccess::destination).optional();
     }
 
+    /** Finds an active destination owned by this merchant matching (type, network, accountNumber). */
+    public Optional<SettlementDestination> activeDestinationByAccount(UUID merchant, String type, String network, String accountNumber) {
+        return db.sql("""
+                SELECT id, type, network, account_number, account_name, verification, verified_name,
+                       cooling_off_until, COALESCE(oob_verification_status, 'confirmed')
+                FROM settlement_destination
+                WHERE owner_type = 'merchant' AND owner_id = :m AND status = 'active'
+                  AND lower(type) = lower(:type) AND lower(network) = lower(:network) AND account_number = :acc
+                ORDER BY created_at DESC LIMIT 1""")
+                .param("m", merchant).param("type", type).param("network", network).param("acc", accountNumber)
+                .query(MerchantAccess::destination).optional();
+    }
+
     public List<SettlementDestination> verifiedDestinations(UUID merchant) {
         return db.sql("""
-                SELECT id, type, network, account_number, account_name, verification, verified_name
+                SELECT id, type, network, account_number, account_name, verification, verified_name,
+                       cooling_off_until, COALESCE(oob_verification_status, 'confirmed')
                 FROM settlement_destination
                 WHERE owner_type = 'merchant' AND owner_id = :m AND status = 'active' AND verification = 'verified'
+                  AND COALESCE(oob_verification_status, 'confirmed') = 'confirmed'
+                  AND (cooling_off_until IS NULL OR cooling_off_until <= now())
                 ORDER BY created_at""").param("m", merchant).query(MerchantAccess::destination).list();
     }
 

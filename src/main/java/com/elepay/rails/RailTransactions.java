@@ -50,10 +50,12 @@ public class RailTransactions {
     private final Ledger ledger;
     private final TransactionTemplate tx;
     private final boolean recoveryEnabled;
+    private final CustodianBankBackstopService custodianBackstop;
 
     RailTransactions(JdbcClient db, ObjectMapper json, RailRegistry rails, ApplicationEventPublisher events,
                          OpsQueue ops, Ledger ledger, PlatformTransactionManager tm,
-                         @Value("${elepay.rails.recovery-enabled:true}") boolean recoveryEnabled) {
+                         @Value("${elepay.rails.recovery-enabled:true}") boolean recoveryEnabled,
+                         @org.springframework.beans.factory.annotation.Autowired(required = false) CustodianBankBackstopService custodianBackstop) {
         this.db = db;
         this.json = json;
         this.rails = rails;
@@ -62,6 +64,7 @@ public class RailTransactions {
         this.ledger = ledger;
         this.tx = new TransactionTemplate(tm);
         this.recoveryEnabled = recoveryEnabled;
+        this.custodianBackstop = custodianBackstop;
     }
 
     public record RailTx(UUID id, String rail, String direction, String reference, String purpose,
@@ -162,6 +165,13 @@ public class RailTransactions {
     }
 
     private Result send(RailTx t) {
+        if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))) {
+            var decision = custodianBackstop.authorizeOutboundDisbursement(
+                    t.id(), t.reference(), t.rail(), t.direction(), t.amount(), t.currency());
+            if (!decision.allowed()) {
+                return Result.unavailable(decision.reason());
+            }
+        }
         PaymentRail rail = rails.get(t.rail());
         Request r = json.readValue(t.request(), Request.class);
         try {
@@ -196,6 +206,9 @@ public class RailTransactions {
                 db.sql("""
                         UPDATE rail_transaction SET status = 'returned', updated_at = now(), failure_reason = :reason
                         WHERE id = :id""").param("id", id).param("reason", result.message()).update();
+                if (custodianBackstop != null) {
+                    custodianBackstop.onOutboundReleased(t.amount(), t.currency());
+                }
                 events.publishEvent(new RailEvents.Returned(id, t.rail(), t.direction(), t.purpose(), t.purposeId(),
                         t.amount(), result.message()));
             } else if (!t.status().equals("returned")) {
@@ -248,6 +261,9 @@ public class RailTransactions {
                             Ledger.Leg.debit("system:rail_fees:GHS", fee),
                             Ledger.Leg.credit(Ledger.clearing(t.rail()), fee))));
                 }
+                if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))) {
+                    custodianBackstop.onOutboundSucceeded(t.amount(), t.currency());
+                }
                 events.publishEvent(new RailEvents.Succeeded(id, t.rail(), t.direction(), t.purpose(),
                         t.purposeId(), t.amount(), fee));
             }
@@ -258,6 +274,9 @@ public class RailTransactions {
                         WHERE id = :id""")
                         .param("id", id).param("pref", result.railReference())
                         .param("reason", result.message()).update();
+                if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))) {
+                    custodianBackstop.onOutboundReleased(t.amount(), t.currency());
+                }
                 events.publishEvent(new RailEvents.Failed(id, t.rail(), t.direction(), t.purpose(),
                         t.purposeId(), t.amount(), result.message()));
             }
@@ -284,6 +303,10 @@ public class RailTransactions {
                         UPDATE rail_transaction SET status = 'failed', updated_at = now(), completed_at = now(),
                                 failure_reason = :reason WHERE id = :id""")
                         .param("id", id).param("reason", result.message()).update();
+                if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))
+                        && result.message() != null && !result.message().startsWith("Custodian Bank")) {
+                    custodianBackstop.onOutboundReleased(t.amount(), t.currency());
+                }
                 events.publishEvent(new RailEvents.Failed(id, t.rail(), t.direction(), t.purpose(),
                         t.purposeId(), t.amount(), result.message()));
             }

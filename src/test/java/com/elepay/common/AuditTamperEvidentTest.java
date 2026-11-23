@@ -16,12 +16,20 @@ class AuditTamperEvidentTest extends PostgresTestBase {
     @Autowired
     private JdbcClient db;
 
+    @Autowired
+    private org.springframework.transaction.support.TransactionTemplate tx;
+
     @org.junit.jupiter.api.BeforeEach
     void cleanAuditLog() {
-        db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
-        db.sql("TRUNCATE audit_log").update();
-        db.sql("ALTER SEQUENCE audit_log_id_seq RESTART WITH 1").update();
-        db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+        tx.executeWithoutResult(s -> {
+            db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+            db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+            db.sql("ALTER TABLE audit_checkpoint DISABLE TRIGGER audit_checkpoint_immutable").update();
+            db.sql("TRUNCATE audit_log, audit_checkpoint").update();
+            db.sql("ALTER SEQUENCE audit_log_id_seq RESTART WITH 1").update();
+            db.sql("ALTER TABLE audit_checkpoint ENABLE TRIGGER audit_checkpoint_immutable").update();
+            db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+        });
     }
 
     @Test
@@ -44,7 +52,10 @@ class AuditTamperEvidentTest extends PostgresTestBase {
         assertTrue(validResult.entriesVerified() >= 3);
 
         String originalDetails = e2.payload();
-        db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+        tx.executeWithoutResult(s -> {
+            db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+            db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+        });
         try {
             db.sql("UPDATE audit_log SET details = CAST('{\"amount\": 999999}' AS jsonb) WHERE id = :id")
                     .param("id", e2.id()).update();
@@ -55,7 +66,10 @@ class AuditTamperEvidentTest extends PostgresTestBase {
         } finally {
             db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb) WHERE id = :id")
                     .param("d", originalDetails).param("id", e2.id()).update();
-            db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+            });
         }
     }
 
@@ -64,7 +78,10 @@ class AuditTamperEvidentTest extends PostgresTestBase {
         audit.recordEntry("admin@elepay.com", "action.1", "subject:1", Map.of("k", "v1"));
         var e2 = audit.recordEntry("admin@elepay.com", "action.2", "subject:2", Map.of("k", "v2"));
 
-        db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+        tx.executeWithoutResult(s -> {
+            db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+            db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+        });
         try {
             db.sql("UPDATE audit_log SET entry_hash = NULL WHERE id = :id")
                     .param("id", e2.id()).update();
@@ -74,7 +91,10 @@ class AuditTamperEvidentTest extends PostgresTestBase {
         } finally {
             db.sql("UPDATE audit_log SET entry_hash = :h WHERE id = :id")
                     .param("h", e2.entryHash()).param("id", e2.id()).update();
-            db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+            });
         }
     }
 
@@ -83,7 +103,10 @@ class AuditTamperEvidentTest extends PostgresTestBase {
         audit.recordEntry("admin@elepay.com", "action.1", "subject:1", Map.of("k", "v1"));
         var e2 = audit.recordEntry("admin@elepay.com", "action.2", "subject:2", Map.of("k", "v2"));
 
-        db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+        tx.executeWithoutResult(s -> {
+            db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+            db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+        });
         try {
             db.sql("UPDATE audit_log SET prev_hash = NULL WHERE id = :id")
                     .param("id", e2.id()).update();
@@ -93,7 +116,10 @@ class AuditTamperEvidentTest extends PostgresTestBase {
         } finally {
             db.sql("UPDATE audit_log SET prev_hash = :h WHERE id = :id")
                     .param("h", e2.prevHash()).param("id", e2.id()).update();
-            db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+            });
         }
     }
 }

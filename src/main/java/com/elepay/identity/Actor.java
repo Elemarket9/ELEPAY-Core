@@ -12,7 +12,12 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
  * The authenticated caller. Either an OIDC user (subject from the JWT) or a
  * merchant API credential scoped to exactly one merchant.
  */
-public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<String> scopes) {
+public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<String> scopes,
+                    String keyType, java.util.List<String> allowedIps) {
+
+    public Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<String> scopes) {
+        this(subject, roles, apiKeyMerchant, scopes, apiKeyMerchant != null ? "legacy" : null, java.util.List.of());
+    }
 
     public static final String OPS = "ops";
     public static final String OPS_ADMIN = "ops_admin";
@@ -20,18 +25,22 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
     public boolean isOps() { return roles.contains(OPS) || roles.contains(OPS_ADMIN); }
     public boolean isApiKey() { return apiKeyMerchant != null; }
     public boolean isCustomer() { return !isOps() && !isApiKey(); }
+    public boolean isPublishableKey() { return "publishable".equalsIgnoreCase(keyType); }
+    public boolean isSecretKey() { return "secret".equalsIgnoreCase(keyType); }
+    public boolean isPayoutKey() { return "payout".equalsIgnoreCase(keyType); }
 
     public static Actor current() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth instanceof ApiKeyAuthentication key) {
-            return new Actor("apikey:" + key.credentialId(), Set.of(), key.merchantId(), key.scopes());
+            return new Actor("apikey:" + key.credentialId(), Set.of(), key.merchantId(), key.scopes(),
+                    key.keyType(), key.allowedIps());
         }
         if (auth instanceof JwtAuthenticationToken jwt) {
             Set<String> roles = new java.util.HashSet<>();
             for (GrantedAuthority authority : jwt.getAuthorities()) {
                 if (authority.getAuthority().startsWith("ROLE_")) roles.add(authority.getAuthority().substring(5));
             }
-            return new Actor(jwt.getToken().getSubject(), Set.copyOf(roles), null, Set.of());
+            return new Actor(jwt.getToken().getSubject(), Set.copyOf(roles), null, Set.of(), null, java.util.List.of());
         }
         throw new ApiException(org.springframework.http.HttpStatus.UNAUTHORIZED, "unauthenticated", "Authentication required");
     }

@@ -57,10 +57,37 @@ public class TenWayClearingReconciliationEngine {
 
     private final JdbcClient db;
     private final ReconSuspenseService suspenseService;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     public TenWayClearingReconciliationEngine(JdbcClient db, ReconSuspenseService suspenseService) {
+        this(db, suspenseService, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public TenWayClearingReconciliationEngine(
+            JdbcClient db,
+            ReconSuspenseService suspenseService,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) org.springframework.jdbc.core.JdbcTemplate jdbcTemplate
+    ) {
         this.db = db;
         this.suspenseService = suspenseService;
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    private record StmtLine(UUID id, int lineNum, String dcMark, long amount, String bankRef, String custRef, String matchStatus, String searchRef) {}
+    private record CarrierRow(UUID id, long amount) {}
+    private record LedgerRow(UUID id, long amount) {}
+
+    private static String extractSearchRef(String bankRef, String custRef) {
+        if (bankRef != null && !bankRef.isBlank() && !bankRef.equalsIgnoreCase("NONREF")
+                && !bankRef.startsWith("REF-") && !bankRef.startsWith("LINE-")) {
+            return bankRef.trim();
+        }
+        if (custRef != null && !custRef.isBlank() && !custRef.equalsIgnoreCase("NONREF")
+                && !custRef.startsWith("REF-") && !custRef.startsWith("LINE-")) {
+            return custRef.trim();
+        }
+        return null;
     }
 
     @Transactional
@@ -79,7 +106,7 @@ public class TenWayClearingReconciliationEngine {
         String currency = batchOpt.map(b -> b.currency).orElse("GHS");
 
         // Retrieve all lines for this statement batch
-        var statementLines = db.sql("""
+        List<StmtLine> statementLines = db.sql("""
             SELECT id, line_number, debit_credit_mark, amount_pesewas,
                    bank_reference, customer_reference, match_status
             FROM recon_statement_line
@@ -87,84 +114,122 @@ public class TenWayClearingReconciliationEngine {
             ORDER BY line_number ASC
         """)
                 .param("batchId", batchId)
-                .query((rs, rowNum) -> new Object() {
-                    UUID id = rs.getObject("id", UUID.class);
-                    int lineNum = rs.getInt("line_number");
-                    String dcMark = rs.getString("debit_credit_mark");
-                    long amount = rs.getLong("amount_pesewas");
-                    String bankRef = rs.getString("bank_reference");
-                    String custRef = rs.getString("customer_reference");
-                    String matchStatus = rs.getString("match_status");
+                .query((rs, rowNum) -> {
+                    String bRef = rs.getString("bank_reference");
+                    String cRef = rs.getString("customer_reference");
+                    return new StmtLine(
+                            rs.getObject("id", UUID.class),
+                            rs.getInt("line_number"),
+                            rs.getString("debit_credit_mark"),
+                            rs.getLong("amount_pesewas"),
+                            bRef,
+                            cRef,
+                            rs.getString("match_status"),
+                            extractSearchRef(bRef, cRef)
+                    );
                 })
                 .list();
 
-        List<MatchOutcome> outcomes = new ArrayList<>();
+        // Bulk hash-join pre-fetch for direct_carrier_session and journal_transaction
+        List<String> allRefs = statementLines.stream()
+                .map(StmtLine::searchRef)
+                .filter(r -> r != null && !r.isBlank())
+                .distinct()
+                .toList();
+
+        Map<String, CarrierRow> carrierMap = new HashMap<>(allRefs.size());
+        Map<String, LedgerRow> ledgerMap = new HashMap<>(allRefs.size());
+
+        int chunkSize = 5000;
+        for (int start = 0; start < allRefs.size(); start += chunkSize) {
+            List<String> chunk = allRefs.subList(start, Math.min(start + chunkSize, allRefs.size()));
+            db.sql("""
+                SELECT id, reference_id, external_transaction_id, amount_pesewas
+                FROM direct_carrier_session
+                WHERE reference_id IN (:refs) OR external_transaction_id IN (:refs)
+            """)
+                    .param("refs", chunk)
+                    .query((rs, i) -> {
+                        CarrierRow cr = new CarrierRow(rs.getObject(1, UUID.class), rs.getLong(4));
+                        String r1 = rs.getString(2);
+                        String r2 = rs.getString(3);
+                        if (r1 != null) carrierMap.putIfAbsent(r1, cr);
+                        if (r2 != null) carrierMap.putIfAbsent(r2, cr);
+                        return cr;
+                    }).list();
+
+            db.sql("""
+                SELECT jt.id, jt.idempotency_key, jt.description, COALESCE(SUM(je.amount), 0) AS total_amount
+                FROM journal_transaction jt
+                JOIN journal_entry je ON je.transaction_id = jt.id AND je.amount > 0
+                WHERE jt.idempotency_key IN (:refs) OR jt.description IN (:refs)
+                GROUP BY jt.id, jt.idempotency_key, jt.description
+            """)
+                    .param("refs", chunk)
+                    .query((rs, i) -> {
+                        LedgerRow lr = new LedgerRow(rs.getObject(1, UUID.class), rs.getLong(4));
+                        String ik = rs.getString(2);
+                        String desc = rs.getString(3);
+                        if (ik != null) {
+                            ledgerMap.putIfAbsent(ik, lr);
+                            int colon = ik.lastIndexOf(':');
+                            if (colon >= 0 && colon + 1 < ik.length()) {
+                                ledgerMap.putIfAbsent(ik.substring(colon + 1), lr);
+                            }
+                        }
+                        if (desc != null) ledgerMap.putIfAbsent(desc, lr);
+                        return lr;
+                    }).list();
+        }
+
+        List<MatchOutcome> outcomes = new ArrayList<>(statementLines.size());
         int exactMatches = 0;
         int amountMismatches = 0;
         int missingInLedger = 0;
         long totalVariance = 0L;
+        boolean allowFallbackLike = statementLines.size() <= 200;
 
-        for (var line : statementLines) {
-            String searchRef = null;
-            if (line.bankRef != null && !line.bankRef.isBlank() && !line.bankRef.equalsIgnoreCase("NONREF") && !line.bankRef.startsWith("REF-") && !line.bankRef.startsWith("LINE-")) {
-                searchRef = line.bankRef.trim();
-            } else if (line.custRef != null && !line.custRef.isBlank() && !line.custRef.equalsIgnoreCase("NONREF") && !line.custRef.startsWith("REF-") && !line.custRef.startsWith("LINE-")) {
-                searchRef = line.custRef.trim();
-            }
-
-            // 1. Search for corresponding Direct Carrier Session (guard against null/blank search)
+        for (StmtLine line : statementLines) {
+            String searchRef = line.searchRef();
             UUID railSessionId = null;
             Long railAmount = null;
-
-            if (searchRef != null && !searchRef.isBlank()) {
-                var carrierOpt = db.sql("""
-                    SELECT id, amount_pesewas FROM direct_carrier_session
-                    WHERE reference_id = :ref OR external_transaction_id = :ref
-                    ORDER BY created_at DESC LIMIT 1
-                """)
-                        .param("ref", searchRef)
-                        .query((rs, rowNum) -> new Object() {
-                            UUID id = rs.getObject("id", UUID.class);
-                            long amount = rs.getLong("amount_pesewas");
-                        })
-                        .optional();
-
-                if (carrierOpt.isPresent()) {
-                    railSessionId = carrierOpt.get().id;
-                    railAmount = carrierOpt.get().amount;
-                }
-            }
-
-            // 2. Search for corresponding Double-Entry Ledger Transaction (aggregate all positive legs)
             UUID ledgerTxId = null;
             Long ledgerAmount = null;
 
             if (searchRef != null && !searchRef.isBlank()) {
-                var ledgerOpt = db.sql("""
-                    SELECT jt.id, jt.idempotency_key, COALESCE(SUM(je.amount), 0) AS total_amount
-                    FROM journal_transaction jt
-                    JOIN journal_entry je ON je.transaction_id = jt.id AND je.amount > 0
-                    WHERE jt.idempotency_key = :ref OR jt.idempotency_key LIKE :refPattern OR jt.description LIKE :descPattern
-                    GROUP BY jt.id, jt.idempotency_key, jt.posted_at
-                    ORDER BY jt.posted_at DESC LIMIT 1
-                """)
-                        .param("ref", searchRef)
-                        .param("refPattern", "%" + searchRef + "%")
-                        .param("descPattern", "%" + searchRef + "%")
-                        .query((rs, rowNum) -> new Object() {
-                            UUID id = rs.getObject("id", UUID.class);
-                            long amount = rs.getLong("total_amount");
-                        })
-                        .optional();
+                CarrierRow cr = carrierMap.get(searchRef);
+                if (cr != null) {
+                    railSessionId = cr.id();
+                    railAmount = cr.amount();
+                }
 
-                if (ledgerOpt.isPresent()) {
-                    ledgerTxId = ledgerOpt.get().id;
-                    ledgerAmount = ledgerOpt.get().amount;
+                LedgerRow lr = ledgerMap.get(searchRef);
+                if (lr == null && allowFallbackLike) {
+                    var ledgerOpt = db.sql("""
+                        SELECT jt.id, COALESCE(SUM(je.amount), 0) AS total_amount
+                        FROM journal_transaction jt
+                        JOIN journal_entry je ON je.transaction_id = jt.id AND je.amount > 0
+                        WHERE jt.idempotency_key = :ref OR jt.idempotency_key LIKE :refPattern OR jt.description LIKE :descPattern
+                        GROUP BY jt.id, jt.posted_at
+                        ORDER BY jt.posted_at DESC LIMIT 1
+                    """)
+                            .param("ref", searchRef)
+                            .param("refPattern", "%" + searchRef + "%")
+                            .param("descPattern", "%" + searchRef + "%")
+                            .query((rs, rowNum) -> new LedgerRow(rs.getObject("id", UUID.class), rs.getLong("total_amount")))
+                            .optional();
+                    if (ledgerOpt.isPresent()) {
+                        lr = ledgerOpt.get();
+                        ledgerMap.put(searchRef, lr);
+                    }
+                }
+                if (lr != null) {
+                    ledgerTxId = lr.id();
+                    ledgerAmount = lr.amount();
                 }
             }
 
-            Long bankAmount = line.amount;
-
+            Long bankAmount = line.amount();
             MatchType matchType;
             MatchStatus matchStatus;
             long variance = 0L;
@@ -189,53 +254,90 @@ public class TenWayClearingReconciliationEngine {
                 totalVariance += Math.abs(variance);
             }
 
-            // Persist match record
             UUID matchRecordId = UUID.randomUUID();
-            db.sql("""
+            outcomes.add(new MatchOutcome(
+                    matchRecordId, line.id(), ledgerTxId, railSessionId, matchType,
+                    ledgerAmount, bankAmount, railAmount, variance, matchStatus
+            ));
+        }
+
+        if (jdbcTemplate != null && outcomes.size() > 1) {
+            jdbcTemplate.batchUpdate("""
                 INSERT INTO recon_match_record (
                     id, batch_id, statement_line_id, ledger_tx_id, rail_session_id,
                     match_type, ledger_amount_pesewas, bank_amount_pesewas,
                     rail_amount_pesewas, variance_pesewas, status, created_at
-                ) VALUES (
-                    :id, :batchId, :lineId, :ledgerTxId, :railSessionId,
-                    :matchType, :ledgerAmt, :bankAmt,
-                    :railAmt, :variance, :status, now()
-                )
-            """)
-                    .param("id", matchRecordId)
-                    .param("batchId", batchId)
-                    .param("lineId", line.id)
-                    .param("ledgerTxId", ledgerTxId)
-                    .param("railSessionId", railSessionId)
-                    .param("matchType", matchType.name())
-                    .param("ledgerAmt", ledgerAmount)
-                    .param("bankAmt", bankAmount)
-                    .param("railAmt", railAmount)
-                    .param("variance", variance)
-                    .param("status", matchStatus.name())
-                    .update();
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+            """, outcomes, 2000, (ps, o) -> {
+                ps.setObject(1, o.matchRecordId());
+                ps.setObject(2, batchId);
+                ps.setObject(3, o.statementLineId());
+                ps.setObject(4, o.ledgerTxId());
+                ps.setObject(5, o.railSessionId());
+                ps.setString(6, o.matchType().name());
+                if (o.ledgerAmountPesewas() != null) ps.setLong(7, o.ledgerAmountPesewas());
+                else ps.setNull(7, java.sql.Types.BIGINT);
+                if (o.bankAmountPesewas() != null) ps.setLong(8, o.bankAmountPesewas());
+                else ps.setNull(8, java.sql.Types.BIGINT);
+                if (o.railAmountPesewas() != null) ps.setLong(9, o.railAmountPesewas());
+                else ps.setNull(9, java.sql.Types.BIGINT);
+                ps.setLong(10, o.variancePesewas());
+                ps.setString(11, o.status().name());
+            });
 
-            // Wire suspense ledger posting if discrepancy occurs
-            if (matchStatus == MatchStatus.SUSPENSE_POSTED && variance != 0L) {
-                suspenseService.postSuspenseVariance(matchRecordId, bankCode, variance, currency);
-            }
-
-            // Update statement line status
-            db.sql("""
+            jdbcTemplate.batchUpdate("""
                 UPDATE recon_statement_line
-                SET match_status = :status,
-                    matched_ledger_tx_id = :ledgerTxId
-                WHERE id = :id
-            """)
-                    .param("status", matchType == MatchType.THREE_WAY_EXACT ? "EXACT_MATCH" : "MANUAL_VARIANCE")
-                    .param("ledgerTxId", ledgerTxId)
-                    .param("id", line.id)
-                    .update();
+                SET match_status = ?,
+                    matched_ledger_tx_id = ?
+                WHERE id = ?
+            """, outcomes, 2000, (ps, o) -> {
+                ps.setString(1, o.matchType() == MatchType.THREE_WAY_EXACT ? "EXACT_MATCH" : "MANUAL_VARIANCE");
+                ps.setObject(2, o.ledgerTxId());
+                ps.setObject(3, o.statementLineId());
+            });
+        } else {
+            for (MatchOutcome o : outcomes) {
+                db.sql("""
+                    INSERT INTO recon_match_record (
+                        id, batch_id, statement_line_id, ledger_tx_id, rail_session_id,
+                        match_type, ledger_amount_pesewas, bank_amount_pesewas,
+                        rail_amount_pesewas, variance_pesewas, status, created_at
+                    ) VALUES (
+                        :id, :batchId, :lineId, :ledgerTxId, :railSessionId,
+                        :matchType, :ledgerAmt, :bankAmt,
+                        :railAmt, :variance, :status, now()
+                    )
+                """)
+                        .param("id", o.matchRecordId())
+                        .param("batchId", batchId)
+                        .param("lineId", o.statementLineId())
+                        .param("ledgerTxId", o.ledgerTxId())
+                        .param("railSessionId", o.railSessionId())
+                        .param("matchType", o.matchType().name())
+                        .param("ledgerAmt", o.ledgerAmountPesewas())
+                        .param("bankAmt", o.bankAmountPesewas())
+                        .param("railAmt", o.railAmountPesewas())
+                        .param("variance", o.variancePesewas())
+                        .param("status", o.status().name())
+                        .update();
 
-            outcomes.add(new MatchOutcome(
-                    matchRecordId, line.id, ledgerTxId, railSessionId, matchType,
-                    ledgerAmount, bankAmount, railAmount, variance, matchStatus
-            ));
+                db.sql("""
+                    UPDATE recon_statement_line
+                    SET match_status = :status,
+                        matched_ledger_tx_id = :ledgerTxId
+                    WHERE id = :id
+                """)
+                        .param("status", o.matchType() == MatchType.THREE_WAY_EXACT ? "EXACT_MATCH" : "MANUAL_VARIANCE")
+                        .param("ledgerTxId", o.ledgerTxId())
+                        .param("id", o.statementLineId())
+                        .update();
+            }
+        }
+
+        for (MatchOutcome o : outcomes) {
+            if (o.status() == MatchStatus.SUSPENSE_POSTED && o.variancePesewas() != 0L) {
+                suspenseService.postSuspenseVariance(o.matchRecordId(), bankCode, o.variancePesewas(), currency);
+            }
         }
 
         String batchStatus = (amountMismatches == 0 && missingInLedger == 0) ? "RECONCILED" : "VARIANCE_SUSPENSE";

@@ -138,7 +138,7 @@ public class AdminAnomalyDetector {
                             event.userAgent(),
                             !detected.isEmpty(),
                             detected.isEmpty() ? null : detected.toString(),
-                            event.timestamp()
+                            event.timestamp() != null ? event.timestamp().atOffset(ZoneOffset.UTC) : java.time.OffsetDateTime.now(ZoneOffset.UTC)
                     )
                     .update();
             } catch (Exception ignored) {

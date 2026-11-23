@@ -38,10 +38,12 @@ class PublicCheckouts {
     private final JdbcClient db;
     private final TransactionTemplate tx;
     private final String publicBaseUrl;
+    private final com.elepay.identity.KillSwitchService killSwitchService;
 
     PublicCheckouts(CheckoutService checkouts, MerchantAccess merchants, RailTransactions rails,
                     CustomerDirectory customers, Idempotency idempotency, JdbcClient db, PlatformTransactionManager tm,
-                    @Value("${elepay.public-base-url}") String publicBaseUrl) {
+                    @Value("${elepay.public-base-url}") String publicBaseUrl,
+                    @org.springframework.beans.factory.annotation.Autowired(required = false) com.elepay.identity.KillSwitchService killSwitchService) {
         this.checkouts = checkouts;
         this.merchants = merchants;
         this.rails = rails;
@@ -50,6 +52,7 @@ class PublicCheckouts {
         this.db = db;
         this.tx = new TransactionTemplate(tm);
         this.publicBaseUrl = publicBaseUrl;
+        this.killSwitchService = killSwitchService;
     }
 
     record PublicLine(String merchant, String kind, String description, long amount) {}
@@ -68,8 +71,9 @@ class PublicCheckouts {
     @GetMapping("/v1/public/checkouts/{reference}")
     public PublicCheckout view(@PathVariable String reference) {
         var c = checkouts.load(reference, false);
+        boolean walletEnabled = killSwitchService == null || killSwitchService.isConsumerWalletEnabled();
         List<MethodTotal> methods = List.of("wallet", "momo", "card").stream()
-                .filter(m -> m.equals("wallet") || (m.equals("card") ? rails.available("charge","card", "card")
+                .filter(m -> m.equals("wallet") ? walletEnabled : (m.equals("card") ? rails.available("charge","card", "card")
                         : List.of("mtn","telecel","airteltigo").stream().anyMatch(n -> rails.available("charge","momo",n))))
                 .map(m -> {
             long fee = checkouts.customerFee(m, c.subtotal());

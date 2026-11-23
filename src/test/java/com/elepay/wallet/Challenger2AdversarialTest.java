@@ -549,12 +549,15 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
     class AuditTamperTests {
 
         private void cleanAuditTable() {
-            db.sql("""
-                    ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable;
-                    TRUNCATE audit_log;
-                    ALTER SEQUENCE audit_log_id_seq RESTART WITH 1;
-                    ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable;
-                    """).update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+                db.sql("ALTER TABLE audit_checkpoint DISABLE TRIGGER audit_checkpoint_immutable").update();
+                db.sql("TRUNCATE audit_log, audit_checkpoint").update();
+                db.sql("ALTER SEQUENCE audit_log_id_seq RESTART WITH 1").update();
+                db.sql("ALTER TABLE audit_checkpoint ENABLE TRIGGER audit_checkpoint_immutable").update();
+                db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+            });
         }
 
         @BeforeEach
@@ -573,7 +576,10 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
             assertTrue(audit.verifyChain().valid());
 
             String originalDetails = e2.payload();
-            db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+            });
             try {
                 db.sql("UPDATE audit_log SET details = CAST('{\"pesewas\": 99999999}' AS jsonb) WHERE id = :id")
                         .param("id", e2.id()).update();
@@ -584,7 +590,10 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
             } finally {
                 db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb) WHERE id = :id")
                         .param("d", originalDetails).param("id", e2.id()).update();
-                db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+                tx.executeWithoutResult(s -> {
+                    db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                    db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+                });
             }
         }
 
@@ -597,7 +606,10 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
 
             assertTrue(audit.verifyChain().valid());
 
-            db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+            });
             try {
                 // Tamper actor
                 db.sql("UPDATE audit_log SET actor = 'rogue-attacker' WHERE id = :id")
@@ -617,7 +629,10 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
             } finally {
                 db.sql("UPDATE audit_log SET action = 'aml.dismiss' WHERE id = :id")
                         .param("id", e2.id()).update();
-                db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+                tx.executeWithoutResult(s -> {
+                    db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                    db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+                });
             }
         }
 
@@ -631,7 +646,10 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
 
             assertTrue(audit.verifyChain().valid());
 
-            db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+            });
             try {
                 // Delete middle entry e2
                 db.sql("DELETE FROM audit_log WHERE id = :id").param("id", e2.id()).update();
@@ -653,7 +671,10 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
 
             String originalHash = e1.entryHash();
             String fakeHash = "bad0" + "0".repeat(60); // Exactly 64 chars
-            db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+            });
             try {
                 db.sql("UPDATE audit_log SET entry_hash = :hash WHERE id = :id")
                         .param("hash", fakeHash).param("id", e1.id()).update();
@@ -664,7 +685,10 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
             } finally {
                 db.sql("UPDATE audit_log SET entry_hash = :hash WHERE id = :id")
                         .param("hash", originalHash).param("id", e1.id()).update();
-                db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+                tx.executeWithoutResult(s -> {
+                    db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                    db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+                });
             }
         }
     }

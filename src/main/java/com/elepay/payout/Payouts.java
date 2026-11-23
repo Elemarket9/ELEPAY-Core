@@ -41,11 +41,15 @@ public class Payouts {
     private final Audit audit;
     private final OpsQueue ops;
     private final ObjectMapper json;
+    private final com.elepay.identity.KillSwitchService killSwitchService;
+    private final PayoutVelocityService velocityService;
 
     private final org.springframework.context.ApplicationEventPublisher events;
 
     Payouts(JdbcClient db, Ledger ledger, RailTransactions rails, NameVerifications verifications, Outbox outbox,
-            Audit audit, OpsQueue ops, ObjectMapper json, org.springframework.context.ApplicationEventPublisher events) {
+            Audit audit, OpsQueue ops, ObjectMapper json, org.springframework.context.ApplicationEventPublisher events,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) com.elepay.identity.KillSwitchService killSwitchService,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) PayoutVelocityService velocityService) {
         this.events = events;
         this.db = db;
         this.ledger = ledger;
@@ -55,6 +59,8 @@ public class Payouts {
         this.audit = audit;
         this.ops = ops;
         this.json = json;
+        this.killSwitchService = killSwitchService;
+        this.velocityService = velocityService;
     }
 
     public record Destination(String type, String network, String accountNumber, String accountName) {}
@@ -111,6 +117,11 @@ public class Payouts {
                 throw ApiException.badRequest("invalid_reference", "Each item needs a unique reference");
             }
             total = Math.addExact(total, item.amount());
+        }
+        if (velocityService != null) {
+            velocityService.checkAndRecordOutflow(ownerType, owner, total, items.size(), actor);
+        } else if (killSwitchService != null) {
+            killSwitchService.requirePayoutsAllowed("merchant".equalsIgnoreCase(ownerType) ? owner : null);
         }
         UUID batchId = UUID.randomUUID();
         db.sql("""
@@ -177,6 +188,14 @@ public class Payouts {
 
     /** Submits every reserved item of a batch. Call after the creating transaction commits. */
     public void submit(UUID batchId) {
+        if (killSwitchService != null) {
+            var ownerRow = db.sql("SELECT owner_type, owner_id FROM payout_batch WHERE id = :b")
+                    .param("b", batchId)
+                    .query((rs, i) -> Map.entry(rs.getString(1), rs.getObject(2, UUID.class)))
+                    .optional();
+            UUID merchantId = ownerRow.filter(e -> "merchant".equalsIgnoreCase(e.getKey())).map(Map.Entry::getValue).orElse(null);
+            killSwitchService.requirePayoutsAllowed(merchantId);
+        }
         List<UUID> railTxs = db.sql("SELECT rail_tx FROM payout WHERE batch_id = :b AND rail_tx IS NOT NULL")
                 .param("b", batchId).query(UUID.class).list();
         for (UUID railTx : railTxs) {
@@ -233,6 +252,11 @@ public class Payouts {
         long already = db.sql("SELECT count(*) FROM payout WHERE retry_of = :id").param("id", original[0])
                 .query(Long.class).single();
         if (already > 0) throw ApiException.conflict("already_retried", "This payout was already retried");
+        if (velocityService != null) {
+            velocityService.checkAndRecordOutflow(ownerType, owner, (long) original[2], 1, actor);
+        } else if (killSwitchService != null) {
+            killSwitchService.requirePayoutsAllowed("merchant".equalsIgnoreCase(ownerType) ? owner : null);
+        }
         Destination d = json.readValue((String) original[3], Destination.class);
         UUID batchId = UUID.randomUUID();
         db.sql("""

@@ -72,9 +72,17 @@ public class Mt940StatementParser {
     ) {}
 
     private final JdbcClient db;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     public Mt940StatementParser(JdbcClient db) {
+        this(db, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public Mt940StatementParser(JdbcClient db,
+                                @org.springframework.beans.factory.annotation.Autowired(required = false) org.springframework.jdbc.core.JdbcTemplate jdbcTemplate) {
         this.db = db;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     public ParsedStatement parse(String mt940Content) {
@@ -217,34 +225,59 @@ public class Mt940StatementParser {
                 .param("now", now)
                 .update();
 
-        for (StatementLine line : parsed.lines()) {
-            UUID lineId = UUID.randomUUID();
-            db.sql("""
+        List<StatementLine> lines = parsed.lines();
+        if (jdbcTemplate != null && lines.size() > 1) {
+            jdbcTemplate.batchUpdate("""
                 INSERT INTO recon_statement_line (
                     id, batch_id, line_number, value_date, entry_date,
                     debit_credit_mark, amount_pesewas, transaction_type_code,
                     bank_reference, customer_reference, supplementary_details,
                     match_status, created_at
-                ) VALUES (
-                    :id, :batchId, :lineNum, :valDate, :entryDate,
-                    :dcMark, :amt, :transType,
-                    :bankRef, :custRef, :details,
-                    'UNMATCHED', :now
-                )
-            """)
-                    .param("id", lineId)
-                    .param("batchId", batchId)
-                    .param("lineNum", line.lineNumber())
-                    .param("valDate", line.valueDate())
-                    .param("entryDate", line.entryDate())
-                    .param("dcMark", line.debitCreditMark())
-                    .param("amt", line.amountPesewas())
-                    .param("transType", line.transactionTypeCode() != null ? line.transactionTypeCode() : "MSC")
-                    .param("bankRef", line.bankReference())
-                    .param("custRef", line.customerReference())
-                    .param("details", line.supplementaryDetails())
-                    .param("now", now)
-                    .update();
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UNMATCHED', ?)
+            """, lines, 2000, (ps, line) -> {
+                ps.setObject(1, UUID.randomUUID());
+                ps.setObject(2, batchId);
+                ps.setInt(3, line.lineNumber());
+                ps.setObject(4, line.valueDate());
+                ps.setObject(5, line.entryDate());
+                ps.setString(6, line.debitCreditMark());
+                ps.setLong(7, line.amountPesewas());
+                ps.setString(8, line.transactionTypeCode() != null ? line.transactionTypeCode() : "MSC");
+                ps.setString(9, line.bankReference());
+                ps.setString(10, line.customerReference());
+                ps.setString(11, line.supplementaryDetails());
+                ps.setObject(12, now);
+            });
+        } else {
+            for (StatementLine line : lines) {
+                UUID lineId = UUID.randomUUID();
+                db.sql("""
+                    INSERT INTO recon_statement_line (
+                        id, batch_id, line_number, value_date, entry_date,
+                        debit_credit_mark, amount_pesewas, transaction_type_code,
+                        bank_reference, customer_reference, supplementary_details,
+                        match_status, created_at
+                    ) VALUES (
+                        :id, :batchId, :lineNum, :valDate, :entryDate,
+                        :dcMark, :amt, :transType,
+                        :bankRef, :custRef, :details,
+                        'UNMATCHED', :now
+                    )
+                """)
+                        .param("id", lineId)
+                        .param("batchId", batchId)
+                        .param("lineNum", line.lineNumber())
+                        .param("valDate", line.valueDate())
+                        .param("entryDate", line.entryDate())
+                        .param("dcMark", line.debitCreditMark())
+                        .param("amt", line.amountPesewas())
+                        .param("transType", line.transactionTypeCode() != null ? line.transactionTypeCode() : "MSC")
+                        .param("bankRef", line.bankReference())
+                        .param("custRef", line.customerReference())
+                        .param("details", line.supplementaryDetails())
+                        .param("now", now)
+                        .update();
+            }
         }
 
         return new BatchIngestionResult(

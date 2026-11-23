@@ -198,14 +198,22 @@ public class PayoutPolicies {
     }
 
     private Optional<DestinationRow> verifiedDestination(UUID merchant, UUID id) {
-        return merchants.activeDestination(merchant, id).filter(MerchantAccess.SettlementDestination::verified)
+        return merchants.activeDestination(merchant, id)
+                .filter(MerchantAccess.SettlementDestination::verified)
+                .filter(d -> !d.isCoolingOff(java.time.OffsetDateTime.now()))
                 .map(DestinationRow::of);
     }
 
     private void requireVerifiedDestination(UUID merchant, UUID id) {
-        if (verifiedDestination(merchant, id).isEmpty()) {
+        var destOpt = merchants.activeDestination(merchant, id);
+        if (destOpt.isEmpty() || !destOpt.get().verified()) {
             throw ApiException.conflict("destination_unverified",
                     "Automatic withdrawals go only to a verified destination owned by this merchant");
+        }
+        if (destOpt.get().isCoolingOff(java.time.OffsetDateTime.now())) {
+            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                    "destination_cooling_off_active",
+                    "Settlement destination is in 24-hour cooling-off lock until " + destOpt.get().coolingOffUntil());
         }
     }
 
@@ -242,7 +250,11 @@ public class PayoutPolicies {
                             destination.get().verifiedName())), null, SYSTEM_ACTOR);
                 });
             } catch (ApiException e) {
-                if (e.code().equals("insufficient_funds")) continue; // a manual withdrawal won the race
+                if (e.code().equals("insufficient_funds")
+                        || e.code().equals("GLOBAL_KILL_SWITCH_ACTIVE")
+                        || e.code().equals("MERCHANT_KILL_SWITCH_ACTIVE")) {
+                    continue;
+                }
                 throw e;
             }
             if (batch == null) continue;

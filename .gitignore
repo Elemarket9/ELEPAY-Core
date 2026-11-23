@@ -10,3 +10,6 @@ __pycache__/
 *.pfx
 *.key
 *.jks
+
+# Teamwork agent metadata
+/.agents/

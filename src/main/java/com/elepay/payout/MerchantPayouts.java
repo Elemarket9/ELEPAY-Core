@@ -27,6 +27,9 @@ class MerchantPayouts {
     private final JdbcClient db;
     private final TransactionTemplate tx;
 
+    @org.springframework.beans.factory.annotation.Value("${elepay.payouts.enforce-batch-destination-allowlist:false}")
+    private volatile boolean enforceBatchDestinationAllowlist = false;
+
     MerchantPayouts(Payouts payouts, MerchantAccess access, Idempotency idempotency, JdbcClient db,
                     PlatformTransactionManager tm) {
         this.payouts = payouts;
@@ -34,6 +37,10 @@ class MerchantPayouts {
         this.idempotency = idempotency;
         this.db = db;
         this.tx = new TransactionTemplate(tm);
+    }
+
+    public void setEnforceBatchDestinationAllowlist(boolean enforce) {
+        this.enforceBatchDestinationAllowlist = enforce;
     }
 
     record Withdrawal(@Positive long amount, @NotNull UUID destinationId) {}
@@ -50,19 +57,31 @@ class MerchantPayouts {
     public Payouts.Batch withdraw(@PathVariable UUID merchantId, @RequestHeader("Idempotency-Key") String key,
                                   @Valid @RequestBody Withdrawal request) {
         var a = access.require(merchantId, WITHDRAW);
+        if (a.actor().isApiKey() && a.actor().isSecretKey()) {
+            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                    "payout_key_required",
+                    "Secret keys (sk_live) cannot initiate payouts or withdrawals alone; use a dedicated payout_live key");
+        }
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("merchant-withdrawal:" + merchantId, key, request,
                 Payouts.Batch.class, () -> {
                     var dest = access.activeDestination(merchantId, request.destinationId())
-                            .orElseThrow(() -> ApiException.notFound("Settlement destination not found"));
-                    Object[] d = {new Payouts.Destination(dest.type(), dest.network(), dest.accountNumber(),
-                            dest.accountName()), dest.verification(), dest.verifiedName()};
-                    if (!"verified".equals(d[1])) {
+                            .orElseThrow(() -> new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                                    "destination_not_allowlisted",
+                                    "Payouts are restricted to pre-approved, verified settlement destinations"));
+                    if (!dest.verified()) {
                         throw ApiException.conflict("destination_unverified",
                                 "Withdrawals go only to a verified destination owned by this merchant");
                     }
+                    if (dest.isCoolingOff(java.time.OffsetDateTime.now())) {
+                        throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                                "destination_cooling_off_active",
+                                "Settlement destination is in 24-hour cooling-off lock until " + dest.coolingOffUntil());
+                    }
                     // Withdrawals carry no ELEPAY fee.
                     return payouts.create("merchant", merchantId, List.of(new Payouts.Item(
-                            "withdrawal-" + key, request.amount(), (Payouts.Destination) d[0], null, (String) d[2])),
+                            "withdrawal-" + key, request.amount(),
+                            new Payouts.Destination(dest.type(), dest.network(), dest.accountNumber(), dest.accountName()),
+                            null, dest.verifiedName())),
                             null, a.actor().subject());
                 }));
         payouts.submit(batch.id());
@@ -73,6 +92,33 @@ class MerchantPayouts {
     public Payouts.Batch batch(@PathVariable UUID merchantId, @RequestHeader("Idempotency-Key") String key,
                                @Valid @RequestBody BatchInput request) {
         var a = access.require(merchantId, PAYOUT);
+        if (a.actor().isApiKey() && a.actor().isSecretKey()) {
+            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                    "payout_key_required",
+                    "Secret keys (sk_live) cannot initiate payouts or withdrawals alone; use a dedicated payout_live key");
+        }
+        boolean requireAllowlist = enforceBatchDestinationAllowlist || (a.actor().isApiKey() && a.actor().isPayoutKey());
+        if (requireAllowlist) {
+            java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
+            for (ItemInput item : request.items()) {
+                Payouts.Destination norm = payouts.normalize(
+                        new Payouts.Destination(item.type(), item.network(), item.accountNumber(), item.accountName()));
+                var match = access.activeDestinationByAccount(merchantId, norm.type(), norm.network(), norm.accountNumber())
+                        .orElseThrow(() -> new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                                "destination_not_allowlisted",
+                                "Payouts are restricted to pre-approved, verified settlement destinations (" + norm.accountNumber() + ")"));
+                if (!match.verified()) {
+                    throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                            "destination_not_allowlisted",
+                            "Settlement destination is not verified (" + norm.accountNumber() + ")");
+                }
+                if (match.isCoolingOff(now)) {
+                    throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                            "destination_cooling_off_active",
+                            "Settlement destination is in 24-hour cooling-off lock until " + match.coolingOffUntil());
+                }
+            }
+        }
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("payout-batch:" + merchantId, key, request,
                 Payouts.Batch.class, () -> payouts.create("merchant", merchantId, request.items().stream()
                         .map(i -> new Payouts.Item(i.reference(), i.amount(),

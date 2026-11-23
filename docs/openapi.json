@@ -860,11 +860,20 @@
       },
       "Created" : {
         "properties" : {
+          "allowedIps" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
           "apiKey" : {
             "type" : "string"
           },
           "id" : {
             "format" : "uuid",
+            "type" : "string"
+          },
+          "keyType" : {
             "type" : "string"
           },
           "prefix" : {
@@ -880,6 +889,103 @@
             "type" : "string"
           },
           "signingSecret" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CustodianConfigRequest" : {
+        "properties" : {
+          "dailyOutflowCapPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "lastReconciledBankBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "minReserveFloorPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "outflowFrozen" : {
+            "type" : "boolean"
+          },
+          "perPayoutCapPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "CustodianSafeguardReport" : {
+        "properties" : {
+          "clearingReceivablesPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "dailyOutflowCapPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "deferredRevenuePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "enterpriseAvailablePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "enterpriseHoldingPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "merchantAvailablePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "merchantPendingEscrowPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "merchantReservedPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "outflowFrozen" : {
+            "type" : "boolean"
+          },
+          "reconciledBankBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "refundsInFlightPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "safeguardingSatisfied" : {
+            "type" : "boolean"
+          },
+          "todayRejectedOutflowCount" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "todayTotalOutflowPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalSafeguardedLiabilitiesPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalTrustAssetsPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "trustAccountCode" : {
             "type" : "string"
           }
         },
@@ -1062,10 +1168,17 @@
             "minLength" : 0,
             "type" : "string"
           },
+          "coolingOffHours" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
           "network" : {
             "maxLength" : 20,
             "minLength" : 0,
             "type" : "string"
+          },
+          "requireOob" : {
+            "type" : "boolean"
           },
           "type" : {
             "minLength" : 1,
@@ -1581,6 +1694,32 @@
         },
         "type" : "object"
       },
+      "GlobalKillSwitchRequest" : {
+        "properties" : {
+          "active" : {
+            "type" : "boolean"
+          },
+          "approvedBy" : {
+            "type" : "string"
+          },
+          "enabled" : {
+            "type" : "boolean"
+          },
+          "freezeAction" : {
+            "type" : "boolean"
+          },
+          "frozen" : {
+            "type" : "boolean"
+          },
+          "proposedBy" : {
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Governor" : {
         "properties" : {
           "marketplaceId" : {
@@ -1835,6 +1974,15 @@
       },
       "KeyRequest" : {
         "properties" : {
+          "allowedIps" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "keyType" : {
+            "type" : "string"
+          },
           "label" : {
             "maxLength" : 100,
             "minLength" : 0,
@@ -1846,6 +1994,31 @@
               "type" : "string"
             },
             "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "KillSwitchStatus" : {
+        "properties" : {
+          "frozenMerchants" : {
+            "items" : {
+              "format" : "uuid",
+              "type" : "string"
+            },
+            "type" : "array",
+            "uniqueItems" : true
+          },
+          "globalFreezeReason" : {
+            "type" : "string"
+          },
+          "globalFrozen" : {
+            "type" : "boolean"
+          },
+          "modules" : {
+            "additionalProperties" : {
+              "type" : "boolean"
+            },
+            "type" : "object"
           }
         },
         "type" : "object"
@@ -1982,12 +2155,21 @@
       },
       "Listed" : {
         "properties" : {
+          "allowedIps" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
           "createdAt" : {
             "format" : "date-time",
             "type" : "string"
           },
           "id" : {
             "format" : "uuid",
+            "type" : "string"
+          },
+          "keyType" : {
             "type" : "string"
           },
           "label" : {
@@ -2185,6 +2367,26 @@
         },
         "type" : "object"
       },
+      "MerchantKillSwitchRequest" : {
+        "properties" : {
+          "active" : {
+            "type" : "boolean"
+          },
+          "enabled" : {
+            "type" : "boolean"
+          },
+          "freezeAction" : {
+            "type" : "boolean"
+          },
+          "frozen" : {
+            "type" : "boolean"
+          },
+          "reason" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "MerchantView" : {
         "properties" : {
           "feeBps" : {
@@ -2236,6 +2438,23 @@
           "total" : {
             "format" : "int64",
             "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "ModuleKillSwitchRequest" : {
+        "properties" : {
+          "active" : {
+            "type" : "boolean"
+          },
+          "enabled" : {
+            "type" : "boolean"
+          },
+          "enabledAction" : {
+            "type" : "boolean"
+          },
+          "reason" : {
+            "type" : "string"
           }
         },
         "type" : "object"
@@ -2313,6 +2532,14 @@
           },
           "tenderType" : {
             "enum" : [ "CASH", "MOMO", "CARD", "WALLET" ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "OobConfirmRequest" : {
+        "properties" : {
+          "token" : {
             "type" : "string"
           }
         },
@@ -2961,6 +3188,88 @@
         },
         "type" : "object"
       },
+      "Proposal" : {
+        "properties" : {
+          "actionType" : {
+            "type" : "string"
+          },
+          "expiresAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "payload" : {
+            "additionalProperties" : { },
+            "type" : "object"
+          },
+          "proposedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "proposedBy" : {
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "resourceId" : {
+            "type" : "string"
+          },
+          "resourceType" : {
+            "type" : "string"
+          },
+          "reviewNote" : {
+            "type" : "string"
+          },
+          "reviewedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "reviewedBy" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "ProposeRequest" : {
+        "properties" : {
+          "actionType" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "payload" : {
+            "additionalProperties" : { },
+            "type" : "object"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "resourceId" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "resourceType" : {
+            "minLength" : 1,
+            "type" : "string"
+          }
+        },
+        "required" : [ "actionType", "resourceId", "resourceType" ],
+        "type" : "object"
+      },
       "PublicCheckout" : {
         "properties" : {
           "collector" : {
@@ -3508,6 +3817,14 @@
         "required" : [ "decision" ],
         "type" : "object"
       },
+      "ReviewRequest" : {
+        "properties" : {
+          "note" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "RotateKeyRequest" : {
         "properties" : {
           "label" : {
@@ -4037,6 +4354,50 @@
           }
         },
         "required" : [ "recipient" ],
+        "type" : "object"
+      },
+      "TrustAccountConfig" : {
+        "properties" : {
+          "accountCode" : {
+            "type" : "string"
+          },
+          "bankAccountNumber" : {
+            "type" : "string"
+          },
+          "bankCode" : {
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "dailyOutflowCapPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "lastReconciledBankBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "minReserveFloorPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "outflowFrozen" : {
+            "type" : "boolean"
+          },
+          "perPayoutCapPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "updatedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "UploadResult" : {
@@ -5308,7 +5669,7 @@
     },
     "/v1/merchants/{id}" : {
       "get" : {
-        "operationId" : "get",
+        "operationId" : "get_1",
         "parameters" : [ {
           "in" : "path",
           "name" : "id",
@@ -5962,6 +6323,51 @@
                   "additionalProperties" : {
                     "type" : "string"
                   },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "merchants" ]
+      }
+    },
+    "/v1/merchants/{id}/settlement-destinations/{destination}/confirm-oob" : {
+      "post" : {
+        "operationId" : "confirmOob",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "destination",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/OobConfirmRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
                   "type" : "object"
                 }
               }
@@ -6755,7 +7161,7 @@
     },
     "/v1/merchants/{merchantId}/payouts" : {
       "get" : {
-        "operationId" : "list_1",
+        "operationId" : "list_2",
         "parameters" : [ {
           "in" : "path",
           "name" : "merchantId",
@@ -7349,6 +7755,77 @@
         "tags" : [ "integrity-api" ]
       }
     },
+    "/v1/ops/custodian/config" : {
+      "get" : {
+        "operationId" : "getCustodianConfig",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TrustAccountConfig"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      },
+      "put" : {
+        "operationId" : "updateCustodianConfig",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CustodianConfigRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TrustAccountConfig"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      }
+    },
+    "/v1/ops/custodian/safeguard-report" : {
+      "get" : {
+        "operationId" : "safeguardReport",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "currency",
+          "required" : false,
+          "schema" : {
+            "default" : "GHS",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/CustodianSafeguardReport"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "rail-endpoints" ]
+      }
+    },
     "/v1/ops/customers" : {
       "post" : {
         "operationId" : "enroll",
@@ -7787,6 +8264,199 @@
         "tags" : [ "fx-api" ]
       }
     },
+    "/v1/ops/kill-switch/api-keys/{keyId}" : {
+      "post" : {
+        "operationId" : "emergencyRevokeApiKey",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "keyId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "kill-switch-controller" ]
+      }
+    },
+    "/v1/ops/kill-switch/global" : {
+      "post" : {
+        "operationId" : "toggleGlobal",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/GlobalKillSwitchRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "kill-switch-controller" ]
+      }
+    },
+    "/v1/ops/kill-switch/merchants/{merchantId}" : {
+      "post" : {
+        "operationId" : "toggleMerchant",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/MerchantKillSwitchRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "kill-switch-controller" ]
+      }
+    },
+    "/v1/ops/kill-switch/modules/{moduleKey}" : {
+      "post" : {
+        "operationId" : "toggleModule",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "moduleKey",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ModuleKillSwitchRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "kill-switch-controller" ]
+      }
+    },
+    "/v1/ops/kill-switch/status" : {
+      "get" : {
+        "operationId" : "status_2",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/KillSwitchStatus"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "kill-switch-controller" ]
+      }
+    },
+    "/v1/ops/kill-switches" : {
+      "get" : {
+        "operationId" : "status_1",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/KillSwitchStatus"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "kill-switch-controller" ]
+      }
+    },
+    "/v1/ops/kill-switches/payouts/freeze" : {
+      "post" : {
+        "operationId" : "toggleGlobal_1",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/GlobalKillSwitchRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "kill-switch-controller" ]
+      }
+    },
     "/v1/ops/ledger/integrity" : {
       "get" : {
         "operationId" : "integrity",
@@ -7803,6 +8473,160 @@
           }
         },
         "tags" : [ "operations" ]
+      }
+    },
+    "/v1/ops/maker-checker/proposals" : {
+      "get" : {
+        "operationId" : "list",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "status",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/Proposal"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "maker-checker-controller" ]
+      },
+      "post" : {
+        "operationId" : "propose",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ProposeRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Proposal"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "maker-checker-controller" ]
+      }
+    },
+    "/v1/ops/maker-checker/proposals/{id}" : {
+      "get" : {
+        "operationId" : "get",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Proposal"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "maker-checker-controller" ]
+      }
+    },
+    "/v1/ops/maker-checker/proposals/{id}/approve" : {
+      "post" : {
+        "operationId" : "approve",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ReviewRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Proposal"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "maker-checker-controller" ]
+      }
+    },
+    "/v1/ops/maker-checker/proposals/{id}/reject" : {
+      "post" : {
+        "operationId" : "reject",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ReviewRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Proposal"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "maker-checker-controller" ]
       }
     },
     "/v1/ops/merchants" : {
@@ -7990,7 +8814,7 @@
     },
     "/v1/ops/queue" : {
       "get" : {
-        "operationId" : "list",
+        "operationId" : "list_1",
         "parameters" : [ {
           "in" : "query",
           "name" : "status",

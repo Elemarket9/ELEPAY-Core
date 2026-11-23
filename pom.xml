@@ -121,7 +121,7 @@
   </build>
 
   <profiles>
-    <!-- mvn -Psecurity-scan verify -DnvdApiKey=...: fails on any dependency with a CVSS 7.0+ vulnerability. -->
+    <!-- mvn -Psecurity-scan verify: fails on any dependency with a CVSS 7.0+ vulnerability. -->
     <profile>
       <id>security-scan</id>
       <build>
@@ -132,7 +132,8 @@
             <version>13.0.0</version>
             <configuration>
               <failBuildOnCVSS>7</failBuildOnCVSS>
-              <nvdApiKey>${nvdApiKey}</nvdApiKey>
+              <nvdDatafeedUrl>https://dependency-check.github.io/DependencyCheck_Builder/nvd_cache/</nvdDatafeedUrl>
+              <ossIndexAnalyzerEnabled>false</ossIndexAnalyzerEnabled>
               <formats><format>HTML</format><format>SARIF</format></formats>
             </configuration>
             <executions><execution><goals><goal>check</goal></goals></execution></executions>

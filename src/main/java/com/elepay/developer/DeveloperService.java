@@ -85,16 +85,19 @@ public class DeveloperService {
 
     @Transactional
     public ApiKeyCreated createApiKey(UUID merchantId, String label, String environment, List<String> scopes, String createdBy) {
+        return createApiKey(merchantId, label, environment, scopes, null, null, createdBy);
+    }
+
+    @Transactional
+    public ApiKeyCreated createApiKey(UUID merchantId, String label, String environment, List<String> scopes,
+                                      String keyType, List<String> allowedIps, String createdBy) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
         String env = ("test".equalsIgnoreCase(environment)) ? "test" : "live";
-        if (scopes == null || scopes.isEmpty()) {
-            scopes = List.of("view", "collect", "refund");
-        }
-        if (!ALLOWED_SCOPES.containsAll(scopes)) {
+        if (scopes != null && !scopes.isEmpty() && !ALLOWED_SCOPES.containsAll(scopes)) {
             throw ApiException.badRequest("invalid_scope", "Valid scopes: " + ALLOWED_SCOPES);
         }
 
-        var key = apiKeys.createForEnvironment(merchantId, label, env, scopes, createdBy);
+        var key = apiKeys.createForEnvironment(merchantId, label, env, scopes, keyType, allowedIps, createdBy);
 
         audit.record(createdBy, "developer.api_key_created", "merchant:" + merchantId,
                 Map.of("prefix", key.prefix(), "environment", env, "scopes", String.join(",", key.scopes())));

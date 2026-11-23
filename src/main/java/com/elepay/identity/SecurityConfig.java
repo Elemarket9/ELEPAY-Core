@@ -35,7 +35,7 @@ class SecurityConfig {
 
     @Bean
     SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys, RequestSigningFilter requestSigningFilter,
-                            RateLimitFilter rateLimitFilter,
+                            RateLimitFilter rateLimitFilter, Stage1KillSwitchFilter stage1KillSwitchFilter,
                             @org.springframework.beans.factory.annotation.Value("${management.server.port:0}") int managementPort)
             throws Exception {
         http.csrf(csrf -> csrf.disable())
@@ -74,6 +74,7 @@ class SecurityConfig {
                                 "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**", "/developer", "/developer/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter())))
+                .addFilterBefore(stage1KillSwitchFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterBefore(rateLimitFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterBefore(requestSigningFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterBefore(new ApiKeyFilter(apiKeys), BearerTokenAuthenticationFilter.class);
@@ -107,14 +108,71 @@ class SecurityConfig {
                 throws ServletException, IOException {
             String header = request.getHeader("X-Elepay-Api-Key");
             if (header != null) {
-                var auth = keys.authenticate(header);
-                if (auth.isEmpty()) {
-                    response.sendError(401, "Invalid API key");
+                var authOpt = keys.authenticate(header);
+                if (authOpt.isEmpty()) {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"invalid_api_key\",\"error\":\"invalid_api_key\",\"message\":\"Invalid or revoked API key\"}");
                     return;
                 }
-                SecurityContextHolder.getContext().setAuthentication(auth.get());
+                ApiKeyAuthentication auth = authOpt.get();
+
+                // Gate 1: Enforce IP Allowlist for payout_live_* keys (and any key with configured allowed_ips)
+                String callerIp = resolveCallerIp(request);
+                if (!keys.isIpAllowed(auth, callerIp)) {
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"ip_not_allowlisted\",\"error\":\"ip_not_allowlisted\",\"message\":\"API key is restricted to the merchant's registered server IP allowlist\"}");
+                    return;
+                }
+
+                // Gate 1: pk_live_* (publishable key) can ONLY create payment intents / checkouts
+                if ("publishable".equalsIgnoreCase(auth.keyType())) {
+                    String method = request.getMethod();
+                    String path = request.getRequestURI();
+                    boolean allowedForPublishable = "POST".equalsIgnoreCase(method)
+                            && (path.matches("^/v1/merchants/[^/]+/checkouts$")
+                                || path.equals("/v1/checkouts")
+                                || path.startsWith("/v1/public/"));
+                    if (!allowedForPublishable) {
+                        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                        response.setContentType("application/json");
+                        response.getWriter().write("{\"code\":\"publishable_key_restricted\",\"error\":\"publishable_key_restricted\",\"message\":\"Publishable keys (pk_live) can only create payment intents / checkouts\"}");
+                        return;
+                    }
+                }
+
+                // Gate 1: sk_live_* (secret key) can create + read + refund, CANNOT initiate payouts or withdrawals alone
+                if ("secret".equalsIgnoreCase(auth.keyType())) {
+                    String method = request.getMethod();
+                    String path = request.getRequestURI();
+                    boolean isPayoutMutation = ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method))
+                            && (path.matches("^/v1/merchants/[^/]+/withdrawals(?:/.*)?$")
+                                || path.matches("^/v1/merchants/[^/]+/payout-batches(?:/.*)?$")
+                                || path.matches("^/v1/merchants/[^/]+/payouts/.+/retry$"));
+                    if (isPayoutMutation) {
+                        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                        response.setContentType("application/json");
+                        response.getWriter().write("{\"code\":\"payout_key_required\",\"error\":\"payout_key_required\",\"message\":\"Secret keys (sk_live) cannot initiate payouts or withdrawals alone; use a dedicated payout_live key\"}");
+                        return;
+                    }
+                }
+
+                SecurityContextHolder.getContext().setAuthentication(auth);
             }
             chain.doFilter(request, response);
+        }
+
+        private static String resolveCallerIp(HttpServletRequest request) {
+            String remoteAddr = request.getRemoteAddr();
+            boolean loopback = "127.0.0.1".equals(remoteAddr) || "::1".equals(remoteAddr) || "0:0:0:0:0:0:0:1".equals(remoteAddr);
+            if (loopback) {
+                String xff = request.getHeader("X-Forwarded-For");
+                if (xff != null && !xff.isBlank()) {
+                    return xff.split(",")[0].trim();
+                }
+            }
+            return remoteAddr;
         }
     }
 }

@@ -16,6 +16,7 @@ class AuditIntegrityIT extends PostgresTestBase {
     @LocalServerPort int port;
     @Autowired Audit audit;
     @Autowired JdbcClient db;
+    @Autowired org.springframework.transaction.support.TransactionTemplate tx;
 
     @Test
     void keyedChainAndSignedCheckpointsDetectAnInsiderRewrite() {
@@ -48,7 +49,16 @@ class AuditIntegrityIT extends PostgresTestBase {
         String forgedDetails = "{\"daily\": 99999999}";
         String forged = Audit.computeHash(target.prevHash(), target.id(), target.action(), target.actor(),
                 forgedDetails, target.createdAt().toString());
-        db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+        // Gate 3: By default, PostgreSQL EVENT TRIGGER blocks ALTER TABLE ... DISABLE TRIGGER with 42501.
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update())
+                .rootCause()
+                .hasMessageContaining("Disabling immutability triggers on financial ledger or audit tables is strictly forbidden");
+
+        tx.executeWithoutResult(s -> {
+            db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+            db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
+        });
         try {
             db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb), entry_hash = :h WHERE id = :id")
                     .param("d", forgedDetails).param("h", forged).param("id", target.id()).update();
@@ -65,7 +75,10 @@ class AuditIntegrityIT extends PostgresTestBase {
         } finally {
             db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb), entry_hash = :h, subject = 'customer:C1' WHERE id = :id")
                     .param("d", target.payload()).param("h", target.entryHash()).param("id", target.id()).update();
-            db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+            });
         }
         assertThat(api.call("GET", "/v1/ops/audit/verify", ops, null, null).body().get("valid").asBoolean()).isTrue();
     }

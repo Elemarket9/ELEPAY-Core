@@ -36,6 +36,9 @@ class Merchants {
     private final tools.jackson.databind.ObjectMapper json;
     private final com.elepay.outbox.Outbox outbox;
 
+    @org.springframework.beans.factory.annotation.Value("${elepay.security.destination-cooling-off-hours:24}")
+    private volatile int destinationCoolingOffHours = 24;
+
     Merchants(JdbcClient db, MerchantAccess access, Ledger ledger, Audit audit, ApiKeys apiKeys, Webhooks webhooks,
               com.elepay.rails.NameVerifications verifications, tools.jackson.databind.ObjectMapper json,
               com.elepay.outbox.Outbox outbox) {
@@ -48,6 +51,14 @@ class Merchants {
         this.webhooks = webhooks;
         this.verifications = verifications;
         this.json = json;
+    }
+
+    public void setDestinationCoolingOffHours(int hours) {
+        this.destinationCoolingOffHours = hours;
+    }
+
+    public int getDestinationCoolingOffHours() {
+        return this.destinationCoolingOffHours;
     }
 
     record Application(@NotBlank @Size(max = 200) String legalName, @NotBlank @Size(max = 100) String tradingName,
@@ -71,10 +82,23 @@ class Merchants {
     record MemberView(String subject, String role, UUID branchId) {}
 
     record DestinationRequest(@NotBlank @Pattern(regexp = "momo|bank") String type, @NotBlank @Size(max = 20) String network,
-                              @NotBlank @Size(max = 34) String accountNumber, @NotBlank @Size(max = 150) String accountName) {}
+                              @NotBlank @Size(max = 34) String accountNumber, @NotBlank @Size(max = 150) String accountName,
+                              Integer coolingOffHours, Boolean requireOob) {
+        DestinationRequest(String type, String network, String accountNumber, String accountName) {
+            this(type, network, accountNumber, accountName, null, null);
+        }
+    }
+
+    record OobConfirmRequest(String token) {}
 
     record Destination(UUID id, String type, String network, String accountNumber, String accountName,
-                       String status, String verification, String verifiedName) {}
+                       String status, String verification, String verifiedName,
+                       java.time.OffsetDateTime coolingOffUntil, String oobVerificationStatus) {
+        Destination(UUID id, String type, String network, String accountNumber, String accountName,
+                    String status, String verification, String verifiedName) {
+            this(id, type, network, accountNumber, accountName, status, verification, verifiedName, null, "confirmed");
+        }
+    }
 
     record SellerInvite(@NotBlank @Pattern(regexp = "[0-9]{6}") String merchantCode) {}
 
@@ -82,7 +106,14 @@ class Merchants {
 
     record Balances(UUID merchantId, String currency, long pending, long available, long reserved) {}
 
-    record KeyRequest(@Size(max = 100) String label, List<@Pattern(regexp = "view|collect|refund|withdraw|payouts") String> scopes) {}
+    record KeyRequest(@Size(max = 100) String label,
+                      List<@Pattern(regexp = "view|collect|refund|withdraw|payouts") String> scopes,
+                      String keyType,
+                      List<String> allowedIps) {
+        KeyRequest(String label, List<String> scopes) {
+            this(label, scopes, null, null);
+        }
+    }
 
     record Delegation(@NotEmpty List<@Pattern(regexp = "view|collect|refund|withdraw|payouts") String> permissions) {}
 
@@ -247,6 +278,7 @@ class Merchants {
     @Transactional
     public Destination addDestination(@PathVariable UUID id, @Valid @RequestBody DestinationRequest request) {
         var a = access.require(id, MANAGE);
+        a.actor().requireUser();
         String account = request.accountNumber();
         if (request.type().equals("momo")) {
             if (!MOMO.contains(request.network())) throw ApiException.badRequest("invalid_network", "Choose mtn, telecel or airteltigo");
@@ -260,27 +292,86 @@ class Merchants {
         }
         boolean verified = check.outcome() == com.elepay.rails.NameVerification.Outcome.VERIFIED;
         UUID dest = UUID.randomUUID();
+        int effectiveCoolingHours = request.coolingOffHours() != null ? request.coolingOffHours() : destinationCoolingOffHours;
+        java.time.OffsetDateTime coolingOffUntil = effectiveCoolingHours > 0
+                ? java.time.OffsetDateTime.now().plusHours(effectiveCoolingHours)
+                : null;
+        boolean requireOob = Boolean.TRUE.equals(request.requireOob());
+        String oobStatus = requireOob ? "pending_oob" : "confirmed";
+        String oobToken = References.digits(6);
+        String oobHash = com.elepay.common.Idempotency.sha256(oobToken);
+
         db.sql("""
                 INSERT INTO settlement_destination (id, owner_type, owner_id, type, network, account_number, account_name,
-                    created_by, verification, verified_name, verified_by)
-                VALUES (:id, 'merchant', :m, :type, :network, :account, :name, :by, :v, :vname, :vby)""")
+                    created_by, verification, verified_name, verified_by, cooling_off_until, oob_verification_status,
+                    oob_token_hash, oob_confirmed_at, updated_at)
+                VALUES (:id, 'merchant', :m, :type, :network, :account, :name, :by, :v, :vname, :vby,
+                        :cooling, :oobStatus, :oobHash, :oobAt, now())""")
                 .param("id", dest).param("m", id).param("type", request.type()).param("network", request.network())
                 .param("account", account).param("name", request.accountName()).param("by", a.actor().subject())
                 .param("v", verified ? "verified" : "unverified").param("vname", check.name())
-                .param("vby", verified ? "network:" + check.source() : null).update();
+                .param("vby", verified ? "network:" + check.source() : null)
+                .param("cooling", coolingOffUntil)
+                .param("oobStatus", oobStatus)
+                .param("oobHash", oobHash)
+                .param("oobAt", requireOob ? null : java.time.OffsetDateTime.now())
+                .update();
         audit.record(a.actor().subject(), "merchant.destination_added", "merchant:" + id,
                 Map.of("destination", dest.toString(), "type", request.type(), "network", request.network(),
-                        "accountLast4", account.substring(account.length() - 4)));
+                        "accountLast4", account.substring(account.length() - 4),
+                        "coolingOffHours", String.valueOf(effectiveCoolingHours)));
         return new Destination(dest, request.type(), request.network(), account, request.accountName(), "active",
-                verified ? "verified" : "unverified", check.name());
+                verified ? "verified" : "unverified", check.name(), coolingOffUntil, oobStatus);
+    }
+
+    @PostMapping("/merchants/{id}/settlement-destinations/{destination}/confirm-oob")
+    @Transactional
+    public Map<String, Object> confirmOob(@PathVariable UUID id, @PathVariable UUID destination,
+                                          @RequestBody(required = false) OobConfirmRequest request) {
+        var a = access.require(id, MANAGE);
+        a.actor().requireUser();
+        var rowOpt = db.sql("""
+                SELECT oob_token_hash, cooling_off_until FROM settlement_destination
+                WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'""")
+                .param("d", destination).param("m", id)
+                .query((rs, i) -> new Object[]{rs.getString(1), rs.getObject(2, java.time.OffsetDateTime.class)})
+                .optional();
+        if (rowOpt.isEmpty()) throw ApiException.notFound("Destination not found");
+        String storedHash = (String) rowOpt.get()[0];
+        if (request != null && request.token() != null && !request.token().isBlank() && storedHash != null) {
+            if (!storedHash.equals(com.elepay.common.Idempotency.sha256(request.token().trim()))) {
+                throw ApiException.forbidden("Invalid out-of-band confirmation token");
+            }
+        }
+        int effectiveCoolingHours = destinationCoolingOffHours;
+        java.time.OffsetDateTime existingCooling = (java.time.OffsetDateTime) rowOpt.get()[1];
+        java.time.OffsetDateTime minCooling = effectiveCoolingHours > 0
+                ? java.time.OffsetDateTime.now().plusHours(effectiveCoolingHours)
+                : existingCooling;
+        java.time.OffsetDateTime coolingOffUntil = (existingCooling != null && minCooling != null && existingCooling.isAfter(minCooling))
+                ? existingCooling
+                : minCooling;
+        db.sql("""
+                UPDATE settlement_destination
+                SET oob_verification_status = 'confirmed',
+                    oob_confirmed_at = now(),
+                    cooling_off_until = :cooling,
+                    updated_at = now()
+                WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m""")
+                .param("cooling", coolingOffUntil).param("d", destination).param("m", id).update();
+        audit.record(a.actor().subject(), "merchant.destination_oob_confirmed", "merchant:" + id,
+                Map.of("destination", destination.toString()));
+        return Map.of("destinationId", destination, "oobVerificationStatus", "confirmed",
+                "coolingOffUntil", String.valueOf(coolingOffUntil));
     }
 
     @DeleteMapping("/merchants/{id}/settlement-destinations/{destination}")
     @Transactional
     public Map<String, String> removeDestination(@PathVariable UUID id, @PathVariable UUID destination) {
         var a = access.require(id, MANAGE);
+        a.actor().requireUser();
         int updated = db.sql("""
-                UPDATE settlement_destination SET status = 'removed'
+                UPDATE settlement_destination SET status = 'removed', updated_at = now()
                 WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'""")
                 .param("d", destination).param("m", id).update();
         if (updated == 0) throw ApiException.notFound("Destination not found");
@@ -293,12 +384,13 @@ class Merchants {
     public List<Destination> destinations(@PathVariable UUID id) {
         access.require(id, FINANCE_VIEW);
         return db.sql("""
-                SELECT id, type, network, account_number, account_name, status, verification, verified_name
+                SELECT id, type, network, account_number, account_name, status, verification, verified_name,
+                       cooling_off_until, COALESCE(oob_verification_status, 'confirmed')
                 FROM settlement_destination
                 WHERE owner_type = 'merchant' AND owner_id = :m AND status = 'active' ORDER BY created_at""")
                 .param("m", id).query((rs, i) -> new Destination(rs.getObject(1, UUID.class), rs.getString(2),
                         rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7),
-                        rs.getString(8))).list();
+                        rs.getString(8), rs.getObject(9, java.time.OffsetDateTime.class), rs.getString(10))).list();
     }
 
     /** Operations verify a destination from documents when no network name enquiry is available. */
@@ -309,7 +401,9 @@ class Merchants {
         actor.requireOps();
         int updated = db.sql("""
                 UPDATE settlement_destination SET verification = 'verified', verified_by = :by,
-                       verified_name = coalesce(verified_name, account_name)
+                       verified_name = coalesce(verified_name, account_name),
+                       oob_verification_status = 'confirmed',
+                       updated_at = now()
                 WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'""")
                 .param("by", "ops:" + actor.subject()).param("d", destination).param("m", id).update();
         if (updated == 0) throw ApiException.notFound("Destination not found");
@@ -376,9 +470,11 @@ class Merchants {
     public ApiKeys.Created createKey(@PathVariable UUID id, @Valid @RequestBody KeyRequest request) {
         var a = access.require(id, MANAGE);
         a.actor().requireUser();
-        var created = apiKeys.create(id, request.label(), request.scopes(), a.actor().subject());
+        var created = apiKeys.create(id, request.label(), request.scopes(), request.keyType(),
+                request.allowedIps(), a.actor().subject());
         audit.record(a.actor().subject(), "merchant.api_key_created", "merchant:" + id,
-                Map.of("prefix", created.prefix(), "scopes", String.join(",", created.scopes())));
+                Map.of("prefix", created.prefix(), "scopes", String.join(",", created.scopes()),
+                        "keyType", created.keyType()));
         return created;
     }
 
@@ -399,6 +495,7 @@ class Merchants {
     @PostMapping("/merchants/{id}/webhooks")
     public Webhooks.Endpoint addWebhook(@PathVariable UUID id, @Valid @RequestBody WebhookRequest request) {
         var a = access.require(id, MANAGE);
+        a.actor().requireUser();
         var endpoint = webhooks.register(id, request.url());
         audit.record(a.actor().subject(), "merchant.webhook_added", "merchant:" + id, Map.of("url", request.url()));
         return endpoint;

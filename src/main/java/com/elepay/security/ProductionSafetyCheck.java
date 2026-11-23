@@ -85,6 +85,23 @@ public class ProductionSafetyCheck {
                 || env.getProperty("elepay.outbound.allow-private-hosts", Boolean.class, false)) {
             p.add("elepay.outbound.allow-http and allow-private-hosts must be false (webhook SSRF)");
         }
+        int coolingOffHours = env.getProperty("elepay.security.destination-cooling-off-hours", Integer.class, 24);
+        if (coolingOffHours < 24) {
+            p.add("elepay.security.destination-cooling-off-hours must be >= 24 in production");
+        }
+        for (String secretProp : List.of(
+                "elepay.security.signing-secret",
+                "elepay.vault.master-key",
+                "elepay.integrity.mac-key",
+                "elepay.integrity.ed25519-private-key",
+                "elepay.integrity.mldsa65-private-key",
+                "elepay.ussd.generic.secret"
+        )) {
+            String val = env.getProperty(secretProp, "");
+            if (KmsSecretProvider.isDiskFileSecret(val)) {
+                p.add(secretProp + " must be provided via KMS/HSM, never a disk secret file path (" + val + ")");
+            }
+        }
         return p;
     }
 

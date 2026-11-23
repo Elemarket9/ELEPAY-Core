@@ -18,17 +18,20 @@ public class RailEndpoints {
     private final CardTokenVault vault;
     private final SmartPaymentRouter router;
     private final NetworkHealthDetector health;
+    private final CustodianBankBackstopService custodianBackstop;
 
     public RailEndpoints(
             CardBinLookupService binService,
             CardTokenVault vault,
             SmartPaymentRouter router,
-            NetworkHealthDetector health
+            NetworkHealthDetector health,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) CustodianBankBackstopService custodianBackstop
     ) {
         this.binService = binService;
         this.vault = vault;
         this.router = router;
         this.health = health;
+        this.custodianBackstop = custodianBackstop;
     }
 
     // --- Card BIN Lookup (017) ---
@@ -108,5 +111,44 @@ public class RailEndpoints {
     public NetworkHealthDetector.RailHealth getHealth(@PathVariable String rail) {
         Actor.current().requireOps();
         return health.getHealth(rail);
+    }
+
+    // --- Custodian Bank Trust Safeguarding & Outflow Cap Backstop ---
+    public record CustodianConfigRequest(
+            Long dailyOutflowCapPesewas,
+            Long perPayoutCapPesewas,
+            Long minReserveFloorPesewas,
+            Long lastReconciledBankBalancePesewas,
+            Boolean outflowFrozen
+    ) {}
+
+    @GetMapping("/v1/ops/custodian/safeguard-report")
+    public CustodianBankBackstopService.CustodianSafeguardReport safeguardReport(
+            @RequestParam(defaultValue = "GHS") String currency
+    ) {
+        Actor.current().requireOps();
+        return custodianBackstop.verifyTrustSafeguarding(currency);
+    }
+
+    @GetMapping("/v1/ops/custodian/config")
+    public CustodianBankBackstopService.TrustAccountConfig getCustodianConfig() {
+        Actor.current().requireOps();
+        return custodianBackstop.getPrimaryConfig();
+    }
+
+    @PutMapping("/v1/ops/custodian/config")
+    public CustodianBankBackstopService.TrustAccountConfig updateCustodianConfig(
+            @RequestBody CustodianConfigRequest request
+    ) {
+        Actor actor = Actor.current();
+        actor.requireOps();
+        return custodianBackstop.updateConfig(
+                request.dailyOutflowCapPesewas(),
+                request.perPayoutCapPesewas(),
+                request.minReserveFloorPesewas(),
+                request.lastReconciledBankBalancePesewas(),
+                request.outflowFrozen(),
+                actor.subject()
+        );
     }
 }

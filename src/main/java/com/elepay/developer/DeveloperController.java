@@ -30,8 +30,14 @@ public class DeveloperController {
     public record KeyRequest(
             @Size(max = 100) String label,
             @Pattern(regexp = "live|test") String environment,
-            List<@Pattern(regexp = "view|collect|refund|withdraw|payouts") String> scopes
-    ) {}
+            List<@Pattern(regexp = "view|collect|refund|withdraw|payouts") String> scopes,
+            String keyType,
+            List<String> allowedIps
+    ) {
+        public KeyRequest(String label, String environment, List<String> scopes) {
+            this(label, environment, scopes, null, null);
+        }
+    }
 
     public record RotateKeyRequest(@Size(max = 100) String label) {}
 
@@ -64,7 +70,8 @@ public class DeveloperController {
     ) {
         Actor actor = Actor.current();
         actor.requireUser();
-        return service.createApiKey(merchantId, request.label(), request.environment(), request.scopes(), actor.subject());
+        return service.createApiKey(merchantId, request.label(), request.environment(), request.scopes(),
+                request.keyType(), request.allowedIps(), actor.subject());
     }
 
     @GetMapping("/merchants/{merchantId}/keys")
@@ -125,6 +132,7 @@ public class DeveloperController {
             @PathVariable UUID endpointId,
             @Valid @RequestBody WebhookUpdateRequest request
     ) {
+        Actor.current().requireUser();
         boolean ok = service.updateWebhook(merchantId, endpointId, request.url(),
                 request.eventTypes(), request.active(), request.description());
         return Map.of("updated", ok);

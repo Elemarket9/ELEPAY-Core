@@ -22,20 +22,71 @@ import org.springframework.stereotype.Component;
 @Component
 public class OutboundUrlGuard {
     private static final Set<Integer> HTTPS_PORTS = Set.of(-1, 443, 8443);
+    public static final Set<String> DEFAULT_STAGE1_ALLOWED_HOSTS = Set.of(
+            "custodian.gcb.com.gh",
+            "custodian.ecobank.com.gh",
+            "custodian.stanbic.com.gh",
+            "proxy.momoapi.mtn.com",
+            "momoapi.momo.africa",
+            "api.telecelcash.com.gh",
+            "openapi.telecel.com.gh",
+            "api.airteltigomoney.com.gh",
+            "openapi.at.com.gh",
+            "gip.ghipss.com",
+            "api.ghipss.com",
+            "switch.ghipss.com"
+    );
 
     private final boolean allowHttp;
     private final boolean allowPrivateHosts;
+    private volatile boolean strictAllowlistEnabled;
+    private final Set<String> allowedHosts;
 
-    public OutboundUrlGuard(@Value("${elepay.outbound.allow-http:false}") boolean allowHttp,
-                            @Value("${elepay.outbound.allow-private-hosts:false}") boolean allowPrivateHosts) {
-        this.allowHttp = allowHttp;
-        this.allowPrivateHosts = allowPrivateHosts;
+    public OutboundUrlGuard(boolean allowHttp, boolean allowPrivateHosts) {
+        this(allowHttp, allowPrivateHosts, false, DEFAULT_STAGE1_ALLOWED_HOSTS);
     }
 
-    /** Throws {@code 400 unsafe_url} when ELEPAY must not call this URL. */
+    @org.springframework.beans.factory.annotation.Autowired
+    public OutboundUrlGuard(
+            @Value("${elepay.outbound.allow-http:false}") boolean allowHttp,
+            @Value("${elepay.outbound.allow-private-hosts:false}") boolean allowPrivateHosts,
+            @Value("${elepay.outbound.strict-allowlist-enabled:false}") boolean strictAllowlistEnabled,
+            @Value("${elepay.outbound.allowed-hosts:custodian.gcb.com.gh,custodian.ecobank.com.gh,custodian.stanbic.com.gh,proxy.momoapi.mtn.com,momoapi.momo.africa,api.telecelcash.com.gh,openapi.telecel.com.gh,api.airteltigomoney.com.gh,openapi.at.com.gh,gip.ghipss.com,api.ghipss.com,switch.ghipss.com}") Set<String> allowedHosts
+    ) {
+        this.allowHttp = allowHttp;
+        this.allowPrivateHosts = allowPrivateHosts;
+        this.strictAllowlistEnabled = strictAllowlistEnabled;
+        this.allowedHosts = allowedHosts != null && !allowedHosts.isEmpty()
+                ? allowedHosts.stream().map(h -> h.trim().toLowerCase(Locale.ROOT)).collect(java.util.stream.Collectors.toUnmodifiableSet())
+                : DEFAULT_STAGE1_ALLOWED_HOSTS;
+    }
+
+    public boolean isStrictAllowlistEnabled() {
+        return strictAllowlistEnabled;
+    }
+
+    public void setStrictAllowlistEnabled(boolean strictAllowlistEnabled) {
+        this.strictAllowlistEnabled = strictAllowlistEnabled;
+    }
+
+    public Set<String> allowedHosts() {
+        return allowedHosts;
+    }
+
+    public boolean isHostAllowlisted(String host) {
+        if (host == null || host.isBlank()) return false;
+        return allowedHosts.contains(host.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /** Throws {@code 400 unsafe_url} (or {@code 403 egress_host_not_allowlisted} in strict mode) when ELEPAY must not call this URL. */
     public void validate(String url) {
         String problem = problem(url);
-        if (problem != null) throw ApiException.badRequest("unsafe_url", problem);
+        if (problem != null) {
+            if (problem.contains("not allowlisted")) {
+                throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN, "egress_host_not_allowlisted", problem);
+            }
+            throw ApiException.badRequest("unsafe_url", problem);
+        }
     }
 
     public boolean isSafe(String url) {
@@ -56,9 +107,12 @@ public class OutboundUrlGuard {
         if (uri.getRawUserInfo() != null) return "The URL must not contain credentials";
         String host = uri.getHost();
         if (host == null || host.isBlank()) return "The URL needs a host name";
+        String lower = host.toLowerCase(Locale.ROOT);
+        if (strictAllowlistEnabled && !isHostAllowlisted(lower)) {
+            return "Egress destination host is not allowlisted in Stage 1 strict egress mode: " + lower;
+        }
         if (!allowPrivateHosts && !HTTPS_PORTS.contains(uri.getPort())) return "Use port 443 or 8443";
         if (allowPrivateHosts) return null;
-        String lower = host.toLowerCase(Locale.ROOT);
         if (lower.equals("localhost") || lower.endsWith(".localhost") || lower.endsWith(".internal")
                 || lower.endsWith(".local")) {
             return "The URL must point to a public host";
@@ -77,6 +131,9 @@ public class OutboundUrlGuard {
 
     /** The HTTP client's connection-time DNS resolver uses exactly these validated addresses. */
     public InetAddress[] resolveForConnection(String host) throws UnknownHostException {
+        if (strictAllowlistEnabled && !isHostAllowlisted(host)) {
+            throw new UnknownHostException("Egress destination host is not allowlisted: " + host);
+        }
         InetAddress[] addresses = InetAddress.getAllByName(host);
         if (addresses.length == 0) throw new UnknownHostException("Destination did not resolve");
         if (!allowPrivateHosts) {

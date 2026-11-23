@@ -1,0 +1,373 @@
+package com.elepay.identity;
+
+import com.elepay.common.ApiException;
+import com.elepay.common.Audit;
+import com.elepay.common.OpsQueue;
+import com.elepay.common.RedisBreaker;
+import java.time.OffsetDateTime;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Stage 1 Kill-Switch Matrix & <1s Global/Merchant/Module Kill Switches.
+ *
+ * <p>Provides:
+ * <ul>
+ *   <li>Route-level non-Stage-1 module kill switches (default-off for lending, virtual-cards,
+ *       bill-payments, agent-banking, fx-trading; runtime-togglable for pos, fx, consumer-wallet,
+ *       consumer-w2w, ussd, mandates).</li>
+ *   <li>Global Payout Kill Switch ({@code elepay:killswitch:global} in Redis + atomic in-memory
+ *       {@link AtomicBoolean} + {@code payout_safety_control.emergency_frozen}), stopping all
+ *       outbound payouts/withdrawals/transfers in < 1 second.</li>
+ *   <li>Merchant Payout Kill Switch ({@code elepay:killswitch:merchants} in Redis + in-memory set
+ *       + {@code merchant.payouts_frozen}), stopping payouts for 1 merchant only in < 1 second.</li>
+ * </ul>
+ */
+@Service
+public class KillSwitchService {
+    public static final String REDIS_GLOBAL_KEY = "elepay:killswitch:global";
+    public static final String REDIS_MERCHANTS_KEY = "elepay:killswitch:merchants";
+    public static final String REDIS_MODULE_PREFIX = "elepay:killswitch:module:";
+
+    private final JdbcClient db;
+    private final Audit audit;
+    private final OpsQueue ops;
+    private final StringRedisTemplate redis;
+    private final RedisBreaker redisBreaker;
+
+    private final AtomicBoolean globalFrozen = new AtomicBoolean(false);
+    private volatile String globalFreezeReason = null;
+    private final Set<UUID> frozenMerchants = ConcurrentHashMap.newKeySet();
+    private final Map<String, Boolean> moduleStates = new ConcurrentHashMap<>();
+
+    @Autowired
+    public KillSwitchService(
+            JdbcClient db,
+            Audit audit,
+            OpsQueue ops,
+            @Autowired(required = false) StringRedisTemplate redis,
+            @Value("${elepay.stage1.strict-kill-switch-enabled:true}") boolean strictStage1,
+            @Value("${elepay.stage1.module.pos.enabled:true}") boolean posEnabled,
+            @Value("${elepay.stage1.module.fx.enabled:true}") boolean fxEnabled,
+            @Value("${elepay.stage1.module.consumer-wallet.enabled:true}") boolean consumerWalletEnabled,
+            @Value("${elepay.stage1.module.ussd.enabled:true}") boolean ussdEnabled,
+            @Value("${elepay.stage1.module.mandates.enabled:true}") boolean mandatesEnabled
+    ) {
+        this.db = db;
+        this.audit = audit;
+        this.ops = ops;
+        this.redis = redis;
+        this.redisBreaker = new RedisBreaker(5_000L);
+
+        // Default-off non-Stage-1 modules
+        moduleStates.put("lending", !strictStage1);
+        moduleStates.put("virtual-cards", !strictStage1);
+        moduleStates.put("bill-payments", !strictStage1);
+        moduleStates.put("agent-banking", !strictStage1);
+        moduleStates.put("fx-trading", !strictStage1);
+
+        // Runtime-togglable modules
+        moduleStates.put("pos", posEnabled);
+        moduleStates.put("fx", fxEnabled);
+        moduleStates.put("consumer-wallet", consumerWalletEnabled);
+        moduleStates.put("consumer-w2w", consumerWalletEnabled);
+        moduleStates.put("ussd", ussdEnabled);
+        moduleStates.put("mandates", mandatesEnabled);
+    }
+
+    public record KillSwitchStatus(
+            boolean globalFrozen,
+            String globalFreezeReason,
+            Set<UUID> frozenMerchants,
+            Map<String, Boolean> modules
+    ) {}
+
+    // ---- Module Route Kill Switch (<1ms zero-DB check) --------------------------------------
+
+    public boolean isModuleEnabled(String moduleKey) {
+        if (moduleKey == null) return true;
+        return moduleStates.getOrDefault(moduleKey, true);
+    }
+
+    public boolean isConsumerWalletEnabled() {
+        return isModuleEnabled("consumer-wallet") && isModuleEnabled("consumer-w2w");
+    }
+
+    @Transactional
+    public void setModuleEnabled(String moduleKey, boolean enabled, String reason, String actor) {
+        String key = moduleKey.toLowerCase(Locale.ROOT);
+        moduleStates.put(key, enabled);
+        if ("consumer-wallet".equals(key) || "consumer-w2w".equals(key)) {
+            moduleStates.put("consumer-wallet", enabled);
+            moduleStates.put("consumer-w2w", enabled);
+        }
+        writeRedis(REDIS_MODULE_PREFIX + key, Boolean.toString(enabled));
+        if (db != null) {
+            try {
+                db.sql("""
+                        INSERT INTO module_kill_switch (module_key, enabled, stage, reason, updated_by, updated_at)
+                        VALUES (:k, :e, :s, :r, :by, now())
+                        ON CONFLICT (module_key) DO UPDATE SET
+                            enabled = :e, reason = :r, updated_by = :by, updated_at = now()""")
+                        .param("k", key).param("e", enabled).param("s", enabled ? 1 : 2)
+                        .param("r", reason).param("by", actor != null ? actor : "system").update();
+            } catch (Exception ignored) {}
+        }
+        if (audit != null && actor != null) {
+            audit.record(actor, enabled ? "kill_switch.module_enabled" : "kill_switch.module_disabled",
+                    "module:" + key, Map.of("enabled", enabled, "reason", String.valueOf(reason)));
+        }
+    }
+
+    /**
+     * Resolves whether a request path belongs to a disabled Stage 1 OFF module.
+     * Returns the disabled module name if blocked, or {@code null} if allowed.
+     */
+    public String resolveDisabledModuleForPath(String path) {
+        if (path == null) return null;
+
+        // 1. Lending & Credit
+        if (path.startsWith("/v1/lending") || path.startsWith("/v1/loans") || path.startsWith("/v1/credit")
+                || path.startsWith("/v1/ops/lending") || path.startsWith("/v1/ops/credit")) {
+            return isModuleEnabled("lending") ? null : "lending";
+        }
+        // 2. Virtual Cards & Card Issuing (Note: /v1/rails/card/** acquiring tokenization remains ON)
+        if (path.startsWith("/v1/cards") || path.startsWith("/v1/virtual-cards") || path.startsWith("/v1/ops/cards")) {
+            return isModuleEnabled("virtual-cards") ? null : "virtual-cards";
+        }
+        // 3. Bill Payments, Airtime & Utilities
+        if (path.startsWith("/v1/bills") || path.startsWith("/v1/bill-payments")
+                || path.startsWith("/v1/airtime") || path.startsWith("/v1/utilities")) {
+            return isModuleEnabled("bill-payments") ? null : "bill-payments";
+        }
+        // 4. Agent Banking
+        if (path.startsWith("/v1/agents") || path.startsWith("/v1/agent-banking") || path.startsWith("/v1/ops/agents")) {
+            return isModuleEnabled("agent-banking") ? null : "agent-banking";
+        }
+        // 5. FX Trading (explicitly disabled route prefix /v1/fx-trading/**, plus /v1/fx/** when fx or fx-trading off)
+        if (path.startsWith("/v1/fx-trading")) {
+            return isModuleEnabled("fx-trading") ? null : "fx-trading";
+        }
+        if (path.startsWith("/v1/fx") || path.startsWith("/v1/ops/fx")) {
+            return isModuleEnabled("fx") ? null : "fx-trading";
+        }
+        // 6. Physical POS Terminals
+        if (path.startsWith("/v1/pos")) {
+            return isModuleEnabled("pos") ? null : "pos";
+        }
+        // 7. Consumer Wallet / W2W / Growth
+        if (path.startsWith("/v1/wallet") || path.startsWith("/v1/ops/customers")
+                || path.startsWith("/v1/growth") || path.startsWith("/v1/savings")
+                || (path.startsWith("/v1/checkouts/") && path.endsWith("/pay/wallet"))) {
+            return isConsumerWalletEnabled() ? null : "consumer-w2w";
+        }
+        // 8. Consumer USSD
+        if (path.startsWith("/v1/ussd")) {
+            return (isModuleEnabled("ussd") && isConsumerWalletEnabled()) ? null : "ussd";
+        }
+        // 9. Consumer Recurring Mandates
+        if (path.startsWith("/v1/customers/mandates")
+                || (path.startsWith("/v1/merchants/") && path.contains("/mandates"))) {
+            return (isModuleEnabled("mandates") && isConsumerWalletEnabled()) ? null : "mandates";
+        }
+
+        return null;
+    }
+
+    // ---- Global Payout Kill Switch (<1s Redis + Atomic Memory + DB) -------------------------
+
+    public boolean isGlobalFrozen() {
+        if (globalFrozen.get()) return true;
+        String redisVal = readRedis(REDIS_GLOBAL_KEY);
+        if ("true".equalsIgnoreCase(redisVal)) {
+            globalFrozen.set(true);
+            return true;
+        }
+        return false;
+    }
+
+    public void requirePayoutsAllowed(UUID merchantId) {
+        if (isGlobalFrozen()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "GLOBAL_KILL_SWITCH_ACTIVE",
+                    "All outbound payouts, withdrawals, and transfers are halted by the global kill switch");
+        }
+        if (merchantId != null && isMerchantFrozen(merchantId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "MERCHANT_KILL_SWITCH_ACTIVE",
+                    "Outbound payouts and withdrawals are frozen for merchant " + merchantId);
+        }
+    }
+
+    @Transactional
+    public void setGlobalFrozen(boolean frozen, String reason, String actor) {
+        globalFrozen.set(frozen);
+        globalFreezeReason = frozen ? (reason != null ? reason : "Emergency global kill switch activated") : null;
+        writeRedis(REDIS_GLOBAL_KEY, Boolean.toString(frozen));
+        if (db != null) {
+            try {
+                db.sql("""
+                        UPDATE payout_safety_control
+                        SET emergency_frozen = :f,
+                            freeze_reason = :r,
+                            frozen_by = :by,
+                            frozen_at = CASE WHEN :f THEN now() ELSE NULL END,
+                            updated_by = :by,
+                            updated_at = now()
+                        WHERE id = 1""")
+                        .param("f", frozen)
+                        .param("r", globalFreezeReason)
+                        .param("by", actor != null ? actor : "system")
+                        .update();
+            } catch (Exception ignored) {}
+        }
+        if (frozen && ops != null) {
+            ops.raise("global_kill_switch_activated", "critical", "kill-switch:global",
+                    Map.of("actor", String.valueOf(actor), "reason", String.valueOf(globalFreezeReason)));
+        }
+        if (audit != null && actor != null) {
+            audit.record(actor, frozen ? "kill_switch.global_frozen" : "kill_switch.global_unfrozen",
+                    "kill-switch:global", Map.of("frozen", frozen, "reason", String.valueOf(reason)));
+        }
+    }
+
+    // ---- Merchant Payout Kill Switch (<1s Redis + Atomic Memory + DB) -----------------------
+
+    public boolean isMerchantFrozen(UUID merchantId) {
+        if (merchantId == null) return false;
+        if (frozenMerchants.contains(merchantId)) return true;
+        if (isMemberRedis(REDIS_MERCHANTS_KEY, merchantId.toString())) {
+            frozenMerchants.add(merchantId);
+            return true;
+        }
+        return false;
+    }
+
+    @Transactional
+    public void setMerchantFrozen(UUID merchantId, boolean frozen, String reason, String actor) {
+        Objects.requireNonNull(merchantId, "merchantId is required");
+        if (frozen) {
+            frozenMerchants.add(merchantId);
+            addSetRedis(REDIS_MERCHANTS_KEY, merchantId.toString());
+        } else {
+            frozenMerchants.remove(merchantId);
+            removeSetRedis(REDIS_MERCHANTS_KEY, merchantId.toString());
+        }
+        if (db != null) {
+            try {
+                db.sql("""
+                        INSERT INTO merchant_kill_switch (merchant_id, payouts_frozen, reason, updated_by, updated_at)
+                        VALUES (:id, :f, :r, :by, now())
+                        ON CONFLICT (merchant_id) DO UPDATE SET
+                            payouts_frozen = :f, reason = :r, updated_by = :by, updated_at = now()""")
+                        .param("id", merchantId).param("f", frozen).param("r", reason)
+                        .param("by", actor != null ? actor : "system").update();
+            } catch (Exception ignored) {}
+        }
+        if (audit != null && actor != null) {
+            audit.record(actor, frozen ? "kill_switch.merchant_frozen" : "kill_switch.merchant_unfrozen",
+                    "merchant:" + merchantId, Map.of("frozen", frozen, "reason", String.valueOf(reason)));
+        }
+    }
+
+    public KillSwitchStatus status() {
+        return new KillSwitchStatus(
+                isGlobalFrozen(),
+                globalFreezeReason,
+                Set.copyOf(frozenMerchants),
+                new TreeMap<>(moduleStates)
+        );
+    }
+
+    /** Reset helper for test isolation so global/merchant kill switches don't leak across tests. */
+    @Transactional
+    public void resetForTesting() {
+        globalFrozen.set(false);
+        globalFreezeReason = null;
+        frozenMerchants.clear();
+        writeRedis(REDIS_GLOBAL_KEY, "false");
+        deleteRedis(REDIS_MERCHANTS_KEY);
+        moduleStates.put("lending", false);
+        moduleStates.put("virtual-cards", false);
+        moduleStates.put("bill-payments", false);
+        moduleStates.put("agent-banking", false);
+        moduleStates.put("fx-trading", false);
+        moduleStates.put("pos", true);
+        moduleStates.put("fx", true);
+        moduleStates.put("consumer-wallet", true);
+        moduleStates.put("consumer-w2w", true);
+        moduleStates.put("ussd", true);
+        moduleStates.put("mandates", true);
+        if (db != null) {
+            try {
+                db.sql("UPDATE payout_safety_control SET emergency_frozen = false, freeze_reason = NULL WHERE id = 1").update();
+                db.sql("DELETE FROM merchant_kill_switch").update();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    // ---- Redis helpers ----------------------------------------------------------------------
+
+    private void writeRedis(String key, String value) {
+        if (redis == null || !redisBreaker.allow()) return;
+        try {
+            redis.opsForValue().set(key, value);
+        } catch (Exception e) {
+            redisBreaker.failure();
+        }
+    }
+
+    private String readRedis(String key) {
+        if (redis == null || !redisBreaker.allow()) return null;
+        try {
+            return redis.opsForValue().get(key);
+        } catch (Exception e) {
+            redisBreaker.failure();
+            return null;
+        }
+    }
+
+    private void addSetRedis(String key, String member) {
+        if (redis == null || !redisBreaker.allow()) return;
+        try {
+            redis.opsForSet().add(key, member);
+        } catch (Exception e) {
+            redisBreaker.failure();
+        }
+    }
+
+    private void removeSetRedis(String key, String member) {
+        if (redis == null || !redisBreaker.allow()) return;
+        try {
+            redis.opsForSet().remove(key, member);
+        } catch (Exception e) {
+            redisBreaker.failure();
+        }
+    }
+
+    private boolean isMemberRedis(String key, String member) {
+        if (redis == null || !redisBreaker.allow()) return false;
+        try {
+            Boolean res = redis.opsForSet().isMember(key, member);
+            return Boolean.TRUE.equals(res);
+        } catch (Exception e) {
+            redisBreaker.failure();
+            return false;
+        }
+    }
+
+    private void deleteRedis(String key) {
+        if (redis == null || !redisBreaker.allow()) return;
+        try {
+            redis.delete(key);
+        } catch (Exception e) {
+            redisBreaker.failure();
+        }
+    }
+}
