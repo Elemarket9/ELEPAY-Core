@@ -36,18 +36,26 @@ class ElevyCalculationEngineTest extends PostgresTestBase {
     void historicalChargeCanBeRefundedOnlyOnce() {
         UUID customer = UUID.randomUUID();
         String reference = customer.toString();
-        ledger.open("customer", customer, "available", Ledger.GHS);
+        String account = ledger.open("customer", customer, "available", Ledger.GHS);
         ledger.openSystem(ElevyCalculationEngine.ELEVY_SYSTEM_ACCOUNT, "clearing", Ledger.GHS, true);
+        String clearing = ledger.openSystem("system:clearing:levy-test", "clearing", Ledger.GHS, true);
+        ledger.post(Ledger.Posting.of("fund_test", reference, "funding",
+                java.util.List.of(Ledger.Leg.debit(clearing, 30), Ledger.Leg.credit(account, 30))));
+        UUID original = ledger.post(Ledger.Posting.of("elevy_collection", reference, "GRA_E_LEVY_TAX_DEDUCTION",
+                java.util.List.of(Ledger.Leg.debit(account, 30),
+                        Ledger.Leg.credit(ElevyCalculationEngine.ELEVY_SYSTEM_ACCOUNT, 30)))).transactionId();
         db.sql("""
                 INSERT INTO elevy_transaction_log
                     (id, transaction_reference, customer_id, recipient_identifier,
                      transfer_amount_pesewas, exempt_portion_pesewas, taxable_portion_pesewas,
-                     levy_amount_pesewas, created_at)
-                VALUES (:id, :ref, :id, 'recipient', 13000, 10000, 3000, 30, '2025-03-01')
-                """).param("ref", reference).param("id", customer).update();
+                     levy_amount_pesewas, ledger_tx_id, created_at)
+                VALUES (:id, :ref, :id, 'recipient', 13000, 10000, 3000, 30, :original, '2025-03-01')
+                """).param("original", original).param("ref", reference).param("id", customer).update();
         var refund = engine.refundElevy(reference, "Historic correction");
         assertThat(refund.refundedLevyPesewas()).isEqualTo(30);
-        assertThat(refund.reversalLedgerTxId()).isNotNull();
+        assertThat(db.sql("SELECT reverses FROM journal_transaction WHERE id = :id")
+                .param("id", refund.reversalLedgerTxId()).query(UUID.class).single()).isEqualTo(original);
+        assertThat(ledger.balance(account)).isEqualTo(30L);
         assertThat(engine.refundElevy(reference, "Retry").refundedLevyPesewas()).isZero();
     }
 

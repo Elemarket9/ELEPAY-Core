@@ -17,7 +17,8 @@ public final class TestApi {
     public final RestClient http;
 
     public TestApi(int port) {
-        this.http = RestClient.create("http://127.0.0.1:" + port);
+        this.http = RestClient.builder().baseUrl("http://127.0.0.1:" + port)
+                .requestFactory(new org.springframework.http.client.JdkClientHttpRequestFactory()).build();
     }
 
     public String token(String subject, String... roles) {

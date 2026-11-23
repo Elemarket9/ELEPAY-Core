@@ -123,7 +123,7 @@ public class LoanOriginationEngine {
                 .update();
 
         // 5. Post disbursement in Double-Entry Ledger
-        ledger.openSystem(LENDING_FUNDING_ACCOUNT, "clearing", "GHS", true);
+        ledger.openSystem(LENDING_FUNDING_ACCOUNT, "clearing", "GHS", false);
         String borrowerAccount = ledger.open("customer", contract.borrowerId(), "available", "GHS");
 
         var posting = Ledger.Posting.of(

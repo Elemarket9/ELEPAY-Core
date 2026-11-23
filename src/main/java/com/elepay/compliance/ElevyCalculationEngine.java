@@ -4,7 +4,6 @@ import com.elepay.common.ApiException;
 import com.elepay.ledger.Ledger;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -67,7 +66,7 @@ public class ElevyCalculationEngine {
     public ElevyReversalResult refundElevy(String originalTxRef, String reversalReason) {
         var txOpt = db.sql("""
             SELECT id, customer_id, transfer_amount_pesewas, exempt_portion_pesewas,
-                   taxable_portion_pesewas, levy_amount_pesewas, status, created_at
+                   taxable_portion_pesewas, levy_amount_pesewas, status, ledger_tx_id, created_at
             FROM elevy_transaction_log
             WHERE transaction_reference = :ref FOR UPDATE
         """).param("ref", originalTxRef)
@@ -79,6 +78,7 @@ public class ElevyCalculationEngine {
                 rs.getLong("taxable_portion_pesewas"),
                 rs.getLong("levy_amount_pesewas"),
                 rs.getString("status"),
+                rs.getObject("ledger_tx_id", UUID.class),
                 rs.getObject("created_at", OffsetDateTime.class).toLocalDate()
         }).optional();
 
@@ -94,7 +94,8 @@ public class ElevyCalculationEngine {
         long taxableAmt = (Long) row[4];
         long levyAmt = (Long) row[5];
         String status = (String) row[6];
-        LocalDate txDate = (LocalDate) row[7];
+        UUID originalPosting = (UUID) row[7];
+        LocalDate txDate = (LocalDate) row[8];
 
         if ("REVERSED".equalsIgnoreCase(status)) {
             return new ElevyReversalResult(originalTxRef, 0L, "ALREADY_REVERSED", null);
@@ -129,18 +130,11 @@ public class ElevyCalculationEngine {
         // 3. Post reversal in ledger if levy was charged
         UUID refundLedgerTxId = null;
         if (levyAmt > 0) {
-            String customerAccount = Ledger.code("customer", customerId, "available", Ledger.GHS);
-            var posting = Ledger.Posting.of(
-                    "elevy_reversal",
-                    "REV-ELEV-" + originalTxRef,
-                    "GRA_E_LEVY_REVERSAL_REFUND",
-                    List.of(
-                            Ledger.Leg.debit(ELEVY_SYSTEM_ACCOUNT, levyAmt),
-                            Ledger.Leg.credit(customerAccount, levyAmt)
-                    )
-            ).describedAs("GRA Act 1075 e-Levy refund on reversed tx " + originalTxRef);
-
-            refundLedgerTxId = ledger.post(posting).transactionId();
+            if (originalPosting == null) {
+                throw ApiException.conflict("missing_levy_posting", "Reconcile the historical charge before refunding it");
+            }
+            refundLedgerTxId = ledger.reverse(originalPosting, "elevy_reversal",
+                    "REV-ELEV-" + originalTxRef, reversalReason).transactionId();
         }
 
         return new ElevyReversalResult(originalTxRef, levyAmt, "REVERSED", refundLedgerTxId);

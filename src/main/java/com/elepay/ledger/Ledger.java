@@ -33,8 +33,27 @@ public class Ledger {
 
     /** One side of a posting. Positive amounts increase the account balance. */
     public record Leg(String account, long amount) {
-        public static Leg debit(String account, long amount) { return new Leg(account, -amount); }
-        public static Leg credit(String account, long amount) { return new Leg(account, amount); }
+        public Leg {
+            if (amount == Long.MIN_VALUE) {
+                throw ApiException.badRequest("invalid_amount", "Journal amount exceeds the reversible range");
+            }
+        }
+
+        public static Leg debit(String account, long amount) {
+            requirePositive(amount);
+            return new Leg(account, -amount);
+        }
+
+        public static Leg credit(String account, long amount) {
+            requirePositive(amount);
+            return new Leg(account, amount);
+        }
+
+        private static void requirePositive(long amount) {
+            if (amount <= 0) {
+                throw ApiException.badRequest("invalid_amount", "Debit and credit amounts must be positive");
+            }
+        }
     }
 
     public record Posting(String scope, String key, String kind, String description,
