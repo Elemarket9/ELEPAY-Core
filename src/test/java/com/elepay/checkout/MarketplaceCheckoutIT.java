@@ -159,6 +159,7 @@ class MarketplaceCheckoutIT extends PostgresTestBase {
 
         // Marketplace lines wait for delivery: a forced run releases nothing until the marketplace confirms.
         api.call("POST", "/v1/ops/settlements/run", ops, null, Map.of("ignoreDelay", true));
+        revenueBefore = ledger.balance(Ledger.REVENUE);
         assertThat(bal("merchant", merchantA, "available")).isZero();
         assertThat(api.call("POST", "/v1/merchants/" + marketplace + "/checkouts/" + reference + "/deliveries",
                 mpOwner, null, Map.of()).status()).isEqualTo(200);

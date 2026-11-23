@@ -6,7 +6,7 @@ interface Item { id: string; kind: string; severity: string; subject: string; de
 interface MerchantView { id: string; legalName: string; tradingName: string; kind: string; status: string }
 interface Integrity { accountsWithDrift: number; netByCurrency: Record<string, number>; unbalancedTransactions: number }
 
-const TABSconst TABS = [
+const TABS = [
   "Overview", "Agent Banking", "Lending Portfolio", "System Health",
   "Exceptions", "Onboarding", "Disputes", "Reconciliation"
 ] as const;

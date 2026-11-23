@@ -219,6 +219,7 @@ public class PosCommerceTest extends PostgresTestBase {
     @Test
     void linkedDigitalCheckoutRequiresLedgerPaymentAndCannotBeAppliedTwice() {
         ledger.open("merchant", merchantId, "pending", "GHS");
+        ledger.open("merchant", merchantId, "available", "GHS");
         var order = orderService.createOrder(merchantId, null, null, null, null,
                 List.of(new PosOrderService.OrderItemInput("Retail item", BigDecimal.ONE, 3000L, 0L, 0L, null)),
                 0L, 0L, 0L, "STANDARD");

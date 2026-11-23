@@ -10,7 +10,7 @@ interface Lookup {
 interface Preview { verifiedName: string; destination: string; amount: number; fee: number; total: number; expiresAt: string; rail: string }
 interface Operation { reference: string; kind: string; amount: number; status: string; counterparty: string | null; createdAt: string }
 
-const WALLET_TABSconst WALLET_TABS = ["Send Money", "Airtime & Data", "Pay Bills", "Virtual Cards", "Savings Goals", "Export Statements"] as const;
+const WALLET_TABS = ["Send Money", "Airtime & Data", "Pay Bills", "Virtual Cards", "Savings Goals", "Export Statements"] as const;
 
 /**
  * Customer web wallet with Send Money, Airtime/Data top-ups, Bill payments,

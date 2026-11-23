@@ -939,9 +939,11 @@ class CheckoutService {
             long total = entry.getValue();
             UUID id = UUID.randomUUID();
             String reference = References.next("ST");
+            String pendingAcc = ledger.open("merchant", merchant, "pending", currency);
+            String availableAcc = ledger.open("merchant", merchant, "available", currency);
             var posted = ledger.post(Ledger.Posting.of("settlement", id.toString(), "settlement", List.of(
-                    Leg.debit(Ledger.code("merchant", merchant, "pending", currency), total),
-                    Leg.credit(Ledger.code("merchant", merchant, "available", currency), total))).describedAs(reference));
+                    Leg.debit(pendingAcc, total),
+                    Leg.credit(availableAcc, total))).describedAs(reference));
             db.sql("""
                     INSERT INTO settlement_batch (id, reference, merchant_id, amount, lines, journal_tx)
                     VALUES (:id, :ref, :m, :amount, :lines, :tx)""")

@@ -141,7 +141,11 @@ public class AgentBankingTest extends PostgresTestBase {
         assertThat(accruedBefore).isGreaterThan(0L);
 
         // Pre-fund revenue account if needed
-        ledger.openSystem(Ledger.REVENUE, "revenue", Ledger.GHS, true);
+        ledger.openSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false);
+        ledger.post(Ledger.Posting.of("test-fund-rev", agent.id().toString(), "test_funding", List.of(
+                Ledger.Leg.debit(testSource, accruedBefore),
+                Ledger.Leg.credit(Ledger.REVENUE, accruedBefore)
+        )));
 
         var payoutSummary = commissionEngine.executeDailyCommissionPayouts();
         assertThat(payoutSummary.agentsPaid()).isGreaterThanOrEqualTo(1);

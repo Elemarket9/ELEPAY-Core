@@ -52,7 +52,14 @@ class LoanOriginationEngineTest extends PostgresTestBase {
             applicationService.approveReviewed(app.id(), "ops-approved-evidence");
         }
 
-        // 2. Originate and disburse
+        // 2. Pre-fund lending capital account legitimately and originate/disburse
+        ledger.openSystem(LoanOriginationEngine.LENDING_FUNDING_ACCOUNT, "clearing", com.elepay.ledger.Ledger.GHS, false);
+        String testSource = ledger.openSystem("system:test_loan_funds:GHS", "clearing", com.elepay.ledger.Ledger.GHS, true);
+        ledger.post(com.elepay.ledger.Ledger.Posting.of("test-loan-fund", app.id().toString(), "test_funding", List.of(
+                com.elepay.ledger.Ledger.Leg.debit(testSource, 500_000L),
+                com.elepay.ledger.Ledger.Leg.credit(LoanOriginationEngine.LENDING_FUNDING_ACCOUNT, 500_000L)
+        )));
+
         var result = originationEngine.originateAndDisburse(
                 app.id(),
                 AmortizationScheduleEngine.AmortizationMethod.EQUAL_INSTALLMENT_FRENCH

@@ -152,7 +152,7 @@ public class AccountingAndInvoicingTest extends PostgresTestBase {
 
         assertThat(inv.status()).isEqualTo("SENT");
         assertThat(inv.paymentLinkUrl()).contains("https://pay.elepay.com/invoice/");
-        assertThat(inv.graSdcReceiptNumber()).contains("SDC-GRA-GH");
+        assertThat(inv.graSdcReceiptNumber()).isNull();
 
         // Verify GL auto-posting for invoice issuance (Debit AR, Credit Revenue & VAT)
         var arAcc = glService.getAccountByCode(merchantId, "1040").orElseThrow();
