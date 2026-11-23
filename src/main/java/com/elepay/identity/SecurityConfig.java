@@ -48,7 +48,8 @@ class SecurityConfig {
     SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys, RequestSigningFilter requestSigningFilter,
                             RateLimitFilter rateLimitFilter, Stage1KillSwitchFilter stage1KillSwitchFilter,
                             @org.springframework.beans.factory.annotation.Value("${management.server.port:0}") int managementPort,
-                            @Value("${elepay.security.trusted-proxies:}") String trustedProxies)
+                            @Value("${elepay.security.trusted-proxies:}") String trustedProxies,
+                            @Value("${elepay.security.pos-lan-origin:}") String posLanOrigin)
             throws Exception {
         http.csrf(csrf -> csrf.disable())
                 .cors(cors -> {})
@@ -56,7 +57,8 @@ class SecurityConfig {
                 .headers(h -> h
                         .contentSecurityPolicy(csp -> csp.policyDirectives(
                                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-                                + "img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; "
+                                + "img-src 'self' data:; connect-src 'self'" + checkedLanOrigin(posLanOrigin)
+                                + "; font-src 'self'; object-src 'none'; "
                                 + "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"))
                         .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31_536_000))
                         .frameOptions(f -> f.deny())
@@ -66,9 +68,9 @@ class SecurityConfig {
                                 "Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(self)")))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // Quarantine device pairing, offline sync and simulated 3DS until their trust protocols are implemented.
-                        // POS and inventory controllers independently enforce merchant-wide membership.
-                        .requestMatchers("/v1/pos/sync", "/v1/pos/terminals/pair", "/v1/rails/card/3ds/**").denyAll()
+                        // Terminal pairing and simulated 3DS remain quarantined. Offline
+                        // cash-only POS replay is authenticated and merchant-scoped in PosController.
+                        .requestMatchers("/v1/pos/terminals/pair", "/v1/rails/card/3ds/**").denyAll()
                         // The legacy sandbox only runs under the sandbox profile and binds to loopback.
                         .requestMatchers("/sandbox/**").permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/health", "/actuator/info").permitAll()
@@ -87,7 +89,8 @@ class SecurityConfig {
                         .requestMatchers("/dev/token").permitAll()
                         .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**", "/pay/**", "/favicon.svg",
                                 "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**", "/developer", "/developer/**",
-                                "/kitchen", "/kitchen/**", "/kitchen-sw.js", "/kitchen.webmanifest").permitAll()
+                                "/kitchen", "/kitchen/**", "/kitchen-sw.js", "/kitchen.webmanifest",
+                                "/pos-sw.js", "/customer-display").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter())))
                 .addFilterBefore(stage1KillSwitchFilter, BearerTokenAuthenticationFilter.class)
@@ -95,6 +98,27 @@ class SecurityConfig {
                 .addFilterBefore(requestSigningFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterBefore(new ApiKeyFilter(apiKeys, trustedProxies), BearerTokenAuthenticationFilter.class);
         return http.build();
+    }
+
+    /**
+     * Whitelist one exact trusted HTTPS edge origin from deployment configuration.
+     * No wildcard, no arbitrary host from a request and no silent relaxation of CSP.
+     */
+    static String checkedLanOrigin(String configured) {
+        if (configured == null || configured.isBlank()) return "";
+        try {
+            java.net.URI uri = new java.net.URI(configured.strip());
+            if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null
+                    || uri.getHost().length() > 253 || uri.getUserInfo() != null
+                    || uri.getQuery() != null || uri.getFragment() != null
+                    || (uri.getPath() != null && !uri.getPath().isBlank() && !"/".equals(uri.getPath()))
+                    || configured.indexOf(';') >= 0 || configured.indexOf(' ') >= 0)
+                throw new IllegalArgumentException("Invalid trusted POS LAN origin");
+            return " " + uri.getScheme().toLowerCase(java.util.Locale.ROOT) + "://"
+                    + uri.getHost() + (uri.getPort() == -1 ? "" : ":" + uri.getPort());
+        } catch (java.net.URISyntaxException e) {
+            throw new IllegalArgumentException("Invalid trusted POS LAN origin", e);
+        }
     }
 
     /** Maps the OIDC {@code roles} claim (and realm roles from Keycloak) to authorities. */
