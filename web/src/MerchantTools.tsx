@@ -349,6 +349,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   async function sendToKitchen() {
     setError(null); setBusy(true);
     try {
+      if (!networkOnline && !order) { await queueCurrentOffline(); return; }
       if (addingRound && order) {
         if (cart.length === 0) throw new Error("Select items for the next round");
         const latest = await api<PosOrder>(`/v1/pos/orders/${order.id}/items`, {
@@ -452,6 +453,18 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     if (cash > 10_000_000_000) { setError("Cash amount exceeds the allowed input size"); return; }
     setBusy(true);
     try {
+      if (activeOffline) {
+        if (activeOffline.status !== "QUEUED" || networkOnline)
+          throw new Error("Reconciliation is active. Open the cloud order to record further payments.");
+        const updated = addCashLocally(activeOffline, cash);
+        await offlineDb.put(updated);
+        setActiveOffline(updated);
+        await refreshOffline();
+        setTendered("");
+        setTableNotice("Cash recorded locally only; payment awaits cloud reconciliation.");
+        return;
+      }
+      if (!networkOnline && !order) { await queueCurrentOffline(cash); return; }
       const o = await ensureOrder();
       const paid = await api<PosOrder>(`/v1/pos/orders/${o.id}/payments`, { body: { tenderType: "CASH", amountPesewas: cash, reference: null }, idempotencyKey: newKey() });
       if (paid.status !== "PAID") { setOrder(paid); setTendered(""); setTableNotice(`Partial cash recorded. Balance: ${formatMoney(Math.max(0, paid.totalPesewas - paid.paidPesewas))}`); return; }
@@ -508,13 +521,29 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     <div className="pos-layout">
       <div>
         <h3>Products</h3>
+        <p role="status" className={networkOnline ? "notice" : "notice warning"}>
+          {networkOnline ? "Online" : "OFFLINE — cash is locally recorded; MoMo/card/NFC disabled"}
+        </p>
+        {offlineWarning && <p className="error">{offlineWarning}</p>}
+        <div className="panel pos-offline-queue">
+          <h4>Local order journal</h4>
+          <p>{offlineOrders.filter((x) => x.status === "QUEUED").length} queued ·
+             {offlineOrders.filter((x) => x.status === "CONFLICT").length} conflicts</p>
+          <button className="secondary" disabled={!networkOnline || busy}
+            onClick={() => void syncPending()}>Synchronize now</button>
+          {offlineOrders.filter((x) => x.status !== "SYNCED").map((x) => (
+            <button key={x.offlineTxId} className="secondary" onClick={() => { setActiveOffline(x); setCart([]); }}>
+              {x.offlineTxId.slice(0, 8)} · {formatMoney(x.totalPesewas)} · {x.status}
+            </button>
+          ))}
+        </div>
         {loadError && <p className="error">{loadError}</p>}
         <input placeholder="Search or scan barcode" value={search} onChange={(e) => setSearch(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { const hit = catalog.find((r) => r.barcode === search.trim() || r.sku === search.trim()); if (hit) { add(hit); setSearch(""); } } }} />
         {catalog.length === 0 && !loadError && <p className="muted">No products yet. Add them in <strong>Inventory &amp; Stock</strong>.</p>}
         <div className="pos-items">
           {shown.map((r) => (
-            <button key={r.variantId} className="secondary pos-item" disabled={!!order && !addingRound} onClick={() => add(r)}>
+            <button key={r.variantId} className="secondary pos-item" disabled={(!!order && !addingRound) || !!activeOffline} onClick={() => add(r)}>
               <span>{itemLabel(r)}</span><strong>{formatMoney(r.retailPricePesewas)}</strong>
               {r.trackInventory && <span className="small muted">{Number(r.onHand)} in stock</span>}
             </button>
@@ -523,27 +552,44 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
       </div>
       <div className="panel">
         <h3>Sale</h3>
+        {activeOffline && <div role="status" className="notice">
+          <strong>LOCAL ORDER {activeOffline.offlineTxId.slice(0, 8)}</strong>
+          <p>{activeOffline.status} · {formatMoney(activeOffline.totalPesewas)}
+            · Cash collected locally: {formatMoney(locallyCollected)}</p>
+          <p>Not a verified ELEPAY receipt. Remote kitchens require internet or a configured LAN relay.</p>
+          {activeOffline.problem && <p className="error">{activeOffline.problem}</p>}
+          {activeOffline.status === "SYNCED" && activeOffline.serverOrderId && <button onClick={() => {
+            void api<PosOrder>(`/v1/pos/orders/${activeOffline.serverOrderId}`).then((next) => {
+              setOrder(next); setActiveOffline(null);
+            }).catch((e) => setError(message(e)));
+          }}>Open reconciled order</button>}
+          <button className="secondary" onClick={() => {
+            setActiveOffline(null); setCart([]); setTendered(""); setTableNotice("");
+          }}>New sale</button>
+        </div>
         <div className="grid-2">
           {terminals.length > 0 && <label>Payment terminal
-            <select value={terminalId} disabled={!!order} onChange={(e) => setTerminalId(e.target.value)}>
+            <select value={terminalId} disabled={!!order || !!activeOffline} onChange={(e) => setTerminalId(e.target.value)}>
               <option value="">No terminal selected</option>
               {terminals.map((t) => <option key={t.id} value={t.id}>{t.model} – {t.serialNumber}</option>)}
             </select>
           </label>}
           <label>Order channel
-            <select value={orderType} disabled={!!order} onChange={(e) => { setOrderType(e.target.value); setTableId(""); }}>
+            <select value={orderType} disabled={!!order || !!activeOffline} onChange={(e) => { setOrderType(e.target.value); setTableId(""); }}>
               <option value="RETAIL">Retail</option><option value="DINE_IN">Dine-in</option>
               <option value="TAKEOUT">Takeaway</option><option value="DELIVERY">Delivery</option>
             </select>
           </label>
           {orderType === "DINE_IN" && <label>Table
-            <select value={tableId} disabled={!!order} onChange={(e) => setTableId(e.target.value)}>
+            <select value={tableId} disabled={!!order || !!activeOffline} onChange={(e) => setTableId(e.target.value)}>
               <option value="">Select available table</option>
               {tables.filter((t) => t.status === "AVAILABLE").map((t) => <option key={t.id} value={t.id}>{t.tableNumber}</option>)}
             </select>
           </label>}
         </div>
-        {cart.length === 0 ? <p className="muted">{order
+        {activeOffline ? <ul>{activeOffline.items.map((i, index) => (
+          <li key={index}>{i.itemName} × {i.quantity} · {formatMoney(i.unitPricePesewas * i.quantity)}</li>
+        ))}</ul> : cart.length === 0 ? <p className="muted">{order
           ? "Order open. Add another round or collect payment."
           : "Tap products to add them."}</p> : (
           <table className="grid">
@@ -621,7 +667,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           </div>}
         </div>}
         {order && orderType !== "RETAIL" && <p className="notice ok">Order {order.orderNumber} sent to kitchen. Payment status: {order.status}.</p>}
-        {orderType !== "RETAIL" && cart.length > 0 && (!order || addingRound) && 
+        {orderType !== "RETAIL" && cart.length > 0 && !activeOffline && (!order || addingRound) && 
           <button onClick={() => void sendToKitchen()} disabled={busy}>
             {addingRound ? "Send new round to kitchen" : "Send to kitchen"}
           </button>}
@@ -641,16 +687,16 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
             <button onClick={() => void checkDigital()} disabled={busy}>Check payment</button>
             <button className="secondary" onClick={() => void cancelDigital()} disabled={busy}>Cancel payment</button>
           </div>
-        ) : (cart.length > 0 || !!order) && (
+        ) : (cart.length > 0 || !!order || !!activeOffline) && (
           <>
             <label>Cash received (GH₵) — full or partial
               <input inputMode="decimal" value={tendered} onChange={(e) => setTendered(e.target.value)}
                 placeholder={(balanceDue / 100).toFixed(2)} /></label>
             <div className="flex-row">
               <button onClick={() => void payCash()} disabled={busy}>Cash</button>
-              <button className="secondary" onClick={() => void startDigital()} disabled={busy}>MoMo / card</button>
-              <button className="secondary" onClick={() => void showPaymentBarcode()} disabled={busy}>Payment QR / barcode</button>
-              <button className="secondary" onClick={() => void startContactless()} disabled={busy || !terminalId}>NFC tap on terminal</button>
+              <button className="secondary" onClick={() => void startDigital()} disabled={busy || !networkOnline || !!activeOffline}>MoMo / card</button>
+              <button className="secondary" onClick={() => void showPaymentBarcode()} disabled={busy || !networkOnline || !!activeOffline}>Payment QR / barcode</button>
+              <button className="secondary" onClick={() => void startContactless()} disabled={busy || !networkOnline || !terminalId || !!activeOffline}>NFC tap on terminal</button>
               {!order && <button className="secondary" onClick={() => setCart([])}>Clear</button>}
             </div>
           </>
