@@ -86,6 +86,15 @@ jobs:
           cache: maven
       - name: Verify fintech-only scope and reject fabricated financial actions
         run: python3 scripts/verify_fintech_scope.py
+      - name: Inventory production source simulation markers
+        run: |
+          set +e
+          grep -rniE "simulat|fake|mock|stub|dummy|sandbox|demo" src/main web/src > production-source-markers.txt
+          result=$?
+          set -e
+          if [ "$result" -gt 1 ]; then exit "$result"; fi
+          cat production-source-markers.txt
+
       # Run unit and integration test suite
       - name: Run Maven Tests & Verify
         env:
@@ -112,6 +121,15 @@ jobs:
           if grep -E 'BOOT-INF/classes/(application-(dev|sandbox|test)\.properties|com/elepay/.*(Simulated|Fake|Mock|Stub|Dummy|Demo|Sandbox|DevTokens|PaymentIntents|ThreeDSecureService|CardIssuingService|CardAuthorizationEngine|CompanyExpenseCardService|AgentCashInService|AgentCashOutService|AgentFloatService|AgentPortalService|AirtimeDataPurchaseEngine|UtilityPaymentService|SchoolFeePaymentService|ScheduledBillPaymentService|FaceMatchingLivenessService))' jar-contents.txt; then
             echo 'Test-only implementations are present in production artifact'; exit 1
           fi
+
+      - name: Publish production artifact and source inventory
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-hardening-evidence
+          path: |
+            jar-contents.txt
+            production-source-markers.txt
+          if-no-files-found: error
 
       - name: Verify isolated test service & End-to-End Scenarios
         env:
