@@ -121,6 +121,50 @@ public class ApiKeys {
         return new Created(id, prefix, secret, sortedScopes, signingSecret, normalizedType, normalizedIps);
     }
 
+    /**
+     * Credential for a paired kitchen screen or kitchen printer device. It can only reach kitchen display
+     * endpoints (enforced at the gateway) and only for its own merchant. Never created through the generic
+     * API key endpoints, which reject the kitchen key type.
+     */
+    @Transactional
+    public Created createKitchenDevice(UUID merchantId, String label, String createdBy) {
+        byte[] bytes = new byte[24];
+        RANDOM.nextBytes(bytes);
+        String prefix = "kd_live_" + HexFormat.of().formatHex(bytes, 0, 4);
+        String secret = prefix + "_" + HexFormat.of().formatHex(bytes, 4, 24);
+        byte[] signingBytes = new byte[32];
+        RANDOM.nextBytes(signingBytes);
+        String signingSecret = "sec_" + HexFormat.of().formatHex(signingBytes);
+        UUID id = UUID.randomUUID();
+        List<String> scopes = List.of("collect", "view");
+        db.sql("""
+                INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes,
+                    signing_secret, key_type, allowed_ips)
+                VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes, :signing_secret, 'kitchen', '{}')""")
+                .param("id", id).param("prefix", prefix).param("hash", Idempotency.sha256(secret))
+                .param("merchant", merchantId).param("label", label).param("by", createdBy)
+                .param("scopes", scopes.toArray(String[]::new)).param("signing_secret", signingSecret)
+                .update();
+        return new Created(id, prefix, secret, scopes, signingSecret, "kitchen", List.of());
+    }
+
+    public record KitchenDevice(UUID id, String label, String prefix, java.time.OffsetDateTime createdAt,
+                                java.time.OffsetDateTime revokedAt) {}
+
+    public List<KitchenDevice> kitchenDevices(UUID merchantId) {
+        return db.sql("""
+                SELECT id, label, prefix, created_at, revoked_at FROM api_credential
+                WHERE merchant_id = :m AND key_type = 'kitchen' ORDER BY revoked_at NULLS FIRST, created_at DESC""")
+                .param("m", merchantId).query(KitchenDevice.class).list();
+    }
+
+    /** Revokes a kitchen device credential; returns false if no such kitchen device belongs to the merchant. */
+    public boolean revokeKitchenDevice(UUID merchantId, UUID id) {
+        boolean kitchen = db.sql("SELECT count(*) FROM api_credential WHERE id = :id AND merchant_id = :m AND key_type = 'kitchen'")
+                .param("id", id).param("m", merchantId).query(Long.class).single() > 0;
+        return kitchen && revoke(merchantId, id);
+    }
+
     // ---- developer portal: live and test keys ------------------------------------------------
 
     public record EnvironmentKey(UUID id, String prefix, String secret, String environment, List<String> scopes,
@@ -345,7 +389,8 @@ public class ApiKeys {
     }
 
     private static boolean hasValidKeyPrefix(String secret) {
-        return secret.startsWith("ek_") || secret.startsWith("pk_") || secret.startsWith("sk_") || secret.startsWith("payout_");
+        return secret.startsWith("ek_") || secret.startsWith("pk_") || secret.startsWith("sk_") || secret.startsWith("payout_")
+                || secret.startsWith("kd_");
     }
 
     private static boolean isTestKey(String secret) {
@@ -397,6 +442,7 @@ public class ApiKeys {
         if (secret.startsWith("payout_")) return "payout";
         if (secret.startsWith("sk_")) return "secret";
         if (secret.startsWith("ek_")) return "secret";
+        if (secret.startsWith("kd_")) return "kitchen";
         return dbKeyType != null ? dbKeyType : "secret";
     }
 

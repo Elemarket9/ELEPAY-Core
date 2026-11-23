@@ -45,6 +45,17 @@
         },
         "type" : "object"
       },
+      "AdvanceRequest" : {
+        "properties" : {
+          "actionId" : {
+            "type" : "string"
+          },
+          "from" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "AgingSummary" : {
         "properties" : {
           "bucket" : {
@@ -376,6 +387,31 @@
           }
         },
         "required" : [ "name" ],
+        "type" : "object"
+      },
+      "BumpResult" : {
+        "properties" : {
+          "applied" : {
+            "type" : "boolean"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "view" : {
+            "$ref" : "#/components/schemas/TicketView"
+          }
+        },
+        "type" : "object"
+      },
+      "CancelRequest" : {
+        "properties" : {
+          "actionId" : {
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "CardBin" : {
@@ -1098,6 +1134,36 @@
         },
         "type" : "object"
       },
+      "CreateStationRequest" : {
+        "properties" : {
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "isDefault" : {
+            "type" : "boolean"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          },
+          "output" : {
+            "enum" : [ "SCREEN", "PRINTER", "BOTH" ],
+            "type" : "string"
+          },
+          "paperWidth" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "printerAddress" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "CreateSupplierRequest" : {
         "properties" : {
           "address" : {
@@ -1141,6 +1207,9 @@
       },
       "CreateTicketRequest" : {
         "properties" : {
+          "clientRef" : {
+            "type" : "string"
+          },
           "course" : {
             "type" : "string"
           },
@@ -2462,6 +2531,42 @@
         "required" : [ "accountName", "accountNumber", "network", "reference", "type" ],
         "type" : "object"
       },
+      "KdsItem" : {
+        "properties" : {
+          "course" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "itemName" : {
+            "type" : "string"
+          },
+          "itemStatus" : {
+            "type" : "string"
+          },
+          "modifiers" : {
+            "type" : "string"
+          },
+          "orderItemId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "number"
+          },
+          "stationId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "ticketId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "KdsItemInput" : {
         "properties" : {
           "course" : {
@@ -2485,6 +2590,17 @@
       },
       "KdsTicket" : {
         "properties" : {
+          "cancelledAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "changeSeq" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "clientRef" : {
+            "type" : "string"
+          },
           "course" : {
             "type" : "string"
           },
@@ -2531,6 +2647,10 @@
           "tableId" : {
             "format" : "uuid",
             "type" : "string"
+          },
+          "ticketNumber" : {
+            "format" : "int32",
+            "type" : "integer"
           }
         },
         "type" : "object"
@@ -2582,6 +2702,29 @@
               "type" : "boolean"
             },
             "type" : "object"
+          }
+        },
+        "type" : "object"
+      },
+      "KitchenDevice" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "label" : {
+            "type" : "string"
+          },
+          "prefix" : {
+            "type" : "string"
+          },
+          "revokedAt" : {
+            "format" : "date-time",
+            "type" : "string"
           }
         },
         "type" : "object"
@@ -3399,6 +3542,20 @@
         },
         "type" : "object"
       },
+      "PairRequest" : {
+        "properties" : {
+          "code" : {
+            "type" : "string"
+          },
+          "deviceName" : {
+            "type" : "string"
+          },
+          "merchantCode" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "PairTerminalRequest" : {
         "properties" : {
           "hardwareFingerprint" : {
@@ -3408,6 +3565,67 @@
             "type" : "string"
           },
           "serialNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Paired" : {
+        "properties" : {
+          "apiKey" : {
+            "type" : "string"
+          },
+          "deviceId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantName" : {
+            "type" : "string"
+          },
+          "signingSecret" : {
+            "type" : "string"
+          },
+          "stationId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "stationName" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PairingCode" : {
+        "properties" : {
+          "code" : {
+            "type" : "string"
+          },
+          "expiresAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "merchantCode" : {
+            "type" : "string"
+          },
+          "stationId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PairingCodeRequest" : {
+        "properties" : {
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "stationId" : {
+            "format" : "uuid",
             "type" : "string"
           }
         },
@@ -3984,6 +4202,71 @@
           "variableFee" : {
             "format" : "int64",
             "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "PrintJob" : {
+        "properties" : {
+          "attempts" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "content" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "kind" : {
+            "type" : "string"
+          },
+          "lastError" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "paperWidth" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "printerAddress" : {
+            "type" : "string"
+          },
+          "stationId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "stationName" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "ticketId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PrintResultRequest" : {
+        "properties" : {
+          "deviceId" : {
+            "type" : "string"
+          },
+          "error" : {
+            "type" : "string"
+          },
+          "printed" : {
+            "type" : "boolean"
           }
         },
         "type" : "object"
@@ -4897,6 +5180,19 @@
         },
         "type" : "object"
       },
+      "RouteRequest" : {
+        "properties" : {
+          "categoryId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Row" : {
         "properties" : {
           "attempts" : {
@@ -5280,6 +5576,50 @@
         "required" : [ "filename", "lines", "rail" ],
         "type" : "object"
       },
+      "Station" : {
+        "properties" : {
+          "active" : {
+            "type" : "boolean"
+          },
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "isDefault" : {
+            "type" : "boolean"
+          },
+          "lastSeenAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          },
+          "output" : {
+            "type" : "string"
+          },
+          "paperWidth" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "printerAddress" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "StatusChange" : {
         "properties" : {
           "reason" : {
@@ -5521,6 +5861,20 @@
           "tenderType" : {
             "enum" : [ "CASH", "MOMO", "CARD", "WALLET" ],
             "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "TicketView" : {
+        "properties" : {
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/KdsItem"
+            },
+            "type" : "array"
+          },
+          "ticket" : {
+            "$ref" : "#/components/schemas/KdsTicket"
           }
         },
         "type" : "object"
@@ -12444,6 +12798,34 @@
         "tags" : [ "integrity-api" ]
       }
     },
+    "/v1/public/kitchen/pair" : {
+      "post" : {
+        "operationId" : "pair",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PairRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Paired"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "kitchen-pairing-controller" ]
+      }
+    },
     "/v1/public/links/{slug}" : {
       "get" : {
         "operationId" : "link",
@@ -12832,6 +13214,92 @@
         "tags" : [ "restaurant-controller" ]
       }
     },
+    "/v1/restaurant/kds/devices/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listDevices",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/KitchenDevice"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/devices/pairing-codes" : {
+      "post" : {
+        "operationId" : "createPairingCode",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PairingCodeRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PairingCode"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/devices/{deviceId}/revoke" : {
+      "post" : {
+        "operationId" : "revokeDevice",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "deviceId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
     "/v1/restaurant/kds/items/{itemId}/bump" : {
       "post" : {
         "operationId" : "bumpItem",
@@ -12874,6 +13342,229 @@
         } ],
         "responses" : {
           "200" : {
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/print-jobs/claim" : {
+      "post" : {
+        "operationId" : "claimPrintJob",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "deviceId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PrintJob"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/print-jobs/{jobId}/result" : {
+      "post" : {
+        "operationId" : "reportPrintResult",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "jobId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PrintResultRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PrintJob"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/stations" : {
+      "post" : {
+        "operationId" : "createStation",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateStationRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Station"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/stations/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listStations",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/Station"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/stations/{stationId}/deactivate" : {
+      "post" : {
+        "operationId" : "deactivateStation",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "stationId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/stations/{stationId}/routes" : {
+      "post" : {
+        "operationId" : "routeToStation",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "stationId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RouteRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/sync" : {
+      "get" : {
+        "operationId" : "sync",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "since",
+          "required" : false,
+          "schema" : {
+            "default" : 0,
+            "format" : "int64",
+            "type" : "integer"
+          }
+        }, {
+          "in" : "query",
+          "name" : "stationId",
+          "required" : false,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SyncResult"
+                }
+              }
+            },
             "description" : "OK"
           }
         },
@@ -12938,6 +13629,43 @@
         "tags" : [ "restaurant-controller" ]
       }
     },
+    "/v1/restaurant/kds/tickets/{ticketId}/advance" : {
+      "post" : {
+        "operationId" : "advanceTicket",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "ticketId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/AdvanceRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/BumpResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
     "/v1/restaurant/kds/tickets/{ticketId}/bump" : {
       "post" : {
         "operationId" : "bumpTicket",
@@ -12956,6 +13684,123 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/KdsTicket"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/tickets/{ticketId}/cancel" : {
+      "post" : {
+        "operationId" : "cancelTicket",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "ticketId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CancelRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/BumpResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/tickets/{ticketId}/reprint" : {
+      "post" : {
+        "operationId" : "reprint",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "ticketId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "stationId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PrintJob"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/tickets/{ticketId}/stations/{stationId}/advance" : {
+      "post" : {
+        "operationId" : "advanceStation",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "ticketId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "stationId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/AdvanceRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/BumpResult"
                 }
               }
             },

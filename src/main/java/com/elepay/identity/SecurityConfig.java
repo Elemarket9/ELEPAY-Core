@@ -86,7 +86,8 @@ class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/v1/ussd/**").permitAll()
                         .requestMatchers("/dev/token").permitAll()
                         .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**", "/pay/**", "/favicon.svg",
-                                "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**", "/developer", "/developer/**").permitAll()
+                                "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**", "/developer", "/developer/**",
+                                "/kitchen", "/kitchen/**", "/kitchen-sw.js", "/kitchen.webmanifest").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter())))
                 .addFilterBefore(stage1KillSwitchFilter, BearerTokenAuthenticationFilter.class)
@@ -164,6 +165,14 @@ class SecurityConfig {
                         response.getWriter().write("{\"code\":\"publishable_key_restricted\",\"error\":\"publishable_key_restricted\",\"message\":\"Publishable keys (pk_live) can only create payment intents / checkouts\"}");
                         return;
                     }
+                }
+
+                // Kitchen device keys (kd_live_*) reach only the kitchen display endpoints, nothing else.
+                if ("kitchen".equalsIgnoreCase(auth.keyType()) && !KitchenDevicePaths.allowed(request.getMethod(), pathForGates)) {
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"kitchen_key_restricted\",\"error\":\"kitchen_key_restricted\",\"message\":\"Kitchen device keys can only use the kitchen display\"}");
+                    return;
                 }
 
                 // Gate 1: sk_live_* and legacy ek_* keys cannot initiate payouts or withdrawals.

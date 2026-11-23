@@ -7,6 +7,7 @@ import { completeSignIn, getToken, oidcEnabled, signIn, signOut } from "./auth";
 const MerchantDashboard = lazy(() => import("./Merchant").then((m) => ({ default: m.MerchantDashboard })));
 const OpsConsole = lazy(() => import("./Ops").then((m) => ({ default: m.OpsConsole })));
 const Wallet = lazy(() => import("./Wallet").then((m) => ({ default: m.Wallet })));
+const Kitchen = lazy(() => import("./Kitchen").then((m) => ({ default: m.Kitchen })));
 const DeveloperPortal = lazy(() => import("./Developer").then((m) => ({ default: m.DeveloperPortal })));
 import "./styles.css";
 
@@ -44,6 +45,9 @@ function App() {
   if ((m = path.match(/^\/pay\/l\/([\w-]+)$/))) return <StartFromLink slug={m[1]} />;
   if ((m = path.match(/^\/pay\/m\/(\d{6})$/))) return <StartFromLink code={m[1]} />;
   if ((m = path.match(/^\/pay\/([\w-]+)$/))) return <Checkout reference={m[1]} />;
+
+  // Kitchen screens run full-screen on tablets, without the site header.
+  if (path.startsWith("/kitchen")) return <Suspense fallback={null}><Kitchen /></Suspense>;
 
   const header = (
     <header>

@@ -26,7 +26,8 @@ class RestaurantAccessControlTest {
     private final RestaurantTableService tables = mock(RestaurantTableService.class);
     private final RestaurantController controller = new RestaurantController(
             tables, mock(ModifierService.class), kds, mock(RecipeCostingService.class),
-            mock(RestaurantSplitBillService.class), access);
+            mock(RestaurantSplitBillService.class), mock(KitchenStationService.class),
+            mock(KdsPrintService.class), mock(KitchenDeviceService.class), access);
 
     private void owns(String sql, UUID id, UUID merchant) {
         when(db.sql(sql).param("id", id).query(UUID.class).optional()).thenReturn(Optional.of(merchant));
@@ -47,7 +48,7 @@ class RestaurantAccessControlTest {
         UUID mine = UUID.randomUUID(), theirs = UUID.randomUUID(), order = UUID.randomUUID();
         owns("SELECT merchant_id FROM pos_order WHERE id = :id", order, theirs);
         var req = new RestaurantController.CreateTicketRequest(mine, order, null, DiningMode.DINE_IN, "Ama", null,
-                List.of(new KdsService.KdsItemInput(UUID.randomUUID(), "Waakye", java.math.BigDecimal.ONE, null, null)), null);
+                List.of(new KdsService.KdsItemInput(UUID.randomUUID(), "Waakye", java.math.BigDecimal.ONE, null, null)), null, null);
         assertThatThrownBy(() -> controller.createTicket(req)).isInstanceOf(ApiException.class);
         verifyNoInteractions(kds);
     }
@@ -80,7 +81,7 @@ class RestaurantAccessControlTest {
             String firstLine = m.group(2).strip().split("\\n")[0];
             if (!firstLine.contains("access.")) unguarded.add(firstLine);
         }
-        assertThat(endpoints).isGreaterThanOrEqualTo(19);
+        assertThat(endpoints).isGreaterThanOrEqualTo(29);
         assertThat(unguarded).as("Endpoints whose first statement is not an access check").isEmpty();
     }
 }
