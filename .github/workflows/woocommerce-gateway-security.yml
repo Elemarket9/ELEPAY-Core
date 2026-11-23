@@ -3,11 +3,13 @@ on:
   pull_request:
     paths:
       - 'plugins/woocommerce-elepay/**'
+      - 'tests/woocommerce/**'
       - '.github/workflows/woocommerce-gateway-security.yml'
   push:
     branches: [main]
     paths:
       - 'plugins/woocommerce-elepay/**'
+      - 'tests/woocommerce/**'
       - '.github/workflows/woocommerce-gateway-security.yml'
   workflow_dispatch:
 
@@ -25,4 +27,4 @@ jobs:
       - name: Lint all WooCommerce plugin PHP files
         run: find plugins/woocommerce-elepay -name '*.php' -print0 | xargs -0 -n1 php -l
       - name: Run isolated contract and security tests (no external rail calls)
-        run: php plugins/woocommerce-elepay/tests/security-contract.php
+        run: php -l tests/woocommerce/security-contract.php && php tests/woocommerce/security-contract.php
