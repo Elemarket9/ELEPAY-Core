@@ -206,6 +206,14 @@ public class RestaurantController {
         return kdsService.advanceTicket(ticketId, req.from(), req.actionId());
     }
 
+    public record RecallRequest(String from, String actionId) {}
+
+    @PostMapping("/kds/tickets/{ticketId}/recall")
+    public KdsService.BumpResult recallTicket(@PathVariable UUID ticketId, @RequestBody RecallRequest req) {
+        access.operate(KDS_TICKET, ticketId);
+        return kdsService.recallTicket(ticketId, req.from(), req.actionId());
+    }
+
     @PostMapping("/kds/tickets/{ticketId}/stations/{stationId}/advance")
     public KdsService.BumpResult advanceStation(@PathVariable UUID ticketId, @PathVariable UUID stationId,
                                                 @RequestBody AdvanceRequest req) {

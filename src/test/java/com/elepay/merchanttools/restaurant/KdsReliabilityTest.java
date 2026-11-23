@@ -105,6 +105,21 @@ class KdsReliabilityTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Expo recall is idempotent and restores only one status")
+    void recallLastBumpOnce() {
+        var t = ticket(order(), null);
+        kds.advanceTicket(t.id(), "NEW", "advance-prep");
+        kds.advanceTicket(t.id(), "PREPARING", "advance-ready");
+        var recalled = kds.recallTicket(t.id(), "READY", "recall-once");
+        assertThat(recalled.applied()).isTrue();
+        assertThat(recalled.view().ticket().status()).isEqualTo("PREPARING");
+        assertThat(kds.recallTicket(t.id(), "READY", "recall-once").applied()).isFalse();
+        assertThat(kds.recallTicket(t.id(), "READY", "recall-twice").applied()).isFalse();
+        assertThat(db.sql("SELECT count(*) FROM restaurant_kds_recall_event WHERE ticket_id = :id")
+            .param("id", t.id()).query(Long.class).single()).isEqualTo(1L);
+    }
+
+    @Test
     @DisplayName("A bump replayed from the offline queue is applied exactly once")
     void replayedActionAppliedOnce() {
         var t = ticket(order(), null);
