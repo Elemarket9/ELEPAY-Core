@@ -179,7 +179,7 @@ public class RestaurantController {
 
     @PostMapping("/kds/tickets/{ticketId}/cancel")
     public KdsService.BumpResult cancelTicket(@PathVariable UUID ticketId, @RequestBody CancelRequest req) {
-        access.operate(KDS_TICKET, ticketId);
+        access.manage(KDS_TICKET, ticketId);
         return kdsService.cancel(ticketId, req.actionId(), req.reason());
     }
 
