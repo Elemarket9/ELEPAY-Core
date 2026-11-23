@@ -227,4 +227,24 @@ public class GeoVelocityService {
                 explanation
         );
     }
+
+    @Transactional
+    public void recordCheckpoint(String entityId, double latitude, double longitude, String ipAddress, String city, String countryCode, OffsetDateTime recordedAt) {
+        db.sql("""
+            INSERT INTO geo_velocity_checkpoint (
+                id, entity_id, latitude, longitude, ip_address, city, country_code, recorded_at, created_at
+            ) VALUES (
+                :id, :entityId, :lat, :lon, :ip, :city, :country, :recordedAt, now()
+            )
+        """)
+                .param("id", UUID.randomUUID())
+                .param("entityId", entityId)
+                .param("lat", latitude)
+                .param("lon", longitude)
+                .param("ip", ipAddress)
+                .param("city", city)
+                .param("country", countryCode)
+                .param("recordedAt", recordedAt != null ? recordedAt : OffsetDateTime.now())
+                .update();
+    }
 }

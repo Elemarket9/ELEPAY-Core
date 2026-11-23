@@ -135,14 +135,67 @@ public class EnterpriseRefundService {
             );
         }
 
-        // 2. Cumulative Refund Tracking & Limit Enforcement
+        synchronized (orderKey(request.enterpriseId(), request.orderReference()).intern()) {
+            return doProcessRefund(request);
+        }
+    }
+
+    private EnterpriseRefundResult doProcessRefund(EnterpriseItemRefundRequest request) {
+        // 2. Cumulative Refund Tracking & Limit Enforcement with Pessimistic Row Locking
         long totalRefundRequested = request.totalRefundPesewas();
         if (totalRefundRequested <= 0) {
             throw ApiException.badRequest("invalid_amount", "Total refund amount must be positive");
         }
 
         long originalGross = resolveOriginalGross(request.enterpriseId(), request.orderReference());
-        long currentCumulative = resolveCumulativeRefunded(request.enterpriseId(), request.orderReference());
+        long currentCumulative = 0L;
+
+        if (db != null) {
+            // Ensure aggregate record exists so FOR UPDATE can acquire row-level lock
+            long insertGross = originalGross > 0 ? originalGross : Math.max(1L, totalRefundRequested);
+            db.sql("""
+                INSERT INTO enterprise_order_refund_aggregate
+                (id, enterprise_id, order_reference, original_gross_pesewas, cumulative_refunded_pesewas, status)
+                VALUES (:id, :eid, :oref, :gross, 0, 'ACTIVE')
+                ON CONFLICT (enterprise_id, order_reference) DO NOTHING
+                """)
+                .param("id", UUID.randomUUID())
+                .param("eid", request.enterpriseId())
+                .param("oref", request.orderReference())
+                .param("gross", insertGross)
+                .update();
+
+            // Acquire exclusive row-level lock on the aggregate
+            var locked = db.sql("""
+                SELECT original_gross_pesewas, cumulative_refunded_pesewas
+                FROM enterprise_order_refund_aggregate
+                WHERE enterprise_id = :eid AND order_reference = :oref
+                FOR UPDATE
+                """)
+                .param("eid", request.enterpriseId())
+                .param("oref", request.orderReference())
+                .query((rs, rowNum) -> new long[] {
+                        rs.getLong("original_gross_pesewas"),
+                        rs.getLong("cumulative_refunded_pesewas")
+                })
+                .optional().orElse(null);
+
+            if (locked != null) {
+                if (locked[0] > 0) {
+                    originalGross = locked[0];
+                }
+                currentCumulative = locked[1];
+            }
+        } else {
+            // In-memory fallback
+            OrderRefundState state = orderRefundStates.get(orderKey(request.enterpriseId(), request.orderReference()));
+            if (state != null) {
+                if (state.originalGrossPesewas() > 0) {
+                    originalGross = state.originalGrossPesewas();
+                }
+                currentCumulative = state.cumulativeRefundedPesewas();
+            }
+        }
 
         if (originalGross > 0 && Math.addExact(currentCumulative, totalRefundRequested) > originalGross) {
             throw ApiException.conflict("refund_limit_exceeded",
@@ -454,12 +507,7 @@ public class EnterpriseRefundService {
         return 0L;
     }
 
-    private long resolveCumulativeRefunded(UUID enterpriseId, String orderReference) {
-        OrderRefundState state = orderRefundStates.get(orderKey(enterpriseId, orderReference));
-        if (state != null) {
-            return state.cumulativeRefundedPesewas();
-        }
-
+    public long resolveCumulativeRefunded(UUID enterpriseId, String orderReference) {
         if (db != null) {
             try {
                 Long dbCum = db.sql("""
@@ -476,6 +524,11 @@ public class EnterpriseRefundService {
             } catch (Exception ignored) {}
         }
 
+        OrderRefundState state = orderRefundStates.get(orderKey(enterpriseId, orderReference));
+        if (state != null) {
+            return state.cumulativeRefundedPesewas();
+        }
+
         return 0L;
     }
 
@@ -487,20 +540,16 @@ public class EnterpriseRefundService {
             try {
                 String status = (originalGross > 0 && newCumulative >= originalGross) ? "FULLY_REFUNDED" : "PARTIALLY_REFUNDED";
                 db.sql("""
-                    INSERT INTO enterprise_order_refund_aggregate
-                    (id, enterprise_id, order_reference, original_gross_pesewas, cumulative_refunded_pesewas, status, updated_at)
-                    VALUES (:id, :eid, :oref, :gross, :cum, :status, now())
-                    ON CONFLICT (enterprise_id, order_reference) DO UPDATE
-                    SET cumulative_refunded_pesewas = EXCLUDED.cumulative_refunded_pesewas,
-                        status = EXCLUDED.status,
+                    UPDATE enterprise_order_refund_aggregate
+                    SET cumulative_refunded_pesewas = :cum,
+                        status = :status,
                         updated_at = now()
+                    WHERE enterprise_id = :eid AND order_reference = :oref
                     """)
-                    .param("id", UUID.randomUUID())
-                    .param("eid", enterpriseId)
-                    .param("oref", orderReference)
-                    .param("gross", Math.max(originalGross, newCumulative))
                     .param("cum", newCumulative)
                     .param("status", status)
+                    .param("eid", enterpriseId)
+                    .param("oref", orderReference)
                     .update();
             } catch (Exception ignored) {}
         }

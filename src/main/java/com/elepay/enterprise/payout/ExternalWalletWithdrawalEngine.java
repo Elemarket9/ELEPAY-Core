@@ -132,7 +132,7 @@ public class ExternalWalletWithdrawalEngine {
         }
 
         // 5. Compliance Screening (KYC Tier daily limits & Sanctions)
-        ComplianceCheckResult compliance = complianceService.evaluate(
+        ComplianceCheckResult compliance = complianceService.reserveWithdrawal(
                 request.enterpriseId(),
                 request.externalCustomerId(),
                 request.customerName(),
@@ -155,24 +155,30 @@ public class ExternalWalletWithdrawalEngine {
         Destination dest = new Destination(railType, network.toLowerCase(), destinationAccount, request.customerName());
         Item item = new Item(withdrawalRef, request.amountPesewas(), dest, "ENTERPRISE_WITHDRAWAL", request.customerName());
 
-        Batch batch = payouts.create(
-                "merchant",
-                request.enterpriseId(),
-                List.of(item),
-                "Enterprise customer withdrawal: " + withdrawalRef,
-                "enterprise"
-        );
-
-        // Submit batch to payment rails
-        payouts.submit(batch.id());
-
+        Batch batch;
         UUID payoutId = null;
-        if (!batch.items().isEmpty()) {
-            payoutId = batch.items().get(0).id();
+        try {
+            batch = payouts.create(
+                    "merchant",
+                    request.enterpriseId(),
+                    List.of(item),
+                    "Enterprise customer withdrawal: " + withdrawalRef,
+                    "enterprise"
+            );
+
+            // Submit batch to payment rails
+            payouts.submit(batch.id());
+
+            if (!batch.items().isEmpty()) {
+                payoutId = batch.items().get(0).id();
+            }
+        } catch (Exception e) {
+            // Roll back daily accumulator reservation if payout dispatch fails
+            complianceService.releaseReservation(request.enterpriseId(), request.externalCustomerId(), request.amountPesewas());
+            throw e;
         }
 
-        // 7. Update Daily Accumulator
-        complianceService.recordWithdrawal(request.enterpriseId(), request.externalCustomerId(), request.amountPesewas());
+        // 7. Daily Accumulator already reserved and recorded atomically in Step 5
 
         // 8. Persist Withdrawal Record
         UUID withdrawalId = UUID.randomUUID();

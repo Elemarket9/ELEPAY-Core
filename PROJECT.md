@@ -9,11 +9,11 @@ ELEPAY is a Ghana-first financial platform designed as a modular monolith in Jav
 - `com.elepay.checkout`: Multi-allocation commercial checkout (merchant/delivery split), payment links, dynamic EMVCo QR codes, settlement batching, line-level refunds, and disputes.
 - `com.elepay.payout`: Single and batch payouts (up to 500 items), available balance reservation, safe rail retries (`retry_of`), and settlement execution.
 - `com.elepay.fx`: Multi-currency corridors, locked quotes with TTL, conversion with explicit rounding, per-currency clearing accounts, and outbound/inbound remittances.
-- `com.elepay.rails`: Direct partner network adapters (MTN, Telecel, AirtelTigo, GHIPSS/NIP, Card acquirers) with controlled simulators, pre-submission intent, 7-state lifecycle, and unknown-outcome recovery. (Paystack and Hubtel strictly excluded).
+- `com.elepay.rails`: Direct partner network adapters (MTN, Telecel, AirtelTigo, GHIPSS/NIP, Card acquirers) with direct carrier session tracking (`DirectCarrierSessionService`), ISO 8583 interbank clearing & ProxyPay (`GhipssClearingService`), and EMVCo dynamic GhQR (`GhQrDynamicService`). (Paystack, Flutterwave, and Hubtel strictly excluded).
 - `com.elepay.identity`: Authentication, API keys, scopes, merchant delegations, actor resolution, USSD PIN hashing (BCrypt) with lockout.
-- `com.elepay.risk`: Velocity tracking, declarative rules engine, fraud scoring, SIM-swap checks, geo-velocity, mule graph detection, and ML risk models.
+- `com.elepay.risk`: Multi-window rolling velocity engine (`MultiWindowVelocityEngine` across 1m, 5m, 1h, 24h, 7d), geo-velocity impossible travel checkpoints (`GeoVelocityService`), pass-through mule account graph edge analysis (`MuleGraphService`), and automated dispute defense evidence compilation (`DisputeEvidenceService`).
 - `com.elepay.compliance`: Audited lookups, KYC limits, Ghana Card verification, fuzzy sanctions screening (Jaro-Winkler/Soundex), PEP checks, structuring detection, AML cases, and BoG/FIC reporting.
-- `com.elepay.reconciliation`: Exact 4-way statement matching, fuzzy statement matching, partner fee audits, suspense aging/clearing, settlement netting, and float management.
+- `com.elepay.reconciliation`: Automated 10-way daily clearing and 3-way matching engine (`TenWayClearingReconciliationEngine`), SWIFT MT940/MT942 statement parser (`Mt940StatementParser`), suspense ledger aging buckets (0-24h, 24-72h, >72h), and dual-control maker-checker resolution (`ReconSuspenseService`).
 - `com.elepay.credit`: Cash-flow underwriting, EWA eligibility, MCA pricing, repayment sweeps (disabled for live use until authorized).
 - `com.elepay.outbox`: Transactional outbox pattern and idempotent consumer inbox for reliable domain event dispatch.
 - `com.elepay.operations`: Operations console backend, ops items queue, maker-checker approvals, and operational health metrics.
@@ -24,7 +24,7 @@ ELEPAY is a Ghana-first financial platform designed as a modular monolith in Jav
 ## Code Layout
 - Java Backend: `src/main/java/com/elepay/`
 - Java Tests: `src/test/java/com/elepay/`
-- Database Migrations: `src/main/resources/db/migration/` (`V1__*.sql` through `V42__*.sql`)
+- Database Migrations: `src/main/resources/db/migration/` (`V1__*.sql` through `V43__*.sql`)
 - Web Frontend: `web/src/`
 - Scripts & Runbooks: `scripts/`, `docs/runbooks/`
 - Specification & Docs: `docs/product-specification.md`, `docs/openapi.json`, `docs/readiness-scorecard.md`

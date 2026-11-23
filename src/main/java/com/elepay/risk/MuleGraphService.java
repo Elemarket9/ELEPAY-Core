@@ -272,4 +272,93 @@ public class MuleGraphService {
                 ))
                 .list();
     }
+
+    public record MuleGraphEdgeRecord(
+            UUID id,
+            UUID sourceAccountId,
+            UUID destinationAccountId,
+            String sharedDeviceId,
+            String sharedIp,
+            long flowVolumePesewas,
+            int transferCount,
+            int turnaroundSeconds,
+            boolean isRapidPassThrough,
+            double riskWeight,
+            OffsetDateTime createdAt,
+            OffsetDateTime updatedAt
+    ) {}
+
+    @Transactional
+    public void recordGraphEdge(
+            UUID sourceAccountId,
+            UUID destinationAccountId,
+            String sharedDeviceId,
+            String sharedIp,
+            long flowVolumePesewas,
+            int turnaroundSeconds,
+            boolean isRapidPassThrough,
+            double riskWeight
+    ) {
+        OffsetDateTime now = OffsetDateTime.now();
+        UUID id = UUID.randomUUID();
+        db.sql("""
+            INSERT INTO mule_account_graph_edge (
+                id, source_account_id, destination_account_id, shared_device_id,
+                shared_ip, flow_volume_pesewas, transfer_count, turnaround_seconds,
+                is_rapid_pass_through, risk_weight, created_at, updated_at
+            ) VALUES (
+                :id, :src, :dst, :device,
+                :ip, :vol, 1, :turnaround,
+                :rapid, :risk, :now, :now
+            )
+            ON CONFLICT (source_account_id, destination_account_id) DO UPDATE SET
+                shared_device_id = COALESCE(EXCLUDED.shared_device_id, mule_account_graph_edge.shared_device_id),
+                shared_ip = COALESCE(EXCLUDED.shared_ip, mule_account_graph_edge.shared_ip),
+                flow_volume_pesewas = mule_account_graph_edge.flow_volume_pesewas + EXCLUDED.flow_volume_pesewas,
+                transfer_count = mule_account_graph_edge.transfer_count + 1,
+                turnaround_seconds = EXCLUDED.turnaround_seconds,
+                is_rapid_pass_through = EXCLUDED.is_rapid_pass_through,
+                risk_weight = GREATEST(mule_account_graph_edge.risk_weight, EXCLUDED.risk_weight),
+                updated_at = EXCLUDED.updated_at
+        """)
+                .param("id", id)
+                .param("src", sourceAccountId)
+                .param("dst", destinationAccountId)
+                .param("device", sharedDeviceId)
+                .param("ip", sharedIp)
+                .param("vol", flowVolumePesewas)
+                .param("turnaround", turnaroundSeconds)
+                .param("rapid", isRapidPassThrough)
+                .param("risk", riskWeight)
+                .param("now", now)
+                .update();
+    }
+
+    public List<MuleGraphEdgeRecord> findRapidPassThroughEdges(int limit) {
+        return db.sql("""
+            SELECT id, source_account_id, destination_account_id, shared_device_id,
+                   shared_ip, flow_volume_pesewas, transfer_count, turnaround_seconds,
+                   is_rapid_pass_through, risk_weight, created_at, updated_at
+            FROM mule_account_graph_edge
+            WHERE is_rapid_pass_through = true
+            ORDER BY flow_volume_pesewas DESC
+            LIMIT :limit
+        """)
+                .param("limit", Math.min(100, Math.max(1, limit)))
+                .query((rs, rowNum) -> new MuleGraphEdgeRecord(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("source_account_id", UUID.class),
+                        rs.getObject("destination_account_id", UUID.class),
+                        rs.getString("shared_device_id"),
+                        rs.getString("shared_ip"),
+                        rs.getLong("flow_volume_pesewas"),
+                        rs.getInt("transfer_count"),
+                        rs.getInt("turnaround_seconds"),
+                        rs.getBoolean("is_rapid_pass_through"),
+                        rs.getDouble("risk_weight"),
+                        rs.getObject("created_at", OffsetDateTime.class),
+                        rs.getObject("updated_at", OffsetDateTime.class)
+                ))
+                .list();
+    }
 }
