@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, newKey } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApiError, newKey } from "./api";
+import { getToken } from "./auth";
+import { kitchenClient, learnServerTime, loadDevice, pairDevice, saveDevice, type DeviceCredential, type KitchenCall } from "./kds/device";
 import {
   applySync, backoff, bump, cancel, elapsed, load, save, settle, stationStatus, storageKey, urgency, visible,
   nextStatus, type BumpResult, type KdsState, type QueuedAction, type Status, type SyncResult, type TicketView,
@@ -22,8 +24,20 @@ function readSetup(): Setup | null {
 
 /** Full-screen kitchen display for tablets and POS screens. Lives at /kitchen. */
 export function Kitchen() {
-  const [setup, setSetup] = useState<Setup | null>(readSetup);
+  const [device, setDevice] = useState<DeviceCredential | null>(loadDevice);
+  const [staff, setStaff] = useState<boolean | null>(null);
+  const [setup, setSetup] = useState<Setup | null>(() => {
+    const saved = readSetup();
+    const d = loadDevice();
+    if (d && saved && saved.merchantId !== d.merchantId) return null;
+    if (d && !saved && d.stationId !== undefined && d.stationName) {
+      return { merchantId: d.merchantId, merchantName: d.merchantName, stationId: d.stationId, stationName: d.stationName, hasPrinter: false };
+    }
+    return saved;
+  });
   const [started, setStarted] = useState(false);
+  const client = useMemo(() => kitchenClient(device), [device]);
+  useEffect(() => { void getToken().then((t) => setStaff(!!t)); }, []);
 
   useEffect(() => {
     // Lets the tablet reopen the screen without internet after a power cut.
@@ -47,7 +61,23 @@ export function Kitchen() {
     return () => document.body.classList.remove("kitchen-body");
   }, []);
 
-  if (!setup) return <SetupScreen onDone={(s) => { try { store()?.setItem(SETUP_KEY, JSON.stringify(s)); } catch { /* ignore */ } setSetup(s); }} />;
+  const unpair = () => {
+    saveDevice(null); setDevice(null);
+    try { store()?.removeItem(SETUP_KEY); } catch { /* ignore */ }
+    setSetup(null); setStarted(false);
+  };
+  if (!device && staff === null) return null;
+  if (!device && !staff) return <PairScreen onPaired={(d) => {
+    saveDevice(d); setDevice(d);
+    if (d.stationId && d.stationName) {
+      const s: Setup = { merchantId: d.merchantId, merchantName: d.merchantName, stationId: d.stationId, stationName: d.stationName, hasPrinter: false };
+      try { store()?.setItem(SETUP_KEY, JSON.stringify(s)); } catch { /* ignore */ }
+      setSetup(s);
+    } else {
+      setSetup(null);
+    }
+  }} />;
+  if (!setup) return <SetupScreen client={client} device={device} onDone={(s) => { try { store()?.setItem(SETUP_KEY, JSON.stringify(s)); } catch { /* ignore */ } setSetup(s); }} />;
   if (!started) {
     return (
       <main className="kitchen-start">
@@ -55,28 +85,63 @@ export function Kitchen() {
         <p className="kitchen-station-name">{setup.stationName}</p>
         <button className="kitchen-big" onClick={() => { unlockAudio(); void keepAwake(); setStarted(true); }}>Start kitchen screen</button>
         <button className="link" onClick={() => { try { store()?.removeItem(SETUP_KEY); } catch { /* ignore */ } setSetup(null); }}>
-          Change restaurant or station
+          Change station
         </button>
+        {device && <p className="muted small">Paired device: {device.merchantName}. <button className="link" onClick={unpair}>Unpair</button></p>}
       </main>
     );
   }
-  return <KitchenScreen setup={setup} />;
+  return <KitchenScreen setup={setup} client={client} paired={!!device} onUnpair={unpair} />;
 }
 
-function SetupScreen({ onDone }: { onDone: (s: Setup) => void }) {
+/** First run on a kitchen tablet: pair it with the codes a manager shows in the dashboard. */
+function PairScreen({ onPaired }: { onPaired: (d: DeviceCredential) => void }) {
+  const [merchantCode, setMerchantCode] = useState("");
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("Kitchen tablet");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <main className="kitchen-start">
+      <h1>Pair this kitchen screen</h1>
+      <p>In the ELEPAY merchant dashboard, open <b>Restaurant &amp; KDS → Kitchen Display System</b> and tap <b>Pair a kitchen device</b>.
+        Enter the two codes shown there. You only do this once.</p>
+      {error && <p className="error">{error}</p>}
+      <form onSubmit={async (e) => {
+        e.preventDefault(); setBusy(true); setError(null);
+        try { onPaired(await pairDevice(merchantCode.trim(), code.replace(/\s/g, ""), name)); }
+        catch (err) { setError(err instanceof ApiError && err.status === 400 ? "Those codes did not work. Check them, or ask the manager for a new pairing code." : "Could not reach ELEPAY. Check the internet and try again."); }
+        finally { setBusy(false); }
+      }}>
+        <label>Merchant code<input inputMode="numeric" pattern="\d{6}" maxLength={6} value={merchantCode} onChange={(e) => setMerchantCode(e.target.value)} required /></label>
+        <label>Pairing code<input inputMode="numeric" pattern="[\d ]{6,7}" maxLength={7} value={code} onChange={(e) => setCode(e.target.value)} required /></label>
+        <label>Name for this device<input value={name} maxLength={64} onChange={(e) => setName(e.target.value)} /></label>
+        <button className="kitchen-big" type="submit" disabled={busy}>{busy ? "Pairing…" : "Pair"}</button>
+      </form>
+      <p className="muted small">Staff with an ELEPAY login can <a href="/merchant">sign in</a> instead, then come back to /kitchen.</p>
+    </main>
+  );
+}
+
+function SetupScreen({ client, device, onDone }: { client: KitchenCall; device: DeviceCredential | null; onDone: (s: Setup) => void }) {
   const [merchants, setMerchants] = useState<MerchantView[]>([]);
   const [merchantId, setMerchantId] = useState("");
   const [stations, setStations] = useState<Station[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api<MerchantView[]>("/v1/merchants").then((m) => { setMerchants(m); if (m[0]) setMerchantId(m[0].id); })
+    if (device) {
+      setMerchants([{ id: device.merchantId, tradingName: device.merchantName, role: "device" }]);
+      setMerchantId(device.merchantId);
+      return;
+    }
+    client<MerchantView[]>("/v1/merchants").then((m) => { setMerchants(m); if (m[0]) setMerchantId(m[0].id); })
       .catch((e) => setError(e instanceof ApiError && e.status === 401 ? "Sign in first, then come back to /kitchen." : String(e.message ?? e)));
-  }, []);
+  }, [client, device]);
   useEffect(() => {
     if (!merchantId) return;
-    api<Station[]>(`${BASE}/stations/merchant/${merchantId}`).then(setStations).catch((e) => setError(String(e.message ?? e)));
-  }, [merchantId]);
+    client<Station[]>(`${BASE}/stations/merchant/${merchantId}`).then(setStations).catch((e) => setError(String(e.message ?? e)));
+  }, [merchantId, client]);
 
   const merchant = merchants.find((m) => m.id === merchantId);
   return (
@@ -106,7 +171,7 @@ function SetupScreen({ onDone }: { onDone: (s: Setup) => void }) {
   );
 }
 
-function KitchenScreen({ setup }: { setup: Setup }) {
+function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; client: KitchenCall; paired: boolean; onUnpair: () => void }) {
   const key = storageKey(setup.merchantId, setup.stationId);
   const [state, setState] = useState<KdsState>(() => load(store(), key));
   const stateRef = useRef(state);
@@ -135,7 +200,8 @@ function KitchenScreen({ setup }: { setup: Setup }) {
         let more = true;
         while (more && !stopped) {
           const station = setup.stationId ? `&stationId=${setup.stationId}` : "";
-          const result = await api<SyncResult>(`${BASE}/sync?merchantId=${setup.merchantId}&since=${stateRef.current.cursor}${station}`);
+          const result = await client<SyncResult>(`${BASE}/sync?merchantId=${setup.merchantId}&since=${stateRef.current.cursor}${station}`);
+          learnServerTime(result.serverTime);
           let arrived: string[] = [];
           update((s) => { const r = applySync(s, result); arrived = r.arrived; return r.state; });
           if (arrived.length) { beep(); setFresh((f) => new Set([...f, ...arrived])); window.setTimeout(() => setFresh(new Set()), 8000); }
@@ -153,7 +219,7 @@ function KitchenScreen({ setup }: { setup: Setup }) {
       while (stateRef.current.queue.length && !stopped) {
         const action = stateRef.current.queue[0];
         try {
-          const result = await send(action);
+          const result = await send(client, action);
           update((s) => settle(s, action.actionId, result));
           if (!result.applied && result.reason === "STATUS_CHANGED") setNotice(`Order ${num(result.view)} was already updated on another screen.`);
         } catch (e) {
@@ -170,7 +236,7 @@ function KitchenScreen({ setup }: { setup: Setup }) {
     void run();
     window.addEventListener("online", kick);
     return () => { stopped = true; window.clearTimeout(timer); window.removeEventListener("online", kick); };
-  }, [setup.merchantId, setup.stationId, update]);
+  }, [setup.merchantId, setup.stationId, update, client]);
 
   useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(t); }, []);
   useEffect(() => {
@@ -187,7 +253,7 @@ function KitchenScreen({ setup }: { setup: Setup }) {
   const reprint = async (ticketId: string) => {
     setMenuFor(null);
     try {
-      await api(`${BASE}/tickets/${ticketId}/reprint?stationId=${setup.stationId}`, { method: "POST" });
+      await client(`${BASE}/tickets/${ticketId}/reprint?stationId=${setup.stationId}`, { method: "POST" });
       setNotice("Sent to the printer.");
     } catch (e) {
       setNotice(`Could not reprint: ${e instanceof Error ? e.message : e}`);
@@ -207,7 +273,9 @@ function KitchenScreen({ setup }: { setup: Setup }) {
         </span>
         <span className="kitchen-clock">{new Date(now).toLocaleTimeString("en-GH", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Accra" })}</span>
       </div>
-      {signedOut && <div className="kitchen-alert">This screen has been signed out. Sign in again to keep receiving orders.</div>}
+      {signedOut && (paired
+        ? <div className="kitchen-alert">This device was removed in the dashboard. <button className="link" onClick={onUnpair}>Pair it again</button></div>
+        : <div className="kitchen-alert">This screen has been signed out. Sign in again to keep receiving orders.</div>)}
       {state.printerFailures.map((f) => (
         <div key={f.id} className="kitchen-alert">
           Printer problem at {f.stationName}: {f.lastError ?? "not printing"}. Check paper and power, then reprint.
@@ -275,10 +343,10 @@ function ago(secs: number) {
   return `${Math.floor(secs / 3600)} h ago`;
 }
 
-function send(a: QueuedAction): Promise<BumpResult> {
-  if (a.kind === "cancel") return api<BumpResult>(`${BASE}/tickets/${a.ticketId}/cancel`, { body: { actionId: a.actionId, reason: a.reason } });
+function send(client: KitchenCall, a: QueuedAction): Promise<BumpResult> {
+  if (a.kind === "cancel") return client<BumpResult>(`${BASE}/tickets/${a.ticketId}/cancel`, { body: { actionId: a.actionId, reason: a.reason } });
   const path = a.stationId ? `${BASE}/tickets/${a.ticketId}/stations/${a.stationId}/advance` : `${BASE}/tickets/${a.ticketId}/advance`;
-  return api<BumpResult>(path, { body: { from: a.from, actionId: a.actionId } });
+  return client<BumpResult>(path, { body: { from: a.from, actionId: a.actionId } });
 }
 
 // ---------------------------------------------------------------- sound and screen

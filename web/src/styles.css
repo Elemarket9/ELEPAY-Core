@@ -105,3 +105,9 @@ body.kitchen-body { margin: 0; background: #111614; color: #f2f5f3; }
 .kitchen-menu { display: flex; flex-wrap: wrap; gap: .4rem; }
 .kitchen-menu button { flex: 1; margin: 0; background: #1c2421; color: #f2f5f3; border: 1px solid #3c4a44; }
 .kitchen-menu button.danger { background: #a12a1f; border-color: #a12a1f; }
+.big-code { font-size: 2rem; font-weight: 800; letter-spacing: .15em; font-variant-numeric: tabular-nums; margin: 0 0 .4rem; }
+.kitchen-pair-codes { border: 2px dashed var(--green); border-radius: 8px; padding: .6rem 1rem; margin: .6rem 0; }
+.kitchen-start input { background: #1c2421; color: #f2f5f3; border-color: #3c4a44; font-size: 1.4rem; }
+html:has(body.kitchen-body) { background: #111614; }
+body.kitchen-body { min-height: 100vh; }
+.kitchen-start a, .kitchen-start .link { color: var(--gold); }

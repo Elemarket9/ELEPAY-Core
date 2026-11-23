@@ -755,11 +755,30 @@ interface KitchenStation {
   printerAddress: string | null; paperWidth: number; lastSeenAt: string | null;
 }
 
+interface KitchenDevice { id: string; label: string; prefix: string; createdAt: string; revokedAt: string | null }
+
 /** Kitchen stations and printers. The live kitchen screen itself runs full-screen at /kitchen on a tablet. */
 function KitchenSetup({ merchantId }: { merchantId: string }) {
   const [stations, setStations] = useState<KitchenStation[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", output: "SCREEN" as KitchenStation["output"], printerAddress: "", paperWidth: 42, isDefault: false });
+  const [devices, setDevices] = useState<KitchenDevice[]>([]);
+  const [pairing, setPairing] = useState<{ code: string; merchantCode: string; expiresAt: string } | null>(null);
+  const [pairStation, setPairStation] = useState("");
+  const loadDevices = () => api<KitchenDevice[]>(`/v1/restaurant/kds/devices/merchant/${merchantId}`).then(setDevices).catch(() => setDevices([]));
+  useEffect(() => { void loadDevices(); }, [merchantId]);
+
+  async function newPairingCode() {
+    setError(null);
+    try {
+      setPairing(await api("/v1/restaurant/kds/devices/pairing-codes", { body: { merchantId, stationId: pairStation || null } }));
+    } catch (err) { setError(String((err as Error).message ?? err)); }
+  }
+
+  async function revokeDevice(id: string) {
+    try { await api(`/v1/restaurant/kds/devices/${id}/revoke?merchantId=${merchantId}`, { method: "POST" }); await loadDevices(); }
+    catch (err) { setError(String((err as Error).message ?? err)); }
+  }
   const load = () => api<KitchenStation[]>(`/v1/restaurant/kds/stations/merchant/${merchantId}`).then(setStations)
     .catch((e) => setError(String(e.message ?? e)));
   useEffect(() => { void load(); }, [merchantId]);
@@ -795,6 +814,41 @@ function KitchenSetup({ merchantId }: { merchantId: string }) {
           It keeps working when the internet drops and sends updates when it returns. Add it to the home screen to run full-screen.</p>
       </div>
       {error && <p className="error">{error}</p>}
+      <div className="panel">
+        <h3>Kitchen devices</h3>
+        <p className="muted small">Pair a tablet or the kitchen printer phone once; it keeps working after restarts without anyone signing in.
+          A paired device can only use the kitchen display.</p>
+        <div className="flex-row">
+          <select value={pairStation} onChange={(e) => setPairStation(e.target.value)} style={{ maxWidth: "16rem" }}>
+            <option value="">Station: choose on the device</option>
+            {stations.map((s) => <option key={s.id} value={s.id}>Station: {s.name}</option>)}
+          </select>
+          <button onClick={() => void newPairingCode()}>Pair a kitchen device</button>
+        </div>
+        {pairing && (
+          <div className="kitchen-pair-codes">
+            <p>On the device, open <strong>{window.location.origin}/kitchen</strong> (or the ELEPAY Kitchen app) and enter:</p>
+            <dl className="confirm">
+              <dt>Merchant code</dt><dd className="big-code">{pairing.merchantCode}</dd>
+              <dt>Pairing code</dt><dd className="big-code">{pairing.code.slice(0, 3)} {pairing.code.slice(3)}</dd>
+            </dl>
+            <p className="muted small">Works once, until {new Date(pairing.expiresAt).toLocaleTimeString("en-GH", { hour: "2-digit", minute: "2-digit" })}.</p>
+          </div>
+        )}
+        <table className="grid">
+          <tbody>
+            {devices.map((d) => (
+              <tr key={d.id}>
+                <td>{d.label}</td>
+                <td className="small muted">paired {new Date(d.createdAt).toLocaleDateString("en-GH")}</td>
+                <td>{d.revokedAt ? <span className="tag failed">removed</span>
+                  : <button className="secondary small" onClick={() => void revokeDevice(d.id)}>Remove</button>}</td>
+              </tr>
+            ))}
+            {devices.length === 0 && <tr><td className="muted small">No paired devices yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
       <h3>Stations</h3>
       <table className="grid">
         <thead><tr><th>Station</th><th>Output</th><th>Printer</th><th>Status</th><th /></tr></thead>

@@ -47,7 +47,7 @@ function App() {
   if ((m = path.match(/^\/pay\/([\w-]+)$/))) return <Checkout reference={m[1]} />;
 
   // Kitchen screens run full-screen on tablets, without the site header.
-  if (path.startsWith("/kitchen")) return <SignedIn><Kitchen /></SignedIn>;
+  if (path.startsWith("/kitchen")) return <Suspense fallback={null}><Kitchen /></Suspense>;
 
   const header = (
     <header>

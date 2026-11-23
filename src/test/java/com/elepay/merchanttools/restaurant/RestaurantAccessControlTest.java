@@ -27,7 +27,7 @@ class RestaurantAccessControlTest {
     private final RestaurantController controller = new RestaurantController(
             tables, mock(ModifierService.class), kds, mock(RecipeCostingService.class),
             mock(RestaurantSplitBillService.class), mock(KitchenStationService.class),
-            mock(KdsPrintService.class), access);
+            mock(KdsPrintService.class), mock(KitchenDeviceService.class), access);
 
     private void owns(String sql, UUID id, UUID merchant) {
         when(db.sql(sql).param("id", id).query(UUID.class).optional()).thenReturn(Optional.of(merchant));

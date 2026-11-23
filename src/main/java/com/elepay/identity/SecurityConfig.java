@@ -167,6 +167,14 @@ class SecurityConfig {
                     }
                 }
 
+                // Kitchen device keys (kd_live_*) reach only the kitchen display endpoints, nothing else.
+                if ("kitchen".equalsIgnoreCase(auth.keyType()) && !KitchenDevicePaths.allowed(request.getMethod(), pathForGates)) {
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"kitchen_key_restricted\",\"error\":\"kitchen_key_restricted\",\"message\":\"Kitchen device keys can only use the kitchen display\"}");
+                    return;
+                }
+
                 // Gate 1: sk_live_* and legacy ek_* keys cannot initiate payouts or withdrawals.
                 if ("secret".equalsIgnoreCase(auth.keyType()) || "legacy".equalsIgnoreCase(auth.keyType())) {
                     String method = request.getMethod();

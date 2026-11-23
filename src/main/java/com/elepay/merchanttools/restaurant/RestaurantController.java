@@ -17,6 +17,7 @@ public class RestaurantController {
     private final KdsService kdsService;
     private final KitchenStationService stationService;
     private final KdsPrintService printService;
+    private final KitchenDeviceService deviceService;
     private final RecipeCostingService recipeService;
     private final RestaurantSplitBillService splitBillService;
     private final MerchantToolAccess access;
@@ -29,8 +30,10 @@ public class RestaurantController {
             RestaurantSplitBillService splitBillService,
             KitchenStationService stationService,
             KdsPrintService printService,
+            KitchenDeviceService deviceService,
             MerchantToolAccess access
     ) {
+        this.deviceService = deviceService;
         this.stationService = stationService;
         this.printService = printService;
         this.access = access;
@@ -236,6 +239,30 @@ public class RestaurantController {
     public KdsPrintService.PrintJob reportPrintResult(@PathVariable UUID jobId, @RequestBody PrintResultRequest req) {
         access.operate(PRINT_JOB, jobId);
         return printService.report(jobId, req.deviceId(), Boolean.TRUE.equals(req.printed()), req.error());
+    }
+
+    // Kitchen devices: pair once with a code, list, revoke
+
+    public record PairingCodeRequest(UUID merchantId, UUID stationId) {}
+
+    @PostMapping("/kds/devices/pairing-codes")
+    public KitchenDeviceService.PairingCode createPairingCode(@RequestBody PairingCodeRequest req) {
+        access.manage(req.merchantId());
+        if (req.stationId() != null) access.belongs(req.merchantId(), STATION, req.stationId());
+        return deviceService.createCode(req.merchantId(), req.stationId(), com.elepay.identity.Actor.current().subject());
+    }
+
+    @GetMapping("/kds/devices/merchant/{merchantId}")
+    public List<com.elepay.identity.ApiKeys.KitchenDevice> listDevices(@PathVariable UUID merchantId) {
+        access.manage(merchantId);
+        return deviceService.list(merchantId);
+    }
+
+    @PostMapping("/kds/devices/{deviceId}/revoke")
+    public ResponseEntity<Void> revokeDevice(@PathVariable UUID deviceId, @RequestParam UUID merchantId) {
+        access.manage(merchantId);
+        deviceService.revoke(merchantId, deviceId);
+        return ResponseEntity.ok().build();
     }
 
     @PostMapping("/kds/items/{itemId}/bump")
