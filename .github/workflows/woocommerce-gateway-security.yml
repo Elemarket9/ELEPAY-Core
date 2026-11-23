@@ -1,0 +1,28 @@
+name: WooCommerce gateway security and contract
+on:
+  pull_request:
+    paths:
+      - 'plugins/woocommerce-elepay/**'
+      - '.github/workflows/woocommerce-gateway-security.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/woocommerce-elepay/**'
+      - '.github/workflows/woocommerce-gateway-security.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  php-contract:
+    name: PHP lint and fail-closed payment contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Verify PHP runtime
+        run: php --version
+      - name: Lint all WooCommerce plugin PHP files
+        run: find plugins/woocommerce-elepay -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Run isolated contract and security tests (no external rail calls)
+        run: php plugins/woocommerce-elepay/tests/security-contract.php
