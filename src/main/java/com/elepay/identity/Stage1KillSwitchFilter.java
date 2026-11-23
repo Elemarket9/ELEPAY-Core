@@ -29,7 +29,14 @@ public class Stage1KillSwitchFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        String path = request.getRequestURI();
+        String path = RequestPaths.normalized(request);
+        if (path == null) {
+            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            response.setContentType("application/json");
+            response.setCharacterEncoding("UTF-8");
+            response.getWriter().write("{\"code\":\"invalid_path\",\"message\":\"The request path is not allowed\"}");
+            return;
+        }
         String disabledModule = killSwitchService.resolveDisabledModuleForPath(path);
         if (disabledModule != null) {
             response.setStatus(HttpServletResponse.SC_NOT_FOUND);

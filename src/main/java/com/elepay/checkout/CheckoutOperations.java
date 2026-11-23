@@ -1,12 +1,14 @@
 package com.elepay.checkout;
 
 import com.elepay.rails.RailTransactions;
+import com.elepay.security.DualControl;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.elepay.identity.Actor;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,10 +18,12 @@ import org.springframework.web.bind.annotation.*;
 class CheckoutOperations {
     private final CheckoutService checkouts;
     private final RailTransactions rails;
+    private final DualControl dualControl;
 
-    CheckoutOperations(CheckoutService checkouts, RailTransactions rails) {
+    CheckoutOperations(CheckoutService checkouts, RailTransactions rails, DualControl dualControl) {
         this.checkouts = checkouts;
         this.rails = rails;
+        this.dualControl = dualControl;
     }
 
     record OpenDispute(@NotBlank String checkout, @JsonAlias("allocationLine") @Min(0) int line, @Positive long amount,
@@ -41,6 +45,9 @@ class CheckoutOperations {
     public CheckoutService.Dispute resolve(@PathVariable UUID id, @Valid @RequestBody Resolve request) {
         Actor actor = Actor.current();
         actor.requireOps();
+        dualControl.hold("DISPUTE_RESOLUTION", "dispute", id.toString(), null,
+                Map.of("disputeId", id.toString(), "outcome", request.outcome(), "note", String.valueOf(request.note())),
+                request.note(), actor);
         var dispute = checkouts.resolveDispute(actor.subject(), id, request.outcome(), request.note());
         // A customer-won dispute paid by MoMo or card goes back through the original rail.
         checkouts.disputeRefundRailTx(id).ifPresent(rails::submit);

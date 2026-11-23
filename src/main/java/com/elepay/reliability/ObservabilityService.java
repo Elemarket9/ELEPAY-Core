@@ -25,6 +25,7 @@ import java.util.function.Supplier;
 public class ObservabilityService {
     private final MeterRegistry registry;
     private final JdbcClient db;
+    private final com.elepay.ledger.Ledger ledger;
     private final Tracer tracer;
 
     private final AtomicLong ledgerDrift = new AtomicLong(0);
@@ -35,8 +36,16 @@ public class ObservabilityService {
     private final Map<String, Counter> counters = new ConcurrentHashMap<>();
 
     public ObservabilityService(MeterRegistry registry, JdbcClient db) {
+        this(registry, db, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ObservabilityService(MeterRegistry registry, JdbcClient db,
+                                @org.springframework.beans.factory.annotation.Autowired(required = false)
+                                com.elepay.ledger.Ledger ledger) {
         this.registry = registry;
         this.db = db;
+        this.ledger = ledger;
 
         // OpenTelemetry Tracer
         this.tracer = OpenTelemetry.noop().getTracer("com.elepay.core", "0.1.0");
@@ -76,22 +85,17 @@ public class ObservabilityService {
      * Checks ledger zero-sum balance triggers and consistency proof.
      */
     public boolean checkLedgerHealth() {
-        if (db == null) return true;
-        try {
-            Long driftSum = db.sql("""
-                    SELECT COALESCE(SUM(ABS(sum_debit - sum_credit)), 0)
-                    FROM (
-                        SELECT journal_entry_id,
-                               COALESCE(SUM(amount) FILTER (WHERE direction = 'DEBIT'), 0) AS sum_debit,
-                               COALESCE(SUM(amount) FILTER (WHERE direction = 'CREDIT'), 0) AS sum_credit
-                        FROM journal_posting
-                        GROUP BY journal_entry_id
-                        HAVING SUM(amount) FILTER (WHERE direction = 'DEBIT') <> SUM(amount) FILTER (WHERE direction = 'CREDIT')
-                    ) unbalanced
-                    """).query(Long.class).optional().orElse(0L);
+        if (ledger == null) return true;
+        return checkThroughLedger();
+    }
 
+    private boolean checkThroughLedger() {
+        if (ledger == null) return true;
+        try {
+            var integrity = ledger.integrity();
+            long driftSum = integrity.unbalancedTransactions();
             ledgerDrift.set(driftSum);
-            if (driftSum == 0) {
+            if (integrity.ok()) {
                 ledgerHealthStatus.set(1);
                 unbalancedPostings.set(0);
                 return true;
@@ -101,8 +105,8 @@ public class ObservabilityService {
                 return false;
             }
         } catch (Exception e) {
-            // Table may not be initialized in isolated tests
-            return true;
+            ledgerHealthStatus.set(0);
+            return false;
         }
     }
 

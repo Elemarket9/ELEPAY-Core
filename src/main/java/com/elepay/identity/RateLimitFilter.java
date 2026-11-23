@@ -21,7 +21,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 class RateLimitFilter extends OncePerRequestFilter {
     record Rule(String method, String prefix, String name, TokenBucketRateLimiter limiter) {
         boolean matches(HttpServletRequest r) {
-            return (method == null || method.equals(r.getMethod())) && r.getRequestURI().startsWith(prefix);
+            String path = RequestPaths.normalized(r);
+            return path != null && (method == null || method.equals(r.getMethod())) && path.startsWith(prefix);
         }
     }
 

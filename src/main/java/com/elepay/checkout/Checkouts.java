@@ -54,7 +54,8 @@ class Checkouts {
     record CreateCheckout(@Positive Long amount, @Size(max = MAX) List<@Valid AllocationInput> allocations,
                           @Size(max = 500) String description, UUID branchId,
                           @Min(1) @Max(10080) Integer expiresInMinutes,
-                          @Size(max = 100) @Pattern(regexp = "[A-Za-z0-9._:-]+") String orderReference) {
+                          @Size(max = 100) @Pattern(regexp = "[A-Za-z0-9._:-]+") String orderReference,
+                          @Size(max = 40) String payerPhone) {
         static final int MAX = CheckoutService.MAX_ALLOCATIONS;
     }
 
@@ -114,6 +115,10 @@ class Checkouts {
             var c = checkouts.create(merchantId, branch, null, allocations, request.description(),
                     request.expiresInMinutes() == null ? 60 : request.expiresInMinutes(), a.actor().subject(),
                     request.orderReference());
+            if (request.payerPhone() != null && !request.payerPhone().isBlank()) {
+                db.sql("UPDATE checkout SET payer_phone = :p WHERE reference = :r")
+                        .param("p", References.msisdn(request.payerPhone())).param("r", c.reference()).update();
+            }
             return new CheckoutCreated(c.reference(), request.orderReference(), c.status(), c.subtotal(),
                     publicBaseUrl + "/pay/" + c.reference(), c.expiresAt());
         });
@@ -259,6 +264,14 @@ class Checkouts {
     }
 
     // ---- refunds ----------------------------------------------------------------------------
+
+    @PostMapping("/checkouts/{reference}/reset-payment")
+    @Transactional
+    public Map<String, String> resetPayment(@PathVariable UUID merchantId, @PathVariable String reference) {
+        access.require(merchantId, MANAGE);
+        checkouts.resetProcessing(merchantId, reference);
+        return Map.of("status", "open");
+    }
 
     @PostMapping("/checkouts/{reference}/allocations/{line}/refunds")
     public CheckoutService.Refund refund(@PathVariable UUID merchantId, @PathVariable String reference,

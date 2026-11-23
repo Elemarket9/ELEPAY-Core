@@ -2,6 +2,7 @@ package com.elepay.rails;
 
 import com.elepay.common.ApiException;
 import com.elepay.identity.Actor;
+import com.elepay.security.DualControl;
 import java.util.*;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,18 +20,21 @@ public class RailEndpoints {
     private final SmartPaymentRouter router;
     private final NetworkHealthDetector health;
     private final CustodianBankBackstopService custodianBackstop;
+    private final DualControl dualControl;
 
     public RailEndpoints(
             CardBinLookupService binService,
             CardTokenVault vault,
             SmartPaymentRouter router,
             NetworkHealthDetector health,
+            DualControl dualControl,
             @org.springframework.beans.factory.annotation.Autowired(required = false) CustodianBankBackstopService custodianBackstop
     ) {
         this.binService = binService;
         this.vault = vault;
         this.router = router;
         this.health = health;
+        this.dualControl = dualControl;
         this.custodianBackstop = custodianBackstop;
     }
 
@@ -142,6 +146,13 @@ public class RailEndpoints {
     ) {
         Actor actor = Actor.current();
         actor.requireOps();
+        dualControl.hold("CUSTODIAN_CONFIG", "custodian", "primary", null, Map.of(
+                "dailyOutflowCapPesewas", String.valueOf(request.dailyOutflowCapPesewas()),
+                "perPayoutCapPesewas", String.valueOf(request.perPayoutCapPesewas()),
+                "minReserveFloorPesewas", String.valueOf(request.minReserveFloorPesewas()),
+                "lastReconciledBankBalancePesewas", String.valueOf(request.lastReconciledBankBalancePesewas()),
+                "outflowFrozen", String.valueOf(request.outflowFrozen())
+        ), "custodian configuration", actor);
         return custodianBackstop.updateConfig(
                 request.dailyOutflowCapPesewas(),
                 request.perPayoutCapPesewas(),

@@ -136,6 +136,11 @@ public class StepUpAuthService {
 
     @Transactional
     public VerificationResult verifyChallenge(String challengeToken, String secretCode, ActionPayload submittedPayload) {
+        return verifyChallenge(challengeToken, secretCode, submittedPayload, null);
+    }
+
+    public VerificationResult verifyChallenge(String challengeToken, String secretCode, ActionPayload submittedPayload,
+                                              String callerSubject) {
         OffsetDateTime now = OffsetDateTime.now();
 
         var recordOpt = db.sql("""
@@ -162,6 +167,10 @@ public class StepUpAuthService {
         }
 
         var rec = recordOpt.get();
+
+        if (callerSubject != null && !callerSubject.equals(rec.actorId)) {
+            return new VerificationResult(false, "Challenge is not bound to this caller");
+        }
 
         if (!"PENDING".equals(rec.status)) {
             return new VerificationResult(false, "Challenge token is already " + rec.status + "; replay rejected");

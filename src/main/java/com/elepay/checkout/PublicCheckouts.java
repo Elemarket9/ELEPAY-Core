@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -37,6 +39,7 @@ class PublicCheckouts {
     private final Idempotency idempotency;
     private final JdbcClient db;
     private final TransactionTemplate tx;
+    private final ConcurrentHashMap<String, AtomicInteger> payAttempts = new ConcurrentHashMap<>();
     private final String publicBaseUrl;
     private final com.elepay.identity.KillSwitchService killSwitchService;
 
@@ -100,7 +103,8 @@ class PublicCheckouts {
     @PostMapping("/v1/public/checkouts/{reference}/pay")
     public CheckoutService.PaymentResult payWithRail(@PathVariable String reference,
                                                      @RequestHeader("Idempotency-Key") String key,
-                                                     @Valid @RequestBody RailPay request) {
+                                                     @Valid @RequestBody RailPay request,
+                                                     jakarta.servlet.http.HttpServletRequest httpRequest) {
         String msisdn = null;
         if (request.method().equals("momo")) {
             msisdn = References.msisdn(request.phone());
@@ -109,7 +113,13 @@ class PublicCheckouts {
             }
         }
         String phone = msisdn;
-        var started = tx.execute(s -> idempotency.execute("checkout-pay:" + reference, key, request,
+        int attempts = payAttempts.computeIfAbsent(reference, r -> new AtomicInteger()).incrementAndGet();
+        if (attempts > 8) {
+            throw new com.elepay.common.ApiException(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
+                    "checkout_rate_limited", "Too many payment attempts for this checkout");
+        }
+        String caller = httpRequest.getRemoteAddr() == null ? "unknown" : httpRequest.getRemoteAddr();
+        var started = tx.execute(s -> idempotency.execute("checkout-pay:" + reference + ":" + caller, key, request,
                 CheckoutService.PaymentResult.class, () -> checkouts.startRailPayment(reference, request.method(), phone,
                         request.network(), request.email(), publicBaseUrl + "/pay/" + reference)));
         if (started != null && started.attemptId() != null) {

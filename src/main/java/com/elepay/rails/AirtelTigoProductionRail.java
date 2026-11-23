@@ -401,14 +401,10 @@ public class AirtelTigoProductionRail implements PaymentRail {
             throw new InvalidCallbackException("AirtelTigo webhook secret is not configured");
         }
 
-        String receivedSig = headers.getOrDefault("x-airteltigo-signature", headers.get("X-AirtelTigo-Signature"));
-        if (receivedSig == null || receivedSig.isBlank()) {
-            throw new InvalidCallbackException("Missing x-airteltigo-signature header");
-        }
-
-        String expectedSig = computeHmac(secret, body);
-        if (!MessageDigest.isEqual(expectedSig.getBytes(StandardCharsets.UTF_8), receivedSig.getBytes(StandardCharsets.UTF_8))) {
-            throw new InvalidCallbackException("Invalid AirtelTigo callback signature");
+        try {
+            com.elepay.common.CallbackAuthenticity.verify(secret, headers, body, "x-airteltigo-signature");
+        } catch (IllegalArgumentException e) {
+            throw new InvalidCallbackException(e.getMessage());
         }
 
         try {
