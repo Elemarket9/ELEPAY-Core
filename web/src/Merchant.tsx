@@ -24,10 +24,6 @@ interface InventoryItem {
 
 // Restaurant & KDS
 interface DiningTable { id: number; name: string; seats: number; status: "AVAILABLE" | "OCCUPIED" | "RESERVED" | "BILLING"; server?: string; orderTotal?: number }
-interface KdsTicket {
-  id: string; ticketNumber: number; table: string; items: { name: string; qty: number; notes?: string }[];
-  status: "PENDING" | "COOKING" | "READY" | "SERVED"; elapsedMinutes: number; createdAt: string;
-}
 
 // Invoices & Quotes
 interface Invoice {
@@ -690,35 +686,9 @@ const SAMPLE_TABLES: DiningTable[] = [
   { id: 6, name: "Table 6", seats: 8, status: "AVAILABLE" },
 ];
 
-const SAMPLE_KDS: KdsTicket[] = [
-  {
-    id: "t1", ticketNumber: 104, table: "Table 1", elapsedMinutes: 8, status: "COOKING", createdAt: "12:14 PM",
-    items: [{ name: "Jollof Rice with Grilled Chicken", qty: 2 }, { name: "Sobolo Drink", qty: 2 }]
-  },
-  {
-    id: "t2", ticketNumber: 105, table: "Table 4", elapsedMinutes: 22, status: "PENDING", createdAt: "12:00 PM",
-    items: [{ name: "Grilled Tilapia with Banku", qty: 2, notes: "Extra spicy shito" }, { name: "Crispy Fried Yam", qty: 2 }]
-  },
-  {
-    id: "t3", ticketNumber: 106, table: "Table 3", elapsedMinutes: 5, status: "READY", createdAt: "12:17 PM",
-    items: [{ name: "Kelewele & Peanuts", qty: 3 }]
-  },
-];
-
-function RestaurantAndKds({ merchantId: _mId }: { merchantId: string }) {
+function RestaurantAndKds({ merchantId }: { merchantId: string }) {
   const [subTab, setSubTab] = useState<"floor" | "kds">("floor");
   const [tables, setTables] = useState<DiningTable[]>(SAMPLE_TABLES);
-  const [tickets, setTickets] = useState<KdsTicket[]>(SAMPLE_KDS);
-
-  function advanceTicket(id: string) {
-    setTickets((prev) => prev.map((t) => {
-      if (t.id === id) {
-        const nextStatus = t.status === "PENDING" ? "COOKING" : t.status === "COOKING" ? "READY" : "SERVED";
-        return { ...t, status: nextStatus };
-      }
-      return t;
-    }));
-  }
 
   return (
     <div>
@@ -775,53 +745,93 @@ function RestaurantAndKds({ merchantId: _mId }: { merchantId: string }) {
         </div>
       )}
 
-      {subTab === "kds" && (
-        <div>
-          <div className="flex-between">
-            <h3>Kitchen Display System (KDS) Real-Time Tickets</h3>
-            <span className="muted small">Auto-refreshes · Live cooking orders</span>
-          </div>
+      {subTab === "kds" && <KitchenSetup merchantId={merchantId} />}
+    </div>
+  );
+}
 
-          <div className="kds-grid">
-            {tickets.map((tk) => {
-              const isUrgent = tk.elapsedMinutes >= 20;
-              return (
-                <div key={tk.id} className={`kds-card ${isUrgent ? "urgent" : tk.status === "COOKING" ? "cooking" : ""}`}>
-                  <div className="flex-between">
-                    <div>
-                      <strong>#{tk.ticketNumber} · {tk.table}</strong>
-                      <div className="small muted">{tk.createdAt}</div>
-                    </div>
-                    <span className={`tag ${isUrgent ? "failed" : "pending"}`}>
-                      ⏱️ {tk.elapsedMinutes} mins
-                    </span>
-                  </div>
+interface KitchenStation {
+  id: string; name: string; isDefault: boolean; output: "SCREEN" | "PRINTER" | "BOTH";
+  printerAddress: string | null; paperWidth: number; lastSeenAt: string | null;
+}
 
-                  <hr style={{ border: "0", borderTop: "1px solid var(--line)", margin: ".5rem 0" }} />
+/** Kitchen stations and printers. The live kitchen screen itself runs full-screen at /kitchen on a tablet. */
+function KitchenSetup({ merchantId }: { merchantId: string }) {
+  const [stations, setStations] = useState<KitchenStation[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ name: "", output: "SCREEN" as KitchenStation["output"], printerAddress: "", paperWidth: 42, isDefault: false });
+  const load = () => api<KitchenStation[]>(`/v1/restaurant/kds/stations/merchant/${merchantId}`).then(setStations)
+    .catch((e) => setError(String(e.message ?? e)));
+  useEffect(() => { void load(); }, [merchantId]);
 
-                  <ul style={{ paddingLeft: "1.2rem", margin: ".5rem 0" }}>
-                    {tk.items.map((it, i) => (
-                      <li key={i} style={{ margin: ".3rem 0" }}>
-                        <strong>{it.qty}x</strong> {it.name}
-                        {it.notes && <div className="small" style={{ color: "#a12a1f" }}>Note: {it.notes}</div>}
-                      </li>
-                    ))}
-                  </ul>
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    try {
+      await api("/v1/restaurant/kds/stations", { body: { merchantId, name: form.name, output: form.output, isDefault: form.isDefault,
+        printerAddress: form.output === "SCREEN" && !form.printerAddress ? null : form.printerAddress, paperWidth: form.paperWidth } });
+      setForm({ ...form, name: "", printerAddress: "" });
+      await load();
+    } catch (err) { setError(String((err as Error).message ?? err)); }
+  }
 
-                  <div className="flex-between" style={{ marginTop: "1rem" }}>
-                    <span className="tag info">{tk.status}</span>
-                    {tk.status !== "SERVED" && (
-                      <button className="small" onClick={() => advanceTicket(tk.id)}>
-                        {tk.status === "PENDING" ? "Start Cooking" : tk.status === "COOKING" ? "Mark Ready" : "Served"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+  async function remove(id: string) {
+    try { await api(`/v1/restaurant/kds/stations/${id}/deactivate`, { method: "POST" }); await load(); }
+    catch (err) { setError(String((err as Error).message ?? err)); }
+  }
+
+  const screenState = (s: KitchenStation) => {
+    if (s.output === "PRINTER") return "Printer only";
+    if (!s.lastSeenAt) return "Screen not connected yet";
+    const mins = Math.round((Date.now() - Date.parse(s.lastSeenAt)) / 60000);
+    return mins < 3 ? "Screen online" : `Screen last seen ${mins} min ago`;
+  };
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Kitchen screen</h3>
+        <p>Open <a href="/kitchen" target="_blank" rel="noreferrer"><strong>{window.location.origin}/kitchen</strong></a> on a tablet or POS screen in the kitchen and choose its station.
+          It keeps working when the internet drops and sends updates when it returns. Add it to the home screen to run full-screen.</p>
+      </div>
+      {error && <p className="error">{error}</p>}
+      <h3>Stations</h3>
+      <table className="grid">
+        <thead><tr><th>Station</th><th>Output</th><th>Printer</th><th>Status</th><th /></tr></thead>
+        <tbody>
+          {stations.map((s) => (
+            <tr key={s.id}>
+              <td>{s.name}{s.isDefault && <span className="tag info" style={{ marginLeft: ".4rem" }}>default</span>}</td>
+              <td>{s.output === "BOTH" ? "Screen + printer" : s.output === "PRINTER" ? "Printer" : "Screen"}</td>
+              <td className="small">{s.printerAddress ?? "—"}{s.printerAddress && ` · ${s.paperWidth} cols`}</td>
+              <td className="small">{screenState(s)}</td>
+              <td><button className="secondary small" onClick={() => void remove(s.id)}>Remove</button></td>
+            </tr>
+          ))}
+          {stations.length === 0 && <tr><td colSpan={5} className="muted">No stations yet. Without stations every order shows on every kitchen screen.</td></tr>}
+        </tbody>
+      </table>
+      <form onSubmit={add} className="panel" style={{ marginTop: "1rem" }}>
+        <h3>Add a station</h3>
+        <label>Name<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Kitchen, Grill, Drinks…" required /></label>
+        <label>Shows orders on
+          <select value={form.output} onChange={(e) => setForm({ ...form, output: e.target.value as KitchenStation["output"] })}>
+            <option value="SCREEN">Screen</option><option value="BOTH">Screen and printer</option><option value="PRINTER">Printer only</option>
+          </select>
+        </label>
+        <label>Printer address {form.output === "SCREEN" && <span className="muted small">(optional: prints automatically if the screen goes off)</span>}
+          <input value={form.printerAddress} onChange={(e) => setForm({ ...form, printerAddress: e.target.value })}
+            placeholder="tcp://192.168.1.50:9100 or bt://AA:BB:CC:DD:EE:FF" required={form.output !== "SCREEN"} />
+        </label>
+        <label>Paper
+          <select value={form.paperWidth} onChange={(e) => setForm({ ...form, paperWidth: Number(e.target.value) })}>
+            <option value={32}>58mm (32 characters)</option><option value={42}>80mm (42 characters)</option><option value={48}>80mm wide (48 characters)</option>
+          </select>
+        </label>
+        <label className="choice"><input type="checkbox" style={{ width: "auto" }} checked={form.isDefault}
+          onChange={(e) => setForm({ ...form, isDefault: e.target.checked })} /> Default station for items without a station</label>
+        <button type="submit">Add station</button>
+      </form>
     </div>
   );
 }

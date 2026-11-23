@@ -187,7 +187,7 @@ public class RestaurantController {
         return printService.reprint(ticketId, stationId);
     }
 
-    public record CreateStationRequest(UUID merchantId, String name, UUID branchId, boolean isDefault,
+    public record CreateStationRequest(UUID merchantId, String name, UUID branchId, Boolean isDefault,
                                        KitchenStationService.Output output, String printerAddress, Integer paperWidth) {}
 
     @PostMapping("/kds/stations")
@@ -195,7 +195,7 @@ public class RestaurantController {
         access.manage(req.merchantId());
         access.branch(req.merchantId(), req.branchId());
         return stationService.create(req.merchantId(), new KitchenStationService.StationInput(
-                req.name(), req.branchId(), req.isDefault(), req.output(), req.printerAddress(), req.paperWidth()));
+                req.name(), req.branchId(), Boolean.TRUE.equals(req.isDefault()), req.output(), req.printerAddress(), req.paperWidth()));
     }
 
     @GetMapping("/kds/stations/merchant/{merchantId}")
@@ -230,12 +230,12 @@ public class RestaurantController {
                 .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
-    public record PrintResultRequest(String deviceId, boolean printed, String error) {}
+    public record PrintResultRequest(String deviceId, Boolean printed, String error) {}
 
     @PostMapping("/kds/print-jobs/{jobId}/result")
     public KdsPrintService.PrintJob reportPrintResult(@PathVariable UUID jobId, @RequestBody PrintResultRequest req) {
         access.operate(PRINT_JOB, jobId);
-        return printService.report(jobId, req.deviceId(), req.printed(), req.error());
+        return printService.report(jobId, req.deviceId(), Boolean.TRUE.equals(req.printed()), req.error());
     }
 
     @PostMapping("/kds/items/{itemId}/bump")
