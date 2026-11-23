@@ -51,11 +51,11 @@ jobs:
       - name: npm audit (web, high and critical)
         working-directory: web
         run: npm ci --no-fund && npm audit --audit-level=high
-      - name: Secret scan (TruffleHog, verified secrets fail the build)
+      - name: Secret scan (TruffleHog, verified secrets and source errors fail)
         uses: trufflesecurity/trufflehog@4ef51f69ca6347aaa76a5e64a87eac9c0c909f71 # audited 2026-11-23
         with:
           version: '3.100.0'
-          extra_args: --only-verified
+          extra_args: --only-verified --fail-on-scan-errors
 
   backend-verify:
     name: Backend Test Suite & Modulith Verification
@@ -145,13 +145,15 @@ jobs:
 
   container-build:
     name: Multi-stage Container Build & Packaging
-    needs: [web, backend-verify]
+    needs: [web, backend-verify, security-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build Container Image
@@ -175,8 +177,26 @@ jobs:
           fi
           echo "Non-root user validation passed (UID: ${RUNNING_UID}, Configured: ${USER_SPEC})"
 
-      - name: Container Build Secret Scan (TruffleHog)
+      - name: Container commit-history secret scan (fail on source errors)
         uses: trufflesecurity/trufflehog@4ef51f69ca6347aaa76a5e64a87eac9c0c909f71 # audited 2026-11-23
         with:
           version: '3.100.0'
-          extra_args: --only-verified
+          extra_args: --only-verified --fail-on-scan-errors
+
+      - name: Verify scan gate rejects unreadable and zero-byte scans
+        run: python3 -m unittest discover -s scripts -p 'test_assert_trufflehog_scan.py' -v
+
+      - name: Scan actual packaged image for verified secrets (no empty-scan success)
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_PATH="${RUNNER_TEMP}/elepay-image-root"
+          mkdir -p "${IMAGE_PATH}"
+          CID=$(docker create elepay-core:ci-test)
+          trap 'docker rm -f "${CID}" >/dev/null 2>&1 || true' EXIT
+          docker export "${CID}" | tar -xf - -C "${IMAGE_PATH}"
+          test -s "${IMAGE_PATH}/app/elepay.jar"
+          docker run --rm -v "${IMAGE_PATH}:/image:ro" ghcr.io/trufflesecurity/trufflehog:3.100.0 \
+            filesystem /image --only-verified --fail --fail-on-scan-errors --no-update \
+            2>&1 | tee "${RUNNER_TEMP}/elepay-image-secret-scan.log"
+          python3 scripts/assert_trufflehog_scan.py "${RUNNER_TEMP}/elepay-image-secret-scan.log"
