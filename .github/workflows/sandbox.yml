@@ -1,6 +1,11 @@
 name: ELEPAY Core CI/CD & Security Verification
 # Third-party actions are pinned to inspected upstream commits. Update SHAs deliberately.
 on: [push, pull_request]
+# One run per branch: push and PR events otherwise double the Maven Central traffic.
+# New commits supersede the old jobs rather than keeping dozens of redundant scans alive.
+concurrency:
+  group: elepay-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 
