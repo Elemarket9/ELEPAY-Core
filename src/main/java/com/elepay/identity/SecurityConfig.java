@@ -36,7 +36,8 @@ class SecurityConfig {
     @Bean
     SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys, RequestSigningFilter requestSigningFilter,
                             RateLimitFilter rateLimitFilter, Stage1KillSwitchFilter stage1KillSwitchFilter,
-                            @org.springframework.beans.factory.annotation.Value("${management.server.port:0}") int managementPort)
+                            @org.springframework.beans.factory.annotation.Value("${management.server.port:0}") int managementPort,
+                            org.springframework.core.env.Environment environment)
             throws Exception {
         http.csrf(csrf -> csrf.disable())
                 .cors(cors -> {})
@@ -57,7 +58,12 @@ class SecurityConfig {
                         // Quarantine device pairing, offline sync and simulated 3DS until their trust protocols are implemented.
                         // POS and inventory controllers independently enforce merchant-wide membership.
                         .requestMatchers("/v1/pos/sync", "/v1/pos/terminals/pair", "/v1/rails/card/3ds/**").denyAll()
-                        // The legacy sandbox only runs under the sandbox profile and binds to loopback.
+                        // Even if a diagnostic controller is accidentally packaged, production forbids it.
+                        // Sandbox integration tests remain accessible only outside the production profile.
+                        .requestMatchers(request -> environment.acceptsProfiles(
+                                org.springframework.core.env.Profiles.of("prod"))
+                                && (request.getRequestURI().startsWith("/sandbox/")
+                                    || request.getRequestURI().startsWith("/dev/"))).denyAll()
                         .requestMatchers("/sandbox/**").permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/health", "/actuator/info").permitAll()
                         // Metrics are served only on the internal management port (prod: 9090), never publicly.
@@ -69,6 +75,7 @@ class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/v1/rails/*/callbacks/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/v1/fx/partners/*/callbacks", "/v1/fx/partners/*/inbound").permitAll()
                         .requestMatchers(HttpMethod.POST, "/v1/ussd/**").permitAll()
+                        // Development token endpoint exists on the test classpath only.
                         .requestMatchers("/dev/token").permitAll()
                         .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**", "/pay/**", "/favicon.svg",
                                 "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**", "/developer", "/developer/**").permitAll()

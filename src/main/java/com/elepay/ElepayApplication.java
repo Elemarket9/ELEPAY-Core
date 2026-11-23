@@ -4,11 +4,11 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
-/** The single ELEPAY application. The legacy class name is retained for build and test compatibility. */
+/** The sole production entry point; development and simulated services stay on the test classpath. */
 @SpringBootApplication
 @EnableScheduling
-public class SandboxApplication {
+public class ElepayApplication {
     public static void main(String[] args) {
-        SpringApplication.run(SandboxApplication.class, args);
+        SpringApplication.run(ElepayApplication.class, args);
     }
 }

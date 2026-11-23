@@ -113,29 +113,26 @@ export function DeveloperPortal() {
 // -------------------------------------------------------------------------------------------------
 function ApiKeysView({ merchantId }: { merchantId: string }) {
   const [keys, setKeys] = useState<ApiKey[]>([]);
-  const [envFilter, setEnvFilter] = useState<string>("all");
   const [msg, setMsg] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [newKeyPlaintext, setNewKeyPlaintext] = useState<string | null>(null);
 
   // Form state
   const [label, setLabel] = useState("");
-  const [env, setEnv] = useState<"live" | "test">("live");
   const [scopes, setScopes] = useState<string[]>(["view", "collect", "refund"]);
 
   const load = () => {
-    const q = envFilter === "all" ? "" : `?environment=${envFilter}`;
-    api<ApiKey[]>(`/v1/developer/merchants/${merchantId}/keys${q}`)
+    api<ApiKey[]>(`/v1/developer/merchants/${merchantId}/keys?environment=live`)
       .then(setKeys)
       .catch((e) => setMsg(e.message));
   };
 
-  useEffect(() => { load(); }, [merchantId, envFilter]);
+  useEffect(() => { load(); }, [merchantId]);
 
   async function createKey() {
     try {
       const res = await api<{ apiKey: string }>(`/v1/developer/merchants/${merchantId}/keys`, {
-        body: { label: label || "Default Key", environment: env, scopes },
+        body: { label: label || "Default Key", environment: "live", scopes },
       });
       setNewKeyPlaintext(res.apiKey);
       setShowModal(false);
@@ -174,16 +171,6 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
   return (
     <div>
       <div className="flex-between">
-        <div className="flex-row">
-          <label className="choice">
-            Filter:
-            <select value={envFilter} onChange={(e) => setEnvFilter(e.target.value)} style={{ width: "auto", display: "inline" }}>
-              <option value="all">All Environments</option>
-              <option value="live">Live Keys</option>
-              <option value="test">Test / Sandbox Keys</option>
-            </select>
-          </label>
-        </div>
         <button onClick={() => setShowModal(true)}>+ Generate New API Key</button>
       </div>
 
@@ -248,12 +235,7 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
         <div className="modal-backdrop">
           <div className="modal-content">
             <h3>Generate API Key</h3>
-            <label>Environment
-              <select value={env} onChange={(e) => setEnv(e.target.value as "live" | "test")}>
-                <option value="live">Live (Production transactions)</option>
-                <option value="test">Test / Sandbox (Simulation)</option>
-              </select>
-            </label>
+            <p className="muted">Production keys only. Charges and payouts require configured live rails.</p>
             <label>Key Label / Application Name
               <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. WooCommerce Store Main" />
             </label>
@@ -292,7 +274,6 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [url, setUrl] = useState("");
-  const [env, setEnv] = useState<"live" | "test">("live");
   const [desc, setDesc] = useState("");
   const [selectedEvents, setSelectedEvents] = useState<string[]>([
     "checkout.paid", "payment.failed", "payout.completed", "refund.created"
@@ -300,7 +281,7 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
 
   const load = () => {
     api<WebhookEndpoint[]>(`/v1/developer/merchants/${merchantId}/webhooks`)
-      .then(setEndpoints)
+      .then((items) => setEndpoints(items.filter((ep) => ep.environment === "live")))
       .catch((e) => setMsg(e.message));
   };
 
@@ -309,7 +290,7 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
   async function register() {
     try {
       await api(`/v1/developer/merchants/${merchantId}/webhooks`, {
-        body: { url, environment: env, description: desc, eventTypes: selectedEvents },
+        body: { url, environment: "live", description: desc, eventTypes: selectedEvents },
       });
       setMsg("Webhook endpoint registered successfully.");
       setShowAdd(false);
@@ -400,12 +381,7 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
             <label>Endpoint URL (must begin with https://)
               <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.myshop.com/webhooks/elepay" required />
             </label>
-            <label>Environment
-              <select value={env} onChange={(e) => setEnv(e.target.value as "live" | "test")}>
-                <option value="live">Live (Production)</option>
-                <option value="test">Test / Sandbox</option>
-              </select>
-            </label>
+            <p className="muted">Live webhook deliveries only.</p>
             <label>Description / Name
               <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="e.g. Primary ERP webhook" />
             </label>
@@ -734,7 +710,6 @@ function WooCommerceView({ merchantId }: { merchantId: string }) {
         <table className="grid">
           <tbody>
             <tr><td><strong>Merchant UUID</strong></td><td className="mono">{merchantId}</td></tr>
-            <tr><td><strong>Test / Live Mode</strong></td><td>Select Test for Sandbox, Live for Production.</td></tr>
             <tr><td><strong>Request Signing Secret</strong></td><td>Your HMAC-SHA256 v2 signing secret for outbound API requests.</td></tr>
             <tr><td><strong>Webhook Notification URL</strong></td><td className="mono">https://YOUR_DOMAIN.com/wc-api/wc_gateway_elepay</td></tr>
           </tbody>

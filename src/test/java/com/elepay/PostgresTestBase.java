@@ -7,7 +7,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /** Shared PostgreSQL 18 container for all integration tests in the JVM. */
-@SpringBootTest(classes = SandboxApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = ElepayApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 public abstract class PostgresTestBase {
 

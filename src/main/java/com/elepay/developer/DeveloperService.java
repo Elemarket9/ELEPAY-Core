@@ -352,7 +352,8 @@ public class DeveloperService {
     // --- 4. Client SDK Code Snippet Generators ---
 
     public SdkSnippet generateSnippet(String action, String language, String apiKey, String baseUrl) {
-        String key = (apiKey != null && !apiKey.isBlank()) ? apiKey : "ek_live_sample_key_123456789";
+        // Never copy a submitted credential into generated examples, URLs, logs or JavaScript bundles.
+        String key = "ELEPAY_API_KEY";
         String host = (baseUrl != null && !baseUrl.isBlank()) ? baseUrl : "https://api.elepay.com";
         String lang = (language != null) ? language.toLowerCase() : "curl";
         String act = (action != null) ? action.toLowerCase() : "create_checkout";
@@ -371,26 +372,26 @@ public class DeveloperService {
     private String generateCurlSnippet(String action, String key, String host) {
         return switch (action) {
             case "verify_payment" -> """
-                    curl -X GET "%s/v1/public/checkouts/chk_live_sample123/status" \\
-                      -H "X-Elepay-Api-Key: %s" \\
+                    curl -X GET "%s/v1/public/checkouts/${ELEPAY_CHECKOUT_REFERENCE}/status" \\
+                      -H "X-Elepay-Api-Key: ${%s}" \\
                       -H "Accept: application/json"
                     """.formatted(host, key);
             case "create_refund" -> """
                     curl -X POST "%s/v1/merchants/YOUR_MERCHANT_ID/checkouts/chk_123/allocations/1/refunds" \\
-                      -H "X-Elepay-Api-Key: %s" \\
+                      -H "X-Elepay-Api-Key: ${%s}" \\
                       -H "Content-Type: application/json" \\
                       -H "Idempotency-Key: $(uuidgen)" \\
                       -d '{"amount": 5000, "reason": "Customer cancellation"}'
                     """.formatted(host, key);
             case "register_webhook" -> """
                     curl -X POST "%s/v1/developer/webhooks" \\
-                      -H "X-Elepay-Api-Key: %s" \\
+                      -H "X-Elepay-Api-Key: ${%s}" \\
                       -H "Content-Type: application/json" \\
                       -d '{"url": "https://yourapp.com/webhooks", "environment": "live", "eventTypes": ["checkout.paid"]}'
                     """.formatted(host, key);
             default -> """
                     curl -X POST "%s/v1/checkouts" \\
-                      -H "X-Elepay-Api-Key: %s" \\
+                      -H "X-Elepay-Api-Key: ${%s}" \\
                       -H "Content-Type: application/json" \\
                       -H "Idempotency-Key: $(uuidgen)" \\
                       -d '{
@@ -409,7 +410,7 @@ public class DeveloperService {
                     import { ElepayClient } from "@elepay/sdk";
 
                     const elepay = new ElepayClient({
-                      apiKey: "%s",
+                      apiKey: process.env.%s,
                       baseUrl: "%s"
                     });
 
@@ -418,13 +419,13 @@ public class DeveloperService {
                       console.log("Payment status:", status.status, "Paid at:", status.paidAt);
                       return status;
                     }
-                    verifyPayment("chk_live_sample123");
+                    verifyPayment(process.env.ELEPAY_CHECKOUT_REFERENCE);
                     """.formatted(key, host);
             case "create_refund" -> """
                     import { ElepayClient } from "@elepay/sdk";
                     import { randomUUID } from "node:crypto";
 
-                    const elepay = new ElepayClient({ apiKey: "%s", baseUrl: "%s" });
+                    const elepay = new ElepayClient({ apiKey: process.env.%s, baseUrl: "%s" });
 
                     async function refund(merchantId, checkoutRef, lineIndex, amountPesewas) {
                       const refund = await elepay.merchants(merchantId).refunds.create({
@@ -442,7 +443,7 @@ public class DeveloperService {
                     import { randomUUID } from "node:crypto";
 
                     const elepay = new ElepayClient({
-                      apiKey: "%s",
+                      apiKey: process.env.%s,
                       baseUrl: "%s"
                     });
 
@@ -467,9 +468,10 @@ public class DeveloperService {
     private String generatePythonSnippet(String action, String key, String host) {
         return switch (action) {
             case "verify_payment" -> """
+                    import os
                     import requests
 
-                    ELEPAY_API_KEY = "%s"
+                    ELEPAY_API_KEY = os.environ["%s"]
                     BASE_URL = "%s"
 
                     def verify_payment(reference: str):
@@ -482,14 +484,15 @@ public class DeveloperService {
                         response.raise_for_status()
                         return response.json()
 
-                    status = verify_payment("chk_live_sample123")
+                    status = verify_payment(os.environ["ELEPAY_CHECKOUT_REFERENCE"])
                     print("Status:", status.get("status"))
                     """.formatted(key, host);
             case "create_refund" -> """
                     import uuid
+                    import os
                     import requests
 
-                    ELEPAY_API_KEY = "%s"
+                    ELEPAY_API_KEY = os.environ["%s"]
                     BASE_URL = "%s"
 
                     def process_refund(merchant_id: str, checkout_ref: str, line_no: int, amount_pesewas: int):
@@ -506,9 +509,10 @@ public class DeveloperService {
                     """.formatted(key, host);
             default -> """
                     import uuid
+                    import os
                     import requests
 
-                    ELEPAY_API_KEY = "%s"
+                    ELEPAY_API_KEY = os.environ["%s"]
                     BASE_URL = "%s"
 
                     def create_checkout_session(amount_pesewas: int, description: str):
@@ -538,9 +542,9 @@ public class DeveloperService {
         return switch (action) {
             case "verify_payment" -> """
                     <?php
-                    $apiKey = '%s';
+                    $apiKey = getenv('%s');
                     $baseUrl = '%s';
-                    $reference = 'chk_live_sample123';
+                    $reference = getenv('ELEPAY_CHECKOUT_REFERENCE');
 
                     $ch = curl_init("$baseUrl/v1/public/checkouts/$reference/status");
                     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -556,7 +560,7 @@ public class DeveloperService {
                     """.formatted(key, host);
             default -> """
                     <?php
-                    $apiKey = '%s';
+                    $apiKey = getenv('%s');
                     $baseUrl = '%s';
 
                     $payload = json_encode([
@@ -595,8 +599,8 @@ public class DeveloperService {
                 import java.net.http.HttpResponse;
                 import java.util.UUID;
 
-                public class ElepayClientDemo {
-                    private static final String API_KEY = "%s";
+                public class ElepayClient {
+                    private static final String API_KEY = System.getenv("%s");
                     private static final String BASE_URL = "%s";
 
                     public static void main(String[] args) throws Exception {

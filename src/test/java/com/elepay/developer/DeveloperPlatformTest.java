@@ -25,7 +25,8 @@ class DeveloperPlatformTest {
         var nodeSnippet = service.generateSnippet("create_checkout", "nodejs", apiKey, baseUrl);
         assertEquals("nodejs", nodeSnippet.language());
         assertTrue(nodeSnippet.code().contains("ElepayClient"));
-        assertTrue(nodeSnippet.code().contains(apiKey));
+        assertFalse(nodeSnippet.code().contains(apiKey));
+        assertTrue(nodeSnippet.code().contains("process.env.ELEPAY_API_KEY"));
         assertTrue(nodeSnippet.code().contains(baseUrl));
 
         // 2. Python
@@ -33,25 +34,30 @@ class DeveloperPlatformTest {
         assertEquals("python", pySnippet.language());
         assertTrue(pySnippet.code().contains("verify_payment"));
         assertTrue(pySnippet.code().contains("requests.get"));
-        assertTrue(pySnippet.code().contains(apiKey));
+        assertFalse(pySnippet.code().contains(apiKey));
+        assertTrue(pySnippet.code().contains("os.environ[\"ELEPAY_API_KEY\"]"));
 
         // 3. PHP
         var phpSnippet = service.generateSnippet("create_checkout", "php", apiKey, baseUrl);
         assertEquals("php", phpSnippet.language());
         assertTrue(phpSnippet.code().contains("curl_init"));
         assertTrue(phpSnippet.code().contains("X-Elepay-Api-Key"));
+        assertFalse(phpSnippet.code().contains(apiKey));
 
         // 4. Java
         var javaSnippet = service.generateSnippet("create_checkout", "java", apiKey, baseUrl);
         assertEquals("java", javaSnippet.language());
         assertTrue(javaSnippet.code().contains("HttpClient"));
         assertTrue(javaSnippet.code().contains("HttpRequest"));
+        assertFalse(javaSnippet.code().contains(apiKey));
 
         // 5. cURL
         var curlSnippet = service.generateSnippet("create_refund", "curl", apiKey, baseUrl);
         assertEquals("curl", curlSnippet.language());
         assertTrue(curlSnippet.code().contains("curl -X POST"));
         assertTrue(curlSnippet.code().contains("X-Elepay-Api-Key"));
+        assertTrue(curlSnippet.code().contains("${ELEPAY_API_KEY}"));
+        assertFalse(curlSnippet.code().contains(apiKey));
     }
 
     @Test

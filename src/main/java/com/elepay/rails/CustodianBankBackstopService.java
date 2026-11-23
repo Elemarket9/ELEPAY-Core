@@ -340,7 +340,7 @@ public class CustodianBankBackstopService {
         // Clearing accounts represent net collected funds settled into the Custodian Bank trust account
         // (in double-entry ledger, collections debit system:clearing:<rail>:GHS, so net clearing inflow is -balance)
         long clearingReceivables = 0L;
-        for (String rail : java.util.List.of("sandbox", "mtn", "telecel", "airteltigo", "ghipss", "card")) {
+        for (String rail : java.util.List.of("mtn", "telecel", "airteltigo", "ghipss", "card")) {
             long bal = ledger.balance(Ledger.clearing(rail));
             if (bal < 0) {
                 clearingReceivables += (-bal);

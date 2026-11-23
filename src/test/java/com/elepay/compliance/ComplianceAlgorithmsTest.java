@@ -39,7 +39,7 @@ class ComplianceAlgorithmsTest {
 
     // --- 040: Ghana Card Matching ---
     @Test
-    @DisplayName("040: Validates Ghana Card format and check digit, and handles unconfigured and test NIA matching")
+    @DisplayName("040: Rejects synthetic identity verification and fails closed on unconfigured NIA")
     void testGhanaCardVerification() {
         // 1. Unconfigured production default: must return UNAVAILABLE without auto-approving
         GhanaCardVerificationService unconfiguredService = new GhanaCardVerificationService(null);
@@ -58,18 +58,13 @@ class ComplianceAlgorithmsTest {
         assertThat(unconfResult.details()).contains("not configured");
         assertThat(unconfResult.simulationProvider()).isEqualTo("UNCONFIGURED_NIA");
 
-        // 2. Test sandbox double
+        // 2. A synthetic NIA client must never be used as proof of identity,
+        // even when injected from the isolated test classpath.
         GhanaCardVerificationService service = new GhanaCardVerificationService(null, new SimulatedNiaClientTest());
-        var result = service.verify(customerId, validId, "Kwame Mensah", LocalDate.of(1990, 5, 15), "M");
-        assertThat(result.status()).isEqualTo(GhanaCardVerificationService.Status.VERIFIED);
-        assertThat(result.simulated()).isTrue();
-        assertThat(result.simulationProvider()).isEqualTo("SIMULATED_NIA_SANDBOX");
-
-        // Test distinguishing UNAVAILABLE from verified/mismatched
-        int check999 = GhanaCardVerificationService.calculateLuhnCheckDigit("999000111");
-        String unavailableId = "GHA-999000111-" + check999;
-        var unavailResult = service.verify(customerId, unavailableId, "Kwame Mensah", LocalDate.of(1990, 5, 15), "M");
-        assertThat(unavailResult.status()).isEqualTo(GhanaCardVerificationService.Status.UNAVAILABLE);
+        assertThatThrownBy(() -> service.verify(customerId, validId, "Kwame Mensah",
+                LocalDate.of(1990, 5, 15), "M"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("synthetic verification is forbidden");
     }
 
     // --- 041: Face Matching and Liveness ---

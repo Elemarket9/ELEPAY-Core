@@ -26,4 +26,4 @@ COPY --from=build /app.jar /app/elepay.jar
 USER 10001
 EXPOSE 8080 9090
 ENV SPRING_PROFILES_ACTIVE=prod JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
-ENTRYPOINT ["java", "-jar", "/app/elepay.jar"]
+ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "/app/elepay.jar"]
