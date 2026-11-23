@@ -6,6 +6,6 @@ import org.springframework.modulith.core.ApplicationModules;
 class ModularityTest {
     @Test
     void modulesHaveNoCyclesOrInternalAccess() {
-        ApplicationModules.of(SandboxApplication.class).verify();
+        ApplicationModules.of(ElepayApplication.class).verify();
     }
 }
