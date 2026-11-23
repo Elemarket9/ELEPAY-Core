@@ -66,6 +66,8 @@ public class ConnectorWebhookSigner {
 
         try {
             String expectedSignature = sign(secret, timestampSeconds, payload);
+            // Comparing hex strings may return early on a length mismatch (leaks length only, not content);
+            // negligible for fixed-width SHA-256 hex, so left as-is.
             return MessageDigest.isEqual(
                     expectedSignature.getBytes(StandardCharsets.UTF_8),
                     signature.trim().toLowerCase().getBytes(StandardCharsets.UTF_8)

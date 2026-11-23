@@ -16,7 +16,21 @@ public final class ClientIpResolver {
         if (remote != null && isTrustedProxy(remote, trustedProxies)) {
             String xff = request.getHeader("X-Forwarded-For");
             if (xff != null && !xff.isBlank()) {
-                return xff.split(",")[0].trim();
+                // Proxies APPEND to X-Forwarded-For (e.g. nginx $proxy_add_x_forwarded_for), so the
+                // chain reads left-to-right as [client, edge, ..., nearest proxy]. The LEFTMOST token
+                // is fully attacker-controlled (the client can send any XFF it likes) and must NEVER be
+                // trusted. We instead walk the chain from RIGHT to LEFT starting at the hop our own edge
+                // appended, skipping entries that are themselves trusted proxies, and return the first
+                // address that is NOT a trusted proxy — that is the real client as seen by our edge.
+                String[] hops = xff.split(",");
+                for (int i = hops.length - 1; i >= 0; i--) {
+                    String hop = hops[i].trim();
+                    if (hop.isEmpty()) continue;
+                    if (!isTrustedProxy(hop, trustedProxies)) {
+                        return hop;
+                    }
+                }
+                // Every hop is a trusted proxy (or the header held only blanks): fall through to the peer.
             }
         }
         return remote;

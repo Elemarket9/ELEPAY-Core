@@ -186,6 +186,11 @@ public class MerchantPayouts {
         }
         String clientRef = payoutOpt.get() == null ? "" : payoutOpt.get();
         var a = access.require(merchantId, clientRef.contains("withdrawal-") ? WITHDRAW : PAYOUT);
+        if (a.actor().isApiKey() && !a.actor().isPayoutKey()) {
+            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                    "payout_key_required",
+                    "Secret keys (sk_live) cannot initiate payouts or withdrawals alone; use a dedicated payout_live key");
+        }
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("payout-retry:" + merchantId, key,
                 java.util.Map.of("reference", reference), Payouts.Batch.class,
                 () -> payouts.retry("merchant", merchantId, reference, a.actor().subject())));
