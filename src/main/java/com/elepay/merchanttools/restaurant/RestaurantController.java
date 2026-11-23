@@ -15,6 +15,8 @@ public class RestaurantController {
     private final RestaurantTableService tableService;
     private final ModifierService modifierService;
     private final KdsService kdsService;
+    private final KitchenStationService stationService;
+    private final KdsPrintService printService;
     private final RecipeCostingService recipeService;
     private final RestaurantSplitBillService splitBillService;
     private final MerchantToolAccess access;
@@ -25,8 +27,12 @@ public class RestaurantController {
             KdsService kdsService,
             RecipeCostingService recipeService,
             RestaurantSplitBillService splitBillService,
+            KitchenStationService stationService,
+            KdsPrintService printService,
             MerchantToolAccess access
     ) {
+        this.stationService = stationService;
+        this.printService = printService;
         this.access = access;
         this.tableService = tableService;
         this.modifierService = modifierService;
@@ -110,7 +116,8 @@ public class RestaurantController {
     // KDS Live Tickets & Bump Bar
     public record CreateTicketRequest(
             UUID merchantId, UUID orderId, UUID tableId, DiningMode diningMode,
-            String serverName, String course, List<KdsService.KdsItemInput> items, String notes
+            String serverName, String course, List<KdsService.KdsItemInput> items, String notes,
+            String clientRef
     ) {}
 
     @PostMapping("/kds/tickets")
@@ -123,7 +130,7 @@ public class RestaurantController {
         for (KdsService.KdsItemInput item : req.items()) access.belongs(req.merchantId(), ORDER_ITEM, item.orderItemId());
         return kdsService.createTicket(
                 req.merchantId(), req.orderId(), req.tableId(), req.diningMode(),
-                req.serverName(), req.course(), req.items(), req.notes()
+                req.serverName(), req.course(), req.items(), req.notes(), req.clientRef()
         );
     }
 
@@ -137,6 +144,98 @@ public class RestaurantController {
     public KdsService.KdsTicket bumpTicket(@PathVariable UUID ticketId) {
         access.operate(KDS_TICKET, ticketId);
         return kdsService.bumpTicket(ticketId);
+    }
+
+    // Reliable kitchen screen API: change feed, expected-status bumps with action ids, stations, printing
+
+    @GetMapping("/kds/sync")
+    public KdsService.SyncResult sync(@RequestParam UUID merchantId, @RequestParam(defaultValue = "0") long since,
+                                      @RequestParam(required = false) UUID stationId) {
+        access.view(merchantId);
+        if (stationId != null) access.belongs(merchantId, STATION, stationId);
+        return kdsService.sync(merchantId, since, stationId);
+    }
+
+    public record AdvanceRequest(String from, String actionId) {}
+
+    @PostMapping("/kds/tickets/{ticketId}/advance")
+    public KdsService.BumpResult advanceTicket(@PathVariable UUID ticketId, @RequestBody AdvanceRequest req) {
+        access.operate(KDS_TICKET, ticketId);
+        return kdsService.advanceTicket(ticketId, req.from(), req.actionId());
+    }
+
+    @PostMapping("/kds/tickets/{ticketId}/stations/{stationId}/advance")
+    public KdsService.BumpResult advanceStation(@PathVariable UUID ticketId, @PathVariable UUID stationId,
+                                                @RequestBody AdvanceRequest req) {
+        UUID merchantId = access.operate(KDS_TICKET, ticketId);
+        access.belongs(merchantId, STATION, stationId);
+        return kdsService.advanceStation(ticketId, stationId, req.from(), req.actionId());
+    }
+
+    public record CancelRequest(String actionId, String reason) {}
+
+    @PostMapping("/kds/tickets/{ticketId}/cancel")
+    public KdsService.BumpResult cancelTicket(@PathVariable UUID ticketId, @RequestBody CancelRequest req) {
+        access.operate(KDS_TICKET, ticketId);
+        return kdsService.cancel(ticketId, req.actionId(), req.reason());
+    }
+
+    @PostMapping("/kds/tickets/{ticketId}/reprint")
+    public KdsPrintService.PrintJob reprint(@PathVariable UUID ticketId, @RequestParam UUID stationId) {
+        UUID merchantId = access.operate(KDS_TICKET, ticketId);
+        access.belongs(merchantId, STATION, stationId);
+        return printService.reprint(ticketId, stationId);
+    }
+
+    public record CreateStationRequest(UUID merchantId, String name, UUID branchId, boolean isDefault,
+                                       KitchenStationService.Output output, String printerAddress, Integer paperWidth) {}
+
+    @PostMapping("/kds/stations")
+    public KitchenStationService.Station createStation(@RequestBody CreateStationRequest req) {
+        access.manage(req.merchantId());
+        access.branch(req.merchantId(), req.branchId());
+        return stationService.create(req.merchantId(), new KitchenStationService.StationInput(
+                req.name(), req.branchId(), req.isDefault(), req.output(), req.printerAddress(), req.paperWidth()));
+    }
+
+    @GetMapping("/kds/stations/merchant/{merchantId}")
+    public List<KitchenStationService.Station> listStations(@PathVariable UUID merchantId) {
+        access.view(merchantId);
+        return stationService.list(merchantId);
+    }
+
+    @PostMapping("/kds/stations/{stationId}/deactivate")
+    public ResponseEntity<Void> deactivateStation(@PathVariable UUID stationId) {
+        access.manage(STATION, stationId);
+        stationService.deactivate(stationId);
+        return ResponseEntity.ok().build();
+    }
+
+    public record RouteRequest(UUID categoryId, UUID variantId) {}
+
+    @PostMapping("/kds/stations/{stationId}/routes")
+    public ResponseEntity<Void> routeToStation(@PathVariable UUID stationId, @RequestBody RouteRequest req) {
+        UUID merchantId = access.manage(STATION, stationId);
+        if (req.categoryId() != null) access.belongs(merchantId, CATEGORY, req.categoryId());
+        if (req.variantId() != null) access.belongs(merchantId, VARIANT, req.variantId());
+        stationService.route(merchantId, stationId, req.categoryId(), req.variantId());
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/kds/print-jobs/claim")
+    public ResponseEntity<KdsPrintService.PrintJob> claimPrintJob(@RequestParam UUID merchantId,
+                                                                  @RequestParam String deviceId) {
+        access.operate(merchantId);
+        return printService.claimNext(merchantId, deviceId).map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    public record PrintResultRequest(String deviceId, boolean printed, String error) {}
+
+    @PostMapping("/kds/print-jobs/{jobId}/result")
+    public KdsPrintService.PrintJob reportPrintResult(@PathVariable UUID jobId, @RequestBody PrintResultRequest req) {
+        access.operate(PRINT_JOB, jobId);
+        return printService.report(jobId, req.deviceId(), req.printed(), req.error());
     }
 
     @PostMapping("/kds/items/{itemId}/bump")

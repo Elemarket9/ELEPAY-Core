@@ -36,7 +36,9 @@ public class MerchantToolAccess {
         MODIFIER_GROUP("SELECT merchant_id FROM restaurant_modifier_group WHERE id = :id"),
         RECIPE("SELECT merchant_id FROM restaurant_recipe WHERE id = :id"),
         KDS_TICKET("SELECT merchant_id FROM restaurant_kds_ticket WHERE id = :id"),
-        KDS_ITEM("SELECT t.merchant_id FROM restaurant_kds_item i JOIN restaurant_kds_ticket t ON t.id = i.ticket_id WHERE i.id = :id");
+        KDS_ITEM("SELECT t.merchant_id FROM restaurant_kds_item i JOIN restaurant_kds_ticket t ON t.id = i.ticket_id WHERE i.id = :id"),
+        STATION("SELECT merchant_id FROM restaurant_kitchen_station WHERE id = :id"),
+        PRINT_JOB("SELECT merchant_id FROM restaurant_kds_print_job WHERE id = :id");
 
         private final String sql;
         Resource(String sql) { this.sql = sql; }
