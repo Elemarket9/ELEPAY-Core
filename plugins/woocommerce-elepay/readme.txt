@@ -25,7 +25,7 @@ Features:
 * Outbound HMAC-SHA256 v2 request signing with server-side nonce replay protection
 * Automatic order status updates via cryptographic webhook signatures (`Elepay-Signature`)
 * Replay attack protection with 300-second timestamp drift validation
-* Seamless checkout redirect with instant order return verification
+* ELEPAY-hosted checkout and verified webhook confirmation; if the shopper returns to WooCommerce, the order is checked against ELEPAY's authoritative status.
 * Refunds from WooCommerce are supported for an unambiguous single-allocation checkout; multi-allocation refunds must be handled in ELEPAY's authorized merchant interface.
 * A pending external rail refund is never reported as completed; reconcile it before updating WooCommerce.
 * Compatible with High-Performance Order Storage (HPOS) and WooCommerce Checkout Blocks
@@ -36,7 +36,9 @@ Features:
 2. Activate the plugin through the 'Plugins' menu in WordPress.
 3. Go to **WooCommerce > Settings > Payments > ELEPAY**.
 4. Configure the HTTPS ELEPAY API URL, Merchant UUID, API Key, Request Signing Secret and Webhook Secret from the ELEPAY Developer Portal. The gateway is disabled until explicitly enabled.
-5. Save changes.
+5. Save changes, then explicitly enable the gateway after confirming live rails and production credentials.
+
+IMPORTANT: The ELEPAY Core CreateCheckout contract does not currently define custom return/cancel URLs. The plugin does not promise an automatic return to the WordPress shop after payment. Order status is reconciled through authenticated, signed webhooks and ELEPAY status lookups. Merchants must test this UX and the external rail connection before going live.
 
 == Configuration ==
 
