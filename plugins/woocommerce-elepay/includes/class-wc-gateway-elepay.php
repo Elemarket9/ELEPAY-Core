@@ -27,8 +27,8 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
         $this->id                 = 'elepay';
         $this->icon               = apply_filters('woocommerce_elepay_icon', WC_ELEPAY_PLUGIN_URL . 'assets/elepay-icon.svg');
         $this->has_fields         = false;
-        $this->method_title       = __('ELEPAY Direct Rails (MoMo, GhQR & Card)', 'woocommerce-elepay');
-        $this->method_description = __('Accept direct Ghanaian payment rails: MTN Mobile Money, Telecel Cash, AT Money, GhIPSS GhQR, and Direct Card.', 'woocommerce-elepay');
+        $this->method_title       = __('ELEPAY Payment Gateway', 'woocommerce-elepay');
+        $this->method_description = __('Accept available payment methods via ELEPAY; actual rails depend on live provider configuration.', 'woocommerce-elepay');
 
         $this->supports = array(
             'products',
@@ -38,8 +38,8 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
         $this->init_form_fields();
         $this->init_settings();
 
-        $this->title               = $this->get_option('title', __('Mobile Money, GhQR & Card (ELEPAY)', 'woocommerce-elepay'));
-        $this->description         = $this->get_option('description', __('Pay securely with MTN MoMo, Telecel Cash, AT Money, GhIPSS GhQR, or Debit/Credit Card.', 'woocommerce-elepay'));
+        $this->title               = $this->get_option('title', __('Pay with ELEPAY', 'woocommerce-elepay'));
+        $this->description         = $this->get_option('description', __('Pay using the methods currently available through ELEPAY.', 'woocommerce-elepay'));
         $this->enabled             = $this->get_option('enabled', 'no');
         $this->testmode            = 'yes' === $this->get_option('testmode', 'no');
         $this->test_api_key        = $this->get_option('test_api_key');
@@ -77,14 +77,14 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
                 'title'       => __('Title', 'woocommerce-elepay'),
                 'type'        => 'text',
                 'description' => __('Payment method title that the customer will see on checkout.', 'woocommerce-elepay'),
-                'default'     => __('Mobile Money, GhQR & Card (ELEPAY)', 'woocommerce-elepay'),
+                'default'     => __('Pay with ELEPAY', 'woocommerce-elepay'),
                 'desc_tip'    => true,
             ),
             'description' => array(
                 'title'       => __('Description', 'woocommerce-elepay'),
                 'type'        => 'textarea',
                 'description' => __('Payment method description that the customer will see on checkout.', 'woocommerce-elepay'),
-                'default'     => __('Pay securely via direct Ghanaian rails: MTN MoMo, Telecel Cash, AT Money, GhIPSS GhQR, or Debit/Credit Card.', 'woocommerce-elepay'),
+                'default'     => __('Pay using the methods currently available through ELEPAY.', 'woocommerce-elepay'),
             ),
             'testmode' => array(
                 'title'       => __('Sandbox / Test Mode', 'woocommerce-elepay'),
