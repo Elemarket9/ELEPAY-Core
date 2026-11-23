@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { Code128Barcode } from "./Barcode128";
+import { listLanOrders, linkLanOrder, publishLanOrder, readLanSettings,
+  saveLanSettings, type LanSettings } from "./lan-edge";
 import { addCashLocally, loadOfflineCatalog, newOfflineOrder, offlineDb, reconcileQueued,
   saveOfflineCatalog, type OfflineOrder, type OfflinePayload, type ReconcileResult } from "./offline-pos";
 import { api, ApiError, newKey } from "./api";
@@ -219,6 +221,13 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine);
+  const [forceOffline, setForceOffline] = useState(false);
+  const offlineMode = forceOffline || !networkOnline;
+  const offlineModeRef = useRef(offlineMode);
+  offlineModeRef.current = offlineMode;
+  const [lanSettings, setLanSettings] = useState<LanSettings | null>(readLanSettings);
+  const [lanUrl, setLanUrl] = useState(() => readLanSettings()?.url ?? "");
+  const [lanToken, setLanToken] = useState(() => readLanSettings()?.token ?? "");
   const [offlineOrders, setOfflineOrders] = useState<OfflineOrder[]>([]);
   const [activeOffline, setActiveOffline] = useState<OfflineOrder | null>(null);
   const [offlineWarning, setOfflineWarning] = useState("");
@@ -232,12 +241,19 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   }
 
   async function syncPending() {
-    if (syncBusy.current || !navigator.onLine) return;
+    if (syncBusy.current || !navigator.onLine || offlineModeRef.current) return;
     syncBusy.current = true;
     try {
       await reconcileQueued(offlineDb, merchant.id,
         (payload: OfflinePayload) => api<ReconcileResult>("/v1/pos/sync", { body: payload }));
       await refreshOffline();
+      if (lanSettings) {
+        const rows = await offlineDb.list(merchant.id);
+        for (const row of rows.filter((x) => x.status === "SYNCED" && x.serverOrderId)) {
+          try { await linkLanOrder(lanSettings, row.offlineTxId, row.serverOrderId!); }
+          catch { /* Local edge may not have received this order; server reconciliation is authoritative. */ }
+        }
+      }
     } catch (e) {
       setOfflineWarning(`Local orders retained: ${message(e)}`);
     } finally {
@@ -318,7 +334,17 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     setCart([]);
     setTendered("");
     await refreshOffline();
-    setTableNotice("Saved locally. Other kitchen devices cannot see this order until it reaches the server.");
+    if (lanSettings) {
+      try {
+        await publishLanOrder(lanSettings, draft);
+        setTableNotice("Saved locally and delivered to the paired LAN kitchen relay.");
+      } catch (e) {
+        setTableNotice("Order saved on this device, but not yet delivered to a kitchen screen.");
+        setOfflineWarning(`LAN edge delivery failed: ${message(e)}`);
+      }
+    } else {
+      setTableNotice("Order saved on this device. Pair a LAN edge to deliver it to kitchen tablets without internet.");
+    }
     return draft;
   }
 
@@ -349,7 +375,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   async function sendToKitchen() {
     setError(null); setBusy(true);
     try {
-      if (!networkOnline && !order) { await queueCurrentOffline(); return; }
+      if (offlineMode && !order) { await queueCurrentOffline(); return; }
       if (addingRound && order) {
         if (cart.length === 0) throw new Error("Select items for the next round");
         const latest = await api<PosOrder>(`/v1/pos/orders/${order.id}/items`, {
@@ -454,7 +480,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     setBusy(true);
     try {
       if (activeOffline) {
-        if (activeOffline.status !== "QUEUED" || networkOnline)
+        if (activeOffline.status !== "QUEUED" || !offlineMode)
           throw new Error("Reconciliation is active. Open the cloud order to record further payments.");
         const updated = addCashLocally(activeOffline, cash);
         await offlineDb.put(updated);
@@ -464,7 +490,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         setTableNotice("Cash recorded locally only; payment awaits cloud reconciliation.");
         return;
       }
-      if (!networkOnline && !order) { await queueCurrentOffline(cash); return; }
+      if (offlineMode && !order) { await queueCurrentOffline(cash); return; }
       const o = await ensureOrder();
       const paid = await api<PosOrder>(`/v1/pos/orders/${o.id}/payments`, { body: { tenderType: "CASH", amountPesewas: cash, reference: null }, idempotencyKey: newKey() });
       if (paid.status !== "PAID") { setOrder(paid); setTendered(""); setTableNotice(`Partial cash recorded. Balance: ${formatMoney(Math.max(0, paid.totalPesewas - paid.paidPesewas))}`); return; }
@@ -522,14 +548,36 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
       <div>
         <h3>Products</h3>
         <p role="status" className={networkOnline ? "notice" : "notice warning"}>
-          {networkOnline ? "Online" : "OFFLINE — cash is locally recorded; MoMo/card/NFC disabled"}
+          {offlineMode ? "OFFLINE MODE — cash collected locally; electronic payments unavailable" : "Network available (cloud status not guaranteed)"}
         </p>
+        <div className="panel">
+          <button className="secondary" onClick={() => setForceOffline((old) => !old)}
+            disabled={!!order || busy}>
+            {forceOffline ? "Leave manual offline mode" : "Use offline mode (for WAN outage)"}
+          </button>
+          <p className="small muted">Wi-Fi can report online even when the cloud is unreachable. Use offline mode before taking a new order if ELEPAY cloud is unavailable.</p>
+          <label>LAN edge HTTPS address
+            <input value={lanUrl} onChange={(e) => setLanUrl(e.target.value)} placeholder="https://kitchen.local:8443" />
+          </label>
+          <label>LAN pairing secret
+            <input type="password" value={lanToken} onChange={(e) => setLanToken(e.target.value)} autoComplete="off" />
+          </label>
+          <button className="secondary" onClick={() => {
+            try {
+              const settings = saveLanSettings(lanUrl, lanToken);
+              void listLanOrders(settings).then(() => {
+                setLanSettings(settings); setOfflineWarning(""); setTableNotice("LAN kitchen edge paired.");
+              }).catch((e) => setOfflineWarning(`Could not connect to LAN edge: ${message(e)}`));
+            } catch (e) { setOfflineWarning(message(e)); }
+          }}>Pair LAN kitchen</button>
+          {lanSettings && <p className="notice">LAN relay configured: {lanSettings.url}</p>}
+        </div>
         {offlineWarning && <p className="error">{offlineWarning}</p>}
         <div className="panel pos-offline-queue">
           <h4>Local order journal</h4>
           <p>{offlineOrders.filter((x) => x.status === "QUEUED").length} queued ·
              {offlineOrders.filter((x) => x.status === "CONFLICT").length} conflicts</p>
-          <button className="secondary" disabled={!networkOnline || busy}
+          <button className="secondary" disabled={offlineMode || busy}
             onClick={() => void syncPending()}>Synchronize now</button>
           {offlineOrders.filter((x) => x.status !== "SYNCED").map((x) => (
             <button key={x.offlineTxId} className="secondary" onClick={() => { setActiveOffline(x); setCart([]); }}>
@@ -671,6 +719,10 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           <button onClick={() => void sendToKitchen()} disabled={busy}>
             {addingRound ? "Send new round to kitchen" : "Send to kitchen"}
           </button>}
+        {cart.length > 0 && !order && !activeOffline && !offlineMode && <button className="secondary"
+          disabled={busy} onClick={() => { setForceOffline(true); void queueCurrentOffline().catch((e) => setError(message(e))); }}>
+          Save order locally before cloud checkout
+        </button>}
         {terminalSession && <p className="notice">Terminal request pending: {terminalSession.instructions ?? "Ask customer to tap their card."} Confirm only after your acquirer settles the checkout.</p>}
         {order && <p>Paid: {formatMoney(order.paidPesewas)} · Remaining balance: <strong>{formatMoney(balanceDue)}</strong></p>}
         {digital ? (
@@ -694,9 +746,9 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
                 placeholder={(balanceDue / 100).toFixed(2)} /></label>
             <div className="flex-row">
               <button onClick={() => void payCash()} disabled={busy}>Cash</button>
-              <button className="secondary" onClick={() => void startDigital()} disabled={busy || !networkOnline || !!activeOffline}>MoMo / card</button>
-              <button className="secondary" onClick={() => void showPaymentBarcode()} disabled={busy || !networkOnline || !!activeOffline}>Payment QR / barcode</button>
-              <button className="secondary" onClick={() => void startContactless()} disabled={busy || !networkOnline || !terminalId || !!activeOffline}>NFC tap on terminal</button>
+              <button className="secondary" onClick={() => void startDigital()} disabled={busy || offlineMode || !!activeOffline}>MoMo / card</button>
+              <button className="secondary" onClick={() => void showPaymentBarcode()} disabled={busy || offlineMode || !!activeOffline}>Payment QR / barcode</button>
+              <button className="secondary" onClick={() => void startContactless()} disabled={busy || offlineMode || !terminalId || !!activeOffline}>NFC tap on terminal</button>
               {!order && <button className="secondary" onClick={() => setCart([])}>Clear</button>}
             </div>
           </>
