@@ -15,6 +15,28 @@ import org.junit.jupiter.api.Test;
 
 class ComplianceAlgorithmsTest {
 
+    /** Test-only NIA adapter; never included in the production application. */
+    private static final class SimulatedNiaClientTest implements GhanaCardVerificationService.NiaClient {
+        @Override
+        public GhanaCardVerificationService.NiaResponse queryNia(String idNumber, String fullName, LocalDate dateOfBirth) {
+            if (idNumber.startsWith("GHA-999")) {
+                return new GhanaCardVerificationService.NiaResponse(
+                        GhanaCardVerificationService.Status.UNAVAILABLE, 0.0, null, null, "NIA test fixture unavailable");
+            }
+            if (idNumber.startsWith("GHA-000")) {
+                return new GhanaCardVerificationService.NiaResponse(
+                        GhanaCardVerificationService.Status.MISMATCHED, 35.0, "Different Person",
+                        LocalDate.of(1980, 1, 1), "NIA test fixture mismatch");
+            }
+            return new GhanaCardVerificationService.NiaResponse(
+                    GhanaCardVerificationService.Status.VERIFIED, 99.5,
+                    fullName, dateOfBirth, "Simulated successful NIA registry match (test only)");
+        }
+        @Override public boolean isSimulated() { return true; }
+        @Override public String getProviderName() { return "SIMULATED_NIA_SANDBOX"; }
+    }
+
+
     // --- 040: Ghana Card Matching ---
     @Test
     @DisplayName("040: Validates Ghana Card format and check digit, and handles unconfigured and test NIA matching")
@@ -37,7 +59,7 @@ class ComplianceAlgorithmsTest {
         assertThat(unconfResult.simulationProvider()).isEqualTo("UNCONFIGURED_NIA");
 
         // 2. Test sandbox double
-        GhanaCardVerificationService service = new GhanaCardVerificationService(null, new GhanaCardVerificationService.SimulatedNiaClient());
+        GhanaCardVerificationService service = new GhanaCardVerificationService(null, new SimulatedNiaClientTest());
         var result = service.verify(customerId, validId, "Kwame Mensah", LocalDate.of(1990, 5, 15), "M");
         assertThat(result.status()).isEqualTo(GhanaCardVerificationService.Status.VERIFIED);
         assertThat(result.simulated()).isTrue();

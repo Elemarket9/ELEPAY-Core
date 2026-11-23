@@ -26,8 +26,7 @@ public class RegulatoryReportingService {
 
     public enum ReportStatus {
         DRAFT,
-        APPROVED_FOR_FILING,
-        SUBMITTED
+        APPROVED_FOR_FILING
     }
 
     public record RegulatoryReport(
