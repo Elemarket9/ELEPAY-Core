@@ -533,7 +533,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         {orderType !== "RETAIL" && cart.length > 0 && (!order || addingRound) && 
           <button onClick={() => void sendToKitchen()} disabled={busy}>
             {addingRound ? "Send new round to kitchen" : "Send to kitchen"}
-          </button>}}
+          </button>}
         {terminalSession && <p className="notice">Terminal request pending: {terminalSession.instructions ?? "Ask customer to tap their card."} Confirm only after your acquirer settles the checkout.</p>}
         {order && <p>Paid: {formatMoney(order.paidPesewas)} · Remaining balance: <strong>{formatMoney(balanceDue)}</strong></p>}
         {digital ? (
