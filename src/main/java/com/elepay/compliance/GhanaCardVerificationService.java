@@ -85,6 +85,10 @@ public class GhanaCardVerificationService {
             throw ApiException.badRequest("invalid_ghana_card_format", "Invalid Ghana Card number format or check digit");
         }
 
+        if (niaClient.isSimulated()) {
+            throw ApiException.unprocessable("IDENTITY_PROVIDER_NOT_CONFIGURED",
+                    "Official identity verification provider is required; synthetic verification is forbidden");
+        }
         NiaResponse response = niaClient.queryNia(normalizedId, fullName, dateOfBirth);
         UUID verificationId = UUID.randomUUID();
         boolean isSimulated = niaClient.isSimulated();
