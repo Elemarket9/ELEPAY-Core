@@ -85,7 +85,7 @@ public class AirtelTigoProductionRail implements PaymentRail {
         this(
                 json,
                 health,
-                (baseUrl == null || baseUrl.isBlank()) ? URI.create("https://api.at.com.gh") : productionBase(baseUrl),
+                (baseUrl == null || baseUrl.isBlank()) ? null : productionBase(baseUrl),
                 new Credentials(clientId, clientSecret, merchantId, webhookSecret),
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
                         .followRedirects(HttpClient.Redirect.NEVER).build()
@@ -109,7 +109,7 @@ public class AirtelTigoProductionRail implements PaymentRail {
 
     public static URI productionBase(String url) {
         if (url == null || url.isBlank()) {
-            return URI.create("https://api.at.com.gh");
+            throw new IllegalStateException("RAIL_NOT_CONFIGURED: explicit production API origin required for AT Money");
         }
         URI u = URI.create(url);
         if (!"https".equalsIgnoreCase(u.getScheme()) || u.getHost() == null
@@ -129,7 +129,7 @@ public class AirtelTigoProductionRail implements PaymentRail {
     }
 
     public boolean isConfigured() {
-        return credentials != null && credentials.isValid();
+        return base != null && credentials != null && credentials.isValid();
     }
 
     @Override
@@ -173,7 +173,7 @@ public class AirtelTigoProductionRail implements PaymentRail {
             return new Result(Status.FAILED, null, request.amount(), request.currency(), null, null, "Unsupported AirtelTigo destination");
         }
         if (!isConfigured()) {
-            return Result.unavailable("AirtelTigo AT Money production credentials not configured for charge");
+            return Result.unavailable("RAIL_NOT_CONFIGURED: AirtelTigo AT Money production credentials not configured for charge");
         }
         return submit("charge", request.reference(), request.amount(), request.currency(), request.msisdn(), request.description());
     }
@@ -184,7 +184,7 @@ public class AirtelTigoProductionRail implements PaymentRail {
             return new Result(Status.FAILED, null, request.amount(), request.currency(), null, null, "Unsupported AirtelTigo destination");
         }
         if (!isConfigured()) {
-            return Result.unavailable("AirtelTigo AT Money production credentials not configured for payout");
+            return Result.unavailable("RAIL_NOT_CONFIGURED: AirtelTigo AT Money production credentials not configured for payout");
         }
         return submit("payout", request.reference(), request.amount(), request.currency(), request.accountNumber(), request.description());
     }
@@ -270,7 +270,7 @@ public class AirtelTigoProductionRail implements PaymentRail {
             return Result.unknown("Unsupported AirtelTigo query direction: " + direction);
         }
         if (!isConfigured()) {
-            return Result.unavailable("AirtelTigo AT Money production credentials not configured for query");
+            return Result.unavailable("RAIL_NOT_CONFIGURED: AirtelTigo AT Money production credentials not configured for query");
         }
         long start = System.currentTimeMillis();
         try {
