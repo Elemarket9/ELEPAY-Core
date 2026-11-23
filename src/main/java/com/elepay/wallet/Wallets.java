@@ -5,6 +5,7 @@ import com.elepay.common.Audit;
 import com.elepay.common.Idempotency;
 import com.elepay.common.References;
 import com.elepay.identity.Actor;
+import com.elepay.identity.KillSwitchService;
 import com.elepay.operations.EmtechCapture;
 import com.elepay.ledger.Ledger;
 import com.elepay.outbox.Outbox;
@@ -35,9 +36,14 @@ public class Wallets {
     private final TransferLimits limits;
     private final Outbox outbox;
     private final EmtechCapture regulatory;
+    private final KillSwitchService killSwitch;
+
+    @org.springframework.beans.factory.annotation.Value("${elepay.wallet.require-recipient-confirmation:true}")
+    private boolean requireRecipientConfirmation = true;
 
     Wallets(JdbcClient db, Ledger ledger, Idempotency idempotency, Audit audit, TransferLimits limits, Outbox outbox,
-            EmtechCapture regulatory) {
+            EmtechCapture regulatory,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) KillSwitchService killSwitch) {
         this.db = db;
         this.ledger = ledger;
         this.idempotency = idempotency;
@@ -45,6 +51,7 @@ public class Wallets {
         this.limits = limits;
         this.outbox = outbox;
         this.regulatory = regulatory;
+        this.killSwitch = killSwitch;
     }
 
     public record Enrollment(@NotBlank @Size(max = 255) String subject,
@@ -61,10 +68,9 @@ public class Wallets {
             this(recipient, amount, null);
         }
     }
-    public record Receipt(UUID transactionId, String reference, long amount, String currency,
-                          Long senderBalance, Long recipientBalance) {
+    public record Receipt(UUID transactionId, String reference, long amount, String currency, Long senderBalance) {
         public Receipt(UUID transactionId, String reference, long amount, String currency) {
-            this(transactionId, reference, amount, currency, null, null);
+            this(transactionId, reference, amount, currency, null);
         }
     }
 
@@ -155,6 +161,15 @@ public class Wallets {
 
     public Receipt send(UUID sender, String scope, String key, UUID recipient, long amount, UUID confirmationId,
                         String channel, String ephemeralIp) {
+        if (killSwitch != null) {
+            if (!killSwitch.isModuleEnabled("consumer-w2w")) {
+                throw ApiException.notFound("FEATURE_NOT_ENABLED", "This module is disabled");
+            }
+            killSwitch.requirePayoutsAllowed(null);
+        }
+        if (requireRecipientConfirmation && confirmationId == null) {
+            throw ApiException.badRequest("confirmation_required", "Confirm the recipient name before sending");
+        }
         if (sender.equals(recipient)) throw ApiException.badRequest("same_wallet", "Choose a different wallet");
         // Lock both customer rows in id order (Algorithm 002)
         List<UUID> active = db.sql("""
@@ -242,9 +257,7 @@ public class Wallets {
         regulatory.walletTransfer(outgoing, null);
 
         long senderBalance = ledger.balance(available(sender));
-        long recipientBalance = ledger.balance(available(recipient));
-
-        return new Receipt(transaction, reference, amount, Ledger.GHS, senderBalance, recipientBalance);
+        return new Receipt(transaction, reference, amount, Ledger.GHS, senderBalance);
     }
 
     private void recordTransfer(UUID id, String reference, UUID customer, String kind, long amount,

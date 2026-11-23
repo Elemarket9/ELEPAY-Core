@@ -89,6 +89,29 @@ public class ProductionSafetyCheck {
         if (coolingOffHours < 24) {
             p.add("elepay.security.destination-cooling-off-hours must be >= 24 in production");
         }
+        if (!env.getProperty("elepay.security.destination-oob-required", Boolean.class, true)) {
+            p.add("elepay.security.destination-oob-required must be true");
+        }
+        if (!env.getProperty("elepay.security.destination-name-match-required", Boolean.class, true)) {
+            p.add("elepay.security.destination-name-match-required must be true");
+        }
+        if (!env.getProperty("elepay.security.dual-control.enforced", Boolean.class, true)) {
+            p.add("elepay.security.dual-control.enforced must be true");
+        }
+        if (!env.getProperty("elepay.wallet.require-recipient-confirmation", Boolean.class, true)) {
+            p.add("elepay.wallet.require-recipient-confirmation must be true");
+        }
+        if (!env.getProperty("elepay.wallet.topup-own-msisdn-only", Boolean.class, true)) {
+            p.add("elepay.wallet.topup-own-msisdn-only must be true");
+        }
+        String bdk = env.getProperty("elepay.pos.dukpt.bdk-hex", "");
+        if (bdk.isBlank() || bdk.equalsIgnoreCase("0123456789ABCDEFFEDCBA9876543210")) {
+            p.add("elepay.pos.dukpt.bdk-hex must be a KMS or HSM key and must not be the public ANSI test key");
+        }
+        String proxies = env.getProperty("elepay.security.trusted-proxies", "");
+        if (proxies.contains("127.0.0.1") || proxies.contains("0.0.0.0/0") || proxies.contains("::1")) {
+            p.add("elepay.security.trusted-proxies must list only real ingress addresses, never loopback or the whole internet");
+        }
         for (String secretProp : List.of(
                 "elepay.security.signing-secret",
                 "elepay.vault.master-key",

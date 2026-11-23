@@ -1,6 +1,7 @@
 package com.elepay.ussd;
 
 import com.elepay.common.ApiException;
+import com.elepay.common.CallbackAuthenticity;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
@@ -8,6 +9,7 @@ import java.util.Map;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import tools.jackson.databind.JsonNode;
@@ -26,23 +28,38 @@ import tools.jackson.databind.ObjectMapper;
 class UssdGateways {
     private final UssdMenu menu;
     private final ObjectMapper json;
+    private final JdbcClient db;
     private final String genericSecret;
 
-    UssdGateways(UssdMenu menu, ObjectMapper json, @Value("${elepay.ussd.generic.secret:}") String genericSecret) {
+    UssdGateways(UssdMenu menu, ObjectMapper json, JdbcClient db,
+                 @Value("${elepay.ussd.generic.secret:}") String genericSecret) {
         this.menu = menu;
         this.json = json;
+        this.db = db;
         this.genericSecret = genericSecret;
     }
 
     @PostMapping("/v1/ussd/generic")
     public Map<String, Object> generic(@RequestBody String body,
-                                       @RequestHeader(value = "X-Ussd-Signature", required = false) String signature) {
+                                       @RequestHeader(value = "X-Ussd-Signature", required = false) String signature,
+                                       @RequestHeader(value = "X-Ussd-Timestamp", required = false) String timestamp,
+                                       @RequestHeader(value = "X-Ussd-Nonce", required = false) String nonce) {
         if (genericSecret.isBlank()) {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "ussd_not_connected", "No USSD gateway is connected");
         }
-        if (signature == null || !MessageDigest.isEqual(signature.toLowerCase().getBytes(StandardCharsets.UTF_8),
-                sign(genericSecret, body).getBytes(StandardCharsets.UTF_8))) {
+        try {
+            CallbackAuthenticity.verify(genericSecret, Map.of(
+                    "x-callback-timestamp", timestamp == null ? "" : timestamp,
+                    "x-callback-nonce", nonce == null ? "" : nonce,
+                    "x-ussd-signature", signature == null ? "" : signature
+            ), body, "x-ussd-signature");
+        } catch (IllegalArgumentException e) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "invalid_signature", "Invalid gateway signature");
+        }
+        int stored = db.sql("INSERT INTO callback_replay_nonce (nonce) VALUES (:n) ON CONFLICT DO NOTHING")
+                .param("n", "ussd:" + nonce).update();
+        if (stored == 0) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "replayed_callback", "This gateway request was already used");
         }
         JsonNode node = json.readTree(body);
         String type = node.path("type").asString("continue");
@@ -52,13 +69,7 @@ class UssdGateways {
         return Map.of("message", response.message(), "end", response.end());
     }
 
-    static String sign(String secret, String body) {
-        try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            return HexFormat.of().formatHex(mac.doFinal(body.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
-        }
+    static String sign(String secret, String timestamp, String nonce, String body) {
+        return com.elepay.common.HmacVerification.computeHex(secret, timestamp + "." + nonce + "." + body);
     }
 }

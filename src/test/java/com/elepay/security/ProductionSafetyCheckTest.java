@@ -20,7 +20,8 @@ class ProductionSafetyCheckTest {
                 .withProperty("elepay.integrity.ed25519-private-key", "configured")
                 .withProperty("elepay.integrity.mldsa65-private-key", "configured")
                 .withProperty("spring.security.oauth2.resourceserver.jwt.audiences", "elepay-api")
-                .withProperty("server.forward-headers-strategy", "native");
+                .withProperty("server.forward-headers-strategy", "native")
+                .withProperty("elepay.pos.dukpt.bdk-hex", "A1B2C3D4E5F60718293A4B5C6D7E8F90");
     }
 
     @Test

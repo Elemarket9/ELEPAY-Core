@@ -61,6 +61,12 @@ class FxApi {
 
     @PostMapping("/v1/fx/partners/{partner}/callbacks")
     public Map<String, String> callback(@PathVariable String partner, @RequestBody String body, HttpServletRequest request) {
+        String ts = request.getHeader("X-Callback-Timestamp");
+        String nonce = request.getHeader("X-Callback-Nonce");
+        if (ts == null || nonce == null || ts.isBlank() || nonce.isBlank()) {
+            throw new ApiException(org.springframework.http.HttpStatus.UNAUTHORIZED, "invalid_callback",
+                    "Partner callbacks must include a timestamp and nonce");
+        }
         FxPartner.Notification n;
         try {
             n = fx.partner(partner).verify(headers(request), body);

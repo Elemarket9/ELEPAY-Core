@@ -188,18 +188,22 @@ class TelecelCashProductionRailTest {
         );
 
         String body = "{\"event\":\"charge.success\",\"data\":{\"reference\":\"TEL-100\",\"status\":\"SUCCESSFUL\",\"amount\":5000,\"currency\":\"GHS\"}}";
-        String validSig = TelecelCashProductionRail.computeHmac("test-secret", body);
+        String timestamp = String.valueOf(java.time.Instant.now().getEpochSecond());
+        String nonce = "telecel-nonce-1";
+        String validSig = TelecelCashProductionRail.computeHmac("test-secret", timestamp + "." + nonce + "." + body);
 
         // Valid signature passes
-        PaymentRail.Callback callback = rail.verifyCallback(Map.of("x-telecel-signature", validSig), body);
+        PaymentRail.Callback callback = rail.verifyCallback(Map.of(
+                "x-telecel-signature", validSig, "x-callback-timestamp", timestamp, "x-callback-nonce", nonce), body);
         assertThat(callback.result().status()).isEqualTo(PaymentRail.Status.SUCCEEDED);
         assertThat(callback.result().amount()).isEqualTo(5000L);
         assertThat(callback.reference()).isEqualTo("TEL-100");
 
         // Invalid signature throws
-        assertThatThrownBy(() -> rail.verifyCallback(Map.of("x-telecel-signature", "invalid_sig"), body))
+        assertThatThrownBy(() -> rail.verifyCallback(Map.of(
+                "x-telecel-signature", "invalid_sig", "x-callback-timestamp", timestamp, "x-callback-nonce", "telecel-nonce-2"), body))
                 .isInstanceOf(PaymentRail.InvalidCallbackException.class)
-                .hasMessageContaining("Invalid Telecel Cash callback signature");
+                .hasMessageContaining("signature");
 
         // Missing signature throws
         assertThatThrownBy(() -> rail.verifyCallback(Map.of(), body))

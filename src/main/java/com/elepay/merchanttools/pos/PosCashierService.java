@@ -1,20 +1,18 @@
 package com.elepay.merchanttools.pos;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
-import java.util.HexFormat;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class PosCashierService {
+    private static final int MAX_ATTEMPTS = 5;
     private final JdbcClient db;
+    private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
     public PosCashierService(JdbcClient db) {
         this.db = db;
@@ -28,7 +26,12 @@ public class PosCashierService {
             String badgeNumber,
             boolean isActive,
             OffsetDateTime createdAt
-    ) {}
+    ) {
+        /** The hash is never part of an API response. */
+        public Cashier withoutSecret() {
+            return new Cashier(id, merchantId, name, null, badgeNumber, isActive, createdAt);
+        }
+    }
 
     public record Shift(
             UUID id,
@@ -45,21 +48,10 @@ public class PosCashierService {
             String notes
     ) {}
 
-    public static String hashPin(String pin, UUID merchantId) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            String salt = merchantId.toString() + "_elepay_pos_salt";
-            byte[] hash = md.digest((salt + pin).getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
-    }
-
     @Transactional
     public Cashier registerCashier(UUID merchantId, String name, String pin, String badgeNumber) {
         UUID id = UUID.randomUUID();
-        String pinHash = hashPin(pin, merchantId);
+        String pinHash = encoder.encode(pin);
 
         db.sql("""
             INSERT INTO pos_cashier (id, merchant_id, name, pin_hash, badge_number, is_active, created_at)
@@ -72,7 +64,7 @@ public class PosCashierService {
             .param("badgeNumber", badgeNumber)
             .update();
 
-        return getCashier(id).orElseThrow();
+        return getCashier(id).orElseThrow().withoutSecret();
     }
 
     public Optional<Cashier> getCashier(UUID id) {
@@ -96,15 +88,31 @@ public class PosCashierService {
             .optional();
     }
 
+    @Transactional
     public boolean authenticateCashier(UUID merchantId, String badgeNumber, String pin) {
         Optional<Cashier> cashierOpt = findByBadge(merchantId, badgeNumber);
-        if (cashierOpt.isEmpty() || !cashierOpt.get().isActive()) {
+        if (cashierOpt.isEmpty() || !cashierOpt.get().isActive() || cashierOpt.get().pinHash() == null) {
             return false;
         }
-
-        String expectedHash = cashierOpt.get().pinHash();
-        String computedHash = hashPin(pin, merchantId);
-        return MessageDigest.isEqual(expectedHash.getBytes(StandardCharsets.UTF_8), computedHash.getBytes(StandardCharsets.UTF_8));
+        Cashier cashier = cashierOpt.get();
+        var lock = db.sql("SELECT pin_failures, pin_locked_until FROM pos_cashier WHERE id = :id FOR UPDATE")
+                .param("id", cashier.id())
+                .query((rs, i) -> new Object[]{rs.getInt(1), rs.getObject(2, OffsetDateTime.class)})
+                .single();
+        OffsetDateTime lockedUntil = (OffsetDateTime) lock[1];
+        if (lockedUntil != null && lockedUntil.isAfter(OffsetDateTime.now())) return false;
+        if (encoder.matches(pin, cashier.pinHash())) {
+            db.sql("UPDATE pos_cashier SET pin_failures = 0, pin_locked_until = NULL WHERE id = :id")
+                    .param("id", cashier.id()).update();
+            return true;
+        }
+        int failures = (Integer) lock[0] + 1;
+        db.sql("""
+                UPDATE pos_cashier SET pin_failures = :f,
+                       pin_locked_until = CASE WHEN :f >= :max THEN now() + interval '15 minutes' END
+                WHERE id = :id""")
+                .param("f", failures).param("max", MAX_ATTEMPTS).param("id", cashier.id()).update();
+        return false;
     }
 
     @Transactional

@@ -35,14 +35,24 @@ class Merchants {
     private final com.elepay.rails.NameVerifications verifications;
     private final tools.jackson.databind.ObjectMapper json;
     private final com.elepay.outbox.Outbox outbox;
+    private final com.elepay.security.DualControl dualControl;
+    private final OobDelivery oobDelivery;
 
     @org.springframework.beans.factory.annotation.Value("${elepay.security.destination-cooling-off-hours:24}")
     private volatile int destinationCoolingOffHours = 24;
 
+    @org.springframework.beans.factory.annotation.Value("${elepay.security.destination-oob-required:true}")
+    private boolean destinationOobRequired = true;
+
+    @org.springframework.beans.factory.annotation.Value("${elepay.security.destination-name-match-required:true}")
+    private boolean destinationNameMatchRequired = true;
+
     Merchants(JdbcClient db, MerchantAccess access, Ledger ledger, Audit audit, ApiKeys apiKeys, Webhooks webhooks,
               com.elepay.rails.NameVerifications verifications, tools.jackson.databind.ObjectMapper json,
-              com.elepay.outbox.Outbox outbox) {
+              com.elepay.outbox.Outbox outbox, com.elepay.security.DualControl dualControl, OobDelivery oobDelivery) {
         this.outbox = outbox;
+        this.dualControl = dualControl;
+        this.oobDelivery = oobDelivery;
         this.db = db;
         this.access = access;
         this.ledger = ledger;
@@ -193,6 +203,18 @@ class Merchants {
     public MerchantView review(@PathVariable UUID id, @Valid @RequestBody Review request) {
         Actor actor = Actor.current();
         actor.requireOps();
+        String createdBy = db.sql("SELECT created_by FROM merchant WHERE id = :id").param("id", id)
+                .query(String.class).optional().orElseThrow(() -> ApiException.notFound("Merchant not found"));
+        if (createdBy.equals(actor.subject())) {
+            throw ApiException.forbidden("The person who created the merchant cannot review it");
+        }
+        String currentStatus = db.sql("SELECT status FROM merchant WHERE id = :id").param("id", id).query(String.class).single();
+        if (!"pending_review".equals(currentStatus)) {
+            dualControl.hold("FEE_SCHEDULE_CHANGE", "merchant", id.toString(), id,
+                    Map.of("decision", request.decision(), "feeBps", String.valueOf(request.feeBps()),
+                            "feeFixed", String.valueOf(request.feeFixed())),
+                    request.note(), actor);
+        }
         String status = switch (request.decision()) {
             case "approve" -> "active";
             case "reject" -> "rejected";
@@ -330,23 +352,36 @@ class Merchants {
         if (check.outcome() == com.elepay.rails.NameVerification.Outcome.NOT_FOUND) {
             throw ApiException.unprocessable("account_not_found", "The receiving network did not find this account");
         }
-        boolean verified = check.outcome() == com.elepay.rails.NameVerification.Outcome.VERIFIED;
+        String legalName = db.sql("SELECT legal_name FROM merchant WHERE id = :id").param("id", id).query(String.class).single();
+        int nameScore = NameMatch.score(legalName, check.name());
+        boolean networkVerified = check.outcome() == com.elepay.rails.NameVerification.Outcome.VERIFIED;
+        boolean nameOk = !destinationNameMatchRequired || nameScore >= 70;
+        boolean verified = networkVerified && nameOk;
         UUID dest = UUID.randomUUID();
-        int effectiveCoolingHours = request.coolingOffHours() != null ? request.coolingOffHours() : destinationCoolingOffHours;
+        // A client may only lengthen the hold. Zero or a shorter value cannot clear the server minimum.
+        int requestedHours = request.coolingOffHours() == null ? destinationCoolingOffHours : request.coolingOffHours();
+        int effectiveCoolingHours = Math.max(destinationCoolingOffHours, Math.max(requestedHours, 0));
         java.time.OffsetDateTime coolingOffUntil = effectiveCoolingHours > 0
                 ? java.time.OffsetDateTime.now().plusHours(effectiveCoolingHours)
                 : null;
-        boolean requireOob = Boolean.TRUE.equals(request.requireOob());
+        boolean requireOob = destinationOobRequired || Boolean.TRUE.equals(request.requireOob());
         String oobStatus = requireOob ? "pending_oob" : "confirmed";
         String oobToken = References.digits(6);
         String oobHash = com.elepay.common.Idempotency.sha256(oobToken);
+        java.time.OffsetDateTime oobExpires = requireOob ? java.time.OffsetDateTime.now().plusMinutes(15) : null;
+        if (requireOob) {
+            String phone = access.contactPhone(id).orElse(null);
+            String email = db.sql("SELECT contact_email FROM merchant WHERE id = :id").param("id", id)
+                    .query(String.class).optional().orElse(null);
+            oobDelivery.send(phone, email, oobToken);
+        }
 
         db.sql("""
                 INSERT INTO settlement_destination (id, owner_type, owner_id, type, network, account_number, account_name,
                     created_by, verification, verified_name, verified_by, cooling_off_until, oob_verification_status,
-                    oob_token_hash, oob_confirmed_at, updated_at)
+                    oob_token_hash, oob_confirmed_at, oob_expires_at, name_match_score, updated_at)
                 VALUES (:id, 'merchant', :m, :type, :network, :account, :name, :by, :v, :vname, :vby,
-                        :cooling, :oobStatus, :oobHash, :oobAt, now())""")
+                        :cooling, :oobStatus, :oobHash, :oobAt, :oobExp, :score, now())""")
                 .param("id", dest).param("m", id).param("type", request.type()).param("network", request.network())
                 .param("account", account).param("name", request.accountName()).param("by", a.actor().subject())
                 .param("v", verified ? "verified" : "unverified").param("vname", check.name())
@@ -355,33 +390,52 @@ class Merchants {
                 .param("oobStatus", oobStatus)
                 .param("oobHash", oobHash)
                 .param("oobAt", requireOob ? null : java.time.OffsetDateTime.now())
+                .param("oobExp", oobExpires)
+                .param("score", nameScore)
                 .update();
         audit.record(a.actor().subject(), "merchant.destination_added", "merchant:" + id,
                 Map.of("destination", dest.toString(), "type", request.type(), "network", request.network(),
                         "accountLast4", account.substring(account.length() - 4),
-                        "coolingOffHours", String.valueOf(effectiveCoolingHours)));
+                        "coolingOffHours", String.valueOf(effectiveCoolingHours),
+                        "nameMatchScore", String.valueOf(nameScore)));
+        outbox.publish("merchant", id, "merchant.destination_added",
+                Map.of("destination", dest.toString(), "network", request.network(), "oob", oobStatus),
+                java.util.List.of(id));
         return new Destination(dest, request.type(), request.network(), account, request.accountName(), "active",
                 verified ? "verified" : "unverified", check.name(), coolingOffUntil, oobStatus);
     }
 
     @PostMapping("/merchants/{id}/settlement-destinations/{destination}/confirm-oob")
-    @Transactional
+    @Transactional(noRollbackFor = ApiException.class)
     public Map<String, Object> confirmOob(@PathVariable UUID id, @PathVariable UUID destination,
                                           @RequestBody(required = false) OobConfirmRequest request) {
         var a = access.require(id, MANAGE);
         a.actor().requireUser();
         var rowOpt = db.sql("""
-                SELECT oob_token_hash, cooling_off_until FROM settlement_destination
+                SELECT oob_token_hash, cooling_off_until, COALESCE(oob_attempts, 0), oob_expires_at
+                FROM settlement_destination
                 WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'""")
                 .param("d", destination).param("m", id)
-                .query((rs, i) -> new Object[]{rs.getString(1), rs.getObject(2, java.time.OffsetDateTime.class)})
+                .query((rs, i) -> new Object[]{rs.getString(1), rs.getObject(2, java.time.OffsetDateTime.class),
+                        rs.getInt(3), rs.getObject(4, java.time.OffsetDateTime.class)})
                 .optional();
         if (rowOpt.isEmpty()) throw ApiException.notFound("Destination not found");
         String storedHash = (String) rowOpt.get()[0];
-        if (request != null && request.token() != null && !request.token().isBlank() && storedHash != null) {
-            if (!storedHash.equals(com.elepay.common.Idempotency.sha256(request.token().trim()))) {
-                throw ApiException.forbidden("Invalid out-of-band confirmation token");
-            }
+        int attempts = (Integer) rowOpt.get()[2];
+        java.time.OffsetDateTime oobExpires = (java.time.OffsetDateTime) rowOpt.get()[3];
+        if (attempts >= 5) throw ApiException.forbidden("Out-of-band confirmation is locked");
+        if (request == null || request.token() == null || request.token().isBlank() || storedHash == null) {
+            throw ApiException.badRequest("oob_token_required", "Enter the confirmation code sent to the merchant contact");
+        }
+        if (oobExpires != null && oobExpires.isBefore(java.time.OffsetDateTime.now())) {
+            throw ApiException.forbidden("The confirmation code has expired");
+        }
+        String presented = com.elepay.common.Idempotency.sha256(request.token().trim());
+        if (!java.security.MessageDigest.isEqual(storedHash.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                presented.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+            db.sql("UPDATE settlement_destination SET oob_attempts = oob_attempts + 1, updated_at = now() WHERE id = :d")
+                    .param("d", destination).update();
+            throw ApiException.forbidden("Invalid out-of-band confirmation token");
         }
         int effectiveCoolingHours = destinationCoolingOffHours;
         java.time.OffsetDateTime existingCooling = (java.time.OffsetDateTime) rowOpt.get()[1];
@@ -439,6 +493,9 @@ class Merchants {
     public Map<String, String> verifyDestination(@PathVariable UUID id, @PathVariable UUID destination) {
         Actor actor = Actor.current();
         actor.requireOps();
+        dualControl.hold("DESTINATION_OPS_VERIFY", "settlement_destination", destination.toString(), id,
+                Map.of("merchantId", id.toString(), "destinationId", destination.toString()),
+                "verify settlement destination", actor);
         int updated = db.sql("""
                 UPDATE settlement_destination SET verification = 'verified', verified_by = :by,
                        verified_name = coalesce(verified_name, account_name),

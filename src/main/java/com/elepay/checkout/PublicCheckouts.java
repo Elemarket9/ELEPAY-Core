@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -39,6 +41,7 @@ class PublicCheckouts {
     private final Idempotency idempotency;
     private final JdbcClient db;
     private final TransactionTemplate tx;
+    private final ConcurrentHashMap<String, AtomicInteger> payAttempts = new ConcurrentHashMap<>();
     private final String publicBaseUrl;
     private final com.elepay.identity.KillSwitchService killSwitchService;
     private final EmtechCapture regulatory;
@@ -106,8 +109,8 @@ class PublicCheckouts {
     public CheckoutService.PaymentResult payWithRail(@PathVariable String reference,
                                                      @RequestHeader("Idempotency-Key") String key,
                                                      @RequestHeader(value = "X-Elepay-Channel", required = false) String channel,
-                                                     HttpServletRequest http,
-                                                     @Valid @RequestBody RailPay request) {
+                                                     @Valid @RequestBody RailPay request,
+                                                     HttpServletRequest httpRequest) {
         String msisdn = null;
         if (request.method().equals("momo")) {
             msisdn = References.msisdn(request.phone());
@@ -116,9 +119,15 @@ class PublicCheckouts {
             }
         }
         String phone = msisdn;
+        int attempts = payAttempts.computeIfAbsent(reference, r -> new AtomicInteger()).incrementAndGet();
+        if (attempts > 8) {
+            throw new com.elepay.common.ApiException(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
+                    "checkout_rate_limited", "Too many payment attempts for this checkout");
+        }
+        String caller = httpRequest.getRemoteAddr() == null ? "unknown" : httpRequest.getRemoteAddr();
         String payChannel = payChannel(channel);
-        String coarseIp = http.getRemoteAddr();
-        var started = tx.execute(s -> idempotency.execute("checkout-pay:" + reference, key, request,
+        String coarseIp = "unknown".equals(caller) ? null : caller;
+        var started = tx.execute(s -> idempotency.execute("checkout-pay:" + reference + ":" + caller, key, request,
                 CheckoutService.PaymentResult.class, () -> {
                     checkouts.noteChannel(reference, payChannel);
                     regulatory.rememberCheckout(checkouts.load(reference, false).id(), coarseIp);

@@ -418,6 +418,26 @@
         },
         "type" : "object"
       },
+      "CeilingChange" : {
+        "properties" : {
+          "autoFreezeOnBreach" : {
+            "type" : "boolean"
+          },
+          "dailyCeilingPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "hourlyCeilingPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "maxSinglePayoutPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "ChargeRequest" : {
         "properties" : {
           "amount" : {
@@ -558,6 +578,28 @@
             "type" : "integer"
           },
           "notes" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Complaint" : {
+        "properties" : {
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "statusAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "type" : {
+            "type" : "string"
+          },
+          "userId" : {
             "type" : "string"
           }
         },
@@ -789,6 +831,11 @@
             "maxLength" : 100,
             "minLength" : 0,
             "pattern" : "[A-Za-z0-9._:-]+",
+            "type" : "string"
+          },
+          "payerPhone" : {
+            "maxLength" : 40,
+            "minLength" : 0,
             "type" : "string"
           }
         },
@@ -1197,6 +1244,20 @@
         "required" : [ "accountName", "accountNumber", "network", "type" ],
         "type" : "object"
       },
+      "DeviceEventRequest" : {
+        "properties" : {
+          "description" : {
+            "type" : "string"
+          },
+          "health" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "DigitalCheckout" : {
         "properties" : {
           "amount" : {
@@ -1531,25 +1592,24 @@
       },
       "Event" : {
         "properties" : {
-          "aggregateId" : {
+          "description" : {
             "type" : "string"
           },
-          "createdAt" : {
-            "format" : "date-time",
+          "deviceId" : {
             "type" : "string"
           },
-          "eventId" : {
+          "health" : {
+            "type" : "string"
+          },
+          "id" : {
             "format" : "uuid",
             "type" : "string"
           },
-          "payload" : {
-            "$ref" : "#/components/schemas/JsonNode"
+          "occurredAt" : {
+            "format" : "date-time",
+            "type" : "string"
           },
-          "sequence" : {
-            "format" : "int64",
-            "type" : "integer"
-          },
-          "type" : {
+          "status" : {
             "type" : "string"
           }
         },
@@ -1907,85 +1967,6 @@
         "required" : [ "accountName", "accountNumber", "network", "reference", "type" ],
         "type" : "object"
       },
-      "JsonNode" : {
-        "properties" : {
-          "array" : {
-            "type" : "boolean"
-          },
-          "bigDecimal" : {
-            "type" : "boolean"
-          },
-          "bigInteger" : {
-            "type" : "boolean"
-          },
-          "binary" : {
-            "type" : "boolean"
-          },
-          "boolean" : {
-            "type" : "boolean"
-          },
-          "container" : {
-            "type" : "boolean"
-          },
-          "double" : {
-            "type" : "boolean"
-          },
-          "embeddedValue" : {
-            "type" : "boolean"
-          },
-          "empty" : {
-            "type" : "boolean"
-          },
-          "float" : {
-            "type" : "boolean"
-          },
-          "floatingPointNumber" : {
-            "type" : "boolean"
-          },
-          "int" : {
-            "type" : "boolean"
-          },
-          "integralNumber" : {
-            "type" : "boolean"
-          },
-          "long" : {
-            "type" : "boolean"
-          },
-          "missingNode" : {
-            "type" : "boolean"
-          },
-          "nodeType" : {
-            "enum" : [ "ARRAY", "BINARY", "BOOLEAN", "MISSING", "NULL", "NUMBER", "OBJECT", "POJO", "STRING" ],
-            "type" : "string"
-          },
-          "null" : {
-            "type" : "boolean"
-          },
-          "number" : {
-            "type" : "boolean"
-          },
-          "object" : {
-            "type" : "boolean"
-          },
-          "pojo" : {
-            "type" : "boolean"
-          },
-          "short" : {
-            "type" : "boolean"
-          },
-          "string" : {
-            "type" : "boolean"
-          },
-          "textual" : {
-            "deprecated" : true,
-            "type" : "boolean"
-          },
-          "valueNode" : {
-            "type" : "boolean"
-          }
-        },
-        "type" : "object"
-      },
       "KeyRequest" : {
         "properties" : {
           "allowedIps" : {
@@ -2204,6 +2185,32 @@
             "type" : "array"
           }
         },
+        "type" : "object"
+      },
+      "Locality" : {
+        "properties" : {
+          "city" : {
+            "maxLength" : 80,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "country" : {
+            "minLength" : 1,
+            "pattern" : "[A-Z]{2}",
+            "type" : "string"
+          },
+          "region" : {
+            "maxLength" : 10,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "source" : {
+            "minLength" : 1,
+            "pattern" : "PROFILE|GHANA_CARD",
+            "type" : "string"
+          }
+        },
+        "required" : [ "city", "country", "source" ],
         "type" : "object"
       },
       "LookupRequest" : {
@@ -2457,6 +2464,22 @@
         },
         "type" : "object"
       },
+      "MnoLocality" : {
+        "properties" : {
+          "city" : {
+            "maxLength" : 80,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "region" : {
+            "maxLength" : 10,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "required" : [ "city" ],
+        "type" : "object"
+      },
       "ModuleKillSwitchRequest" : {
         "properties" : {
           "active" : {
@@ -2588,6 +2611,25 @@
           }
         },
         "required" : [ "checkout", "reason" ],
+        "type" : "object"
+      },
+      "OpenRequest" : {
+        "properties" : {
+          "customerId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "description" : {
+            "maxLength" : 2000,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "type" : {
+            "minLength" : 1,
+            "type" : "string"
+          }
+        },
+        "required" : [ "description", "type" ],
         "type" : "object"
       },
       "OpenShiftRequest" : {
@@ -2949,6 +2991,10 @@
       },
       "PinRequest" : {
         "properties" : {
+          "currentPin" : {
+            "pattern" : "[0-9]{4,6}",
+            "type" : "string"
+          },
           "pin" : {
             "pattern" : "[0-9]{4,6}",
             "type" : "string"
@@ -3542,10 +3588,6 @@
           "currency" : {
             "type" : "string"
           },
-          "recipientBalance" : {
-            "format" : "int64",
-            "type" : "integer"
-          },
           "reference" : {
             "type" : "string"
           },
@@ -3667,8 +3709,42 @@
       },
       "RegisterTerminalRequest" : {
         "properties" : {
+          "address" : {
+            "type" : "string"
+          },
           "branchId" : {
             "format" : "uuid",
+            "type" : "string"
+          },
+          "city" : {
+            "type" : "string"
+          },
+          "connectionType" : {
+            "type" : "string"
+          },
+          "country" : {
+            "type" : "string"
+          },
+          "deviceDescription" : {
+            "type" : "string"
+          },
+          "deviceName" : {
+            "type" : "string"
+          },
+          "latitude" : {
+            "type" : "string"
+          },
+          "location" : {
+            "type" : "string"
+          },
+          "longitude" : {
+            "type" : "string"
+          },
+          "manufactureYear" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "manufacturer" : {
             "type" : "string"
           },
           "merchantId" : {
@@ -3678,7 +3754,52 @@
           "model" : {
             "type" : "string"
           },
+          "region" : {
+            "type" : "string"
+          },
           "serialNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "RegulatoryProfile" : {
+        "properties" : {
+          "address" : {
+            "type" : "string"
+          },
+          "city" : {
+            "type" : "string"
+          },
+          "connectionType" : {
+            "type" : "string"
+          },
+          "country" : {
+            "type" : "string"
+          },
+          "deviceDescription" : {
+            "type" : "string"
+          },
+          "deviceName" : {
+            "type" : "string"
+          },
+          "latitude" : {
+            "type" : "string"
+          },
+          "location" : {
+            "type" : "string"
+          },
+          "longitude" : {
+            "type" : "string"
+          },
+          "manufactureYear" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "manufacturer" : {
+            "type" : "string"
+          },
+          "region" : {
             "type" : "string"
           }
         },
@@ -3851,6 +3972,51 @@
           "label" : {
             "maxLength" : 100,
             "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Row" : {
+        "properties" : {
+          "attempts" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "fact" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "idempotencyKey" : {
+            "type" : "string"
+          },
+          "lastCode" : {
+            "type" : "string"
+          },
+          "lastError" : {
+            "type" : "string"
+          },
+          "lastStatus" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "resource" : {
+            "type" : "string"
+          },
+          "sequence" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "sourceId" : {
+            "type" : "string"
+          },
+          "sourceType" : {
+            "type" : "string"
+          },
+          "status" : {
             "type" : "string"
           }
         },
@@ -4138,6 +4304,21 @@
           }
         },
         "required" : [ "reason", "status" ],
+        "type" : "object"
+      },
+      "StatusRequest" : {
+        "properties" : {
+          "resolution" : {
+            "maxLength" : 2000,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "status" : {
+            "minLength" : 1,
+            "type" : "string"
+          }
+        },
+        "required" : [ "status" ],
         "type" : "object"
       },
       "SuspenseItem" : {
@@ -4732,6 +4913,13 @@
           "schema" : {
             "type" : "string"
           }
+        }, {
+          "in" : "header",
+          "name" : "X-Elepay-Channel",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
         } ],
         "responses" : {
           "200" : {
@@ -4746,6 +4934,71 @@
           }
         },
         "tags" : [ "public-checkouts" ]
+      }
+    },
+    "/v1/complaints" : {
+      "post" : {
+        "operationId" : "open_1",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/OpenRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Complaint"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "emtech-complaint-api" ]
+      }
+    },
+    "/v1/complaints/{id}/status" : {
+      "post" : {
+        "operationId" : "status",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/StatusRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Complaint"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "emtech-complaint-api" ]
       }
     },
     "/v1/customers/mandates" : {
@@ -5914,6 +6167,54 @@
         "tags" : [ "merchants" ]
       }
     },
+    "/v1/merchants/{id}/branches/{branchId}/locality" : {
+      "put" : {
+        "operationId" : "branchLocality",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "branchId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Locality"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "merchants" ]
+      }
+    },
     "/v1/merchants/{id}/delegations/{delegate}" : {
       "delete" : {
         "operationId" : "revokeDelegation",
@@ -6034,6 +6335,46 @@
                     "$ref" : "#/components/schemas/Event"
                   },
                   "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "merchants" ]
+      }
+    },
+    "/v1/merchants/{id}/locality" : {
+      "put" : {
+        "operationId" : "merchantLocality",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Locality"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
                 }
               }
             },
@@ -6403,6 +6744,54 @@
         "tags" : [ "merchants" ]
       }
     },
+    "/v1/merchants/{id}/settlement-destinations/{destination}/locality" : {
+      "put" : {
+        "operationId" : "destinationLocality",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "destination",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Locality"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "merchants" ]
+      }
+    },
     "/v1/merchants/{id}/webhooks" : {
       "get" : {
         "operationId" : "listWebhooks",
@@ -6762,6 +7151,43 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/CheckoutSummary"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "checkouts" ]
+      }
+    },
+    "/v1/merchants/{merchantId}/checkouts/{reference}/reset-payment" : {
+      "post" : {
+        "operationId" : "resetPayment",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "reference",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
                 }
               }
             },
@@ -7186,7 +7612,7 @@
     },
     "/v1/merchants/{merchantId}/payouts" : {
       "get" : {
-        "operationId" : "list_2",
+        "operationId" : "list_3",
         "parameters" : [ {
           "in" : "path",
           "name" : "merchantId",
@@ -7879,6 +8305,46 @@
         "tags" : [ "wallets" ]
       }
     },
+    "/v1/ops/customers/{id}/mno-locality" : {
+      "put" : {
+        "operationId" : "saveMnoLocality",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/MnoLocality"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "wallets" ]
+      }
+    },
     "/v1/ops/customers/{id}/phone" : {
       "put" : {
         "operationId" : "changePhone",
@@ -7941,6 +8407,36 @@
           },
           "required" : true
         },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "customer-admin" ]
+      }
+    },
+    "/v1/ops/customers/{id}/ussd-pin/reset" : {
+      "post" : {
+        "operationId" : "resetUssdPin",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
         "responses" : {
           "200" : {
             "content" : {
@@ -8051,6 +8547,113 @@
           }
         },
         "tags" : [ "checkout-operations" ]
+      }
+    },
+    "/v1/ops/emtech/device-events" : {
+      "post" : {
+        "operationId" : "deviceEvent",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "additionalProperties" : {
+                  "type" : "string"
+                },
+                "type" : "object"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Event"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "emtech-complaint-api" ]
+      }
+    },
+    "/v1/ops/emtech/submissions" : {
+      "get" : {
+        "operationId" : "list_2",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "status",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "limit",
+          "required" : false,
+          "schema" : {
+            "default" : 100,
+            "format" : "int32",
+            "type" : "integer"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/Row"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "emtech-ops-controller" ]
+      }
+    },
+    "/v1/ops/emtech/submissions/{id}/replay" : {
+      "post" : {
+        "operationId" : "replay",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "sendNow",
+          "required" : false,
+          "schema" : {
+            "default" : false,
+            "type" : "boolean"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "emtech-ops-controller" ]
       }
     },
     "/v1/ops/fx/corridors" : {
@@ -8420,7 +9023,7 @@
     },
     "/v1/ops/kill-switch/status" : {
       "get" : {
-        "operationId" : "status_2",
+        "operationId" : "status_3",
         "responses" : {
           "200" : {
             "content" : {
@@ -8438,7 +9041,7 @@
     },
     "/v1/ops/kill-switches" : {
       "get" : {
-        "operationId" : "status_1",
+        "operationId" : "status_2",
         "responses" : {
           "200" : {
             "content" : {
@@ -8815,6 +9418,37 @@
         "tags" : [ "payout-policy-api" ]
       }
     },
+    "/v1/ops/payouts/velocity-ceilings" : {
+      "put" : {
+        "operationId" : "update",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CeilingChange"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "velocity-ceiling-controller" ]
+      }
+    },
     "/v1/ops/platform-payout-routes" : {
       "get" : {
         "operationId" : "routes",
@@ -8935,7 +9569,7 @@
     },
     "/v1/ops/rails/open" : {
       "get" : {
-        "operationId" : "open_1",
+        "operationId" : "open_2",
         "responses" : {
           "200" : {
             "content" : {
@@ -9705,6 +10339,80 @@
         "tags" : [ "pos-controller" ]
       }
     },
+    "/v1/pos/terminals/{terminalId}/events" : {
+      "post" : {
+        "operationId" : "terminalEvent",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "terminalId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/DeviceEventRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Event"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/terminals/{terminalId}/regulatory" : {
+      "put" : {
+        "operationId" : "saveRegulatory",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "terminalId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegulatoryProfile"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PosTerminal"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
     "/v1/public/checkouts/{reference}" : {
       "get" : {
         "operationId" : "view",
@@ -9748,6 +10456,13 @@
           "schema" : {
             "type" : "string"
           }
+        }, {
+          "in" : "header",
+          "name" : "X-Elepay-Channel",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
         } ],
         "requestBody" : {
           "content" : {
@@ -9776,7 +10491,7 @@
     },
     "/v1/public/checkouts/{reference}/status" : {
       "get" : {
-        "operationId" : "status",
+        "operationId" : "status_1",
         "parameters" : [ {
           "in" : "path",
           "name" : "reference",
@@ -10193,6 +10908,20 @@
           "schema" : {
             "type" : "string"
           }
+        }, {
+          "in" : "header",
+          "name" : "X-Ussd-Timestamp",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "X-Ussd-Nonce",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
         } ],
         "requestBody" : {
           "content" : {
@@ -10229,6 +10958,37 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/Wallet"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "wallets" ]
+      }
+    },
+    "/v1/wallet/locality" : {
+      "put" : {
+        "operationId" : "saveLocality",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Locality"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
                 }
               }
             },
@@ -10371,6 +11131,13 @@
           "schema" : {
             "type" : "string"
           }
+        }, {
+          "in" : "header",
+          "name" : "X-Elepay-Channel",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
         } ],
         "requestBody" : {
           "content" : {
@@ -10404,6 +11171,13 @@
           "in" : "header",
           "name" : "Idempotency-Key",
           "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "X-Elepay-Channel",
+          "required" : false,
           "schema" : {
             "type" : "string"
           }

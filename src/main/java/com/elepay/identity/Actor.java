@@ -23,6 +23,7 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
     public static final String OPS_ADMIN = "ops_admin";
 
     public boolean isOps() { return roles.contains(OPS) || roles.contains(OPS_ADMIN); }
+    public boolean isOpsAdmin() { return roles.contains(OPS_ADMIN); }
     public boolean isApiKey() { return apiKeyMerchant != null; }
     public boolean isCustomer() { return !isOps() && !isApiKey(); }
     public boolean isPublishableKey() { return "publishable".equalsIgnoreCase(keyType); }
@@ -53,6 +54,10 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
 
     public void requireOps() {
         if (!isOps()) throw ApiException.forbidden("Operations role required");
+    }
+
+    public void requireOpsAdmin() {
+        if (!isOpsAdmin()) throw ApiException.forbidden("Operations administrator role required");
     }
 
     public void requireUser() {

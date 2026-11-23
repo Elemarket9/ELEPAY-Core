@@ -1,5 +1,6 @@
 package com.elepay.risk;
 
+import com.elepay.identity.Actor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,10 +14,17 @@ public class RiskController {
         this.riskEngine = riskEngine;
     }
 
+    private static Actor ops() {
+        Actor actor = Actor.current();
+        actor.requireOps();
+        return actor;
+    }
+
     @PostMapping("/evaluate")
     public ResponseEntity<RiskEngineService.ComprehensiveRiskAssessment> evaluateTransaction(
             @RequestBody RiskEngineService.AssessmentRequest request
     ) {
+        ops();
         return ResponseEntity.ok(riskEngine.assessTransaction(request));
     }
 
@@ -30,10 +38,12 @@ public class RiskController {
     public ResponseEntity<StepUpAuthService.VerificationResult> verifyStepUp(
             @RequestBody StepUpVerificationRequest request
     ) {
+        Actor actor = ops();
         return ResponseEntity.ok(riskEngine.getStepUpAuthService().verifyChallenge(
                 request.challengeToken(),
                 request.secretCode(),
-                request.submittedPayload()
+                request.submittedPayload(),
+                actor.subject()
         ));
     }
 
@@ -41,6 +51,7 @@ public class RiskController {
     public ResponseEntity<MerchantRiskService.MerchantRiskEvaluation> evaluateMerchant(
             @RequestBody MerchantRiskService.MerchantMetrics metrics
     ) {
+        ops();
         return ResponseEntity.ok(riskEngine.getMerchantRiskService().evaluateMerchantRisk(metrics));
     }
 
@@ -48,6 +59,7 @@ public class RiskController {
     public ResponseEntity<MuleGraphService.MuleNodeAssessment> recordMuleFlow(
             @RequestBody MuleGraphService.TransactionFlow flow
     ) {
+        ops();
         return ResponseEntity.ok(riskEngine.getMuleGraphService().recordFlowAndAssess(flow));
     }
 
@@ -55,6 +67,7 @@ public class RiskController {
     public ResponseEntity<SyntheticIdentityService.SyntheticIdentityResult> assessSyntheticIdentity(
             @RequestBody SyntheticIdentityService.IdentityProfile profile
     ) {
+        ops();
         return ResponseEntity.ok(riskEngine.getSyntheticIdentityService().assessIdentity(profile));
     }
 
@@ -62,6 +75,7 @@ public class RiskController {
     public ResponseEntity<ChargebackPredictionService.ChargebackAssessment> predictChargeback(
             @RequestBody ChargebackPredictionService.PaymentRiskProfile profile
     ) {
+        ops();
         return ResponseEntity.ok(riskEngine.getChargebackService().predictChargeback(profile));
     }
 }

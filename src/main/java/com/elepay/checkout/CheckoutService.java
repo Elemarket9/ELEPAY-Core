@@ -51,6 +51,12 @@ class CheckoutService {
     private final CustomerDirectory customers;
     private final CheckoutConfigService config;
     private final EmtechCapture regulatory;
+    private com.elepay.identity.KillSwitchService killSwitch;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setKillSwitch(com.elepay.identity.KillSwitchService killSwitch) {
+        this.killSwitch = killSwitch;
+    }
 
     CheckoutService(JdbcClient db, Ledger ledger, MerchantAccess merchants, RailTransactions rails, Outbox outbox,
                     Audit audit, OpsQueue ops, CustomerDirectory customers, CheckoutConfigService config,
@@ -395,6 +401,11 @@ class CheckoutService {
                                    String returnUrl) {
         Checkout current = load(reference, true);
         if (current.status().equals("paid")) return status(reference);
+        String boundPhone = db.sql("SELECT payer_phone FROM checkout WHERE reference = :r")
+                .param("r", reference).query(String.class).optional().orElse(null);
+        if (boundPhone != null && msisdn != null && !boundPhone.equals(msisdn)) {
+            throw ApiException.badRequest("payer_mismatch", "This checkout is bound to a different phone number");
+        }
         var inFlight = db.sql("SELECT id FROM payment_attempt WHERE checkout_id = :c AND status = 'pending'")
                 .param("c", current.id()).query(UUID.class).optional();
         if (inFlight.isPresent()) return status(reference);
@@ -411,6 +422,19 @@ class CheckoutService {
                 .param("m", method).param("fee", fee).param("id", c.id()).update();
         return new PaymentResult(c.reference(), "processing", method, c.subtotal(), fee, total, attempt, "created", null,
                 "Approve the payment on your phone");
+    }
+
+    @Transactional
+    void resetProcessing(UUID merchantId, String reference) {
+        Checkout c = load(reference, true);
+        if (!c.collectorId().equals(merchantId) && c.allocations().stream().noneMatch(a -> a.merchantId().equals(merchantId))) {
+            throw ApiException.notFound("Checkout not found");
+        }
+        if (c.status().equals("paid")) throw ApiException.conflict("already_paid", "A paid checkout cannot be reset");
+        db.sql("UPDATE payment_attempt SET status = 'failed' WHERE checkout_id = :c AND status = 'pending'")
+                .param("c", c.id()).update();
+        db.sql("UPDATE checkout SET status = 'open', payment_method = NULL WHERE id = :id AND status = 'processing'")
+                .param("id", c.id()).update();
     }
 
     UUID railTxOf(UUID attempt) {
@@ -592,6 +616,7 @@ class CheckoutService {
 
     @Transactional
     Refund refund(MerchantAccess.Access access, String reference, int line, long amount, String reason) {
+        if (killSwitch != null) killSwitch.requirePayoutsAllowed(access.merchantId());
         Checkout c = load(reference, true);
         Allocation a = allocation(c, line);
         if (!access.merchantId().equals(a.merchantId()) && !access.merchantId().equals(c.collectorId())) {

@@ -5,9 +5,11 @@ import static com.elepay.merchant.MerchantAccess.Permission.*;
 import com.elepay.common.ApiException;
 import com.elepay.common.Idempotency;
 import com.elepay.merchant.MerchantAccess;
+import com.elepay.security.DualControl;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -20,23 +22,28 @@ import org.springframework.web.bind.annotation.*;
  */
 @RestController
 @RequestMapping("/v1/merchants/{merchantId}")
-class MerchantPayouts {
+public class MerchantPayouts {
     private final Payouts payouts;
     private final MerchantAccess access;
     private final Idempotency idempotency;
     private final JdbcClient db;
     private final TransactionTemplate tx;
+    private final DualControl dualControl;
 
     @org.springframework.beans.factory.annotation.Value("${elepay.payouts.enforce-batch-destination-allowlist:false}")
     private volatile boolean enforceBatchDestinationAllowlist = false;
 
+    @org.springframework.beans.factory.annotation.Value("${elepay.security.large-payout-pesewas:5000000}")
+    private long largePayoutPesewas = 5_000_000L;
+
     MerchantPayouts(Payouts payouts, MerchantAccess access, Idempotency idempotency, JdbcClient db,
-                    PlatformTransactionManager tm) {
+                    PlatformTransactionManager tm, DualControl dualControl) {
         this.payouts = payouts;
         this.access = access;
         this.idempotency = idempotency;
         this.db = db;
         this.tx = new TransactionTemplate(tm);
+        this.dualControl = dualControl;
     }
 
     public void setEnforceBatchDestinationAllowlist(boolean enforce) {
@@ -57,11 +64,21 @@ class MerchantPayouts {
     public Payouts.Batch withdraw(@PathVariable UUID merchantId, @RequestHeader("Idempotency-Key") String key,
                                   @Valid @RequestBody Withdrawal request) {
         var a = access.require(merchantId, WITHDRAW);
-        if (a.actor().isApiKey() && a.actor().isSecretKey()) {
+        if (a.actor().isApiKey() && !a.actor().isPayoutKey()) {
             throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
                     "payout_key_required",
                     "Secret keys (sk_live) cannot initiate payouts or withdrawals alone; use a dedicated payout_live key");
         }
+        if (request.amount() >= largePayoutPesewas) {
+            dualControl.hold("LARGE_PAYOUT", "withdrawal", merchantId.toString(), merchantId,
+                    Map.of("merchantId", merchantId.toString(), "amount", request.amount(),
+                            "destinationId", request.destinationId().toString(), "idempotencyKey", key),
+                    "large withdrawal", a.actor());
+        }
+        return executeWithdrawal(merchantId, key, request, a.actor().subject());
+    }
+
+    public Payouts.Batch executeWithdrawal(UUID merchantId, String key, Withdrawal request, String actor) {
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("merchant-withdrawal:" + merchantId, key, request,
                 Payouts.Batch.class, () -> {
                     var dest = access.activeDestination(merchantId, request.destinationId())
@@ -82,7 +99,7 @@ class MerchantPayouts {
                             "withdrawal-" + key, request.amount(),
                             new Payouts.Destination(dest.type(), dest.network(), dest.accountNumber(), dest.accountName()),
                             null, dest.verifiedName())),
-                            null, a.actor().subject());
+                            null, actor);
                 }));
         payouts.submit(batch.id());
         return payouts.batch(batch.id());
@@ -92,12 +109,12 @@ class MerchantPayouts {
     public Payouts.Batch batch(@PathVariable UUID merchantId, @RequestHeader("Idempotency-Key") String key,
                                @Valid @RequestBody BatchInput request) {
         var a = access.require(merchantId, PAYOUT);
-        if (a.actor().isApiKey() && a.actor().isSecretKey()) {
+        if (a.actor().isApiKey() && !a.actor().isPayoutKey()) {
             throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
                     "payout_key_required",
                     "Secret keys (sk_live) cannot initiate payouts or withdrawals alone; use a dedicated payout_live key");
         }
-        boolean requireAllowlist = enforceBatchDestinationAllowlist || (a.actor().isApiKey() && a.actor().isPayoutKey());
+        boolean requireAllowlist = enforceBatchDestinationAllowlist || a.actor().isApiKey();
         if (requireAllowlist) {
             java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
             for (ItemInput item : request.items()) {

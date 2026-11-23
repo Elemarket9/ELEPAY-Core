@@ -7,9 +7,9 @@ import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.UUID;
-import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,11 +25,21 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class PosDukptKeyManagementService {
 
-    private static final String DEFAULT_BDK_HEX = "0123456789ABCDEFFEDCBA9876543210";
+    private static final String PUBLIC_TEST_BDK = "0123456789ABCDEFFEDCBA9876543210";
     private final JdbcClient db;
+    private final String bdkHex;
 
-    public PosDukptKeyManagementService(JdbcClient db) {
+    public PosDukptKeyManagementService(JdbcClient db, @Value("${elepay.pos.dukpt.bdk-hex:}") String bdkHex) {
         this.db = db;
+        this.bdkHex = bdkHex == null ? "" : bdkHex.trim();
+    }
+
+    private String bdk() {
+        if (bdkHex.isBlank() || bdkHex.equalsIgnoreCase(PUBLIC_TEST_BDK)) {
+            throw ApiException.unprocessable("dukpt_key_missing",
+                    "The POS base derivation key must be supplied from a KMS or HSM");
+        }
+        return bdkHex;
     }
 
     public record TerminalDukptProfile(
@@ -67,7 +77,7 @@ public class PosDukptKeyManagementService {
         String bdkId = (baseKeyId != null && !baseKeyId.isBlank()) ? baseKeyId : "BDK-PRIMARY-01";
         // KSN: 10 bytes (20 hex digits) -> BaseKeyId (6 hex) + TerminalId (9 hex) + Counter (5 hex = 21 bits)
         String initialKsn = String.format("%06X%09X00000", Math.abs(bdkId.hashCode()) & 0xFFFFFF, Math.abs(terminalId.hashCode()) & 0xFFFFFFFFFEL);
-        String encryptedIpek = deriveIpek(DEFAULT_BDK_HEX, initialKsn);
+        String encryptedIpek = deriveIpek(bdk(), initialKsn);
 
         UUID id = UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now();
@@ -205,20 +215,7 @@ public class PosDukptKeyManagementService {
             xorResult.append(Integer.toHexString(pVal ^ aVal).toUpperCase());
         }
 
-        // Encrypt with 3DES key block encryption (or fallback to HMAC if DESede unavailable)
-        try {
-            byte[] rawPinBlock = HexFormat.of().parseHex(xorResult.toString());
-            byte[] keyBytes = HexFormat.of().parseHex(keyHex.length() >= 48 ? keyHex.substring(0, 48) : keyHex);
-            byte[] key24 = new byte[24];
-            System.arraycopy(keyBytes, 0, key24, 0, Math.min(keyBytes.length, 24));
-            SecretKeySpec desKey = new SecretKeySpec(key24, "DESede");
-            Cipher cipher = Cipher.getInstance("DESede/ECB/NoPadding");
-            cipher.init(Cipher.ENCRYPT_MODE, desKey);
-            byte[] encrypted = cipher.doFinal(rawPinBlock);
-            return HexFormat.of().formatHex(encrypted).toUpperCase();
-        } catch (Exception e) {
-            return hmacSha256(keyHex, xorResult.toString()).substring(0, 16).toUpperCase();
-        }
+        return hmacSha256(keyHex, xorResult.toString()).substring(0, 16).toUpperCase(java.util.Locale.ROOT);
     }
 
     private String deriveIpek(String bdkHex, String ksn) {

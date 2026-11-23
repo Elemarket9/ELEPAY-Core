@@ -85,24 +85,19 @@ public class ApiKeys {
     @Transactional
     public Created create(UUID merchantId, String label, List<String> scopes, String keyType, List<String> allowedIps,
                           String createdBy) {
-        String normalizedType = normalizeKeyType(keyType);
+        String normalizedType = normalizeKeyType(defaultKeyType(keyType, scopes));
         List<String> resolvedScopes = resolveScopesForType(normalizedType, scopes);
         List<String> normalizedIps = validateAndNormalizeIps(allowedIps);
+        requirePayoutAllowlist(normalizedType, normalizedIps);
 
         byte[] bytes = new byte[24];
         RANDOM.nextBytes(bytes);
-        String prefix;
-        if (keyType == null || keyType.isBlank()) {
-            // Backward compatibility: legacy create calls without keyType get ek_ prefix
-            prefix = "ek_" + HexFormat.of().formatHex(bytes, 0, 4);
-        } else {
-            String typePrefix = switch (normalizedType) {
-                case "publishable" -> "pk_live_";
-                case "payout" -> "payout_live_";
-                default -> "sk_live_";
-            };
-            prefix = typePrefix + HexFormat.of().formatHex(bytes, 0, 4);
-        }
+        String typePrefix = switch (normalizedType) {
+            case "publishable" -> "pk_live_";
+            case "payout" -> "payout_live_";
+            default -> "sk_live_";
+        };
+        String prefix = typePrefix + HexFormat.of().formatHex(bytes, 0, 4);
         String secret = prefix + "_" + HexFormat.of().formatHex(bytes, 4, 24);
 
         // Dynamic Cryptographically Secure Signing Secret (32 bytes = 256 bits of entropy)
@@ -153,14 +148,15 @@ public class ApiKeys {
             throw com.elepay.common.ApiException.badRequest("invalid_environment", "Use live or test");
         String env = environment.toLowerCase(java.util.Locale.ROOT);
         if ("test".equals(env) && !testEnvironment) throw com.elepay.common.ApiException.unprocessable("test_environment_disabled", "Test credentials require an isolated test deployment");
-        String normalizedType = normalizeKeyType(keyType);
+        String normalizedType = normalizeKeyType(defaultKeyType(keyType, scopes));
         List<String> resolvedScopes = resolveScopesForType(normalizedType, scopes);
         List<String> normalizedIps = validateAndNormalizeIps(allowedIps);
+        requirePayoutAllowlist(normalizedType, normalizedIps);
 
         byte[] bytes = new byte[24];
         RANDOM.nextBytes(bytes);
         String randomHex = HexFormat.of().formatHex(bytes);
-        String lead = (keyType == null || keyType.isBlank()) ? "ek" : switch (normalizedType) {
+        String lead = switch (normalizedType) {
             case "publishable" -> "pk";
             case "payout" -> "payout";
             default -> "sk";
@@ -183,6 +179,27 @@ public class ApiKeys {
                 .param("allowed_ips", normalizedIps.toArray(String[]::new))
                 .update();
         return new EnvironmentKey(id, prefix, secret, env, sorted, signingSecret, normalizedType, normalizedIps);
+    }
+
+    /**
+     * A missing type is publishable when the caller asked for nothing a server key needs.
+     * Withdraw and payout scopes are refused until the caller asks for a payout key explicitly.
+     */
+    static String defaultKeyType(String keyType, List<String> scopes) {
+        if (keyType != null && !keyType.isBlank()) return keyType;
+        if (scopes != null && scopes.stream().anyMatch(s -> "withdraw".equals(s) || "payouts".equals(s))) {
+            throw com.elepay.common.ApiException.badRequest("key_type_required",
+                    "withdraw and payouts scopes require keyType payout and an IP allowlist");
+        }
+        if (scopes == null || scopes.isEmpty() || scopes.stream().allMatch("collect"::equals)) return "publishable";
+        return "secret";
+    }
+
+    private static void requirePayoutAllowlist(String normalizedType, List<String> ips) {
+        if ("payout".equals(normalizedType) && (ips == null || ips.isEmpty())) {
+            throw com.elepay.common.ApiException.badRequest("ip_allowlist_required",
+                    "Payout keys require at least one allowed IP or CIDR");
+        }
     }
 
     private static String normalizeKeyType(String keyType) {
@@ -247,14 +264,24 @@ public class ApiKeys {
                 rs.getObject(8, java.time.OffsetDateTime.class))).list();
     }
 
-    /** Environment and scopes of an active key, for rotation. */
-    public Optional<Map.Entry<String, List<String>>> activeKey(UUID merchantId, UUID id) {
+    /** Environment, scopes, type and allowlist of an active key, copied on rotation. */
+    public record RotationSource(String environment, List<String> scopes, String label, String keyType, List<String> allowedIps) {}
+
+    public Optional<RotationSource> rotationSource(UUID merchantId, UUID id) {
         return db.sql("""
-                SELECT COALESCE(environment, 'live'), scopes FROM api_credential
+                SELECT COALESCE(environment, 'live'), scopes, label, COALESCE(key_type, 'secret'), COALESCE(allowed_ips, '{}')
+                FROM api_credential
                 WHERE id = :id AND merchant_id = :m AND revoked_at IS NULL""")
                 .param("id", id).param("m", merchantId)
-                .query((rs, i) -> Map.entry(rs.getString(1), List.of((String[]) rs.getArray(2).getArray())))
+                .query((rs, i) -> new RotationSource(rs.getString(1), List.of((String[]) rs.getArray(2).getArray()),
+                        rs.getString(3), rs.getString(4),
+                        rs.getArray(5) == null ? List.of() : List.of((String[]) rs.getArray(5).getArray())))
                 .optional();
+    }
+
+    /** Environment and scopes of an active key, for rotation. */
+    public Optional<Map.Entry<String, List<String>>> activeKey(UUID merchantId, UUID id) {
+        return rotationSource(merchantId, id).map(s -> Map.entry(s.environment(), s.scopes()));
     }
 
     public List<Listed> list(UUID merchantId) {
@@ -342,11 +369,17 @@ public class ApiKeys {
                 .query((rs, i) -> {
                     String dbKeyType = rs.getString(5);
                     String effectiveKeyType = resolveEffectiveKeyType(secret, dbKeyType);
+                    java.util.Set<String> scopes = new java.util.HashSet<>(java.util.Set.of((String[]) rs.getArray(3).getArray()));
+                    if (secret.startsWith("ek_")) {
+                        effectiveKeyType = "secret";
+                        scopes.remove("withdraw");
+                        scopes.remove("payouts");
+                    }
                     List<String> ips = rs.getArray(6) != null ? List.of((String[]) rs.getArray(6).getArray()) : List.of();
                     return new ApiKeyAuthentication(
                             rs.getObject(1, UUID.class),
                             rs.getObject(2, UUID.class),
-                            java.util.Set.of((String[]) rs.getArray(3).getArray()),
+                            scopes,
                             rs.getString(4),
                             effectiveKeyType,
                             ips
@@ -363,7 +396,7 @@ public class ApiKeys {
         if (secret.startsWith("pk_")) return "publishable";
         if (secret.startsWith("payout_")) return "payout";
         if (secret.startsWith("sk_")) return "secret";
-        if (secret.startsWith("ek_")) return "legacy";
+        if (secret.startsWith("ek_")) return "secret";
         return dbKeyType != null ? dbKeyType : "secret";
     }
 

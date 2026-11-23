@@ -68,6 +68,11 @@ class EmtechReportingIT extends PostgresTestBase {
 
     @BeforeEach
     void stubHappyPath() {
+        // Other suites enqueue reports while Emtech is disabled. Park that backlog so this
+        // class dispatches only the rows it just wrote.
+        db.sql("""
+                UPDATE emtech_submission SET next_attempt_at = now() + interval '1 day'
+                WHERE status = 'PENDING'""").update();
         EMTECH.resetAll();
         EMTECH.stubFor(post(urlPathEqualTo("/v1/auth/token"))
                 .willReturn(okJson("{\"accessToken\":\"sandbox-token\",\"expiryMS\":3600000}")));

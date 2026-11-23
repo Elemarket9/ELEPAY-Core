@@ -39,9 +39,13 @@ class WalletFunding {
     private final Outbox outbox;
     private final TransactionTemplate tx;
     private final EmtechCapture regulatory;
+    private final TransferLimits limits;
+
+    @org.springframework.beans.factory.annotation.Value("${elepay.wallet.topup-own-msisdn-only:true}")
+    private boolean ownMsisdnOnly = true;
 
     WalletFunding(JdbcClient db, Wallets wallets, RailTransactions rails, Idempotency idempotency, Ledger ledger,
-                  Outbox outbox, PlatformTransactionManager tm, EmtechCapture regulatory) {
+                  Outbox outbox, PlatformTransactionManager tm, EmtechCapture regulatory, TransferLimits limits) {
         this.db = db;
         this.wallets = wallets;
         this.rails = rails;
@@ -50,6 +54,7 @@ class WalletFunding {
         this.outbox = outbox;
         this.tx = new TransactionTemplate(tm);
         this.regulatory = regulatory;
+        this.limits = limits;
     }
 
     record TopUp(@Positive @Max(1_000_000_00L) long amount, @NotBlank @Pattern(regexp = "momo|card") String method,
@@ -70,9 +75,16 @@ class WalletFunding {
             if (!NETWORKS.contains(request.network())) throw ApiException.badRequest("invalid_network", "Choose mtn, telecel or airteltigo");
         }
         String phone = msisdn;
+        if (ownMsisdnOnly && msisdn != null) {
+            String own = db.sql("SELECT phone FROM customer WHERE id = :id").param("id", customer).query(String.class).single();
+            if (!msisdn.equals(own)) {
+                throw ApiException.badRequest("phone_not_on_file", "Top up only from the wallet's verified phone number");
+            }
+        }
         String payChannel = "MOBILE_APP".equals(channel) ? "MOBILE_APP" : "WEB";
         String coarseIp = http.getRemoteAddr();
         Operation created = tx.execute(s -> idempotency.execute("wallet-topup:" + customer, key, request, Operation.class, () -> {
+            limits.checkCredit(customer, request.amount());
             UUID id = UUID.randomUUID();
             String reference = References.next("TOP");
             var origin = regulatory.customerOrigin(customer, payChannel, coarseIp);
@@ -154,6 +166,13 @@ class WalletFunding {
                 .optional();
         if (op.isEmpty()) return;
         UUID customer = (UUID) op.get()[0];
+        try {
+            limits.checkCredit(customer, event.amount());
+        } catch (ApiException e) {
+            db.sql("UPDATE wallet_operation SET status = 'failed', updated_at = now() WHERE id = :id")
+                    .param("id", event.purposeId()).update();
+            return;
+        }
         var posted = ledger.post(Ledger.Posting.of("wallet-topup", event.purposeId().toString(), "wallet_topup", List.of(
                 Ledger.Leg.debit(Ledger.clearing(event.rail()), event.amount()),
                 Ledger.Leg.credit(CustomerDirectory.available(customer), event.amount()))).describedAs((String) op.get()[1]));

@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
  * </ul>
  */
 @Service
+@DependsOn("flywayInitializer")
 public class KillSwitchService {
     public static final String REDIS_GLOBAL_KEY = "elepay:killswitch:global";
     public static final String REDIS_MERCHANTS_KEY = "elepay:killswitch:merchants";
@@ -45,8 +47,12 @@ public class KillSwitchService {
 
     private final AtomicBoolean globalFrozen = new AtomicBoolean(false);
     private volatile String globalFreezeReason = null;
+    private volatile String globalFrozenBy = null;
     private final Set<UUID> frozenMerchants = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, String> merchantFrozenBy = new ConcurrentHashMap<>();
     private final Map<String, Boolean> moduleStates = new ConcurrentHashMap<>();
+    private final Map<String, String> moduleChangedBy = new ConcurrentHashMap<>();
+    private volatile boolean controlsUnreadable = false;
 
     @Autowired
     public KillSwitchService(
@@ -81,7 +87,48 @@ public class KillSwitchService {
         moduleStates.put("consumer-w2w", consumerWalletEnabled);
         moduleStates.put("ussd", ussdEnabled);
         moduleStates.put("mandates", mandatesEnabled);
+        loadControls();
     }
+
+    /** Database is the source of truth so a restart or another instance sees the same switches. */
+    private void loadControls() {
+        if (db == null) {
+            controlsUnreadable = true;
+            return;
+        }
+        try {
+            db.sql("SELECT module_key, enabled, updated_by FROM module_kill_switch")
+                    .query((rs, i) -> {
+                        moduleStates.put(rs.getString(1), rs.getBoolean(2));
+                        moduleChangedBy.put(rs.getString(1), rs.getString(3));
+                        return 1;
+                    }).list();
+            var global = db.sql("""
+                    SELECT emergency_frozen, freeze_reason, frozen_by FROM payout_safety_control WHERE id = 1""")
+                    .query((rs, i) -> new Object[]{rs.getBoolean(1), rs.getString(2), rs.getString(3)}).optional();
+            if (global.isPresent() && Boolean.TRUE.equals(global.get()[0])) {
+                globalFrozen.set(true);
+                globalFreezeReason = (String) global.get()[1];
+                globalFrozenBy = (String) global.get()[2];
+            }
+            db.sql("SELECT merchant_id, payouts_frozen, updated_by FROM merchant_kill_switch")
+                    .query((rs, i) -> {
+                        if (rs.getBoolean(2)) {
+                            UUID id = rs.getObject(1, UUID.class);
+                            frozenMerchants.add(id);
+                            merchantFrozenBy.put(id, rs.getString(3));
+                        }
+                        return 1;
+                    }).list();
+            controlsUnreadable = false;
+        } catch (RuntimeException e) {
+            controlsUnreadable = true;
+        }
+    }
+
+    public String globalFrozenBy() { return globalFrozenBy; }
+
+    public String merchantFrozenBy(UUID merchantId) { return merchantFrozenBy.get(merchantId); }
 
     public record KillSwitchStatus(
             boolean globalFrozen,
@@ -93,6 +140,7 @@ public class KillSwitchService {
     // ---- Module Route Kill Switch (<1ms zero-DB check) --------------------------------------
 
     public boolean isModuleEnabled(String moduleKey) {
+        if (controlsUnreadable) return false;
         if (moduleKey == null) return true;
         return moduleStates.getOrDefault(moduleKey, true);
     }
@@ -110,16 +158,15 @@ public class KillSwitchService {
             moduleStates.put("consumer-w2w", enabled);
         }
         writeRedis(REDIS_MODULE_PREFIX + key, Boolean.toString(enabled));
+        moduleChangedBy.put(key, actor);
         if (db != null) {
-            try {
-                db.sql("""
-                        INSERT INTO module_kill_switch (module_key, enabled, stage, reason, updated_by, updated_at)
-                        VALUES (:k, :e, :s, :r, :by, now())
-                        ON CONFLICT (module_key) DO UPDATE SET
-                            enabled = :e, reason = :r, updated_by = :by, updated_at = now()""")
-                        .param("k", key).param("e", enabled).param("s", enabled ? 1 : 2)
-                        .param("r", reason).param("by", actor != null ? actor : "system").update();
-            } catch (Exception ignored) {}
+            db.sql("""
+                    INSERT INTO module_kill_switch (module_key, enabled, stage, reason, updated_by, updated_at)
+                    VALUES (:k, :e, :s, :r, :by, now())
+                    ON CONFLICT (module_key) DO UPDATE SET
+                        enabled = :e, reason = :r, updated_by = :by, updated_at = now()""")
+                    .param("k", key).param("e", enabled).param("s", enabled ? 1 : 2)
+                    .param("r", reason).param("by", actor != null ? actor : "system").update();
         }
         if (audit != null && actor != null) {
             audit.record(actor, enabled ? "kill_switch.module_enabled" : "kill_switch.module_disabled",
@@ -185,6 +232,7 @@ public class KillSwitchService {
     // ---- Global Payout Kill Switch (<1s Redis + Atomic Memory + DB) -------------------------
 
     public boolean isGlobalFrozen() {
+        if (controlsUnreadable) return true;
         if (globalFrozen.get()) return true;
         String redisVal = readRedis(REDIS_GLOBAL_KEY);
         if ("true".equalsIgnoreCase(redisVal)) {
@@ -209,23 +257,22 @@ public class KillSwitchService {
     public void setGlobalFrozen(boolean frozen, String reason, String actor) {
         globalFrozen.set(frozen);
         globalFreezeReason = frozen ? (reason != null ? reason : "Emergency global kill switch activated") : null;
+        globalFrozenBy = frozen ? actor : null;
         writeRedis(REDIS_GLOBAL_KEY, Boolean.toString(frozen));
         if (db != null) {
-            try {
-                db.sql("""
-                        UPDATE payout_safety_control
-                        SET emergency_frozen = :f,
-                            freeze_reason = :r,
-                            frozen_by = :by,
-                            frozen_at = CASE WHEN :f THEN now() ELSE NULL END,
-                            updated_by = :by,
-                            updated_at = now()
-                        WHERE id = 1""")
-                        .param("f", frozen)
-                        .param("r", globalFreezeReason)
-                        .param("by", actor != null ? actor : "system")
-                        .update();
-            } catch (Exception ignored) {}
+            db.sql("""
+                    UPDATE payout_safety_control
+                    SET emergency_frozen = :f,
+                        freeze_reason = :r,
+                        frozen_by = :by,
+                        frozen_at = CASE WHEN :f THEN now() ELSE NULL END,
+                        updated_by = :by,
+                        updated_at = now()
+                    WHERE id = 1""")
+                    .param("f", frozen)
+                    .param("r", globalFreezeReason)
+                    .param("by", actor != null ? actor : "system")
+                    .update();
         }
         if (frozen && ops != null) {
             ops.raise("global_kill_switch_activated", "critical", "kill-switch:global",
@@ -241,6 +288,7 @@ public class KillSwitchService {
 
     public boolean isMerchantFrozen(UUID merchantId) {
         if (merchantId == null) return false;
+        if (controlsUnreadable) return true;
         if (frozenMerchants.contains(merchantId)) return true;
         if (isMemberRedis(REDIS_MERCHANTS_KEY, merchantId.toString())) {
             frozenMerchants.add(merchantId);
@@ -254,21 +302,21 @@ public class KillSwitchService {
         Objects.requireNonNull(merchantId, "merchantId is required");
         if (frozen) {
             frozenMerchants.add(merchantId);
+            merchantFrozenBy.put(merchantId, actor);
             addSetRedis(REDIS_MERCHANTS_KEY, merchantId.toString());
         } else {
             frozenMerchants.remove(merchantId);
+            merchantFrozenBy.remove(merchantId);
             removeSetRedis(REDIS_MERCHANTS_KEY, merchantId.toString());
         }
         if (db != null) {
-            try {
-                db.sql("""
-                        INSERT INTO merchant_kill_switch (merchant_id, payouts_frozen, reason, updated_by, updated_at)
-                        VALUES (:id, :f, :r, :by, now())
-                        ON CONFLICT (merchant_id) DO UPDATE SET
-                            payouts_frozen = :f, reason = :r, updated_by = :by, updated_at = now()""")
-                        .param("id", merchantId).param("f", frozen).param("r", reason)
-                        .param("by", actor != null ? actor : "system").update();
-            } catch (Exception ignored) {}
+            db.sql("""
+                    INSERT INTO merchant_kill_switch (merchant_id, payouts_frozen, reason, updated_by, updated_at)
+                    VALUES (:id, :f, :r, :by, now())
+                    ON CONFLICT (merchant_id) DO UPDATE SET
+                        payouts_frozen = :f, reason = :r, updated_by = :by, updated_at = now()""")
+                    .param("id", merchantId).param("f", frozen).param("r", reason)
+                    .param("by", actor != null ? actor : "system").update();
         }
         if (audit != null && actor != null) {
             audit.record(actor, frozen ? "kill_switch.merchant_frozen" : "kill_switch.merchant_unfrozen",
@@ -290,7 +338,10 @@ public class KillSwitchService {
     public void resetForTesting() {
         globalFrozen.set(false);
         globalFreezeReason = null;
+        globalFrozenBy = null;
         frozenMerchants.clear();
+        merchantFrozenBy.clear();
+        controlsUnreadable = false;
         writeRedis(REDIS_GLOBAL_KEY, "false");
         deleteRedis(REDIS_MERCHANTS_KEY);
         moduleStates.put("lending", false);
@@ -305,10 +356,15 @@ public class KillSwitchService {
         moduleStates.put("ussd", true);
         moduleStates.put("mandates", true);
         if (db != null) {
-            try {
-                db.sql("UPDATE payout_safety_control SET emergency_frozen = false, freeze_reason = NULL WHERE id = 1").update();
-                db.sql("DELETE FROM merchant_kill_switch").update();
-            } catch (Exception ignored) {}
+            db.sql("UPDATE payout_safety_control SET emergency_frozen = false, freeze_reason = NULL, frozen_by = NULL WHERE id = 1").update();
+            db.sql("DELETE FROM merchant_kill_switch").update();
+            for (var entry : moduleStates.entrySet()) {
+                db.sql("""
+                        INSERT INTO module_kill_switch (module_key, enabled, stage, reason, updated_by, updated_at)
+                        VALUES (:k, :e, 1, 'test reset', 'test-reset', now())
+                        ON CONFLICT (module_key) DO UPDATE SET enabled = :e, updated_by = 'test-reset', updated_at = now()""")
+                        .param("k", entry.getKey()).param("e", entry.getValue()).update();
+            }
         }
     }
 
