@@ -21,7 +21,9 @@ public class TokenBucketRateLimiter {
             local capacity = tonumber(ARGV[1])
             local refillRatePerSec = tonumber(ARGV[2])
             local requested = tonumber(ARGV[3])
-            local nowMillis = tonumber(ARGV[4])
+            -- Use the Redis server clock so app nodes with skewed clocks cannot over-grant tokens.
+            local t = redis.call('TIME')
+            local nowMillis = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 
             local lastRefill = tonumber(redis.call('HGET', key, 'last') or nowMillis)
             local currentTokens = tonumber(redis.call('HGET', key, 'tokens') or capacity)
@@ -49,6 +51,13 @@ public class TokenBucketRateLimiter {
     private final LongSupplier nanoTimeSupplier;
     private final ConcurrentHashMap<String, Bucket> buckets = new ConcurrentHashMap<>();
     private final StringRedisTemplate redisTemplate;
+    private final RedisBreaker redisBreaker = new RedisBreaker(5_000);
+    /**
+     * Upper bound on in-memory buckets. Without it an attacker rotating source addresses grows the map
+     * until the JVM runs out of memory. See {@link #localBucket(String)}.
+     */
+    private volatile int maxLocalKeys = DEFAULT_MAX_LOCAL_KEYS;
+    public static final int DEFAULT_MAX_LOCAL_KEYS = 100_000;
 
     public TokenBucketRateLimiter(double capacity, double refillTokensPerSecond) {
         this(capacity, refillTokensPerSecond, System::nanoTime, null);
@@ -91,12 +100,14 @@ public class TokenBucketRateLimiter {
     /** Production abuse limits must not reset independently on every application node. */
     public boolean tryAcquireShared(String key) {
         if (redisTemplate == null || key == null) return false;
+        if (!redisBreaker.allow()) return false; // shared limit unavailable: fail closed, fast
         try {
             Long result = redisTemplate.execute(SCRIPT, Collections.singletonList("elepay:ratelimit:" + key),
                     String.valueOf(capacity), String.valueOf(refillTokensPerSecond), "1",
                     String.valueOf(System.currentTimeMillis()));
             return Long.valueOf(1L).equals(result);
         } catch (RuntimeException unavailable) {
+            redisBreaker.failure();
             return false;
         }
     }
@@ -110,7 +121,7 @@ public class TokenBucketRateLimiter {
         if (tokens <= 0) throw new IllegalArgumentException("Requested tokens must be positive: " + tokens);
 
         // 1. Try distributed Redis backend if available
-        if (redisTemplate != null) {
+        if (redisTemplate != null && redisBreaker.allow()) {
             try {
                 String redisKey = "elepay:ratelimit:" + key;
                 long nowMillis = System.currentTimeMillis();
@@ -126,13 +137,43 @@ public class TokenBucketRateLimiter {
                     return result == 1L;
                 }
             } catch (Exception e) {
-                // Redis unavailable / timeout -> fallback to memory
+                redisBreaker.failure(); // Redis unavailable / timeout -> fallback to memory for a cool-down
             }
         }
 
-        // 2. In-memory fallback
-        return buckets.computeIfAbsent(key, k -> new Bucket(capacity, nanoTimeSupplier.getAsLong()))
-                .tryAcquire(tokens, capacity, refillTokensPerNano, nanoTimeSupplier.getAsLong());
+        // 2. In-memory fallback (bounded)
+        Bucket bucket = localBucket(key);
+        if (bucket == null) {
+            return false; // table saturated by active clients: fail closed rather than exhaust memory
+        }
+        return bucket.tryAcquire(tokens, capacity, refillTokensPerNano, nanoTimeSupplier.getAsLong());
+    }
+
+    /**
+     * Returns the bucket for {@code key}, creating it if there is room. When the table is full, buckets that
+     * have refilled to capacity are evicted first: a full bucket behaves exactly like a missing one, so this
+     * eviction is lossless. If every bucket is still draining (a large distributed flood), new keys are refused
+     * and the caller treats the request as rate limited.
+     */
+    private Bucket localBucket(String key) {
+        Bucket existing = buckets.get(key);
+        if (existing != null) return existing;
+        if (buckets.size() >= maxLocalKeys) {
+            long now = nanoTimeSupplier.getAsLong();
+            buckets.entrySet().removeIf(e -> e.getValue().isFull(capacity, refillTokensPerNano, now));
+            if (buckets.size() >= maxLocalKeys) return null;
+        }
+        return buckets.computeIfAbsent(key, k -> new Bucket(capacity, nanoTimeSupplier.getAsLong()));
+    }
+
+    /** Sets the in-memory key bound (minimum 1). */
+    public TokenBucketRateLimiter withMaxLocalKeys(int maxKeys) {
+        this.maxLocalKeys = Math.max(1, maxKeys);
+        return this;
+    }
+
+    public int localKeyCount() {
+        return buckets.size();
     }
 
     public double getAvailableTokens(String key) {
@@ -193,6 +234,11 @@ public class TokenBucketRateLimiter {
                 return true;
             }
             return false;
+        }
+
+        synchronized boolean isFull(double maxCapacity, double refillRatePerNano, long nowNanos) {
+            refill(maxCapacity, refillRatePerNano, nowNanos);
+            return tokens >= maxCapacity;
         }
 
         synchronized double getTokens(double maxCapacity, double refillRatePerNano, long nowNanos) {
