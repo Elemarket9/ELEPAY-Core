@@ -130,9 +130,4 @@ public class SimulatedFxPartner implements FxPartner {
                 node.path("message").asString(null));
     }
 
-    @Override
-    public String verifyInbound(Map<String, String> headers, String body) {
-        check(headers, body);
-        return body;
-    }
 }

@@ -3,11 +3,9 @@ package com.elepay.fx;
 import com.elepay.common.ApiException;
 import com.elepay.common.Audit;
 import com.elepay.common.OpsQueue;
-import com.elepay.common.References;
 import com.elepay.ledger.Ledger;
 import com.elepay.ledger.Ledger.Leg;
 import com.elepay.outbox.Outbox;
-import com.elepay.wallet.CustomerDirectory;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
@@ -22,13 +20,13 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Cross-border transfers bound to partner-confirmed quotes.
+ * FX rates, pricing, exposure and historical transaction reconciliation.
  *
  * <p>Every journal transaction balances within each currency. Conversion is
  * expressed with linked FX clearing entries: the source currency leg ends in
  * {@code system:fx_clearing:SRC} and the destination leg starts from
  * {@code system:fx_clearing:DST} inside the same journal transaction.
- * Outbound destination funds wait in {@code fx_in_flight} until the partner
+ * Historical destination funds wait in {@code fx_in_flight} until the partner
  * confirms delivery; a failure or return reverses the original transaction.
  */
 @Service
@@ -47,14 +45,12 @@ class FxService {
     private final FxDeliveryEstimator deliveryEstimator;
     private final FxExposureService exposureService;
     private final FxDualReconciliationService dualReconciliationService;
-    private final CustomerDirectory customers;
 
     FxService(JdbcClient db, Ledger ledger, List<FxPartner> partners, Outbox outbox, Audit audit, OpsQueue ops,
               ObjectMapper json, PlatformTransactionManager tm, FxRateService rateService,
               FxPricingService pricingService, FxRoutingService routingService,
               FxDeliveryEstimator deliveryEstimator, FxExposureService exposureService,
-              FxDualReconciliationService dualReconciliationService, CustomerDirectory customers) {
-        this.customers = customers;
+              FxDualReconciliationService dualReconciliationService) {
         this.db = db;
         this.ledger = ledger;
         this.partners = partners.stream().collect(Collectors.toMap(FxPartner::name, Function.identity()));
@@ -75,10 +71,6 @@ class FxService {
                     String sourceCurrency, String destinationCurrency, String fundingMethod, String deliveryMethod,
                     String partner, long feeFixed, int feeBps, long minAmount, long maxAmount, int quoteTtlSeconds,
                     int estDeliveryMinutes, boolean active) {}
-
-    record Quote(UUID id, String corridor, String sourceCurrency, long sourceAmount, long fee, long totalDebit,
-                 BigDecimal rate, String destinationCurrency, long destinationAmount, OffsetDateTime expiresAt,
-                 int estimatedDeliveryMinutes, String status) {}
 
     record Transfer(UUID id, String reference, String direction, String corridor, String sourceCurrency,
                     long sourceAmount, long fee, BigDecimal rate, String destinationCurrency, long destinationAmount,
@@ -148,175 +140,6 @@ class FxService {
                 .param("ff", c.feeFixed()).param("fb", c.feeBps()).param("min", c.minAmount()).param("max", c.maxAmount())
                 .param("ttl", c.quoteTtlSeconds()).param("eta", c.estDeliveryMinutes()).param("active", c.active()).update();
         audit.record(actor, "fx.corridor_upserted", "corridor:" + c.code(), Map.of("active", c.active()));
-    }
-
-    // ---- quotes and outbound transfers ----------------------------------------------------
-
-    Quote quote(UUID customer, String corridorCode, long sourceAmount) {
-        Corridor c = corridor(corridorCode);
-        if (!c.active() || !c.direction().equals("outbound") || !c.fundingMethod().equals("wallet")) {
-            throw ApiException.unprocessable("corridor_unavailable", "This corridor cannot be quoted from a wallet");
-        }
-        if (sourceAmount < c.minAmount() || sourceAmount > c.maxAmount()) {
-            throw ApiException.badRequest("amount_out_of_range", "Amount must be between " + c.minAmount() + " and " + c.maxAmount());
-        }
-
-        // Algorithm 061: Corridor Partner Selection
-        String selectedPartner = routingService.selectOptimalPartner(c.code(), sourceAmount, c.partner());
-        if (!partners.containsKey(selectedPartner)) {
-            selectedPartner = c.partner();
-        }
-        FxPartner chosenPartner = partner(selectedPartner);
-        FxPartner.Quote pq = chosenPartner.quote(c.sourceCurrency(), c.destinationCurrency(), sourceAmount);
-
-        // Algorithm 059: Rate Sourcing & Blending (authoritative mid-market rate synthesis)
-        BigDecimal baseRate = pq.rate();
-        try {
-            var blended = rateService.latestBlendedRate(c.sourceCurrency(), c.destinationCurrency());
-            if (blended != null && blended.midRate() != null && blended.midRate().compareTo(BigDecimal.ZERO) > 0) {
-                baseRate = blended.midRate();
-            }
-        } catch (Exception ignored) {
-            // Use partner quote rate as base rate when multi-source blended rate is not seeded
-        }
-
-        // Algorithm 060: Dynamic FX Margin Pricing & Tiers
-        var tier = pricingService.resolveMarginTier(c.code(), "standard", sourceAmount);
-        BigDecimal effectiveRate;
-        long fee;
-        long destination;
-        if (tier != null) {
-            var pricing = pricingService.calculatePricing(c.code(), "standard", c.sourceCurrency(),
-                    c.destinationCurrency(), sourceAmount, baseRate, c.feeFixed(), c.feeBps());
-            effectiveRate = pricing.effectiveRate();
-            fee = pricing.totalFee();
-            destination = pricing.destinationAmount();
-        } else {
-            fee = Math.addExact(c.feeFixed(), Math.multiplyExact(sourceAmount, c.feeBps()) / 10_000);
-            effectiveRate = baseRate;
-            destination = convert(sourceAmount, c.sourceCurrency(), effectiveRate, c.destinationCurrency());
-        }
-
-        if (destination <= 0) throw ApiException.badRequest("amount_too_small", "Amount is too small to convert");
-
-        // Algorithm 063: Delivery-time SLA estimation taking cutoffs and weekends into account
-        int estDeliveryMinutes = c.estDeliveryMinutes();
-        try {
-            var deliveryEst = deliveryEstimator.estimate(c.code(), c.deliveryMethod(), null, OffsetDateTime.now());
-            if (deliveryEst != null && deliveryEst.estimatedMinutes() > 0) {
-                var rule = deliveryEstimator.resolveRule(c.code(), c.deliveryMethod(), null);
-                if (rule != null && (rule.corridor() != null || estDeliveryMinutes <= 0)) {
-                    estDeliveryMinutes = deliveryEst.estimatedMinutes();
-                }
-            }
-        } catch (Exception ignored) {
-            // Keep corridor configured delivery estimate
-        }
-
-        OffsetDateTime own = OffsetDateTime.now().plusSeconds(c.quoteTtlSeconds());
-        OffsetDateTime expires = pq.expiresAt().isBefore(own) ? pq.expiresAt() : own;
-        UUID id = UUID.randomUUID();
-        db.sql("""
-                INSERT INTO fx_quote (id, corridor, customer_id, partner, partner_quote_ref, source_currency, source_amount,
-                    fee, total_debit, rate, destination_currency, destination_amount, expires_at, est_delivery_minutes)
-                VALUES (:id, :c, :cust, :p, :pref, :src, :amount, :fee, :total, :rate, :dst, :dest, :exp, :eta)""")
-                .param("id", id).param("c", c.code()).param("cust", customer).param("p", selectedPartner)
-                .param("pref", pq.reference()).param("src", c.sourceCurrency()).param("amount", sourceAmount)
-                .param("fee", fee).param("total", sourceAmount + fee).param("rate", effectiveRate)
-                .param("dst", c.destinationCurrency()).param("dest", destination).param("exp", expires)
-                .param("eta", estDeliveryMinutes).update();
-        return quote(id);
-    }
-
-    Quote quote(UUID id) {
-        return db.sql("""
-                SELECT id, corridor, source_currency, source_amount, fee, total_debit, rate, destination_currency,
-                       destination_amount, expires_at, est_delivery_minutes, status FROM fx_quote WHERE id = :id""")
-                .param("id", id).query((rs, i) -> new Quote(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
-                        rs.getLong(4), rs.getLong(5), rs.getLong(6), rs.getBigDecimal(7), rs.getString(8), rs.getLong(9),
-                        rs.getObject(10, OffsetDateTime.class), rs.getInt(11), rs.getString(12)))
-                .optional().orElseThrow(() -> ApiException.notFound("Quote not found"));
-    }
-
-    /** Executes exactly the accepted quote. Runs inside the caller's idempotent transaction. */
-    Transfer execute(UUID customer, UUID quoteId, Map<String, String> recipient) {
-        var q = db.sql("""
-                SELECT customer_id, status, expires_at, partner, partner_quote_ref, corridor FROM fx_quote
-                WHERE id = :id FOR UPDATE""").param("id", quoteId)
-                .query((rs, i) -> new Object[]{rs.getObject(1, UUID.class), rs.getString(2),
-                        rs.getObject(3, OffsetDateTime.class), rs.getString(4), rs.getString(5), rs.getString(6)})
-                .optional().orElse(null);
-        if (q == null || !customer.equals(q[0])) throw ApiException.notFound("Quote not found");
-        if (!q[1].equals("open")) throw ApiException.conflict("quote_" + q[1], "This quote is " + q[1] + "; request a new quote");
-        if (!((OffsetDateTime) q[2]).isAfter(OffsetDateTime.now())) {
-            db.sql("UPDATE fx_quote SET status = 'expired' WHERE id = :id").param("id", quoteId).update();
-            throw ApiException.conflict("quote_expired", "The quote expired. Review a new quote before sending.");
-        }
-        FxPartner partner = partner((String) q[3]);
-        if (!partner.honours((String) q[4])) {
-            throw ApiException.conflict("quote_changed", "The partner no longer honours this quote. Review a new quote before sending.");
-        }
-        Corridor c = corridor((String) q[5]);
-        if (!c.active()) throw ApiException.unprocessable("corridor_unavailable", "This corridor is not available");
-        Quote quote = quote(quoteId);
-        validateRecipient(c, recipient);
-        UUID id = UUID.randomUUID();
-        String reference = References.next("FX");
-        List<Leg> legs = new ArrayList<>();
-        legs.add(Leg.debit(CustomerDirectory.available(customer), quote.totalDebit()));
-        if (quote.fee() > 0) legs.add(Leg.credit(revenue(quote.sourceCurrency()), quote.fee()));
-        legs.add(Leg.credit(fxClearing(quote.sourceCurrency()), quote.sourceAmount()));
-        legs.add(Leg.debit(fxClearing(quote.destinationCurrency()), quote.destinationAmount()));
-        legs.add(Leg.credit(inFlight(quote.destinationCurrency()), quote.destinationAmount()));
-        var posted = ledger.post(Ledger.Posting.of("fx-transfer", id.toString(), "fx_outbound", legs).describedAs(reference)
-                .withMetadata(Map.of("quote", quoteId.toString(), "rate", quote.rate().toPlainString())));
-        db.sql("""
-                INSERT INTO fx_transfer (id, reference, direction, corridor, quote_id, customer_id, partner, source_currency,
-                    source_amount, fee, rate, destination_currency, destination_amount, recipient, status, journal_tx)
-                VALUES (:id, :ref, 'outbound', :c, :q, :cust, :p, :src, :sa, :fee, :rate, :dst, :da,
-                    CAST(:recipient AS jsonb), 'pending', :tx)""")
-                .param("id", id).param("ref", reference).param("c", c.code()).param("q", quoteId).param("cust", customer)
-                .param("p", c.partner()).param("src", quote.sourceCurrency()).param("sa", quote.sourceAmount())
-                .param("fee", quote.fee()).param("rate", quote.rate()).param("dst", quote.destinationCurrency())
-                .param("da", quote.destinationAmount()).param("recipient", json.writeValueAsString(recipient))
-                .param("tx", posted.transactionId()).update();
-        db.sql("UPDATE fx_quote SET status = 'accepted' WHERE id = :id").param("id", quoteId).update();
-        audit.record("customer:" + customer, "fx.transfer_created", "fx:" + reference, Map.of("quote", quoteId.toString()));
-        return transfer(id);
-    }
-
-    private static void validateRecipient(Corridor c, Map<String, String> r) {
-        if (r == null || r.get("name") == null || r.get("name").isBlank()) {
-            throw ApiException.badRequest("invalid_recipient", "Recipient name is required");
-        }
-        switch (c.deliveryMethod()) {
-            case "bank", "momo", "wallet" -> {
-                if (r.get("accountNumber") == null || r.get("accountNumber").isBlank()) {
-                    throw ApiException.badRequest("invalid_recipient", "Recipient account is required");
-                }
-            }
-            default -> { }
-        }
-    }
-
-    /** Sends a pending outbound transfer to its partner. Call after the creating transaction commits. */
-    void submit(UUID id) {
-        Transfer t = transfer(id);
-        if (!t.status().equals("pending") || db.sql("SELECT partner_reference IS NOT NULL FROM fx_transfer WHERE id = :id")
-                .param("id", id).query(Boolean.class).single()) return;
-        String quoteRef = db.sql("SELECT q.partner_quote_ref FROM fx_quote q JOIN fx_transfer t ON t.quote_id = q.id WHERE t.id = :id")
-                .param("id", id).query(String.class).single();
-        String partnerName = db.sql("SELECT partner FROM fx_transfer WHERE id = :id").param("id", id).query(String.class).single();
-        Map<String, String> recipient = json.convertValue(t.recipient(), json.getTypeFactory()
-                .constructMapType(Map.class, String.class, String.class));
-        FxPartner.Execution e;
-        try {
-            e = partner(partnerName).execute(quoteRef, t.reference(), t.sourceAmount(), t.destinationAmount(),
-                    t.destinationCurrency(), recipient);
-        } catch (RuntimeException ex) {
-            e = new FxPartner.Execution(FxPartner.Status.UNKNOWN, null, ex.getClass().getSimpleName());
-        }
-        apply(t.reference(), e.status(), e.partnerReference(), e.message());
     }
 
     /** Applies a partner status under a row lock; safe to repeat and out of order. */
@@ -420,60 +243,6 @@ class FxService {
     Optional<UUID> transferId(String reference, UUID customer) {
         return db.sql("SELECT id FROM fx_transfer WHERE reference = :r AND customer_id = :c")
                 .param("r", reference).param("c", customer).query(UUID.class).optional();
-    }
-
-    // ---- inbound remittances --------------------------------------------------------------
-
-    record Inbound(String partnerReference, String corridor, long sourceAmount, String sourceCurrency,
-                   BigDecimal rate, long destinationAmount, String destinationCurrency, String recipientPhone,
-                   String senderName) {}
-
-    Transfer inbound(String partnerName, Inbound in) {
-        return tx.execute(s -> {
-            var existing = db.sql("SELECT id FROM fx_transfer WHERE partner = :p AND partner_reference = :r")
-                    .param("p", partnerName).param("r", in.partnerReference()).query(UUID.class).optional();
-            if (existing.isPresent()) return transfer(existing.get());
-            Corridor c = corridor(in.corridor());
-            if (!c.active() || !c.direction().equals("inbound") || !c.partner().equals(partnerName)
-                    || !c.sourceCurrency().equals(in.sourceCurrency()) || !c.destinationCurrency().equals(in.destinationCurrency())) {
-                throw ApiException.unprocessable("corridor_mismatch", "Instruction does not match an active inbound corridor");
-            }
-            long expected = convert(in.sourceAmount(), in.sourceCurrency(), in.rate(), in.destinationCurrency());
-            if (expected != in.destinationAmount()) {
-                ops.raise("fx_inbound_amount_mismatch", "high", "fx-inbound:" + partnerName + ":" + in.partnerReference(),
-                        Map.of("expected", expected, "reported", in.destinationAmount()));
-                throw ApiException.unprocessable("amount_mismatch", "Destination amount does not match the rate");
-            }
-            if (!c.deliveryMethod().equals("wallet")) {
-                throw ApiException.unprocessable("delivery_unsupported", "Only wallet delivery is automated for inbound remittances");
-            }
-            UUID customer = customers.activeCustomerByPhone(References.msisdn(in.recipientPhone()))
-                    .orElseThrow(() -> ApiException.unprocessable("recipient_not_found", "No active ELEPAY wallet for this number"));
-            UUID id = UUID.randomUUID();
-            String reference = References.next("FX");
-            var posted = ledger.post(Ledger.Posting.of("fx-inbound", partnerName + ":" + in.partnerReference(), "fx_inbound",
-                    List.of(Leg.debit(partnerClearing(partnerName, in.sourceCurrency()), in.sourceAmount()),
-                            Leg.credit(fxClearing(in.sourceCurrency()), in.sourceAmount()),
-                            Leg.debit(fxClearing(in.destinationCurrency()), in.destinationAmount()),
-                            Leg.credit(CustomerDirectory.available(customer), in.destinationAmount())))
-                    .describedAs(reference).withMetadata(Map.of("rate", in.rate().toPlainString())));
-            db.sql("""
-                    INSERT INTO fx_transfer (id, reference, direction, corridor, customer_id, partner, partner_reference,
-                        source_currency, source_amount, fee, rate, destination_currency, destination_amount, recipient,
-                        status, journal_tx)
-                    VALUES (:id, :ref, 'inbound', :c, :cust, :p, :pref, :src, :sa, 0, :rate, :dst, :da,
-                        CAST(:recipient AS jsonb), 'paid', :tx)""")
-                    .param("id", id).param("ref", reference).param("c", c.code()).param("cust", customer)
-                    .param("p", partnerName).param("pref", in.partnerReference()).param("src", in.sourceCurrency())
-                    .param("sa", in.sourceAmount()).param("rate", in.rate()).param("dst", in.destinationCurrency())
-                    .param("da", in.destinationAmount())
-                    .param("recipient", json.writeValueAsString(Map.of("phone", in.recipientPhone(),
-                            "sender", String.valueOf(in.senderName()))))
-                    .param("tx", posted.transactionId()).update();
-            customers.recordOperation(reference, customer, "topup", in.destinationAmount(), "completed",
-                    "Remittance from " + in.senderName(), posted.transactionId(), null);
-            return transfer(id);
-        });
     }
 
     // ---- reconciliation ---------------------------------------------------------------------

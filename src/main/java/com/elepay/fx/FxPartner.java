@@ -5,8 +5,8 @@ import java.time.OffsetDateTime;
 import java.util.Map;
 
 /**
- * A contracted remittance or FX partner (for example a money-transfer
- * operator or bank). ELEPAY binds each transfer to a partner-confirmed quote.
+ * An FX conversion and domestic-settlement partner, for example a contracted bank.
+ * Legacy transfer status callbacks support historical reconciliation only.
  */
 public interface FxPartner {
 
@@ -34,6 +34,4 @@ public interface FxPartner {
 
     Notification verify(Map<String, String> headers, String body);
 
-    /** Verifies a partner-originated inbound instruction and returns its JSON body. */
-    String verifyInbound(Map<String, String> headers, String body);
 }
