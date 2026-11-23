@@ -1,6 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { Code128Barcode } from "./Barcode128";
+import { listLanOrders, linkLanOrder, publishLanOrder, readLanSettings,
+  saveLanSettings, type LanSettings } from "./lan-edge";
+import { addCashLocally, loadOfflineCatalog, newOfflineOrder, offlineDb, reconcileQueued,
+  saveOfflineCatalog, type OfflineOrder, type OfflinePayload, type ReconcileResult } from "./offline-pos";
 import { api, ApiError, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
 
@@ -188,7 +192,9 @@ interface TerminalSession { status: string; instructions: string | null; checkou
 const TAX_KEY = (merchantId: string) => `elepay.pos.taxPercent.${merchantId}`;
 
 export function PosRegister({ merchant }: { merchant: MerchantRef }) {
-  const [catalog, reloadCatalog, loadError] = useLoad<CatalogRow[]>(`/v1/inventory/catalog/merchant/${merchant.id}`, []);
+  const [serverCatalog, reloadCatalog, loadError] = useLoad<CatalogRow[]>(`/v1/inventory/catalog/merchant/${merchant.id}`, []);
+  const [cachedCatalog, setCachedCatalog] = useState<CatalogRow[]>([]);
+  const catalog = serverCatalog.length ? serverCatalog : cachedCatalog;
   const [tables, reloadTables] = useLoad<DiningTableOption[]>(`/v1/restaurant/tables/merchant/${merchant.id}`, []);
   const [terminals] = useLoad<PaymentTerminal[]>(`/v1/pos/terminals/available/${merchant.id}`, []);
   const [orderType, setOrderType] = useState("RETAIL");
@@ -214,6 +220,76 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [receipt, setReceipt] = useState<{ receipt: PosReceipt; order: PosOrder } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine);
+  const [forceOffline, setForceOffline] = useState(false);
+  const offlineMode = forceOffline || !networkOnline;
+  const offlineModeRef = useRef(offlineMode);
+  offlineModeRef.current = offlineMode;
+  const [lanSettings, setLanSettings] = useState<LanSettings | null>(readLanSettings);
+  const [lanUrl, setLanUrl] = useState(() => readLanSettings()?.url ?? "");
+  const [lanToken, setLanToken] = useState(() => readLanSettings()?.token ?? "");
+  const [offlineOrders, setOfflineOrders] = useState<OfflineOrder[]>([]);
+  const [activeOffline, setActiveOffline] = useState<OfflineOrder | null>(null);
+  const [offlineWarning, setOfflineWarning] = useState("");
+  const syncBusy = useRef(false);
+
+  async function refreshOffline() {
+    const saved = await offlineDb.list(merchant.id);
+    setOfflineOrders(saved);
+    setActiveOffline((selected) => selected
+      ? saved.find((o) => o.offlineTxId === selected.offlineTxId) ?? selected : null);
+  }
+
+  async function syncPending() {
+    if (syncBusy.current || !navigator.onLine || offlineModeRef.current) return;
+    syncBusy.current = true;
+    try {
+      await reconcileQueued(offlineDb, merchant.id,
+        (payload: OfflinePayload) => api<ReconcileResult>("/v1/pos/sync", { body: payload }));
+      await refreshOffline();
+      if (lanSettings) {
+        const rows = await offlineDb.list(merchant.id);
+        for (const row of rows.filter((x) => x.status === "SYNCED" && x.serverOrderId)) {
+          try { await linkLanOrder(lanSettings, row.offlineTxId, row.serverOrderId!); }
+          catch { /* Local edge may not have received this order; server reconciliation is authoritative. */ }
+        }
+      }
+    } catch (e) {
+      setOfflineWarning(`Local orders retained: ${message(e)}`);
+    } finally {
+      syncBusy.current = false;
+    }
+  }
+
+  useEffect(() => {
+    let live = true;
+    void loadOfflineCatalog<CatalogRow>(merchant.id).then((snapshot) => {
+      if (live && snapshot) setCachedCatalog(snapshot.rows);
+    }).catch(() => {});
+    void refreshOffline().catch(() => setOfflineWarning("Offline storage cannot be opened on this device"));
+    const status = () => {
+      setNetworkOnline(navigator.onLine);
+      if (navigator.onLine) void syncPending();
+    };
+    window.addEventListener("online", status);
+    window.addEventListener("offline", status);
+    const interval = window.setInterval(() => {
+      if (navigator.onLine) void syncPending();
+    }, 12000);
+    if (navigator.onLine) void syncPending();
+    void navigator.storage?.persist?.().catch(() => false);
+    return () => {
+      live = false;
+      clearInterval(interval);
+      window.removeEventListener("online", status);
+      window.removeEventListener("offline", status);
+    };
+  }, [merchant.id]);
+
+  useEffect(() => {
+    if (serverCatalog.length) void saveOfflineCatalog(merchant.id, serverCatalog).catch(() =>
+      setOfflineWarning("Menu snapshot could not be saved for offline operation"));
+  }, [merchant.id, serverCatalog]);
 
   const subtotal = cart.reduce((s, c) => s + c.row.retailPricePesewas * c.qty, 0);
   const discountP = discount.trim() ? money(discount) : 0;
@@ -221,7 +297,9 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const taxValid = Number.isFinite(taxRate) && taxRate >= 0 && taxRate <= 100;
   const tax = discountP !== null && taxValid ? Math.round((subtotal - Math.min(discountP, subtotal)) * taxRate / 100) : 0;
   const total = discountP !== null ? subtotal - Math.min(discountP, subtotal) + tax : subtotal;
-  const balanceDue = order ? Math.max(0, order.totalPesewas - order.paidPesewas) : total;
+  const locallyCollected = activeOffline?.payments.reduce((sum, x) => sum + x.amountPesewas, 0) ?? 0;
+  const balanceDue = activeOffline ? Math.max(0, activeOffline.totalPesewas - locallyCollected)
+    : order ? Math.max(0, order.totalPesewas - order.paidPesewas) : total;
   const shown = catalog.filter((r) => `${itemLabel(r)} ${r.sku} ${r.barcode ?? ""}`.toLowerCase().includes(search.toLowerCase()));
 
   useEffect(() => { try { localStorage.setItem(TAX_KEY(merchant.id), taxPercent); } catch { /* ignore */ } }, [taxPercent, merchant.id]);
@@ -230,6 +308,46 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const add = (row: CatalogRow) => setCart((c) => c.some((x) => x.row.variantId === row.variantId)
     ? c.map((x) => x.row.variantId === row.variantId ? { ...x, qty: x.qty + 1 } : x) : [...c, { row, qty: 1 }]);
   const setQty = (id: string, qty: number) => setCart((c) => qty <= 0 ? c.filter((x) => x.row.variantId !== id) : c.map((x) => x.row.variantId === id ? { ...x, qty } : x));
+
+  async function queueCurrentOffline(receivedCashPesewas = 0) {
+    if (order || activeOffline || addingRound || digital)
+      throw new Error("Finish the current sale before offline capture");
+    if (discountP === null || !taxValid || cart.length === 0)
+      throw new Error("Choose items with a valid discount and tax");
+    if (orderType === "DINE_IN" && !tableId) throw new Error("Select a table");
+    const terminal = terminals.find((t) => t.id === terminalId);
+    let draft = newOfflineOrder({
+      merchantId: merchant.id, branchId: terminal?.branchId ?? null, terminalId: terminal?.id ?? null,
+      cashierId: null, customerId: null, orderType: orderType as OfflineOrder["orderType"],
+      tableId: tableId || null,
+      items: cart.map((c) => ({
+        variantId: c.row.variantId, itemName: itemLabel(c.row), quantity: c.qty,
+        unitPricePesewas: c.row.retailPricePesewas, discountPesewas: 0, taxPesewas: 0,
+        modifiersJson: "[]", seatNumber: null, course: "MAIN", notes: null,
+      })),
+      discountPesewas: Math.min(discountP, subtotal), taxPesewas: tax, tipPesewas: 0,
+      totalPesewas: total, payments: [],
+    });
+    if (receivedCashPesewas) draft = addCashLocally(draft, receivedCashPesewas);
+    await offlineDb.put(draft);
+    setActiveOffline(draft);
+    setCart([]);
+    setTendered("");
+    await refreshOffline();
+    if (lanSettings) {
+      try {
+        await publishLanOrder(lanSettings, draft,
+          tables.find((t) => t.id === draft.tableId)?.tableNumber ?? null);
+        setTableNotice("Saved locally and delivered to the paired LAN kitchen relay.");
+      } catch (e) {
+        setTableNotice("Order saved on this device, but not yet delivered to a kitchen screen.");
+        setOfflineWarning(`LAN edge delivery failed: ${message(e)}`);
+      }
+    } else {
+      setTableNotice("Order saved on this device. Pair a LAN edge to deliver it to kitchen tablets without internet.");
+    }
+    return draft;
+  }
 
   async function ensureOrder(): Promise<PosOrder> {
     if (order) return order;
@@ -258,6 +376,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   async function sendToKitchen() {
     setError(null); setBusy(true);
     try {
+      if (offlineMode && !order) { await queueCurrentOffline(); return; }
       if (addingRound && order) {
         if (cart.length === 0) throw new Error("Select items for the next round");
         const latest = await api<PosOrder>(`/v1/pos/orders/${order.id}/items`, {
@@ -361,6 +480,18 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     if (cash > 10_000_000_000) { setError("Cash amount exceeds the allowed input size"); return; }
     setBusy(true);
     try {
+      if (activeOffline) {
+        if (activeOffline.status !== "QUEUED" || !offlineMode)
+          throw new Error("Reconciliation is active. Open the cloud order to record further payments.");
+        const updated = addCashLocally(activeOffline, cash);
+        await offlineDb.put(updated);
+        setActiveOffline(updated);
+        await refreshOffline();
+        setTendered("");
+        setTableNotice("Cash recorded locally only; payment awaits cloud reconciliation.");
+        return;
+      }
+      if (offlineMode && !order) { await queueCurrentOffline(cash); return; }
       const o = await ensureOrder();
       const paid = await api<PosOrder>(`/v1/pos/orders/${o.id}/payments`, { body: { tenderType: "CASH", amountPesewas: cash, reference: null }, idempotencyKey: newKey() });
       if (paid.status !== "PAID") { setOrder(paid); setTendered(""); setTableNotice(`Partial cash recorded. Balance: ${formatMoney(Math.max(0, paid.totalPesewas - paid.paidPesewas))}`); return; }
@@ -417,13 +548,51 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     <div className="pos-layout">
       <div>
         <h3>Products</h3>
+        <p role="status" className={networkOnline ? "notice" : "notice warning"}>
+          {offlineMode ? "OFFLINE MODE — cash collected locally; electronic payments unavailable" : "Network available (cloud status not guaranteed)"}
+        </p>
+        <div className="panel">
+          <button className="secondary" onClick={() => setForceOffline((old) => !old)}
+            disabled={!!order || busy}>
+            {forceOffline ? "Leave manual offline mode" : "Use offline mode (for WAN outage)"}
+          </button>
+          <p className="small muted">Wi-Fi can report online even when the cloud is unreachable. Use offline mode before taking a new order if ELEPAY cloud is unavailable.</p>
+          <label>LAN edge HTTPS address
+            <input value={lanUrl} onChange={(e) => setLanUrl(e.target.value)} placeholder="https://kitchen.local:8443" />
+          </label>
+          <label>LAN pairing secret
+            <input type="password" value={lanToken} onChange={(e) => setLanToken(e.target.value)} autoComplete="off" />
+          </label>
+          <button className="secondary" onClick={() => {
+            try {
+              const settings = saveLanSettings(lanUrl, lanToken);
+              void listLanOrders(settings).then(() => {
+                setLanSettings(settings); setOfflineWarning(""); setTableNotice("LAN kitchen edge paired.");
+              }).catch((e) => setOfflineWarning(`Could not connect to LAN edge: ${message(e)}`));
+            } catch (e) { setOfflineWarning(message(e)); }
+          }}>Pair LAN kitchen</button>
+          {lanSettings && <p className="notice">LAN relay configured: {lanSettings.url}</p>}
+        </div>
+        {offlineWarning && <p className="error">{offlineWarning}</p>}
+        <div className="panel pos-offline-queue">
+          <h4>Local order journal</h4>
+          <p>{offlineOrders.filter((x) => x.status === "QUEUED").length} queued ·
+             {offlineOrders.filter((x) => x.status === "CONFLICT").length} conflicts</p>
+          <button className="secondary" disabled={offlineMode || busy}
+            onClick={() => void syncPending()}>Synchronize now</button>
+          {offlineOrders.filter((x) => x.status !== "SYNCED").map((x) => (
+            <button key={x.offlineTxId} className="secondary" onClick={() => { setActiveOffline(x); setCart([]); }}>
+              {x.offlineTxId.slice(0, 8)} · {formatMoney(x.totalPesewas)} · {x.status}
+            </button>
+          ))}
+        </div>
         {loadError && <p className="error">{loadError}</p>}
         <input placeholder="Search or scan barcode" value={search} onChange={(e) => setSearch(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { const hit = catalog.find((r) => r.barcode === search.trim() || r.sku === search.trim()); if (hit) { add(hit); setSearch(""); } } }} />
         {catalog.length === 0 && !loadError && <p className="muted">No products yet. Add them in <strong>Inventory &amp; Stock</strong>.</p>}
         <div className="pos-items">
           {shown.map((r) => (
-            <button key={r.variantId} className="secondary pos-item" disabled={!!order && !addingRound} onClick={() => add(r)}>
+            <button key={r.variantId} className="secondary pos-item" disabled={(!!order && !addingRound) || !!activeOffline} onClick={() => add(r)}>
               <span>{itemLabel(r)}</span><strong>{formatMoney(r.retailPricePesewas)}</strong>
               {r.trackInventory && <span className="small muted">{Number(r.onHand)} in stock</span>}
             </button>
@@ -432,27 +601,44 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
       </div>
       <div className="panel">
         <h3>Sale</h3>
+        {activeOffline && <div role="status" className="notice">
+          <strong>LOCAL ORDER {activeOffline.offlineTxId.slice(0, 8)}</strong>
+          <p>{activeOffline.status} · {formatMoney(activeOffline.totalPesewas)}
+            · Cash collected locally: {formatMoney(locallyCollected)}</p>
+          <p>Not a verified ELEPAY receipt. Remote kitchens require internet or a configured LAN relay.</p>
+          {activeOffline.problem && <p className="error">{activeOffline.problem}</p>}
+          {activeOffline.status === "SYNCED" && activeOffline.serverOrderId && <button onClick={() => {
+            void api<PosOrder>(`/v1/pos/orders/${activeOffline.serverOrderId}`).then((next) => {
+              setOrder(next); setActiveOffline(null);
+            }).catch((e) => setError(message(e)));
+          }}>Open reconciled order</button>}
+          <button className="secondary" onClick={() => {
+            setActiveOffline(null); setCart([]); setTendered(""); setTableNotice("");
+          }}>New sale</button>
+        </div>}
         <div className="grid-2">
           {terminals.length > 0 && <label>Payment terminal
-            <select value={terminalId} disabled={!!order} onChange={(e) => setTerminalId(e.target.value)}>
+            <select value={terminalId} disabled={!!order || !!activeOffline} onChange={(e) => setTerminalId(e.target.value)}>
               <option value="">No terminal selected</option>
               {terminals.map((t) => <option key={t.id} value={t.id}>{t.model} – {t.serialNumber}</option>)}
             </select>
           </label>}
           <label>Order channel
-            <select value={orderType} disabled={!!order} onChange={(e) => { setOrderType(e.target.value); setTableId(""); }}>
+            <select value={orderType} disabled={!!order || !!activeOffline} onChange={(e) => { setOrderType(e.target.value); setTableId(""); }}>
               <option value="RETAIL">Retail</option><option value="DINE_IN">Dine-in</option>
               <option value="TAKEOUT">Takeaway</option><option value="DELIVERY">Delivery</option>
             </select>
           </label>
           {orderType === "DINE_IN" && <label>Table
-            <select value={tableId} disabled={!!order} onChange={(e) => setTableId(e.target.value)}>
+            <select value={tableId} disabled={!!order || !!activeOffline} onChange={(e) => setTableId(e.target.value)}>
               <option value="">Select available table</option>
               {tables.filter((t) => t.status === "AVAILABLE").map((t) => <option key={t.id} value={t.id}>{t.tableNumber}</option>)}
             </select>
           </label>}
         </div>
-        {cart.length === 0 ? <p className="muted">{order
+        {activeOffline ? <ul>{activeOffline.items.map((i, index) => (
+          <li key={index}>{i.itemName} × {i.quantity} · {formatMoney(i.unitPricePesewas * i.quantity)}</li>
+        ))}</ul> : cart.length === 0 ? <p className="muted">{order
           ? "Order open. Add another round or collect payment."
           : "Tap products to add them."}</p> : (
           <table className="grid">
@@ -530,10 +716,14 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           </div>}
         </div>}
         {order && orderType !== "RETAIL" && <p className="notice ok">Order {order.orderNumber} sent to kitchen. Payment status: {order.status}.</p>}
-        {orderType !== "RETAIL" && cart.length > 0 && (!order || addingRound) && 
+        {orderType !== "RETAIL" && cart.length > 0 && !activeOffline && (!order || addingRound) && 
           <button onClick={() => void sendToKitchen()} disabled={busy}>
             {addingRound ? "Send new round to kitchen" : "Send to kitchen"}
-          </button>}}
+          </button>}
+        {cart.length > 0 && !order && !activeOffline && !offlineMode && <button className="secondary"
+          disabled={busy} onClick={() => { setForceOffline(true); void queueCurrentOffline().catch((e) => setError(message(e))); }}>
+          Save order locally before cloud checkout
+        </button>}
         {terminalSession && <p className="notice">Terminal request pending: {terminalSession.instructions ?? "Ask customer to tap their card."} Confirm only after your acquirer settles the checkout.</p>}
         {order && <p>Paid: {formatMoney(order.paidPesewas)} · Remaining balance: <strong>{formatMoney(balanceDue)}</strong></p>}
         {digital ? (
@@ -550,16 +740,16 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
             <button onClick={() => void checkDigital()} disabled={busy}>Check payment</button>
             <button className="secondary" onClick={() => void cancelDigital()} disabled={busy}>Cancel payment</button>
           </div>
-        ) : (cart.length > 0 || !!order) && (
+        ) : (cart.length > 0 || !!order || !!activeOffline) && (
           <>
             <label>Cash received (GH₵) — full or partial
               <input inputMode="decimal" value={tendered} onChange={(e) => setTendered(e.target.value)}
                 placeholder={(balanceDue / 100).toFixed(2)} /></label>
             <div className="flex-row">
               <button onClick={() => void payCash()} disabled={busy}>Cash</button>
-              <button className="secondary" onClick={() => void startDigital()} disabled={busy}>MoMo / card</button>
-              <button className="secondary" onClick={() => void showPaymentBarcode()} disabled={busy}>Payment QR / barcode</button>
-              <button className="secondary" onClick={() => void startContactless()} disabled={busy || !terminalId}>NFC tap on terminal</button>
+              <button className="secondary" onClick={() => void startDigital()} disabled={busy || offlineMode || !!activeOffline}>MoMo / card</button>
+              <button className="secondary" onClick={() => void showPaymentBarcode()} disabled={busy || offlineMode || !!activeOffline}>Payment QR / barcode</button>
+              <button className="secondary" onClick={() => void startContactless()} disabled={busy || offlineMode || !terminalId || !!activeOffline}>NFC tap on terminal</button>
               {!order && <button className="secondary" onClick={() => setCart([])}>Clear</button>}
             </div>
           </>

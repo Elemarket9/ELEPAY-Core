@@ -143,3 +143,13 @@ td.num, .lines .num { text-align: right; font-variant-numeric: tabular-nums; }
 .pos-transfer, .pos-bill-split { border: 1px solid var(--border, #aaa); border-radius: 8px; padding: .75rem; margin: .75rem 0; }
 .pos-transfer button, .pos-bill-split button, .pos-qty { min-width: 80px; min-height: 80px; }
 @media print { .pos-layout, .pos-transfer, .pos-bill-split, button, nav, header { display: none !important; } .receipt { display: block !important; color: black; background: white; white-space: pre-wrap; } }
+
+.pos-offline-queue { display: flex; flex-direction: column; gap: .5rem; margin: .75rem 0; }
+.pos-offline-queue button, .pos-offline-queue input { min-height: 64px; }
+.pos-offline-queue button { text-align: left; }
+.notice.warning { background: #5d3f0c; color: #fff2b6; border: 2px solid #e4aa2d; }
+
+.kitchen-lan { margin: 2rem 0; padding: 1rem; border-top: 3px dashed #b6ad8c; }
+.kitchen-lan-pair { display: flex; gap: 1rem; flex-wrap: wrap; align-items: end; }
+.kitchen-lan-pair label { min-width: 230px; }
+.kitchen-lan button { min-height: 80px; min-width: 80px; font-size: 1.15rem; }

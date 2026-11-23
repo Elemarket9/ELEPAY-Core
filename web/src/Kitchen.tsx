@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, newKey } from "./api";
+import { LanKitchenBoard } from "./LanKitchenBoard";
 import { getToken } from "./auth";
 import { kitchenClient, learnServerTime, loadDevice, pairDevice, saveDevice, type DeviceCredential, type KitchenCall } from "./kds/device";
 import {
@@ -327,6 +328,7 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
           );
         })}
       </div>
+      <LanKitchenBoard merchantId={setup.merchantId} now={now} />
     </div>
   );
 }

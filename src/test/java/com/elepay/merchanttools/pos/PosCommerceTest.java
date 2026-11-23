@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class PosCommerceTest extends PostgresTestBase {
 
@@ -302,6 +303,50 @@ public class PosCommerceTest extends PostgresTestBase {
         var seat2 = seatSplit.seatGroups().stream().filter(g -> g.seatNumber() == 2).findFirst().orElseThrow();
         assertThat(seat1.subtotalPesewas()).isEqualTo(4000L);
         assertThat(seat2.subtotalPesewas()).isEqualTo(6000L);
+    }
+
+    @Test
+    @DisplayName("Offline POS retry with a different API key returns exactly the first cloud order")
+    void offlineRetryCannotCreateDuplicateOrder() {
+        var item = new PosOrderService.OrderItemInput(null, "Fried Yam", BigDecimal.ONE,
+                1250L, 0L, 0L, "[]", null, "MAIN", null);
+        String tx = "OFF-" + UUID.randomUUID();
+        var first = new PosOfflineSyncService.OfflineOrderPayload(tx, "SYNC-" + UUID.randomUUID(),
+                merchantId, null, null, null, null, List.of(item),
+                0L, 0L, 0L, 1250L, List.of(), "REJECT_FLAGGED", "TAKEOUT", null);
+        var synced = syncService.syncOfflineOrder(first);
+        var second = new PosOfflineSyncService.OfflineOrderPayload(tx, "SYNC-" + UUID.randomUUID(),
+                merchantId, null, null, null, null, List.of(item),
+                0L, 0L, 0L, 1250L, List.of(), "REJECT_FLAGGED", "TAKEOUT", null);
+        var replay = syncService.syncOfflineOrder(second);
+        assertThat(replay.serverOrderId()).isEqualTo(synced.serverOrderId());
+        assertThat(db.sql("SELECT count(*) FROM pos_offline_sync_log WHERE merchant_id = :m AND offline_tx_id = :tx")
+                .param("m", merchantId).param("tx", tx).query(Long.class).single()).isEqualTo(1L);
+        assertThat(db.sql("SELECT count(*) FROM pos_order WHERE id = :id")
+                .param("id", synced.serverOrderId()).query(Long.class).single()).isEqualTo(1L);
+        assertThatThrownBy(() -> syncService.syncOfflineOrder(
+                new PosOfflineSyncService.OfflineOrderPayload(tx, "SYNC-" + UUID.randomUUID(),
+                        merchantId, null, null, null, null, List.of(item),
+                        0L, 0L, 0L, 1250L, List.of(new PosOfflineSyncService.OfflinePayment(
+                                TenderType.CASH, 1250L, null)), "REJECT_FLAGGED", "TAKEOUT", null)))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+    }
+
+    @Test
+    @DisplayName("Offline digital tender never creates a POS order or fake authorization")
+    void offlineDigitalTenderFailsBeforeMutation() {
+        var item = new PosOrderService.OrderItemInput(null, "Tea", BigDecimal.ONE,
+                1200L, 0L, 0L, "[]", null, null, null);
+        String tx = "OFF-" + UUID.randomUUID();
+        var unsafe = new PosOfflineSyncService.OfflineOrderPayload(tx, "SYNC-" + UUID.randomUUID(),
+                merchantId, null, null, null, null, List.of(item),
+                0L, 0L, 0L, 1200L,
+                List.of(new PosOfflineSyncService.OfflinePayment(TenderType.CARD, 1200L, "fake-approval")),
+                "REJECT_FLAGGED", "RETAIL", null);
+        assertThatThrownBy(() -> syncService.syncOfflineOrder(unsafe))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+        assertThat(db.sql("SELECT count(*) FROM pos_offline_sync_log WHERE merchant_id = :m AND offline_tx_id = :tx")
+                .param("m", merchantId).param("tx", tx).query(Long.class).single()).isZero();
     }
 
     @Test
