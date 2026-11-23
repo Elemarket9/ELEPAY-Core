@@ -47,7 +47,7 @@ class TableOwnershipTest {
                     String owner = owners.getProperty(table);
                     if (owner == null) {
                         violations.add(table + ": no owner in table-owners.properties (used by " + module + ")");
-                    } else if (!owner.equals(module)
+                    } else if (!Arrays.asList(owner.split(",\\s*")).contains(module)
                             && !(module.equals(REPORTING) && !written.contains(table))) {
                         violations.add(module + " -> " + table + " (owned by " + owner + ") in " + SOURCES.relativize(file));
                     }

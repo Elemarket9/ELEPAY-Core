@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -450,5 +452,70 @@ class EnterpriseItemRefundTest {
 
         long remaining = liabilityTracker.getOutstandingLiability(enterpriseId, merchantId);
         assertThat(remaining).isEqualTo(0L);
+    }
+
+    @Test
+    @DisplayName("Concurrency: Concurrent refunds on same order with distinct idempotency keys cannot exceed gross")
+    void testConcurrentRefundsOnSameOrderWithDistinctKeysSerialized() throws InterruptedException {
+        String orderRef = "JUMIA-ORD-CONCURRENT-001";
+        long originalGross = 100_000L; // GH₵1,000.00
+        refundService.registerOrderGross(enterpriseId, orderRef, originalGross);
+
+        int threadCount = 10;
+        long refundPerThread = 80_000L; // GH₵800.00 (80% of total order gross)
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+        CountDownLatch readyLatch = new CountDownLatch(threadCount);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger limitExceededCount = new AtomicInteger(0);
+        List<Throwable> unexpectedErrors = Collections.synchronizedList(new ArrayList<>());
+
+        for (int i = 0; i < threadCount; i++) {
+            final int index = i;
+            executor.submit(() -> {
+                readyLatch.countDown();
+                try {
+                    startLatch.await();
+                    EnterpriseItemRefundRequest req = new EnterpriseItemRefundRequest(
+                            "idem_concurrent_refund_" + index,
+                            enterpriseId,
+                            orderRef,
+                            null,
+                            "cust_conc_1",
+                            RefundDestination.EXTERNAL_WALLET,
+                            Map.of(),
+                            "GHS",
+                            "Item return",
+                            List.of(EnterpriseRefundItemSpecification.of("ITEM-1", merchantIds.get(0), refundPerThread, 1000, "Return")),
+                            null,
+                            Map.of()
+                    );
+                    refundService.processRefund(req);
+                    successCount.incrementAndGet();
+                } catch (ApiException e) {
+                    if ("refund_limit_exceeded".equals(e.code())) {
+                        limitExceededCount.incrementAndGet();
+                    } else {
+                        unexpectedErrors.add(e);
+                    }
+                } catch (Throwable t) {
+                    unexpectedErrors.add(t);
+                }
+            });
+        }
+
+        readyLatch.await();
+        startLatch.countDown();
+        executor.shutdown();
+        boolean terminated = executor.awaitTermination(10, TimeUnit.SECONDS);
+
+        assertThat(terminated).isTrue();
+        assertThat(unexpectedErrors).isEmpty();
+        assertThat(successCount.get()).isEqualTo(1);
+        assertThat(limitExceededCount.get()).isEqualTo(threadCount - 1);
+
+        long finalCumulative = refundService.resolveCumulativeRefunded(enterpriseId, orderRef);
+        assertThat(finalCumulative).isEqualTo(refundPerThread);
+        assertThat(finalCumulative).isLessThanOrEqualTo(originalGross);
     }
 }

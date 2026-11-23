@@ -18,6 +18,8 @@ import org.mockito.Mockito;
 
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -360,5 +362,71 @@ class ExternalWalletWithdrawalTest {
         assertThat(retried.retryOf()).isEqualTo(original.withdrawalId());
         assertThat(retried.withdrawalReference()).isNotEqualTo(original.withdrawalReference());
         assertThat(retried.amountPesewas()).isEqualTo(original.amountPesewas());
+    }
+
+    @Test
+    @DisplayName("Concurrency: Concurrent withdrawals for same customer serialized and cannot exceed BoG KYC daily limit")
+    void testConcurrentWithdrawalsForSameCustomerSerialized() throws InterruptedException {
+        String customerId = "cust_concurrent_kyc_tier1";
+        // Tier 1 daily limit is 100,000 pesewas (GH₵1,000.00)
+        long withdrawalPerThread = 80_000L; // GH₵800.00 (80% of daily limit)
+        int threadCount = 10;
+
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+        CountDownLatch readyLatch = new CountDownLatch(threadCount);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger dailyLimitExceededCount = new AtomicInteger(0);
+        List<Throwable> unexpectedErrors = Collections.synchronizedList(new ArrayList<>());
+
+        for (int i = 0; i < threadCount; i++) {
+            final int index = i;
+            executor.submit(() -> {
+                readyLatch.countDown();
+                try {
+                    startLatch.await();
+                    EnterpriseWithdrawalRequest request = new EnterpriseWithdrawalRequest(
+                            "idem_conc_withdraw_" + index,
+                            enterpriseId,
+                            PARTNER_ID,
+                            customerId,
+                            null,
+                            "Kofi Mensah",
+                            "GHA-123456789-1",
+                            1, // Tier 1 (100,000 daily limit)
+                            withdrawalPerThread,
+                            "GHS",
+                            WithdrawalDestinationType.MOMO,
+                            "mtn",
+                            "0241234567",
+                            Map.of()
+                    );
+                    withdrawalEngine.requestWithdrawal(request);
+                    successCount.incrementAndGet();
+                } catch (ApiException e) {
+                    if ("daily_limit_exceeded".equals(e.code())) {
+                        dailyLimitExceededCount.incrementAndGet();
+                    } else {
+                        unexpectedErrors.add(e);
+                    }
+                } catch (Throwable t) {
+                    unexpectedErrors.add(t);
+                }
+            });
+        }
+
+        readyLatch.await();
+        startLatch.countDown();
+        executor.shutdown();
+        boolean terminated = executor.awaitTermination(10, TimeUnit.SECONDS);
+
+        assertThat(terminated).isTrue();
+        assertThat(unexpectedErrors).isEmpty();
+        assertThat(successCount.get()).isEqualTo(1);
+        assertThat(dailyLimitExceededCount.get()).isEqualTo(threadCount - 1);
+
+        long dailyTotal = complianceService.getDailyTotal(enterpriseId, customerId, java.time.LocalDate.now());
+        assertThat(dailyTotal).isEqualTo(withdrawalPerThread);
+        assertThat(dailyTotal).isLessThanOrEqualTo(EnterpriseWithdrawalComplianceService.BOG_TIER_1_DAILY_LIMIT);
     }
 }
