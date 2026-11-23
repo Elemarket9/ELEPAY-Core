@@ -16,7 +16,7 @@ class WC_Elepay_API {
     private $base_url;
     private $merchant_id;
 
-    public function __construct($api_key, $signing_secret = '', $base_url = 'https://api.elepay.com', $merchant_id = '') {
+    public function __construct($api_key, $signing_secret = '', $base_url = '', $merchant_id = '') {
         $this->api_key = trim($api_key);
         $this->signing_secret = trim($signing_secret);
         $this->base_url = rtrim($base_url, '/');
@@ -56,7 +56,7 @@ class WC_Elepay_API {
         $this->require_configuration();
         $url = $this->base_url . '/v1/merchants/' . rawurlencode($this->merchant_id)
             . '/checkouts/' . rawurlencode($reference);
-        $response = wp_remote_get($url, array(
+        $response = wp_safe_remote_get($url, array(
             'timeout' => 15, 'redirection' => 0,
             'headers' => array('Accept' => 'application/json', 'X-Elepay-Api-Key' => $this->api_key),
         ));
@@ -163,7 +163,7 @@ class WC_Elepay_API {
             'body'        => $body_json,
         );
 
-        $response = self::decode_response(wp_remote_post($url, $args), 'checkout creation');
+        $response = self::decode_response(wp_safe_remote_post($url, $args), 'checkout creation');
         if (empty($response['reference']) || !is_string($response['reference'])
                 || empty($response['payUrl']) || !is_string($response['payUrl'])
                 || !filter_var($response['payUrl'], FILTER_VALIDATE_URL)
@@ -183,7 +183,7 @@ class WC_Elepay_API {
     public function get_checkout_status($reference) {
         $this->require_configuration();
         $url = $this->base_url . '/v1/public/checkouts/' . rawurlencode($reference) . '/status';
-        $response = wp_remote_get($url, array(
+        $response = wp_safe_remote_get($url, array(
             'timeout' => 15, 'redirection' => 0,
             'headers' => array('Accept' => 'application/json', 'X-Elepay-Api-Key' => $this->api_key),
         ));
@@ -238,11 +238,11 @@ class WC_Elepay_API {
                 $nonce, $idempotency_key, $body_json
             ),
         );
-        $body = self::decode_response(wp_remote_post($url, array(
+        $body = self::decode_response(wp_safe_remote_post($url, array(
             'method' => 'POST', 'timeout' => 30, 'redirection' => 0,
             'headers' => $headers, 'body' => $body_json,
         )), 'refund');
-        if (empty($body['reference']) || !isset($body['line'], $body['amount'])
+        if (empty($body['reference']) || !isset($body['checkout'], $body['line'], $body['amount'])
                 || !hash_equals((string) $checkout_ref, (string) $body['checkout'])
                 || (int) $body['line'] !== $line
                 || (int) $body['amount'] !== $amount_pesewas) {
