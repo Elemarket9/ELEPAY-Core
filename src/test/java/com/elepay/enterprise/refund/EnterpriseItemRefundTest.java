@@ -61,7 +61,7 @@ class EnterpriseItemRefundTest {
         when(ledger.post(any())).thenReturn(new Ledger.Posted(UUID.randomUUID(), false));
 
         refundCalculator = new EnterpriseItemRefundCalculator();
-        liabilityTracker = new EnterpriseRefundLiabilityTracker(null);
+        liabilityTracker = new InMemoryRefundLiabilityTracker();
 
         EnterpriseMultiMerchantSplitter splitter = new EnterpriseMultiMerchantSplitter();
         checkoutService = new EnterpriseCheckoutService(ledger, splitter);
