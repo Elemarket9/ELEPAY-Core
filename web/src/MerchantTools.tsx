@@ -566,7 +566,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           <button className="secondary" onClick={() => {
             setActiveOffline(null); setCart([]); setTendered(""); setTableNotice("");
           }}>New sale</button>
-        </div>
+        </div>}
         <div className="grid-2">
           {terminals.length > 0 && <label>Payment terminal
             <select value={terminalId} disabled={!!order || !!activeOffline} onChange={(e) => setTerminalId(e.target.value)}>
