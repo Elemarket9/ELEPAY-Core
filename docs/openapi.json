@@ -33,6 +33,18 @@
         },
         "type" : "object"
       },
+      "AddModifierOptionRequest" : {
+        "properties" : {
+          "additionalPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "AgingSummary" : {
         "properties" : {
           "bucket" : {
@@ -407,6 +419,26 @@
           },
           "isActive" : {
             "type" : "boolean"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Category" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
           },
           "merchantId" : {
             "format" : "uuid",
@@ -797,6 +829,45 @@
         "required" : [ "deliveryMethod", "destinationCurrency", "direction", "fundingMethod", "partner", "receivingCountry", "sendingCountry", "sourceCurrency" ],
         "type" : "object"
       },
+      "CreateBatchRequest" : {
+        "properties" : {
+          "batchNumber" : {
+            "type" : "string"
+          },
+          "costPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "expiryDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "number"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateCategoryRequest" : {
+        "properties" : {
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "CreateCheckout" : {
         "properties" : {
           "allocations" : {
@@ -841,6 +912,21 @@
         },
         "type" : "object"
       },
+      "CreateFloorPlanRequest" : {
+        "properties" : {
+          "layoutJson" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "CreateMandateRequest" : {
         "properties" : {
           "consentReference" : {
@@ -865,6 +951,29 @@
           }
         },
         "required" : [ "consentReference", "frequency", "merchantId" ],
+        "type" : "object"
+      },
+      "CreateModifierGroupRequest" : {
+        "properties" : {
+          "isRequired" : {
+            "type" : "boolean"
+          },
+          "maxSelection" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "minSelection" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "CreateOrderRequest" : {
@@ -909,6 +1018,246 @@
           "tipPesewas" : {
             "format" : "int64",
             "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "CreatePoRequest" : {
+        "properties" : {
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/PoItemInput"
+            },
+            "type" : "array"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "poNumber" : {
+            "type" : "string"
+          },
+          "supplierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateProductRequest" : {
+        "properties" : {
+          "brand" : {
+            "type" : "string"
+          },
+          "categoryId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateRecipeRequest" : {
+        "properties" : {
+          "ingredients" : {
+            "items" : {
+              "$ref" : "#/components/schemas/IngredientInput"
+            },
+            "type" : "array"
+          },
+          "menuItemVariantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "preparationInstructions" : {
+            "type" : "string"
+          },
+          "recipeName" : {
+            "type" : "string"
+          },
+          "yieldQuantity" : {
+            "type" : "number"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateSupplierRequest" : {
+        "properties" : {
+          "address" : {
+            "type" : "string"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          },
+          "phone" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateTableRequest" : {
+        "properties" : {
+          "capacity" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "sectionId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "tableNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateTicketRequest" : {
+        "properties" : {
+          "course" : {
+            "type" : "string"
+          },
+          "diningMode" : {
+            "enum" : [ "DINE_IN", "TAKEOUT", "DELIVERY" ],
+            "type" : "string"
+          },
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/KdsItemInput"
+            },
+            "type" : "array"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "serverName" : {
+            "type" : "string"
+          },
+          "tableId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateTransferRequest" : {
+        "properties" : {
+          "destWarehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/TransferItemInput"
+            },
+            "type" : "array"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "sourceWarehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "trackingNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateVariantRequest" : {
+        "properties" : {
+          "attributesJson" : {
+            "type" : "string"
+          },
+          "barcode" : {
+            "type" : "string"
+          },
+          "costPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "productId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "retailPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "trackInventory" : {
+            "type" : "boolean"
+          },
+          "variantName" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateWarehouseRequest" : {
+        "properties" : {
+          "address" : {
+            "type" : "string"
+          },
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
           }
         },
         "type" : "object"
@@ -1098,6 +1447,26 @@
           },
           "valid" : {
             "type" : "boolean"
+          }
+        },
+        "type" : "object"
+      },
+      "DeductRecipeStockRequest" : {
+        "properties" : {
+          "dishQuantity" : {
+            "type" : "number"
+          },
+          "menuItemVariantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "referenceId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
           }
         },
         "type" : "object"
@@ -1764,6 +2133,29 @@
         },
         "type" : "object"
       },
+      "FloorPlan" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "layoutJson" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "GlobalKillSwitchRequest" : {
         "properties" : {
           "active" : {
@@ -1842,6 +2234,68 @@
         },
         "type" : "object"
       },
+      "HeldCart" : {
+        "properties" : {
+          "cartPayloadJson" : {
+            "type" : "string"
+          },
+          "cashierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "customerName" : {
+            "type" : "string"
+          },
+          "heldAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "HoldCartRequest" : {
+        "properties" : {
+          "cartPayloadJson" : {
+            "type" : "string"
+          },
+          "cashierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "customerName" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "IngestRateRequest" : {
         "properties" : {
           "askRate" : {
@@ -1871,6 +2325,47 @@
           }
         },
         "required" : [ "askRate", "bidRate", "destinationCurrency", "source", "sourceCurrency" ],
+        "type" : "object"
+      },
+      "IngredientCostDetail" : {
+        "properties" : {
+          "ingredientName" : {
+            "type" : "string"
+          },
+          "ingredientVariantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "lineCostPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "quantityRequired" : {
+            "type" : "number"
+          },
+          "unitCostPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "unitOfMeasure" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "IngredientInput" : {
+        "properties" : {
+          "ingredientVariantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "quantityRequired" : {
+            "type" : "number"
+          },
+          "unitOfMeasure" : {
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "Integrity" : {
@@ -1965,6 +2460,79 @@
           }
         },
         "required" : [ "accountName", "accountNumber", "network", "reference", "type" ],
+        "type" : "object"
+      },
+      "KdsItemInput" : {
+        "properties" : {
+          "course" : {
+            "type" : "string"
+          },
+          "itemName" : {
+            "type" : "string"
+          },
+          "modifiers" : {
+            "type" : "string"
+          },
+          "orderItemId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "number"
+          }
+        },
+        "type" : "object"
+      },
+      "KdsTicket" : {
+        "properties" : {
+          "course" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "diningMode" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "readyAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "servedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "serverName" : {
+            "type" : "string"
+          },
+          "startedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "tableId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "KeyRequest" : {
@@ -2272,6 +2840,40 @@
         },
         "type" : "object"
       },
+      "LowStockAlert" : {
+        "properties" : {
+          "productName" : {
+            "type" : "string"
+          },
+          "quantityOnHand" : {
+            "type" : "number"
+          },
+          "reorderPoint" : {
+            "type" : "number"
+          },
+          "severity" : {
+            "type" : "string"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "variantName" : {
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseName" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Mandate" : {
         "properties" : {
           "consentReference" : {
@@ -2478,6 +3080,57 @@
           }
         },
         "required" : [ "city" ],
+        "type" : "object"
+      },
+      "ModifierGroup" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "isRequired" : {
+            "type" : "boolean"
+          },
+          "maxSelection" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "minSelection" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "ModifierOption" : {
+        "properties" : {
+          "additionalPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "groupId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
         "type" : "object"
       },
       "ModuleKillSwitchRequest" : {
@@ -2690,11 +3343,17 @@
       },
       "OrderItemInput" : {
         "properties" : {
+          "course" : {
+            "type" : "string"
+          },
           "discountPesewas" : {
             "format" : "int64",
             "type" : "integer"
           },
           "itemName" : {
+            "type" : "string"
+          },
+          "modifiersJson" : {
             "type" : "string"
           },
           "notes" : {
@@ -2703,6 +3362,10 @@
           "quantity" : {
             "type" : "number"
           },
+          "seatNumber" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
           "taxPesewas" : {
             "format" : "int64",
             "type" : "integer"
@@ -2710,6 +3373,10 @@
           "unitPricePesewas" : {
             "format" : "int64",
             "type" : "integer"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
           }
         },
         "type" : "object"
@@ -3020,6 +3687,22 @@
         },
         "type" : "object"
       },
+      "PoItemInput" : {
+        "properties" : {
+          "quantityOrdered" : {
+            "type" : "number"
+          },
+          "unitCostPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "PosOrder" : {
         "properties" : {
           "branchId" : {
@@ -3086,6 +3769,58 @@
           "totalPesewas" : {
             "format" : "int64",
             "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "PosOrderItem" : {
+        "properties" : {
+          "course" : {
+            "type" : "string"
+          },
+          "discountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "itemName" : {
+            "type" : "string"
+          },
+          "modifiersJson" : {
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "number"
+          },
+          "seatNumber" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "taxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "unitPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
           }
         },
         "type" : "object"
@@ -3253,6 +3988,39 @@
         },
         "type" : "object"
       },
+      "Product" : {
+        "properties" : {
+          "brand" : {
+            "type" : "string"
+          },
+          "categoryId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "isActive" : {
+            "type" : "boolean"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Proposal" : {
         "properties" : {
           "actionType" : {
@@ -3395,6 +4163,49 @@
             "type" : "string"
           },
           "merchant" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PurchaseOrder" : {
+        "properties" : {
+          "completedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "issuedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "poNumber" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "supplierId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "totalCostPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
             "type" : "string"
           }
         },
@@ -3598,6 +4409,65 @@
           "transactionId" : {
             "format" : "uuid",
             "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Recipe" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "menuItemVariantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "preparationInstructions" : {
+            "type" : "string"
+          },
+          "recipeName" : {
+            "type" : "string"
+          },
+          "yieldQuantity" : {
+            "type" : "number"
+          }
+        },
+        "type" : "object"
+      },
+      "RecipeCostSummary" : {
+        "properties" : {
+          "costPerPortionPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "ingredients" : {
+            "items" : {
+              "$ref" : "#/components/schemas/IngredientCostDetail"
+            },
+            "type" : "array"
+          },
+          "recipeId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "recipeName" : {
+            "type" : "string"
+          },
+          "totalCostPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "yieldQuantity" : {
+            "type" : "number"
           }
         },
         "type" : "object"
@@ -3926,6 +4796,56 @@
         "required" : [ "outcome" ],
         "type" : "object"
       },
+      "RestaurantSplitResult" : {
+        "properties" : {
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "orderTotalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "seatBills" : {
+            "items" : {
+              "$ref" : "#/components/schemas/SeatBill"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "RestaurantTable" : {
+        "properties" : {
+          "capacity" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "currentOrderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "sectionId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "tableNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Review" : {
         "properties" : {
           "decision" : {
@@ -4060,6 +4980,75 @@
           },
           "language" : {
             "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "SeatBill" : {
+        "properties" : {
+          "allocatedTaxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "allocatedTipPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/PosOrderItem"
+            },
+            "type" : "array"
+          },
+          "itemsTotalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "seatNumber" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "totalDuePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "SeatSplitGroup" : {
+        "properties" : {
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/PosOrderItem"
+            },
+            "type" : "array"
+          },
+          "seatNumber" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "subtotalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "SeatSplitResult" : {
+        "properties" : {
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "seatGroups" : {
+            "items" : {
+              "$ref" : "#/components/schemas/SeatSplitGroup"
+            },
+            "type" : "array"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
           }
         },
         "type" : "object"
@@ -4321,6 +5310,95 @@
         "required" : [ "status" ],
         "type" : "object"
       },
+      "Stock" : {
+        "properties" : {
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "quantityOnHand" : {
+            "type" : "number"
+          },
+          "quantityReserved" : {
+            "type" : "number"
+          },
+          "reorderPoint" : {
+            "type" : "number"
+          },
+          "reorderQuantity" : {
+            "type" : "number"
+          },
+          "updatedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "StockAdjustmentRequest" : {
+        "properties" : {
+          "movementType" : {
+            "enum" : [ "RECEIVED", "DAMAGED", "LOST", "ADJUSTMENT", "SALE_DEDUCTION", "TRANSFER_OUT", "TRANSFER_IN", "RECIPE_USAGE" ],
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "quantityChange" : {
+            "type" : "number"
+          },
+          "referenceId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Supplier" : {
+        "properties" : {
+          "address" : {
+            "type" : "string"
+          },
+          "contactEmail" : {
+            "type" : "string"
+          },
+          "contactPhone" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "SuspenseItem" : {
         "properties" : {
           "agingBucket" : {
@@ -4561,6 +5639,60 @@
         "required" : [ "recipient" ],
         "type" : "object"
       },
+      "TransferItemInput" : {
+        "properties" : {
+          "quantity" : {
+            "type" : "number"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "TransferOrder" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "destinationWarehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "dispatchedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          },
+          "receivedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "sourceWarehouseId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "trackingNumber" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "TrustAccountConfig" : {
         "properties" : {
           "accountCode" : {
@@ -4640,6 +5772,93 @@
         },
         "type" : "object"
       },
+      "Variant" : {
+        "properties" : {
+          "attributesJson" : {
+            "type" : "string"
+          },
+          "barcode" : {
+            "type" : "string"
+          },
+          "costPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "productId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "retailPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "trackInventory" : {
+            "type" : "boolean"
+          },
+          "variantName" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "VariantDetail" : {
+        "properties" : {
+          "attributesJson" : {
+            "type" : "string"
+          },
+          "barcode" : {
+            "type" : "string"
+          },
+          "costPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "productId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "productName" : {
+            "type" : "string"
+          },
+          "retailPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "trackInventory" : {
+            "type" : "boolean"
+          },
+          "variantName" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Wallet" : {
         "properties" : {
           "accounts" : {
@@ -4650,6 +5869,39 @@
           },
           "customerId" : {
             "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Warehouse" : {
+        "properties" : {
+          "address" : {
+            "type" : "string"
+          },
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "isActive" : {
+            "type" : "boolean"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "name" : {
             "type" : "string"
           }
         },
@@ -5896,6 +7148,518 @@
           }
         },
         "tags" : [ "fx-api" ]
+      }
+    },
+    "/v1/inventory/batches" : {
+      "post" : {
+        "operationId" : "createBatch",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateBatchRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Batch"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/categories" : {
+      "post" : {
+        "operationId" : "createCategory",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateCategoryRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Category"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/products" : {
+      "post" : {
+        "operationId" : "createProduct",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateProductRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Product"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/purchase-orders" : {
+      "post" : {
+        "operationId" : "createPo",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreatePoRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PurchaseOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/purchase-orders/{id}/issue" : {
+      "post" : {
+        "operationId" : "issuePo",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PurchaseOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/purchase-orders/{id}/receive" : {
+      "post" : {
+        "operationId" : "receivePo",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "additionalProperties" : {
+                  "type" : "number"
+                },
+                "type" : "object"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PurchaseOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/scan/barcode" : {
+      "get" : {
+        "operationId" : "scanBarcode",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "barcode",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/VariantDetail"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/scan/sku" : {
+      "get" : {
+        "operationId" : "scanSku",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "sku",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/VariantDetail"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/stock/adjust" : {
+      "post" : {
+        "operationId" : "adjustStock",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/StockAdjustmentRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Stock"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/stock/alerts/{merchantId}" : {
+      "get" : {
+        "operationId" : "listAlerts",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/LowStockAlert"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/suppliers" : {
+      "post" : {
+        "operationId" : "createSupplier",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateSupplierRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Supplier"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/transfers" : {
+      "post" : {
+        "operationId" : "createTransfer",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateTransferRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TransferOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/transfers/{id}/dispatch" : {
+      "post" : {
+        "operationId" : "dispatchTransfer",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TransferOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/transfers/{id}/receive" : {
+      "post" : {
+        "operationId" : "receiveTransfer",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "additionalProperties" : {
+                  "type" : "number"
+                },
+                "type" : "object"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TransferOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/variants" : {
+      "post" : {
+        "operationId" : "createVariant",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateVariantRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Variant"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/warehouses" : {
+      "post" : {
+        "operationId" : "createWarehouse",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateWarehouseRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Warehouse"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/warehouses/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listWarehouses",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/Warehouse"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
       }
     },
     "/v1/merchants" : {
@@ -9824,6 +11588,91 @@
         "tags" : [ "reconciliation-service" ]
       }
     },
+    "/v1/pos/carts/held/{cartId}/recall" : {
+      "post" : {
+        "operationId" : "recallHeldCart",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "cartId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/HeldCart"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/carts/held/{terminalId}" : {
+      "get" : {
+        "operationId" : "listHeldCarts",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "terminalId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/HeldCart"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/carts/hold" : {
+      "post" : {
+        "operationId" : "holdCart",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/HoldCartRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/HeldCart"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
     "/v1/pos/cashiers/auth" : {
       "post" : {
         "operationId" : "authenticateCashier",
@@ -10124,6 +11973,33 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/EvenSplitResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/orders/{orderId}/split/seats" : {
+      "post" : {
+        "operationId" : "splitBillBySeats",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SeatSplitResult"
                 }
               }
             },
@@ -10896,6 +12772,558 @@
           }
         },
         "tags" : [ "rail-callbacks" ]
+      }
+    },
+    "/v1/restaurant/floor-plans" : {
+      "post" : {
+        "operationId" : "createFloorPlan",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateFloorPlanRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/FloorPlan"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/floor-plans/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listFloorPlans",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/FloorPlan"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/items/{itemId}/bump" : {
+      "post" : {
+        "operationId" : "bumpItem",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "itemId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/orders/{orderId}/fire-course" : {
+      "post" : {
+        "operationId" : "fireCourse",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "course",
+          "required" : true,
+          "schema" : {
+            "enum" : [ "APPETIZER", "MAIN", "DESSERT", "BEVERAGE", "SIDE" ],
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/tickets" : {
+      "post" : {
+        "operationId" : "createTicket",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateTicketRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/KdsTicket"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/tickets/active/{merchantId}" : {
+      "get" : {
+        "operationId" : "getActiveTickets",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/KdsTicket"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/tickets/{ticketId}/bump" : {
+      "post" : {
+        "operationId" : "bumpTicket",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "ticketId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/KdsTicket"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/modifiers/groups" : {
+      "post" : {
+        "operationId" : "createModifierGroup",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateModifierGroupRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ModifierGroup"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/modifiers/groups/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listModifierGroups",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/ModifierGroup"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/modifiers/groups/{groupId}/options" : {
+      "post" : {
+        "operationId" : "addModifierOption",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "groupId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/AddModifierOptionRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ModifierOption"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/orders/{orderId}/split-by-seat" : {
+      "post" : {
+        "operationId" : "splitBySeat",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RestaurantSplitResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/recipes" : {
+      "post" : {
+        "operationId" : "createRecipe",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateRecipeRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Recipe"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/recipes/deduct-stock" : {
+      "post" : {
+        "operationId" : "deductRecipeStock",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/DeductRecipeStockRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/recipes/{recipeId}/cost" : {
+      "get" : {
+        "operationId" : "calculateRecipeCost",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "recipeId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RecipeCostSummary"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/tables" : {
+      "post" : {
+        "operationId" : "createTable",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateTableRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RestaurantTable"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/tables/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listTables",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/RestaurantTable"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/tables/{tableId}/seat" : {
+      "post" : {
+        "operationId" : "seatTable",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "tableId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RestaurantTable"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/tables/{tableId}/status" : {
+      "post" : {
+        "operationId" : "updateTableStatus",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "tableId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "status",
+          "required" : true,
+          "schema" : {
+            "enum" : [ "AVAILABLE", "OCCUPIED", "RESERVED", "DIRTY" ],
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RestaurantTable"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/tables/{tableId}/vacate" : {
+      "post" : {
+        "operationId" : "vacateTable",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "tableId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "markDirty",
+          "required" : false,
+          "schema" : {
+            "default" : true,
+            "type" : "boolean"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RestaurantTable"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "restaurant-controller" ]
       }
     },
     "/v1/ussd/generic" : {
