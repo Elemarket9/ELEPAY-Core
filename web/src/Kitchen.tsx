@@ -293,6 +293,8 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
               <header>
                 <span className="kitchen-num">{num(v)}</span>
                 <span className="kitchen-mode">{v.ticket.diningMode.replace("_", " ")}</span>
+                {v.ticket.tableNumber && <span className="kitchen-mode">Table {v.ticket.tableNumber}</span>}
+                <span className={`kitchen-pay ${(v.ticket.paymentStatus ?? "PENDING").toLowerCase()}`}>{v.ticket.paymentStatus === "PAID" ? "PAID" : v.ticket.paymentStatus === "PARTIAL" ? "PARTIAL" : "UNPAID"}</span>
                 <span className="kitchen-time">{elapsed(v, now)}</span>
               </header>
               {v.ticket.serverName && <p className="kitchen-server">{v.ticket.serverName}</p>}
@@ -316,9 +318,9 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
               {menuFor === v.ticket.id && (
                 <div className="kitchen-menu">
                   {setup.hasPrinter && <button className="secondary" onClick={() => void reprint(v.ticket.id)}>Reprint</button>}
-                  {confirmCancel === v.ticket.id
+                  {!paired && (confirmCancel === v.ticket.id
                     ? <button className="danger" onClick={() => { update((s) => cancel(s, v.ticket.id, null, newKey())); setMenuFor(null); }}>Tap again to cancel order</button>
-                    : <button className="secondary" onClick={() => setConfirmCancel(v.ticket.id)}>Cancel order</button>}
+                    : <button className="secondary" onClick={() => setConfirmCancel(v.ticket.id)}>Manager: cancel order</button>)}
                 </div>
               )}
             </article>

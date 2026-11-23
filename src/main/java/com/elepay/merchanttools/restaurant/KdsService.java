@@ -58,7 +58,9 @@ public class KdsService {
             Integer ticketNumber,
             String clientRef,
             OffsetDateTime cancelledAt,
-            long changeSeq
+            long changeSeq,
+            String paymentStatus,
+            String tableNumber
     ) {
         public long elapsedSeconds() {
             OffsetDateTime end = servedAt != null ? servedAt : cancelledAt != null ? cancelledAt : OffsetDateTime.now();
@@ -70,8 +72,8 @@ public class KdsService {
                 return "COMPLETED";
             }
             long minutes = elapsedSeconds() / 60;
-            if (minutes >= 25) return "CRITICAL";
-            if (minutes >= 15) return "WARNING";
+            if (minutes >= 15) return "CRITICAL";
+            if (minutes >= 10) return "WARNING";
             return "NORMAL";
         }
     }
@@ -111,12 +113,16 @@ public class KdsService {
 
     private static final String TICKET_COLS = """
             id, merchant_id, order_id, table_id, dining_mode, server_name, status, course, notes,
-            created_at, started_at, ready_at, served_at, ticket_number, client_ref, cancelled_at, change_seq""";
+            created_at, started_at, ready_at, served_at, ticket_number, client_ref, cancelled_at, change_seq,
+             (SELECT p.status FROM pos_order p WHERE p.id = order_id) AS payment_status,
+             (SELECT rt.table_number FROM restaurant_table rt WHERE rt.id = table_id) AS table_number""";
 
     private static final String TICKET_COLS_T = """
             t.id, t.merchant_id, t.order_id, t.table_id, t.dining_mode, t.server_name, t.status, t.course, t.notes,
             t.created_at, t.started_at, t.ready_at, t.served_at, t.ticket_number, t.client_ref, t.cancelled_at,
-            t.change_seq""";
+            t.change_seq,
+             (SELECT p.status FROM pos_order p WHERE p.id = t.order_id) AS payment_status,
+             (SELECT rt.table_number FROM restaurant_table rt WHERE rt.id = t.table_id) AS table_number""";
 
     private static final String ITEM_COLS = """
             id, ticket_id, order_item_id, item_name, quantity, modifiers, course, item_status, station_id""";
@@ -182,8 +188,12 @@ public class KdsService {
                 throw ApiException.badRequest("item_name_required", "Every kitchen item needs a name");
             if (item.quantity() != null && item.quantity().signum() <= 0)
                 throw ApiException.badRequest("item_quantity_invalid", "Item quantity must be positive");
-            UUID variant = item.orderItemId() == null ? null : db.sql(
-                    "SELECT variant_id FROM pos_order_item WHERE id = :id")
+            if (item.orderItemId() == null || db.sql(
+                    "SELECT count(*) FROM pos_order_item WHERE id = :id AND order_id = :order")
+                    .param("id", item.orderItemId()).param("order", orderId)
+                    .query(Long.class).single() != 1)
+                throw ApiException.badRequest("order_item_mismatch", "Kitchen item must belong to the selected POS order");
+            UUID variant = db.sql("SELECT variant_id FROM pos_order_item WHERE id = :id")
                     .param("id", item.orderItemId()).query(UUID.class).optional().orElse(null);
             db.sql("""
                 INSERT INTO restaurant_kds_item (

@@ -25,6 +25,8 @@ public class PosController {
     private final PosReceiptService receiptService;
     private final PosOfflineSyncService syncService;
     private final DeviceEvents deviceEvents;
+    private final PosTerminalAcceptanceService cardPresent;
+    private final PosPaymentCodeService paymentCodes;
 
     public PosController(
             MerchantToolAccess access,
@@ -36,7 +38,9 @@ public class PosController {
             PosSplitBillService splitBillService,
             PosReceiptService receiptService,
             PosOfflineSyncService syncService,
-            DeviceEvents deviceEvents
+            DeviceEvents deviceEvents,
+            PosTerminalAcceptanceService cardPresent,
+            PosPaymentCodeService paymentCodes
     ) {
         this.access = access;
         this.idempotency = idempotency;
@@ -48,6 +52,8 @@ public class PosController {
         this.receiptService = receiptService;
         this.syncService = syncService;
         this.deviceEvents = deviceEvents;
+        this.cardPresent = cardPresent;
+        this.paymentCodes = paymentCodes;
     }
 
     // Terminal endpoints
@@ -96,6 +102,19 @@ public class PosController {
     public List<PosTerminalService.PosTerminal> listTerminals(@PathVariable UUID merchantId) {
         access.manage(merchantId);
         return terminalService.listTerminals(merchantId);
+    }
+
+    /** Only paired active terminals belonging to the operator's branch are offered for payment. */
+    public record TerminalChoice(UUID id, String serialNumber, String model, UUID branchId) {}
+
+    @GetMapping("/terminals/available/{merchantId}")
+    public List<TerminalChoice> availableTerminals(@PathVariable UUID merchantId) {
+        UUID allowedBranch = access.operatingBranch(merchantId);
+        return terminalService.listTerminals(merchantId).stream()
+                .filter(t -> "ACTIVE".equals(t.status()))
+                .filter(t -> allowedBranch == null || java.util.Objects.equals(allowedBranch, t.branchId()))
+                .map(t -> new TerminalChoice(t.id(), t.serialNumber(), t.model(), t.branchId()))
+                .toList();
     }
 
     // Cashier & Shift endpoints
@@ -169,17 +188,37 @@ public class PosController {
     public record CreateOrderRequest(
             UUID merchantId, UUID branchId, UUID terminalId, UUID cashierId, UUID customerId,
             List<PosOrderService.OrderItemInput> items, long discountPesewas, long taxPesewas,
-            long tipPesewas, String orderType
+            long tipPesewas, String orderType, UUID tableId
     ) {}
 
     @PostMapping("/orders")
     public PosOrderService.PosOrder createOrder(@RequestBody CreateOrderRequest req) {
         access.operate(req.merchantId());
         verifyOrderInputs(req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(), req.items());
+        if (req.tableId() != null) access.belongs(req.merchantId(), TABLE, req.tableId());
         return orderService.createOrder(
                 req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(),
-                req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType()
+                req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType(),
+                req.tableId(), com.elepay.identity.Actor.current().subject()
         );
+    }
+
+    public record AddRoundRequest(List<PosOrderService.OrderItemInput> items) {}
+
+    @PostMapping("/orders/{orderId}/items")
+    @Transactional
+    public PosOrderService.PosOrder addRound(@PathVariable UUID orderId,
+            @RequestHeader("Idempotency-Key") String key, @RequestBody AddRoundRequest req) {
+        var order = verifyOrder(orderId);
+        if (req == null || req.items() == null || req.items().isEmpty())
+            throw ApiException.badRequest("items_required", "Choose items for the new round");
+        for (var item : req.items()) {
+            if (item == null) throw ApiException.badRequest("item_required", "Invalid order item");
+            if (item.variantId() != null) access.belongs(order.merchantId(), VARIANT, item.variantId());
+        }
+        return idempotency.execute("pos-add-items:" + order.merchantId() + ":" + orderId, key, req,
+                PosOrderService.PosOrder.class,
+                () -> orderService.addItems(orderId, req.items(), key));
     }
 
     @GetMapping("/orders/{orderId}")
@@ -223,6 +262,63 @@ public class PosController {
         return ResponseEntity.noContent().build();
     }
 
+    /** Generate merchant-presented QR/2D-barcode payment data bound to a real pending checkout.
+     * Scanning the code opens the customer's hosted checkout; it never means payment succeeded.
+     */
+    public record PaymentCode(String checkoutReference, String barcodeValue, String qrPayload,
+                              long amountPesewas, String status) {}
+
+    @PostMapping("/orders/{orderId}/payment-code")
+    public PaymentCode paymentCode(@PathVariable UUID orderId) {
+        var order = verifyOrder(orderId);
+        var checkout = orderService.startDigital(order.id(), com.elepay.identity.Actor.current().subject());
+        if (!"open".equals(checkout.status()))
+            throw ApiException.conflict("checkout_not_open", "Payment code is no longer active");
+        return new PaymentCode(checkout.reference(), "ELEPAY-PAY:" + checkout.reference(),
+                checkout.payUrl(), checkout.amount(), "PENDING");
+    }
+
+    public record ScanPaymentCodeRequest(String barcodeValue) {}
+
+    /**
+     * Cashier/scanner may resolve a merchant-presented Code128 reference to an existing
+     * pending checkout; it cannot mark an order paid without the payment rail.
+     */
+    @PostMapping("/payment-codes/resolve")
+    public PaymentCode resolvePaymentCode(@RequestBody ScanPaymentCodeRequest req) {
+        String value = req.barcodeValue();
+        if (value == null || !value.startsWith("ELEPAY-PAY:") || value.length() > 160)
+            throw ApiException.badRequest("payment_barcode_invalid", "Scan a valid ELEPAY payment barcode");
+        String reference = value.substring("ELEPAY-PAY:".length());
+        if (reference.isBlank()) throw ApiException.badRequest("payment_barcode_invalid", "Payment barcode has no reference");
+        UUID orderId = paymentCodes.orderForReference(reference);
+        var order = verifyOrder(orderId);
+        var checkout = orderService.startDigital(order.id(), com.elepay.identity.Actor.current().subject());
+        if (!"open".equals(checkout.status()) || !reference.equals(checkout.reference()))
+            throw ApiException.conflict("checkout_not_open", "Payment barcode is no longer active");
+        return new PaymentCode(reference, value, checkout.payUrl(), checkout.amount(), "PENDING");
+    }
+
+    public record TerminalPaymentRequest(UUID terminalId, PosTerminalAcceptanceService.Mode mode) {}
+
+    @PostMapping("/orders/{orderId}/terminal-payments")
+    @Transactional
+    public PosTerminalAcceptanceService.TerminalSession startTerminalPayment(
+            @PathVariable UUID orderId, @RequestHeader("Idempotency-Key") String key,
+            @RequestBody TerminalPaymentRequest req) {
+        var order = verifyOrder(orderId);
+        UUID allowedBranch = access.operatingBranch(order.merchantId());
+        if (allowedBranch != null && !java.util.Objects.equals(allowedBranch, order.branchId()))
+            throw ApiException.forbidden("Order belongs to another branch");
+        if (req.terminalId() == null)
+            throw ApiException.badRequest("terminal_required", "Select a registered payment terminal");
+        access.belongs(order.merchantId(), TERMINAL, req.terminalId());
+        return idempotency.execute("pos-terminal:" + order.merchantId() + ":" + orderId, key, req,
+                PosTerminalAcceptanceService.TerminalSession.class,
+                () -> cardPresent.begin(orderId, req.terminalId(), req.mode(),
+                        com.elepay.identity.Actor.current().subject()));
+    }
+
     // Split Bills
     @PostMapping("/orders/{orderId}/split/even")
     public PosSplitBillService.EvenSplitResult splitBillEven(@PathVariable UUID orderId, @RequestParam int count) {
@@ -234,6 +330,19 @@ public class PosController {
     public PosSplitBillService.SeatSplitResult splitBillBySeats(@PathVariable UUID orderId) {
         verifyOrder(orderId);
         return splitBillService.splitBillBySeats(orderId);
+    }
+
+    @PostMapping("/orders/{orderId}/split/items")
+    public PosSplitBillService.ItemSplitResult splitBillByItem(@PathVariable UUID orderId) {
+        verifyOrder(orderId);
+        return splitBillService.splitBillByItem(orderId);
+    }
+
+    @PostMapping("/orders/{orderId}/split/amount")
+    public PosSplitBillService.AmountSplitResult splitBillByAmount(@PathVariable UUID orderId,
+            @RequestParam long firstPesewas) {
+        verifyOrder(orderId);
+        return splitBillService.splitBillByAmount(orderId, firstPesewas);
     }
 
     // Receipts

@@ -56,6 +56,11 @@ public class MerchantToolAccess {
         return merchantId;
     }
 
+    /** Branch restriction for the authenticated operator; null means merchant-wide access. */
+    public UUID operatingBranch(UUID merchantId) {
+        return merchants.require(merchantId, MerchantAccess.Permission.COLLECT).branchId();
+    }
+
     /** Read access for any merchant member, including branch-scoped staff. */
     public UUID view(UUID merchantId) {
         if (merchantId == null) throw ApiException.badRequest("merchant_required", "Merchant is required");

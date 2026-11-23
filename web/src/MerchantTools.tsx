@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
+import { Code128Barcode } from "./Barcode128";
 import { api, ApiError, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
 
@@ -178,11 +179,30 @@ export function InventoryAndStock({ merchantId }: { merchantId: string }) {
 interface PosOrder { id: string; orderNumber: string; totalPesewas: number; paidPesewas: number; changePesewas: number; status: string }
 interface DigitalCheckout { id: string; reference: string; amount: number; status: string; payUrl: string | null }
 interface PosReceipt { receiptNumber: string; escposFormattedText: string }
+interface PaymentTerminal { id: string; model: string; serialNumber: string; branchId: string | null }
+interface DiningTableOption { id: string; tableNumber: string; status: string; currentOrderId: string | null }
+interface SplitQuoteLine { label: string; amountPesewas: number }
+interface PaymentCode { checkoutReference: string; barcodeValue: string; qrPayload: string; amountPesewas: number; status: string }
+interface TerminalSession { status: string; instructions: string | null; checkoutReference: string; providerReference: string }
 
 const TAX_KEY = (merchantId: string) => `elepay.pos.taxPercent.${merchantId}`;
 
 export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [catalog, reloadCatalog, loadError] = useLoad<CatalogRow[]>(`/v1/inventory/catalog/merchant/${merchant.id}`, []);
+  const [tables, reloadTables] = useLoad<DiningTableOption[]>(`/v1/restaurant/tables/merchant/${merchant.id}`, []);
+  const [terminals] = useLoad<PaymentTerminal[]>(`/v1/pos/terminals/available/${merchant.id}`, []);
+  const [orderType, setOrderType] = useState("RETAIL");
+  const [tableId, setTableId] = useState("");
+  const [terminalId, setTerminalId] = useState("");
+  const [paymentCode, setPaymentCode] = useState<PaymentCode | null>(null);
+  const [terminalSession, setTerminalSession] = useState<TerminalSession | null>(null);
+  const [destinationTable, setDestinationTable] = useState("");
+  const [splitMethod, setSplitMethod] = useState<"even" | "seats" | "items" | "amount">("even");
+  const [splitCount, setSplitCount] = useState("2");
+  const [splitAmount, setSplitAmount] = useState("");
+  const [splitPreview, setSplitPreview] = useState<SplitQuoteLine[]>([]);
+  const [tableNotice, setTableNotice] = useState("");
+  const [addingRound, setAddingRound] = useState(false);
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState<{ row: CatalogRow; qty: number }[]>([]);
   const [discount, setDiscount] = useState("");
@@ -201,6 +221,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const taxValid = Number.isFinite(taxRate) && taxRate >= 0 && taxRate <= 100;
   const tax = discountP !== null && taxValid ? Math.round((subtotal - Math.min(discountP, subtotal)) * taxRate / 100) : 0;
   const total = discountP !== null ? subtotal - Math.min(discountP, subtotal) + tax : subtotal;
+  const balanceDue = order ? Math.max(0, order.totalPesewas - order.paidPesewas) : total;
   const shown = catalog.filter((r) => `${itemLabel(r)} ${r.sku} ${r.barcode ?? ""}`.toLowerCase().includes(search.toLowerCase()));
 
   useEffect(() => { try { localStorage.setItem(TAX_KEY(merchant.id), taxPercent); } catch { /* ignore */ } }, [taxPercent, merchant.id]);
@@ -214,11 +235,14 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     if (order) return order;
     if (discountP === null) throw new Error("Enter the discount like 5.00");
     if (!taxValid) throw new Error("Tax must be between 0 and 100%");
-    const created = await api<PosOrder>("/v1/pos/orders", { body: { merchantId: merchant.id, branchId: null, terminalId: null, cashierId: null, customerId: null,
+    if ((orderType === "DINE_IN" || orderType === "QR") && !tableId) throw new Error("Select a table first");
+    const chosenTerminal = terminals.find((t) => t.id === terminalId);
+    const created = await api<PosOrder>("/v1/pos/orders", { body: { merchantId: merchant.id, branchId: chosenTerminal?.branchId ?? null, terminalId: chosenTerminal?.id ?? null, cashierId: null, customerId: null, tableId: tableId || null,
       items: cart.map((c) => ({ variantId: c.row.variantId, itemName: itemLabel(c.row), quantity: c.qty, unitPricePesewas: c.row.retailPricePesewas,
         discountPesewas: 0, taxPesewas: 0, modifiersJson: "[]", seatNumber: null, course: null, notes: null })),
-      discountPesewas: Math.min(discountP, subtotal), taxPesewas: tax, tipPesewas: 0, orderType: "RETAIL" } });
+      discountPesewas: Math.min(discountP, subtotal), taxPesewas: tax, tipPesewas: 0, orderType } });
     setOrder(created);
+    setCart([]); // Once sent to the kitchen, the server is the order's source of truth.
     return created;
   }
 
@@ -227,24 +251,125 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     const latest = await api<PosOrder>(`/v1/pos/orders/${o.id}`);
     setReceipt({ receipt: r, order: latest });
     setCart([]); setDiscount(""); setTendered(""); setOrder(null); setDigital(null);
+    setPaymentCode(null); setTerminalSession(null); setSplitPreview([]); setAddingRound(false);
     void reloadCatalog();
   }
 
+  async function sendToKitchen() {
+    setError(null); setBusy(true);
+    try {
+      if (addingRound && order) {
+        if (cart.length === 0) throw new Error("Select items for the next round");
+        const latest = await api<PosOrder>(`/v1/pos/orders/${order.id}/items`, {
+          body: { items: cart.map((c) => ({
+            variantId: c.row.variantId, itemName: itemLabel(c.row), quantity: c.qty,
+            unitPricePesewas: c.row.retailPricePesewas, discountPesewas: 0,
+            taxPesewas: taxValid ? Math.round(c.row.retailPricePesewas * c.qty * taxRate / 100) : 0,
+            modifiersJson: "[]", seatNumber: null, course: "MAIN", notes: null,
+          })) }, idempotencyKey: newKey() });
+        setOrder(latest); setCart([]); setAddingRound(false); setSplitPreview([]);
+        setTableNotice("Next round sent to the kitchen. Both rounds remain on one bill.");
+      } else {
+        await ensureOrder();
+        setTableNotice("Order sent to the kitchen.");
+      }
+    }
+    catch (e) { setError(`Could not send order: ${message(e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function showPaymentBarcode() {
+    if (addingRound && cart.length) { setError("Send the next round to the kitchen before payment"); return; }
+    setError(null); setBusy(true);
+    try {
+      const o = await ensureOrder();
+      const code = await api<PaymentCode>(`/v1/pos/orders/${o.id}/payment-code`, { method: "POST" });
+      setPaymentCode(code);
+      setDigital({ id: o.id, reference: code.checkoutReference, amount: code.amountPesewas, status: "open", payUrl: code.qrPayload });
+    } catch (e) { setError(`Could not generate payment barcode: ${message(e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function startContactless() {
+    if (addingRound && cart.length) { setError("Send the next round to the kitchen before payment"); return; }
+    if (!terminalId) { setError("Choose a paired payment terminal for NFC tap"); return; }
+    setError(null); setBusy(true);
+    try {
+      const o = await ensureOrder();
+      const s = await api<TerminalSession>(`/v1/pos/orders/${o.id}/terminal-payments`, {
+        body: { terminalId, mode: "NFC_TAP" }, idempotencyKey: newKey() });
+      setTerminalSession(s);
+    } catch (e) { setError(`NFC unavailable: ${message(e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function transferTable() {
+    if (!order || !tableId || !destinationTable) return;
+    setError(null); setBusy(true);
+    try {
+      await api(`/v1/restaurant/tables/${tableId}/move?destinationId=${encodeURIComponent(destinationTable)}`, { method: "POST" });
+      setTableId(destinationTable); setDestinationTable(""); setSplitPreview([]);
+      await reloadTables();
+    } catch (e) { setError(`Table transfer failed: ${message(e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function closeCompletedTable() {
+    if (!receipt || !tableId) return;
+    setError(null); setBusy(true);
+    try {
+      await api(`/v1/restaurant/tables/${tableId}/close`, { method: "POST" });
+      setTableNotice("Table closed and marked for cleaning.");
+      setTableId(""); await reloadTables();
+    } catch (e) { setError(`Cannot close table: ${message(e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function previewBillSplit() {
+    if (addingRound && cart.length) { setError("Send the next round to the kitchen before splitting the bill"); return; }
+    setError(null); setBusy(true);
+    try {
+      const o = await ensureOrder();
+      const prefix = `/v1/pos/orders/${o.id}/split`;
+      if (splitMethod === "even") {
+        const n = Number(splitCount);
+        if (!Number.isInteger(n) || n < 2 || n > 100) throw new Error("Choose 2-100 portions");
+        const q = await api<{ portions: { portionIndex: number; amountPesewas: number }[] }>(`${prefix}/even?count=${n}`, { method: "POST" });
+        setSplitPreview(q.portions.map((p) => ({ label: `Guest ${p.portionIndex}`, amountPesewas: p.amountPesewas })));
+      } else if (splitMethod === "amount") {
+        const first = money(splitAmount);
+        if (first === null || first <= 0 || first >= o.totalPesewas) throw new Error("Enter a smaller positive share");
+        const q = await api<{ firstPesewas: number; remainingPesewas: number }>(`${prefix}/amount?firstPesewas=${first}`, { method: "POST" });
+        setSplitPreview([{ label: "First share", amountPesewas: q.firstPesewas }, { label: "Remaining share", amountPesewas: q.remainingPesewas }]);
+      } else if (splitMethod === "items") {
+        const q = await api<{ portions: { orderItemId: string; itemName: string; amountPesewas: number }[] }>(`${prefix}/items`, { method: "POST" });
+        setSplitPreview(q.portions.map((p) => ({ label: p.itemName, amountPesewas: p.amountPesewas })));
+      } else {
+        const q = await api<{ seatGroups: { seatNumber: number; totalDuePesewas: number }[] }>(`${prefix}/seats`, { method: "POST" });
+        setSplitPreview(q.seatGroups.map((p) => ({ label: `Seat ${p.seatNumber}`, amountPesewas: p.totalDuePesewas })));
+      }
+    } catch (e) { setError(`Split preview failed: ${message(e)}`); setSplitPreview([]); }
+    finally { setBusy(false); }
+  }
+
   async function payCash() {
+    if (addingRound && cart.length) { setError("Send the next round to the kitchen before payment"); return; }
     setError(null);
     const cash = money(tendered);
     if (cash === null || cash <= 0) { setError("Enter the cash received, like 50.00"); return; }
-    if (cash < total) { setError(`Cash received is less than ${formatMoney(total)}`); return; }
+    // The POS order accepts multiple verified tenders. Partial cash leaves the remaining bill open.
+    if (cash > 10_000_000_000) { setError("Cash amount exceeds the allowed input size"); return; }
     setBusy(true);
     try {
       const o = await ensureOrder();
       const paid = await api<PosOrder>(`/v1/pos/orders/${o.id}/payments`, { body: { tenderType: "CASH", amountPesewas: cash, reference: null }, idempotencyKey: newKey() });
-      if (paid.status !== "PAID") { setOrder(paid); setError("The sale is not fully paid yet."); return; }
+      if (paid.status !== "PAID") { setOrder(paid); setTendered(""); setTableNotice(`Partial cash recorded. Balance: ${formatMoney(Math.max(0, paid.totalPesewas - paid.paidPesewas))}`); return; }
       await finish(paid);
     } catch (e) { setError(`Sale not recorded: ${message(e)}`); } finally { setBusy(false); }
   }
 
   async function startDigital() {
+    if (addingRound && cart.length) { setError("Send the next round to the kitchen before payment"); return; }
     setError(null); setBusy(true);
     try {
       const o = await ensureOrder();
@@ -275,7 +400,15 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         <p>Order {receipt.order.orderNumber} · {formatMoney(receipt.order.totalPesewas)}
           {receipt.order.changePesewas > 0 && <> · <strong>Change {formatMoney(receipt.order.changePesewas)}</strong></>}</p>
         <pre className="receipt">{receipt.receipt.escposFormattedText}</pre>
-        <button onClick={() => setReceipt(null)}>New sale</button>
+        {tableNotice && <p className="notice ok">{tableNotice}</p>}
+        {error && <p className="error">{error}</p>}
+        {orderType === "DINE_IN" && tableId && <button disabled={busy} onClick={() => void closeCompletedTable()}>
+          Close table after kitchen marks it Served
+        </button>}
+        <div className="flex-row">
+          <button className="secondary" onClick={() => window.print()}>Print receipt</button>
+          <button onClick={() => { setReceipt(null); setTableNotice(""); }}>New sale</button>
+        </div>
       </div>
     );
   }
@@ -290,7 +423,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         {catalog.length === 0 && !loadError && <p className="muted">No products yet. Add them in <strong>Inventory &amp; Stock</strong>.</p>}
         <div className="pos-items">
           {shown.map((r) => (
-            <button key={r.variantId} className="secondary pos-item" disabled={!!order} onClick={() => add(r)}>
+            <button key={r.variantId} className="secondary pos-item" disabled={!!order && !addingRound} onClick={() => add(r)}>
               <span>{itemLabel(r)}</span><strong>{formatMoney(r.retailPricePesewas)}</strong>
               {r.trackInventory && <span className="small muted">{Number(r.onHand)} in stock</span>}
             </button>
@@ -299,16 +432,38 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
       </div>
       <div className="panel">
         <h3>Sale</h3>
-        {cart.length === 0 ? <p className="muted">Tap products to add them.</p> : (
+        <div className="grid-2">
+          {terminals.length > 0 && <label>Payment terminal
+            <select value={terminalId} disabled={!!order} onChange={(e) => setTerminalId(e.target.value)}>
+              <option value="">No terminal selected</option>
+              {terminals.map((t) => <option key={t.id} value={t.id}>{t.model} – {t.serialNumber}</option>)}
+            </select>
+          </label>}
+          <label>Order channel
+            <select value={orderType} disabled={!!order} onChange={(e) => { setOrderType(e.target.value); setTableId(""); }}>
+              <option value="RETAIL">Retail</option><option value="DINE_IN">Dine-in</option>
+              <option value="TAKEOUT">Takeaway</option><option value="DELIVERY">Delivery</option>
+            </select>
+          </label>
+          {orderType === "DINE_IN" && <label>Table
+            <select value={tableId} disabled={!!order} onChange={(e) => setTableId(e.target.value)}>
+              <option value="">Select available table</option>
+              {tables.filter((t) => t.status === "AVAILABLE").map((t) => <option key={t.id} value={t.id}>{t.tableNumber}</option>)}
+            </select>
+          </label>}
+        </div>
+        {cart.length === 0 ? <p className="muted">{order
+          ? "Order open. Add another round or collect payment."
+          : "Tap products to add them."}</p> : (
           <table className="grid">
             <tbody>
               {cart.map((c) => (
                 <tr key={c.row.variantId}>
                   <td>{itemLabel(c.row)}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
-                    <button className="secondary small" disabled={!!order} onClick={() => setQty(c.row.variantId, c.qty - 1)}>−</button>
+                    <button className="secondary small pos-qty" disabled={!!order && !addingRound} onClick={() => setQty(c.row.variantId, c.qty - 1)}>−</button>
                     {c.qty}
-                    <button className="secondary small" disabled={!!order} onClick={() => setQty(c.row.variantId, c.qty + 1)}>+</button>
+                    <button className="secondary small pos-qty" disabled={!!order && !addingRound} onClick={() => setQty(c.row.variantId, c.qty + 1)}>+</button>
                   </td>
                   <td>{formatMoney(c.row.retailPricePesewas * c.qty)}</td>
                 </tr>
@@ -321,25 +476,90 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           <label>Tax %<input inputMode="decimal" value={taxPercent} disabled={!!order} onChange={(e) => setTaxPercent(e.target.value)} /></label>
         </div>
         <dl className="confirm">
-          <dt>Subtotal</dt><dd>{formatMoney(subtotal)}</dd>
-          {tax > 0 && <><dt>Tax</dt><dd>{formatMoney(tax)}</dd></>}
-          <dt><strong>Total</strong></dt><dd><strong>{formatMoney(total)}</strong></dd>
+          {order ? <>
+            <dt>Current bill total</dt><dd><strong>{formatMoney(order.totalPesewas)}</strong></dd>
+            {addingRound && cart.length > 0 && <>
+              <dt>Unsaved new items</dt><dd>{formatMoney(subtotal)}</dd>
+            </>}
+          </> : <>
+            <dt>Subtotal</dt><dd>{formatMoney(subtotal)}</dd>
+            {tax > 0 && <><dt>Tax</dt><dd>{formatMoney(tax)}</dd></>}
+            <dt><strong>Total</strong></dt><dd><strong>{formatMoney(total)}</strong></dd>
+          </>}
         </dl>
         {error && <p className="error">{error}</p>}
+        {tableNotice && <p className="notice ok">{tableNotice}</p>}
+        {order && order.status === "PENDING" && orderType !== "RETAIL" && <>
+          {!addingRound ? <button className="secondary" onClick={() => { setAddingRound(true); setTableNotice(""); }}>
+            Add another round
+          </button> : <button className="secondary" onClick={() => { setAddingRound(false); setCart([]); }}>
+            Cancel new round
+          </button>}
+        </>}
+        {order && tableId && orderType === "DINE_IN" && <div className="pos-transfer">
+          <label>Move open order to an available table
+            <select value={destinationTable} onChange={(e) => setDestinationTable(e.target.value)}>
+              <option value="">Choose available destination</option>
+              {tables.filter((t) => t.status === "AVAILABLE" && !t.currentOrderId && t.id !== tableId).map((t) =>
+                <option key={t.id} value={t.id}>{t.tableNumber}</option>)}
+            </select>
+          </label>
+          <button className="secondary" disabled={busy || !destinationTable} onClick={() => void transferTable()}>Transfer table</button>
+        </div>}
+        {(cart.length > 0 || !!order) && <div className="pos-bill-split">
+          <h4>Split the bill</h4>
+          <div className="grid-2">
+            <label>Split method
+              <select value={splitMethod} onChange={(e) => { setSplitMethod(e.target.value as typeof splitMethod); setSplitPreview([]); }}>
+                <option value="even">Equal shares</option>
+                <option value="seats">By seat</option>
+                <option value="items">By item</option>
+                <option value="amount">By amount</option>
+              </select>
+            </label>
+            {splitMethod === "even" && <label>Number of people<input inputMode="numeric" value={splitCount} onChange={(e) => setSplitCount(e.target.value)} /></label>}
+            {splitMethod === "amount" && <label>First share (GH₵)<input inputMode="decimal" value={splitAmount} onChange={(e) => setSplitAmount(e.target.value)} /></label>}
+          </div>
+          <button className="secondary" disabled={busy} onClick={() => void previewBillSplit()}>Preview split</button>
+          {splitPreview.length > 0 && <div>
+            <p className="small muted">Each share includes allocated discounts and charges. Payments remain on the one order.</p>
+            <ul>{splitPreview.map((line, i) => <li key={i} className="flex-between">
+              <span>{line.label}</span><strong>{formatMoney(line.amountPesewas)}</strong>
+            </li>)}</ul>
+            <strong>Split total: {formatMoney(splitPreview.reduce((a, b) => a + b.amountPesewas, 0))}</strong>
+          </div>}
+        </div>}
+        {order && orderType !== "RETAIL" && <p className="notice ok">Order {order.orderNumber} sent to kitchen. Payment status: {order.status}.</p>}
+        {orderType !== "RETAIL" && cart.length > 0 && (!order || addingRound) && 
+          <button onClick={() => void sendToKitchen()} disabled={busy}>
+            {addingRound ? "Send new round to kitchen" : "Send to kitchen"}
+          </button>}}
+        {terminalSession && <p className="notice">Terminal request pending: {terminalSession.instructions ?? "Ask customer to tap their card."} Confirm only after your acquirer settles the checkout.</p>}
+        {order && <p>Paid: {formatMoney(order.paidPesewas)} · Remaining balance: <strong>{formatMoney(balanceDue)}</strong></p>}
         {digital ? (
           <div className="notice">
             <p>Customer pays <strong>{formatMoney(digital.amount)}</strong> with MoMo or card:</p>
             {qr && <img src={qr} alt="Payment QR code" width={220} height={220} />}
             {digital.payUrl && <p className="small mono">{digital.payUrl}</p>}
+            {paymentCode && <div className="payment-code-panel">
+              <strong>Scannable Code 128 payment reference</strong>
+              <Code128Barcode value={paymentCode.barcodeValue} />
+              <p className="mono small">{paymentCode.barcodeValue}</p>
+              <p className="muted small">Scanning only opens checkout. Payment requires verified MoMo/card confirmation.</p>
+            </div>}
             <button onClick={() => void checkDigital()} disabled={busy}>Check payment</button>
             <button className="secondary" onClick={() => void cancelDigital()} disabled={busy}>Cancel payment</button>
           </div>
-        ) : cart.length > 0 && (
+        ) : (cart.length > 0 || !!order) && (
           <>
-            <label>Cash received (GH₵)<input inputMode="decimal" value={tendered} onChange={(e) => setTendered(e.target.value)} placeholder={(total / 100).toFixed(2)} /></label>
+            <label>Cash received (GH₵) — full or partial
+              <input inputMode="decimal" value={tendered} onChange={(e) => setTendered(e.target.value)}
+                placeholder={(balanceDue / 100).toFixed(2)} /></label>
             <div className="flex-row">
               <button onClick={() => void payCash()} disabled={busy}>Cash</button>
               <button className="secondary" onClick={() => void startDigital()} disabled={busy}>MoMo / card</button>
+              <button className="secondary" onClick={() => void showPaymentBarcode()} disabled={busy}>Payment QR / barcode</button>
+              <button className="secondary" onClick={() => void startContactless()} disabled={busy || !terminalId}>NFC tap on terminal</button>
               {!order && <button className="secondary" onClick={() => setCart([])}>Clear</button>}
             </div>
           </>

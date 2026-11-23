@@ -1,5 +1,7 @@
 package com.elepay.merchanttools.pos;
 
+import com.elepay.common.ProportionalAllocation;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -31,6 +33,7 @@ public class PosSplitBillService {
     public record SeatSplitGroup(
             int seatNumber,
             long subtotalPesewas,
+            long totalDuePesewas,
             List<PosOrderService.PosOrderItem> items
     ) {}
 
@@ -60,6 +63,30 @@ public class PosSplitBillService {
         return new EvenSplitResult(orderId, total, splitCount, portions);
     }
 
+    /** Itemized share quote including allocated order-level discount/tax/tip. */
+    public record ItemSplitPortion(UUID orderItemId, String itemName, long amountPesewas) {}
+    public record ItemSplitResult(UUID orderId, long totalPesewas, List<ItemSplitPortion> portions) {}
+    public record AmountSplitResult(UUID orderId, long totalPesewas, long firstPesewas, long remainingPesewas) {}
+
+    public ItemSplitResult splitBillByItem(UUID orderId) {
+        PosOrderService.PosOrder order = orderService.getOrder(orderId).orElseThrow();
+        List<PosOrderService.PosOrderItem> items = orderService.listOrderItems(orderId);
+        List<Long> shares = ProportionalAllocation.allocate(order.totalPesewas(),
+                items.stream().map(PosOrderService.PosOrderItem::totalPesewas).toList());
+        List<ItemSplitPortion> portions = new ArrayList<>();
+        for (int i = 0; i < items.size(); i++)
+            portions.add(new ItemSplitPortion(items.get(i).id(), items.get(i).itemName(), shares.get(i)));
+        return new ItemSplitResult(orderId, order.totalPesewas(), portions);
+    }
+
+    public AmountSplitResult splitBillByAmount(UUID orderId, long firstPesewas) {
+        PosOrderService.PosOrder order = orderService.getOrder(orderId).orElseThrow();
+        if (firstPesewas <= 0 || firstPesewas >= order.totalPesewas())
+            throw new IllegalArgumentException("First portion must be above zero and below the bill total");
+        return new AmountSplitResult(orderId, order.totalPesewas(), firstPesewas,
+                Math.subtractExact(order.totalPesewas(), firstPesewas));
+    }
+
     // Split bill by seat numbers
     public SeatSplitResult splitBillBySeats(UUID orderId) {
         PosOrderService.PosOrder order = orderService.getOrder(orderId).orElseThrow();
@@ -72,13 +99,14 @@ public class PosSplitBillService {
         }
 
         List<SeatSplitGroup> groups = new ArrayList<>();
-        for (Map.Entry<Integer, List<PosOrderService.PosOrderItem>> entry : bySeat.entrySet()) {
-            long subtotal = 0;
-            for (PosOrderService.PosOrderItem it : entry.getValue()) {
-                subtotal += it.totalPesewas();
-            }
-            groups.add(new SeatSplitGroup(entry.getKey(), subtotal, entry.getValue()));
-        }
+        List<Integer> sortedSeats = bySeat.keySet().stream().sorted().toList();
+        List<Long> weights = new ArrayList<>();
+        for (int seat : sortedSeats)
+            weights.add(bySeat.get(seat).stream().mapToLong(PosOrderService.PosOrderItem::totalPesewas).sum());
+        List<Long> totals = ProportionalAllocation.allocate(order.totalPesewas(), weights);
+        for (int i = 0; i < sortedSeats.size(); i++)
+            groups.add(new SeatSplitGroup(sortedSeats.get(i), weights.get(i), totals.get(i),
+                    bySeat.get(sortedSeats.get(i))));
 
         return new SeatSplitResult(orderId, order.totalPesewas(), groups);
     }

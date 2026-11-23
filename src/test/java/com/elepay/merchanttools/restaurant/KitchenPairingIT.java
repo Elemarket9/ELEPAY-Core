@@ -185,6 +185,7 @@ class KitchenPairingIT extends PostgresTestBase {
         String id = UUID.randomUUID().toString();
         assertThat(KitchenDevicePaths.allowed("GET", "/v1/restaurant/kds/sync")).isTrue();
         assertThat(KitchenDevicePaths.allowed("POST", "/v1/restaurant/kds/tickets/" + id + "/advance")).isTrue();
+        assertThat(KitchenDevicePaths.allowed("POST", "/v1/restaurant/kds/tickets/" + id + "/cancel")).isFalse();
         assertThat(KitchenDevicePaths.allowed("POST", "/v1/restaurant/kds/print-jobs/claim")).isTrue();
         assertThat(KitchenDevicePaths.allowed("GET", "/v1/restaurant/kds/tickets/" + id + "/advance")).isFalse();
         assertThat(KitchenDevicePaths.allowed("POST", "/v1/restaurant/kds/stations")).isFalse();

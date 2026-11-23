@@ -40,6 +40,12 @@ public class PosCommerceTest extends PostgresTestBase {
     private PosOfflineSyncService syncService;
 
     @Autowired
+    private PosTerminalAcceptanceService terminalAcceptance;
+
+    @Autowired
+    private PosPaymentCodeService paymentCodes;
+
+    @Autowired
     private WarehouseService warehouseService;
 
     @Autowired
@@ -116,6 +122,41 @@ public class PosCommerceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Unconfigured NFC terminal never fakes an approval or debits the ledger")
+    void unconfiguredNfcFailsClosed() {
+        String serial = "NFC-" + UUID.randomUUID();
+        var terminal = terminalService.registerTerminal(merchantId, null, serial, "Partner terminal");
+        terminalService.pairTerminal(serial, terminal.pairingCode(), "device-hardware-fingerprint");
+        var order = orderService.createOrder(merchantId, null, terminal.id(), null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Food", BigDecimal.ONE,
+                        2500L, 0L, 0L, "[]", null, null, null)),
+                0L, 0L, 0L, "RETAIL");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                terminalAcceptance.begin(order.id(), terminal.id(),
+                        PosTerminalAcceptanceService.Mode.NFC_TAP, "tester"))
+                .isInstanceOf(com.elepay.common.ApiException.class)
+                .hasMessageContaining("No certified card-present provider");
+        assertThat(orderService.getOrder(order.id()).orElseThrow().status()).isEqualTo("PENDING");
+        assertThat(db.sql("SELECT count(*) FROM pos_checkout_link WHERE order_id = :id")
+                .param("id", order.id()).query(Long.class).single()).isZero();
+    }
+
+    @Test
+    @DisplayName("Payment barcode resolves to an actual checkout, never an invented approval")
+    void barcodeResolvesExistingCheckout() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Jollof", BigDecimal.ONE,
+                        2700L, 0L, 0L, "[]", null, null, null)),
+                0L, 0L, 0L, "RETAIL");
+        var pending = orderService.startDigital(order.id(), "barcode-test");
+        assertThat(paymentCodes.orderForReference(pending.reference())).isEqualTo(order.id());
+        assertThat(orderService.getOrder(order.id()).orElseThrow().status()).isEqualTo("PENDING");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                paymentCodes.orderForReference("not-a-real-reference"))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+    }
+
+    @Test
     @DisplayName("Domain 1: Quick-sale cart, held carts, orders, multi-tender payment, and inventory stock deduction")
     void testCartOrdersAndMultiTenderPayments() {
         String sn2 = "SN-TERM-" + UUID.randomUUID().toString().substring(0, 8);
@@ -178,6 +219,51 @@ public class PosCommerceTest extends PostgresTestBase {
         assertThat(receipt.escposFormattedText()).contains("POS MART").doesNotContain("ELEPAY COMMERCE");
         assertThat(receipt.escposFormattedText()).contains("TOTAL DUE:");
         assertThat(receipt.escposFormattedText()).contains("CHANGE GIVEN:");
+    }
+
+    @Test
+    @DisplayName("POS order staff attribution is supplied by the service's authenticated actor")
+    void posOrderAttribution() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Sobolo", BigDecimal.ONE,
+                        1200L, 0L, 0L, "[]", null, null, null)),
+                0L, 0L, 0L, "RETAIL", null, "staff:cashier-47");
+        String actor = db.sql("SELECT created_by_subject FROM pos_order WHERE id = :order")
+                .param("order", order.id()).query(String.class).single();
+        assertThat(actor).isEqualTo("staff:cashier-47");
+    }
+
+    @Test
+    @DisplayName("Repeated receipt creation issues exactly one paid receipt")
+    void receiptCreationIsIdempotent() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Tea", BigDecimal.ONE,
+                        750L, 0L, 0L, "[]", null, null, null)), 0L, 0L, 0L, "STANDARD");
+        orderService.addTenderPayment(order.id(), TenderType.CASH, 750L, null);
+        var first = receiptService.generateReceipt(order.id());
+        var second = receiptService.generateReceipt(order.id());
+        assertThat(second.id()).isEqualTo(first.id());
+        assertThat(db.sql("SELECT count(*) FROM pos_receipt WHERE order_id = :o")
+                .param("o", order.id()).query(Long.class).single()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("Item and amount split previews preserve total including order discount")
+    void itemAndAmountSplitConservePesewas() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(
+                    new PosOrderService.OrderItemInput(null, "Fish", BigDecimal.ONE, 1001L, 0L, 0L, "[]", 1, null, null),
+                    new PosOrderService.OrderItemInput(null, "Rice", BigDecimal.ONE, 999L, 0L, 0L, "[]", 2, null, null)),
+                101L, 2L, 3L, "STANDARD");
+        assertThat(splitBillService.splitBillByItem(order.id()).portions().stream()
+                .mapToLong(PosSplitBillService.ItemSplitPortion::amountPesewas).sum())
+                .isEqualTo(order.totalPesewas());
+        var byAmount = splitBillService.splitBillByAmount(order.id(), 500L);
+        assertThat(byAmount.firstPesewas() + byAmount.remainingPesewas())
+                .isEqualTo(order.totalPesewas());
+        assertThat(splitBillService.splitBillBySeats(order.id()).seatGroups().stream()
+                .mapToLong(PosSplitBillService.SeatSplitGroup::totalDuePesewas).sum())
+                .isEqualTo(order.totalPesewas());
     }
 
     @Test
