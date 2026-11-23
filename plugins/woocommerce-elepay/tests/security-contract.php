@@ -16,6 +16,7 @@ class WP_Error {
 }
 function __($message, $domain = null) { return $message; }
 function get_bloginfo($field) { return 'Test WordPress'; }
+function home_url($path = '/') { return 'https://merchant.example' . $path; }
 function wc_format_decimal($amount, $decimals = 2) { return number_format((float) $amount, $decimals, '.', ''); }
 function wp_json_encode($data) { return json_encode($data); }
 function wp_generate_uuid4() {
@@ -114,6 +115,7 @@ $first = $gateway->process_payment(101);
 same('success', $first['result'], 'checkout first result');
 same('CH-101', $order->get_meta('_elepay_checkout_reference'), 'stored reference');
 same(12500, $order->get_meta('_elepay_checkout_amount'), 'immutable initial amount');
+yes((bool) preg_match('/^wc_[0-9a-f]{12}_101$/', $order->get_meta('_elepay_checkout_order_reference')), 'site-scoped stable order reference');
 $first_key = $order->get_meta('_elepay_checkout_idempotency_key');
 yes($first_key !== '', 'stored retry key');
 $posts_before = count(array_filter($GLOBALS['calls'], function ($call) { return $call['method'] === 'POST'; }));
