@@ -1,7 +1,5 @@
 package com.elepay.merchanttools.pos;
 
-import com.elepay.merchanttools.inventory.MovementType;
-import com.elepay.merchanttools.inventory.StockService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -17,14 +15,12 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class PosOrderService {
     private final JdbcClient db;
-    private final StockService stockService;
     private final PosCashierService cashierService;
     private final com.elepay.checkout.PosCheckoutGateway checkout;
 
-    public PosOrderService(JdbcClient db, StockService stockService, PosCashierService cashierService,
+    public PosOrderService(JdbcClient db, PosCashierService cashierService,
                            com.elepay.checkout.PosCheckoutGateway checkout) {
         this.db = db;
-        this.stockService = stockService;
         this.cashierService = cashierService;
         this.checkout = checkout;
     }
@@ -332,8 +328,6 @@ public class PosOrderService {
                 change = newPaid - order.totalPesewas();
             }
 
-            // Deduct stock for inventory-tracked variants
-            deductInventoryForOrder(orderId, order.merchantId());
         }
 
         db.sql("""
@@ -348,36 +342,5 @@ public class PosOrderService {
             .update();
 
         return getOrder(orderId).orElseThrow();
-    }
-
-    private void deductInventoryForOrder(UUID orderId, UUID merchantId) {
-        // Find default warehouse for merchant
-        var defaultWarehouseOpt = db.sql("SELECT id FROM inventory_warehouse WHERE merchant_id = :m LIMIT 1")
-                .param("m", merchantId)
-                .query(UUID.class)
-                .optional();
-
-        if (defaultWarehouseOpt.isEmpty()) {
-            return; // No warehouse configured, skip stock deduction
-        }
-
-        UUID warehouseId = defaultWarehouseOpt.get();
-        List<PosOrderItem> items = listOrderItems(orderId);
-        for (PosOrderItem item : items) {
-            if (item.variantId() != null) {
-                try {
-                    stockService.deductStock(
-                            warehouseId,
-                            item.variantId(),
-                            item.quantity(),
-                            MovementType.SALE_DEDUCTION,
-                            orderId,
-                            "POS Sale Order " + orderId
-                    );
-                } catch (Exception e) {
-                    // Log or handle stock deduction note without breaking order completion
-                }
-            }
-        }
     }
 }

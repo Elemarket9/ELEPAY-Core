@@ -116,7 +116,7 @@ public class PosCommerceTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Domain 1: Quick-sale cart, held carts, orders, multi-tender payment, and inventory stock deduction")
+    @DisplayName("Domain 1: Quick-sale cart, held carts, orders, multi-tender payment, and merchant-owned inventory isolation")
     void testCartOrdersAndMultiTenderPayments() {
         String sn2 = "SN-TERM-" + UUID.randomUUID().toString().substring(0, 8);
         String badge2 = "B-" + UUID.randomUUID().toString().substring(0, 6);
@@ -167,9 +167,9 @@ public class PosCommerceTest extends PostgresTestBase {
         assertThat(finalOrder.paidPesewas()).isEqualTo(3500L);
         assertThat(finalOrder.changePesewas()).isEqualTo(500L); // 5.00 GHS change
 
-        // Verify stock automatically deducted by 2 pies: 30 - 2 = 28 pies
+        // Payment acceptance leaves stock management to the merchant.
         var stockAfterSale = stockService.getOrCreateStock(defaultWarehouse.id(), variant.id());
-        assertThat(stockAfterSale.quantityOnHand()).isEqualByComparingTo("28");
+        assertThat(stockAfterSale.quantityOnHand()).isEqualByComparingTo("30");
 
         // 4. Generate Printed & Digital Receipt
         var receipt = receiptService.generateReceipt(order.id());

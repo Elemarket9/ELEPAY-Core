@@ -1,6 +1,5 @@
 package com.elepay.compliance;
 
-import com.elepay.common.ApiException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -63,7 +62,7 @@ public class ElevyStatutoryReportingService {
                    levy_amount_pesewas, gra_clearance_code, status
             FROM elevy_transaction_log
             WHERE DATE(created_at) = :repDate
-            ORDER BY created_at ASC
+            ORDER BY created_at ASC, transaction_reference ASC
         """)
                 .param("repDate", date)
                 .query((rs, rowNum) -> new StatutoryTxSummary(
@@ -80,8 +79,8 @@ public class ElevyStatutoryReportingService {
                 .list();
 
         int totalTx = records.size();
-        long totalVolume = records.stream().mapToLong(StatutoryTxSummary::transferAmountPesewas).sum();
-        long totalLevy = records.stream().mapToLong(StatutoryTxSummary::levyAmountPesewas).sum();
+        long totalVolume = records.stream().mapToLong(StatutoryTxSummary::transferAmountPesewas).reduce(0L, Math::addExact);
+        long totalLevy = records.stream().mapToLong(StatutoryTxSummary::levyAmountPesewas).reduce(0L, Math::addExact);
 
         // 2. Compute canonical SHA-256 fingerprint of the batch payload
         StringBuilder sb = new StringBuilder();
@@ -92,8 +91,7 @@ public class ElevyStatutoryReportingService {
         String batchSha256 = hashSha256(sb.toString());
 
         UUID batchId = UUID.randomUUID();
-        String batchRef = "GRA-ELEV-BATCH-" + date.toString().replace("-", "") + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        String ackCode = "GRA-ACK-" + UUID.randomUUID().toString().replace("-", "").substring(0, 10).toUpperCase();
+        String batchRef = "ELEPAY-ELEV-BATCH-" + date.toString().replace("-", "") + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         OffsetDateTime now = OffsetDateTime.now();
 
         db.sql("""
@@ -104,7 +102,7 @@ public class ElevyStatutoryReportingService {
             ) VALUES (
                 :id, :ref, :date, :txCount,
                 :vol, :levy, :sha,
-                'SUBMITTED', :ack, :now, :now
+                'PREPARED', NULL, NULL, :now
             )
         """)
                 .param("id", batchId)
@@ -114,13 +112,12 @@ public class ElevyStatutoryReportingService {
                 .param("vol", totalVolume)
                 .param("levy", totalLevy)
                 .param("sha", batchSha256)
-                .param("ack", ackCode)
                 .param("now", now)
                 .update();
 
         return new StatutoryBatchReport(
                 batchId, batchRef, date, totalTx, totalVolume, totalLevy,
-                batchSha256, "SUBMITTED", ackCode, now
+                batchSha256, "PREPARED", null, null
         );
     }
 

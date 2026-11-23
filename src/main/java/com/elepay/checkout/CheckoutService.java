@@ -941,7 +941,7 @@ class CheckoutService {
             String reference = References.next("ST");
             var posted = ledger.post(Ledger.Posting.of("settlement", id.toString(), "settlement", List.of(
                     Leg.debit(Ledger.code("merchant", merchant, "pending", currency), total),
-                    Leg.credit(Ledger.code("merchant", merchant, "available", currency), total))).describedAs(reference));
+                    Leg.credit(ledger.open("merchant", merchant, "available", currency), total))).describedAs(reference));
             db.sql("""
                     INSERT INTO settlement_batch (id, reference, merchant_id, amount, lines, journal_tx)
                     VALUES (:id, :ref, :m, :amount, :lines, :tx)""")
@@ -952,7 +952,7 @@ class CheckoutService {
                     "currency", currency), Set.of(merchant));
             byBatch.put(entry.getKey(), settlementBatch(id));
         }
-        long fees = due.stream().mapToLong(Due::fee).sum();
+        long fees = due.stream().mapToLong(Due::fee).reduce(0L, Math::addExact);
         UUID feeTx = null;
         if (fees > 0) {
             UUID run = UUID.randomUUID();

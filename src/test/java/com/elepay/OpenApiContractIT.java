@@ -29,7 +29,7 @@ class OpenApiContractIT extends PostgresTestBase {
         ((tools.jackson.databind.node.ObjectNode) generated).remove("servers");
         String pretty = mapper.writeValueAsString(mapper.treeToValue(generated, java.util.TreeMap.class)) + "\n";
         Path committed = Path.of("docs/openapi.json");
-        if ("1".equals(System.getenv("ELEPAY_WRITE_OPENAPI")) || !Files.exists(committed)) {
+        if ("1".equals(System.getenv("ELEPAY_WRITE_OPENAPI"))) {
             Files.writeString(committed, pretty);
         }
         assertThat(generated.path("paths").has("/v1/wallet/recipients/lookup")).isTrue();

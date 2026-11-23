@@ -104,7 +104,8 @@ class MarketplaceCommissionIT extends PostgresTestBase {
     }
 
     void settleForced() {
-        api.call("POST", "/v1/ops/settlements/run", ops, null, Map.of("ignoreDelay", true));
+        var run = api.call("POST", "/v1/ops/settlements/run", ops, null, Map.of("ignoreDelay", true));
+        assertThat(run.status()).as(run.body().toString()).isEqualTo(200);
     }
 
     @Test

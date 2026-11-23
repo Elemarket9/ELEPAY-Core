@@ -164,7 +164,9 @@ class MarketplaceCheckoutIT extends PostgresTestBase {
                 mpOwner, null, Map.of()).status()).isEqualTo(200);
 
         // Settle the remaining proceeds.
-        JsonNode batches = api.call("POST", "/v1/ops/settlements/run", ops, null, Map.of("ignoreDelay", true)).body();
+        var run = api.call("POST", "/v1/ops/settlements/run", ops, null, Map.of("ignoreDelay", true));
+        assertThat(run.status()).as(run.body().toString()).isEqualTo(200);
+        JsonNode batches = run.body();
         assertThat(batches.findValues("merchantId").stream().map(JsonNode::asString).toList())
                 .contains(merchantA.toString(), delivery.toString()).doesNotContain(merchantB.toString());
         assertThat(bal("merchant", merchantA, "available")).isEqualTo(7880);

@@ -1,6 +1,7 @@
 package com.elepay.lending;
 
 import com.elepay.PostgresTestBase;
+import com.elepay.ledger.Ledger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,6 +52,11 @@ class LoanOriginationEngineTest extends PostgresTestBase {
         if ("REVIEW_REQUIRED".equals(app.status())) {
             applicationService.approveReviewed(app.id(), "ops-approved-evidence");
         }
+
+        String funding = ledger.openSystem(LoanOriginationEngine.LENDING_FUNDING_ACCOUNT, "clearing", Ledger.GHS, false);
+        String clearing = ledger.openSystem("system:clearing:loan-test", "clearing", Ledger.GHS, true);
+        ledger.post(Ledger.Posting.of("loan_test_funding", app.id().toString(), "funding",
+                List.of(Ledger.Leg.debit(clearing, 500_000L), Ledger.Leg.credit(funding, 500_000L))));
 
         // 2. Originate and disburse
         var result = originationEngine.originateAndDisburse(

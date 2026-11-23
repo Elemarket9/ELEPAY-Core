@@ -38,6 +38,17 @@ class LedgerIT extends PostgresTestBase {
     }
 
     @Test
+    void invalidMagnitudesCannotChangeTheDirectionOfMoney() {
+        for (long amount : new long[]{0L, -1L, Long.MIN_VALUE}) {
+            assertThatThrownBy(() -> debit(alice, amount)).isInstanceOf(ApiException.class);
+            assertThatThrownBy(() -> credit(bob, amount)).isInstanceOf(ApiException.class);
+        }
+        assertThatThrownBy(() -> new Ledger.Leg(alice, Long.MIN_VALUE)).isInstanceOf(ApiException.class);
+        assertThat(debit(alice, Long.MAX_VALUE).amount()).isEqualTo(-Long.MAX_VALUE);
+        assertThat(credit(bob, Long.MAX_VALUE).amount()).isEqualTo(Long.MAX_VALUE);
+    }
+
+    @Test
     void postsBalancedEntriesAndRejectsUnbalanced() {
         ledger.post(fund(alice, 15_000));
         assertThat(ledger.balance(alice)).isEqualTo(15_000);

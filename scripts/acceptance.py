@@ -102,6 +102,8 @@ print("Paid GH₵150 once across seller A, seller B and delivery; duplicate and 
 call("GET", f"/v1/merchants/{a['id']}/balances", owners["b"], expect=404)
 call("POST", f"/v1/merchants/{b['id']}/checkouts/{reference}/allocations/1/refunds", owners["b"],
      {"amount": 5000, "reason": "Seller cancelled"}, key=str(uuid.uuid4()))
+assert balances(owners["a"], a["id"])["available"] == 0
+call("POST", f"/v1/merchants/{mp['id']}/checkouts/{reference}/deliveries", owners["mp"], {})
 call("POST", "/v1/ops/settlements/run", ops, {"ignoreDelay": True, "merchantId": a["id"]})
 call("POST", "/v1/ops/settlements/run", ops, {"ignoreDelay": True, "merchantId": d["id"]})
 assert balances(owners["a"], a["id"])["available"] == 7880

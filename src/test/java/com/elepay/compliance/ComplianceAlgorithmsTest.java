@@ -37,7 +37,7 @@ class ComplianceAlgorithmsTest {
         assertThat(unconfResult.simulationProvider()).isEqualTo("UNCONFIGURED_NIA");
 
         // 2. Test sandbox double
-        GhanaCardVerificationService service = new GhanaCardVerificationService(null, new GhanaCardVerificationService.SimulatedNiaClient());
+        GhanaCardVerificationService service = new GhanaCardVerificationService(null, new SimulatedNiaClient());
         var result = service.verify(customerId, validId, "Kwame Mensah", LocalDate.of(1990, 5, 15), "M");
         assertThat(result.status()).isEqualTo(GhanaCardVerificationService.Status.VERIFIED);
         assertThat(result.simulated()).isTrue();

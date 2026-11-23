@@ -95,7 +95,7 @@ jobs:
           ELEPAY_DB_PASSWORD: sandbox-ci-only
           ELEPAY_REDIS_HOST: localhost
           ELEPAY_REDIS_PORT: 6379
-        run: mvn -B verify
+        run: mvn -B clean verify
 
       - name: Upload CycloneDX SBOM Artifact
         uses: actions/upload-artifact@v4
@@ -107,7 +107,7 @@ jobs:
       - name: Verify production artifact contains no test payment implementations
         run: |
           jar tf target/elepay-core-0.1.0-SNAPSHOT.jar > jar-contents.txt
-          if grep -E 'BOOT-INF/classes/(application-(dev|sandbox|test)\.properties|com/elepay/.*(Simulated|SandboxLedger|DevTokens|PaymentIntents|ThreeDSecureService|CardIssuingService|CardAuthorizationEngine|CompanyExpenseCardService|AgentCashInService|AgentCashOutService|AgentFloatService|AgentPortalService|AirtimeDataPurchaseEngine|UtilityPaymentService|SchoolFeePaymentService|ScheduledBillPaymentService|FaceMatchingLivenessService))' jar-contents.txt; then
+          if grep -E 'BOOT-INF/classes/(application-(dev|sandbox|test)\.properties|com/elepay/.*(Simulated|SandboxLedger|DevTokens|PaymentIntents|ThreeDSecureService|CardIssuingService|CardAuthorizationEngine|CompanyExpenseCardService|AgentCashInService|AgentCashOutService|AgentFloatService|AgentPortalService|AirtimeDataPurchaseEngine|UtilityPaymentService|SchoolFeePaymentService|ScheduledBillPaymentService|FaceMatchingLivenessService|WhiteLabelWalletConnector|ExternalSettlementConnector))' jar-contents.txt; then
             echo 'Test-only implementations are present in production artifact'; exit 1
           fi
 
