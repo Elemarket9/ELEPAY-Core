@@ -69,16 +69,6 @@ public class SimulatedFxPartner implements FxPartner {
     }
 
     @Override
-    public Execution execute(String quoteReference, String reference, long sourceAmount, long destinationAmount,
-                             String destinationCurrency, Map<String, String> recipient) {
-        String account = recipient.getOrDefault("accountNumber", "");
-        String outcome = account.endsWith("1") ? "failed" : "paid";
-        db.sql("INSERT INTO simulated_fx_partner (reference, quote_ref, status) VALUES (:r, :q, :s) ON CONFLICT DO NOTHING")
-                .param("r", reference).param("q", quoteReference).param("s", "pending:" + outcome).update();
-        return new Execution(Status.PENDING, "SIMFX-" + reference, "Accepted by simulated partner");
-    }
-
-    @Override
     public Execution query(String reference) {
         return db.sql("SELECT status FROM simulated_fx_partner WHERE reference = :r").param("r", reference)
                 .query(String.class).optional().map(s -> switch (s) {

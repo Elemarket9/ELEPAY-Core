@@ -27,9 +27,6 @@ public interface FxPartner {
     /** True while the partner still honours the quote. */
     boolean honours(String quoteReference);
 
-    Execution execute(String quoteReference, String reference, long sourceAmount, long destinationAmount,
-                      String destinationCurrency, Map<String, String> recipient);
-
     Execution query(String reference);
 
     Notification verify(Map<String, String> headers, String body);
