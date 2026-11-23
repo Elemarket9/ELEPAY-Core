@@ -86,7 +86,7 @@ public class GhipssInstantPayRail implements PaymentRail {
         this(
                 json,
                 health,
-                (baseUrl == null || baseUrl.isBlank()) ? URI.create("https://gip.ghipss.com") : productionBase(baseUrl),
+                (baseUrl == null || baseUrl.isBlank()) ? null : productionBase(baseUrl),
                 new Credentials(institutionCode, apiKey, signingSecret, webhookSecret),
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
                         .followRedirects(HttpClient.Redirect.NEVER).build()
@@ -110,7 +110,7 @@ public class GhipssInstantPayRail implements PaymentRail {
 
     public static URI productionBase(String url) {
         if (url == null || url.isBlank()) {
-            return URI.create("https://gip.ghipss.com");
+            throw new IllegalStateException("RAIL_NOT_CONFIGURED: explicit production API origin required for GhIPSS");
         }
         URI u = URI.create(url);
         if (!"https".equalsIgnoreCase(u.getScheme()) || u.getHost() == null
@@ -125,7 +125,7 @@ public class GhipssInstantPayRail implements PaymentRail {
     }
 
     public boolean isConfigured() {
-        return credentials != null && credentials.isValid();
+        return base != null && credentials != null && credentials.isValid();
     }
 
     @Override
@@ -248,7 +248,7 @@ public class GhipssInstantPayRail implements PaymentRail {
             return new Result(Status.FAILED, null, request.amount(), request.currency(), null, null, "Unsupported GhIPSS destination");
         }
         if (!isConfigured()) {
-            return Result.unavailable("GhIPSS Instant Pay production credentials not configured for charge");
+            return Result.unavailable("RAIL_NOT_CONFIGURED: GhIPSS Instant Pay production credentials not configured for charge");
         }
 
         if ("ghqr".equalsIgnoreCase(request.channel())) {
@@ -274,7 +274,7 @@ public class GhipssInstantPayRail implements PaymentRail {
             return new Result(Status.FAILED, null, request.amount(), request.currency(), null, null, "Unsupported GhIPSS destination");
         }
         if (!isConfigured()) {
-            return Result.unavailable("GhIPSS Instant Pay production credentials not configured for payout");
+            return Result.unavailable("RAIL_NOT_CONFIGURED: GhIPSS Instant Pay production credentials not configured for payout");
         }
         return submitTransfer("payout", request.reference(), request.amount(), request.currency(),
                 request.accountNumber(), request.accountName(), request.description());
@@ -370,7 +370,7 @@ public class GhipssInstantPayRail implements PaymentRail {
             return Result.unknown("Unsupported GhIPSS query direction: " + direction);
         }
         if (!isConfigured()) {
-            return Result.unavailable("GhIPSS Instant Pay production credentials not configured for query");
+            return Result.unavailable("RAIL_NOT_CONFIGURED: GhIPSS Instant Pay production credentials not configured for query");
         }
         long start = System.currentTimeMillis();
         try {
