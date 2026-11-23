@@ -18,7 +18,7 @@ ELEPAY is a Ghana-first financial platform designed as a modular monolith in Jav
 - `com.elepay.outbox`: Transactional outbox pattern and idempotent consumer inbox for reliable domain event dispatch.
 - `com.elepay.operations`: Operations console backend, ops items queue, maker-checker approvals, and operational health metrics.
 - `com.elepay.ussd`: Telco USSD session menu state machine with signed callbacks and secure PIN verification.
-- `com.elepay.enterprise`: Enterprise embedded finance engine powering marketplaces and platforms (Jumia/JumiaPay, ELEMARKET, ELESEND, ride-hailing): managed accounts bulk provisioning, universal external wallet connectors (Modes A, B, C), Hare-Niemeyer multi-merchant 10-split engine, item-level refunds and liability tracking, BoG KYC-tier customer withdrawals, conditional delivery escrow release, and safeguarded treasury prefunding with shortfall protection.
+- `com.elepay.enterprise`: Enterprise embedded finance engine powering marketplaces, payment platforms, delivery and ride-hailing businesses (provider-neutral; no partner-specific adapters): managed accounts bulk provisioning, universal external wallet connectors (Modes A, B, C), Hare-Niemeyer multi-merchant 10-split engine, item-level refunds and liability tracking, BoG KYC-tier customer withdrawals, conditional delivery escrow release, and safeguarded treasury prefunding with shortfall protection.
 - `web/`: React 19 + TypeScript frontend with Customer Wallet (`/app`), Merchant Dashboard (`/merchant`), Operations Console (`/ops`), and Checkout (`/pay/*`).
 
 ## Code Layout
@@ -199,15 +199,15 @@ Extending ELEPAY into a comprehensive, independent financial and business manage
 - **Status**: **DONE** (Gate 2 Passed, commits: `0914cbf`, `3d7ecca`, `8db79bb`, `f3459e5`).
 
 ## Phase B: Enterprise Embedded Finance, External Wallets & Intelligent Settlement
-Expanding ELEPAY into enterprise-grade embedded finance and multi-merchant commerce platforms (e.g. Jumia/JumiaPay model) across 5 core enterprise engines:
+Expanding ELEPAY into enterprise-grade embedded finance and multi-merchant commerce platforms (provider-neutral) across 5 core enterprise engines:
 
 | Stream | Name | Scope / Package | Key Capabilities | Status |
 |---|---|---|---|---|
 | E1 | Enterprise Managed Accounts | `com.elepay.enterprise.accounts` | Bulk creation, external ID mapping, phone/email dedupe, tier KYC sync, subaccount balances | DONE (commit: e75f8bc, V40 migration, 7/7 tests pass) |
-| E2 | Universal External Wallet Engine | `com.elepay.enterprise.wallet` | 3 Modes (Enterprise-owned e.g. JumiaPay, White-label, External settlement), OAuth/OIDC delegation | DONE (commit: d4d6767, JumiaPay adapter, 9/9 tests pass) |
+| E2 | Universal External Wallet Engine | `com.elepay.enterprise.wallet` | 3 Modes (Enterprise-owned, White-label, External settlement), OAuth/OIDC delegation | DONE (commit: d4d6767). Partner-specific adapter removed; enterprises plug in an `ExternalWalletConnector` built against their own authorized API, wrapped by `ResilientWalletConnector` |
 | E3 | External Collections & Split Engine | `com.elepay.enterprise.checkout` | Multi-merchant external collections, nested commissions, delivery splits, integer minor units | DONE (commit: 4a538be, 10-sub-merchant split, 7/7 tests pass) |
-| E4 | Enterprise Refunds & Withdrawals | `com.elepay.enterprise.refund`, `com.elepay.enterprise.payout` | Item-level refunds via JumiaPay connector, MoMo/bank refunds, wallet withdrawals to MTN MoMo with BoG limits | DONE (commit: 5299c38, V41 migration, 25/25 tests pass) |
-| E5 | Enterprise Settlement, Treasury & Connectors | `com.elepay.enterprise.settlement`, `com.elepay.enterprise.connectors` | Conditional release, missing delivery confirmations, safeguarded funds, SFTP/mTLS connector, 10-way recon | DONE (V42 migration, Jumia 17-step scenario verified, 53/53 tests pass) |
+| E4 | Enterprise Refunds & Withdrawals | `com.elepay.enterprise.refund`, `com.elepay.enterprise.payout` | Item-level refunds via the enterprise's registered wallet connector, MoMo/bank refunds, wallet withdrawals to MTN MoMo with BoG limits | DONE (commit: 5299c38, V41 migration, 25/25 tests pass) |
+| E5 | Enterprise Settlement, Treasury & Connectors | `com.elepay.enterprise.settlement`, `com.elepay.enterprise.connectors` | Conditional release, missing delivery confirmations, safeguarded funds, SFTP/mTLS connector, 10-way recon | DONE (V42 migration, 17-step marketplace reference scenario (`MarketplaceReferenceScenarioTest`, isolated test wallet)) |
 
 ### Phase C — Domestic Banking & Direct MoMo Rails, Fraud Intelligence & 10-Way Daily Clearing
 | Milestone | Name | Scope | Capabilities | Status |

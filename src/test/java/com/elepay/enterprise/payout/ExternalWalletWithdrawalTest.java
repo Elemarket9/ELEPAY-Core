@@ -32,7 +32,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>Verifies:
  * <ul>
- *   <li>Authorized customer withdrawal requests from enterprise-owned wallets (e.g. Jumia refund balance).</li>
+ *   <li>Authorized customer withdrawal requests from enterprise-owned wallets (e.g. Marketplace refund balance).</li>
  *   <li>Delegated authorization token validation (EnterpriseTokenService) with cryptographic HMAC signatures.</li>
  *   <li>Available enterprise settlement funding and prefunding checks.</li>
  *   <li>Ghana E.164 phone number canonicalization (+233...) and carrier network detection.</li>
@@ -54,16 +54,16 @@ class ExternalWalletWithdrawalTest {
     private ExternalWalletWithdrawalEngine withdrawalEngine;
 
     private UUID enterpriseId;
-    private static final String PARTNER_ID = "partner_jumiapay_gh";
-    private static final String SIGNING_KEY = "k_jumia_withdrawal_signing_secret_key_12345";
+    private static final String PARTNER_ID = "partner_test_wallet";
+    private static final String SIGNING_KEY = "k_marketplace_withdrawal_signing_secret_key_12345";
 
     @BeforeEach
     void setUp() {
         tokenService = new EnterpriseTokenService();
         PartnerAuthCredentials creds = PartnerAuthCredentials.create(
                 PARTNER_ID,
-                "Jumia Ghana",
-                "client_jumia_withdraw",
+                "Marketplace Ghana",
+                "client_marketplace_withdraw",
                 "secret_withdraw_9988",
                 SIGNING_KEY,
                 Set.of(PartnerScope.WALLET_READ, PartnerScope.WALLET_WITHDRAW)
@@ -110,7 +110,7 @@ class ExternalWalletWithdrawalTest {
     @Test
     @DisplayName("Authorized MoMo Customer Withdrawal: Delegated token, funding, phone normalization & payout dispatch")
     void testSuccessfulMoMoWithdrawal() {
-        String customerId = "jumia_cust_8801";
+        String customerId = "marketplace_cust_8801";
         long amountPesewas = 30_000L; // GH₵300.00 refund withdrawal to MoMo
 
         // Issue cryptographically signed delegated token for withdrawal
@@ -156,7 +156,7 @@ class ExternalWalletWithdrawalTest {
     @Test
     @DisplayName("Delegated Authorization Token Security: Invalid scope, expired, revoked, and over-limit tokens rejected")
     void testDelegatedTokenValidationFailures() {
-        String customerId = "jumia_cust_sec_1";
+        String customerId = "marketplace_cust_sec_1";
 
         // 1. Token without WALLET_WITHDRAW scope
         var tokenReqNoWithdraw = new DelegatedTokenRequest(

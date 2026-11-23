@@ -8,12 +8,12 @@ package com.elepay.enterprise.wallet;
 public interface ExternalWalletConnector {
 
     /**
-     * Unique identifier for this connector instance (e.g. "jumiapay-gh-v1").
+     * Unique identifier for this connector instance (e.g. "acme-wallet-v1").
      */
     String getConnectorId();
 
     /**
-     * Human-readable enterprise provider name (e.g. "JumiaPay Ghana").
+     * Human-readable enterprise provider name (e.g. "Acme Wallet").
      */
     String getProviderName();
 

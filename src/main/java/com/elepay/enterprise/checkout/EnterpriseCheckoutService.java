@@ -14,7 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
  * Enterprise Externally Collected Payment & Multi-Merchant Split Service.
  *
  * <p>Ingests customer payments collected externally by enterprises/marketplaces
- * (e.g. JumiaPay, MoMo, Card) and executes atomic, multi-tier allocations across
+ * (e.g. an enterprise wallet, MoMo, card) and executes atomic, multi-tier allocations across
  * sub-merchants, delivery partners, marketplace commissions, and platform revenue
  * via the authoritative double-entry {@link Ledger}.
  */

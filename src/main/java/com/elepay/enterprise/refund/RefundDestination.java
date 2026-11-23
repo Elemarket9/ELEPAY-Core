@@ -5,7 +5,7 @@ package com.elepay.enterprise.refund;
  */
 public enum RefundDestination {
     /**
-     * Credit back directly to customer's external enterprise wallet (Mode A e.g. JumiaPay).
+     * Credit back directly to customer's external enterprise wallet (Mode A).
      */
     EXTERNAL_WALLET,
 

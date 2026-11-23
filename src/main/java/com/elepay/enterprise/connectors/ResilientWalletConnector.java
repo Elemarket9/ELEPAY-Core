@@ -4,29 +4,24 @@ import com.elepay.enterprise.wallet.*;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
 
 /**
- * Universal Enterprise Connector Adapter for JumiaPay Ghana.
+ * Provider-neutral resilience wrapper around any {@link ExternalWalletConnector}.
  *
- * <p>In production this wraps the disabled {@link JumiaPayContractAdapter}: every wallet call fails
- * closed until an authorized JumiaPay API contract is implemented. It is not a live connection.
- * Tests may wrap an isolated test double through the package-visible constructor.
- *
- * <p>Wraps external wallet Mode A operations with enterprise resilience features:
- * - REST API client capabilities
- * - HMAC-SHA256 signed webhook generation and verification
- * - SFTP/file-based batch reconciliation
- * - Resilient Circuit Breaker
- * - Token-bucket Rate Limiter
+ * <p>ELEPAY ships no partner-specific wallet adapter. An enterprise's connector is supplied as an
+ * {@link ExternalWalletConnector} implementation built against that enterprise's authorized API
+ * contract; this class adds, without knowing who the partner is:
+ * <ul>
+ *   <li>circuit breaking and token-bucket rate limiting per connector,</li>
+ *   <li>HMAC-SHA256 webhook signing and verification,</li>
+ *   <li>file-based batch reconciliation.</li>
+ * </ul>
+ * It is intentionally not a Spring bean: instances are created per configured connector.
  */
-@Component
-public class JumiaPayConnectorAdapter implements EnterpriseConnector {
+public class ResilientWalletConnector implements EnterpriseConnector {
 
-    public static final String CONNECTOR_ID = "jumiapay-gh-v1";
-    public static final String CONNECTOR_TYPE = "JUMIAPAY";
-    public static final long DEFAULT_RATE_LIMIT_RPM = 600L; // 600 req/min
+    public static final String CONNECTOR_TYPE = "EXTERNAL_WALLET";
+    public static final long DEFAULT_RATE_LIMIT_RPM = 600L; // used when no per-connector limit is configured
 
     private final ExternalWalletConnector walletAdapter;
     private final ConnectorWebhookSigner webhookSigner;
@@ -34,31 +29,22 @@ public class JumiaPayConnectorAdapter implements EnterpriseConnector {
     private final CircuitBreaker circuitBreaker;
     private final RateLimiter rateLimiter;
 
-    @Autowired
-    public JumiaPayConnectorAdapter(
-            JumiaPayContractAdapter walletAdapter,
-            ConnectorWebhookSigner webhookSigner,
-            SftpReconHandler reconHandler
-    ) {
-        this((ExternalWalletConnector) walletAdapter, webhookSigner, reconHandler);
-    }
-
-    /** Wraps an arbitrary wallet connector; used by isolated tests. */
-    public JumiaPayConnectorAdapter(
+    public ResilientWalletConnector(
             ExternalWalletConnector walletAdapter,
             ConnectorWebhookSigner webhookSigner,
-            SftpReconHandler reconHandler
+            SftpReconHandler reconHandler,
+            long rateLimitPerMinute
     ) {
         this.walletAdapter = Objects.requireNonNull(walletAdapter, "walletAdapter cannot be null");
         this.webhookSigner = Objects.requireNonNull(webhookSigner, "webhookSigner cannot be null");
         this.reconHandler = Objects.requireNonNull(reconHandler, "reconHandler cannot be null");
-        this.circuitBreaker = new CircuitBreaker(CONNECTOR_ID, 5, 30_000L, null);
-        this.rateLimiter = new RateLimiter(CONNECTOR_ID, DEFAULT_RATE_LIMIT_RPM);
+        this.circuitBreaker = new CircuitBreaker(walletAdapter.getConnectorId(), 5, 30_000L, null);
+        this.rateLimiter = new RateLimiter(walletAdapter.getConnectorId(), rateLimitPerMinute > 0 ? rateLimitPerMinute : DEFAULT_RATE_LIMIT_RPM);
     }
 
     @Override
     public String getConnectorId() {
-        return CONNECTOR_ID;
+        return walletAdapter.getConnectorId();
     }
 
     @Override
@@ -106,7 +92,7 @@ public class JumiaPayConnectorAdapter implements EnterpriseConnector {
 
     public PartnerAuthResult authenticatePartner(PartnerAuthRequest request) {
         if (!rateLimiter.tryAcquire()) {
-            throw com.elepay.common.ApiException.tooManyRequests("Rate limit exceeded for JumiaPay connector");
+            throw com.elepay.common.ApiException.tooManyRequests("Rate limit exceeded for wallet connector " + getConnectorId());
         }
         try {
             PartnerAuthResult res = walletAdapter.authenticatePartner(request);
@@ -120,10 +106,10 @@ public class JumiaPayConnectorAdapter implements EnterpriseConnector {
 
     public ExternalPaymentAuthResult authorizePayment(ExternalPaymentAuthRequest request) {
         if (!circuitBreaker.allowRequest()) {
-            throw com.elepay.common.ApiException.internal("circuit_open", "JumiaPay connector circuit breaker is OPEN");
+            throw com.elepay.common.ApiException.internal("circuit_open", "Circuit breaker is OPEN for wallet connector " + getConnectorId());
         }
         if (!rateLimiter.tryAcquire()) {
-            throw com.elepay.common.ApiException.tooManyRequests("Rate limit exceeded for JumiaPay connector");
+            throw com.elepay.common.ApiException.tooManyRequests("Rate limit exceeded for wallet connector " + getConnectorId());
         }
         try {
             ExternalPaymentAuthResult res = walletAdapter.authorizePayment(request);
@@ -137,10 +123,10 @@ public class JumiaPayConnectorAdapter implements EnterpriseConnector {
 
     public ExternalPaymentCaptureResult capturePayment(ExternalPaymentCaptureRequest request) {
         if (!circuitBreaker.allowRequest()) {
-            throw com.elepay.common.ApiException.internal("circuit_open", "JumiaPay connector circuit breaker is OPEN");
+            throw com.elepay.common.ApiException.internal("circuit_open", "Circuit breaker is OPEN for wallet connector " + getConnectorId());
         }
         if (!rateLimiter.tryAcquire()) {
-            throw com.elepay.common.ApiException.tooManyRequests("Rate limit exceeded for JumiaPay connector");
+            throw com.elepay.common.ApiException.tooManyRequests("Rate limit exceeded for wallet connector " + getConnectorId());
         }
         try {
             ExternalPaymentCaptureResult res = walletAdapter.capturePayment(request);
@@ -154,10 +140,10 @@ public class JumiaPayConnectorAdapter implements EnterpriseConnector {
 
     public ExternalWalletRefundResult refundToWallet(ExternalWalletRefundRequest request) {
         if (!circuitBreaker.allowRequest()) {
-            throw com.elepay.common.ApiException.internal("circuit_open", "JumiaPay connector circuit breaker is OPEN");
+            throw com.elepay.common.ApiException.internal("circuit_open", "Circuit breaker is OPEN for wallet connector " + getConnectorId());
         }
         if (!rateLimiter.tryAcquire()) {
-            throw com.elepay.common.ApiException.tooManyRequests("Rate limit exceeded for JumiaPay connector");
+            throw com.elepay.common.ApiException.tooManyRequests("Rate limit exceeded for wallet connector " + getConnectorId());
         }
         try {
             ExternalWalletRefundResult res = walletAdapter.refundToWallet(request);
@@ -171,10 +157,10 @@ public class JumiaPayConnectorAdapter implements EnterpriseConnector {
 
     public ExternalWalletWithdrawalResult requestWithdrawal(ExternalWalletWithdrawalRequest request) {
         if (!circuitBreaker.allowRequest()) {
-            throw com.elepay.common.ApiException.internal("circuit_open", "JumiaPay connector circuit breaker is OPEN");
+            throw com.elepay.common.ApiException.internal("circuit_open", "Circuit breaker is OPEN for wallet connector " + getConnectorId());
         }
         if (!rateLimiter.tryAcquire()) {
-            throw com.elepay.common.ApiException.tooManyRequests("Rate limit exceeded for JumiaPay connector");
+            throw com.elepay.common.ApiException.tooManyRequests("Rate limit exceeded for wallet connector " + getConnectorId());
         }
         try {
             ExternalWalletWithdrawalResult res = walletAdapter.requestWithdrawal(request);

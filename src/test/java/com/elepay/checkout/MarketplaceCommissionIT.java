@@ -15,7 +15,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Jumia-style marketplace fees through the public API: a commission grid per category with minimums and a
+ * Commission-on-delivery marketplace fees through the public API: a commission grid per category with minimums and a
  * processing fee, every seller line held until delivery, commission earned only on delivered items, and
  * ELEPAY's fee deferred until settlement (BoG Notice 43).
  */
@@ -38,7 +38,7 @@ class MarketplaceCommissionIT extends PostgresTestBase {
         aOwner = api.token("a-" + s);
         bOwner = api.token("b-" + s);
         dOwner = api.token("d-" + s);
-        marketplace = merchant(mpOwner, "JUMIA GH " + s, "marketplace", 0);
+        marketplace = merchant(mpOwner, "MARKETPLACE GH " + s, "marketplace", 0);
         sellerA = merchant(aOwner, "Fashion GH " + s, "merchant", 150);
         sellerB = merchant(bOwner, "Phone Hub " + s, "merchant", 100);
         rider = merchant(dOwner, "Rider " + s, "delivery", 0);

@@ -26,7 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
  * settlement. All money moves through the ledger; this class keeps the
  * per-allocation state that explains each posting.
  *
- * <p>Marketplace checkouts follow the Jumia model: the marketplace's commission
+ * <p>Marketplace checkouts follow a commission-on-delivery model: the marketplace's commission
  * grid (per category, with a minimum) and per-item processing fee are deducted
  * from each seller line, and every seller and delivery line is held until the
  * marketplace confirms delivery. Commission is therefore earned only on
@@ -871,8 +871,9 @@ class CheckoutService {
     /**
      * Settles due lines: each seller's net and each marketplace's share move from pending to available, one
      * batch per merchant, and ELEPAY's deferred fee for those lines is recognised as revenue. A line held for
-     * delivery is due once delivered and past the seller's settlement delay, or once the order's delivery
-     * deadline passes (treated as delivered). {@code force} skips the delay but never the delivery hold.
+     * delivery is due only once the marketplace has confirmed delivery and the seller's settlement delay has passed.
+     * The order's delivery deadline is informational: a passed deadline is never treated as delivery and never
+     * releases funds or fees. {@code force} skips the delay but never the delivery hold.
      */
     @Transactional
     List<SettlementBatch> settleDue(boolean force, UUID onlyMerchant, UUID onlyCheckout) {

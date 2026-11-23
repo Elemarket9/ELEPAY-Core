@@ -30,7 +30,7 @@ import static org.mockito.Mockito.when;
  *   <li>Full and partial refunds per item or line item.</li>
  *   <li>Multiple simultaneous refunds against the same external order across distinct sub-merchants.</li>
  *   <li>Exact fee adjustments, commission clawbacks, tax/delivery adjustments in integer minor units (pesewas).</li>
- *   <li>JumiaPay connector integration (ExternalWalletConnector.refundToWallet).</li>
+ *   <li>test wallet connector integration (ExternalWalletConnector.refundToWallet).</li>
  *   <li>Direct MoMo and bank refund destinations.</li>
  *   <li>Strict duplicate prevention, idempotency key checks, zero double-crediting.</li>
  *   <li>Order cumulative refund limit enforcement.</li>
@@ -45,7 +45,7 @@ class EnterpriseItemRefundTest {
     private EnterpriseRefundLiabilityTracker liabilityTracker;
     private EnterpriseCheckoutService checkoutService;
     private ExternalWalletEngine walletEngine;
-    private InMemoryModeAWalletSimulator jumiaPayAdapter;
+    private InMemoryModeAWalletSimulator modeAWallet;
     private EnterpriseRefundService refundService;
 
     private UUID enterpriseId;
@@ -68,10 +68,10 @@ class EnterpriseItemRefundTest {
 
         EnterpriseTokenService tokenService = new EnterpriseTokenService();
         HmacWebhookVerifier webhookVerifier = new HmacWebhookVerifier();
-        jumiaPayAdapter = new InMemoryModeAWalletSimulator(tokenService, webhookVerifier);
+        modeAWallet = new InMemoryModeAWalletSimulator(tokenService, webhookVerifier);
 
         walletEngine = new ExternalWalletEngine(
-                List.of(jumiaPayAdapter),
+                List.of(modeAWallet),
                 tokenService,
                 webhookVerifier
         );
@@ -157,7 +157,7 @@ class EnterpriseItemRefundTest {
     @Test
     @DisplayName("Multiple Simultaneous Refunds against Same Order across Distinct Sub-Merchants and Delivery")
     void testMultipleSimultaneousRefundsAcrossTenMerchants() {
-        String orderRef = "JUMIA-ORD-998877";
+        String orderRef = "MARKETPLACE-ORD-998877";
         long totalOrderGross = 152_000L;
         refundService.registerOrderGross(enterpriseId, orderRef, totalOrderGross);
 
@@ -183,7 +183,7 @@ class EnterpriseItemRefundTest {
                 enterpriseId,
                 orderRef,
                 null,
-                "jumia_cust_5566",
+                "marketplace_cust_5566",
                 RefundDestination.INTERNAL_WALLET,
                 Map.of(),
                 "GHS",
@@ -213,19 +213,19 @@ class EnterpriseItemRefundTest {
     }
 
     @Test
-    @DisplayName("JumiaPay Mode A Connector Integration: Direct refund to external wallet")
-    void testJumiaPayConnectorIntegration() {
-        String externalCustId = "jumia_cust_9900";
-        jumiaPayAdapter.seedCustomerBalance(externalCustId, 20_000L); // Customer has GH₵200.00 initially
+    @DisplayName("test wallet Mode A Connector Integration: Direct refund to external wallet")
+    void testModeAWalletConnectorIntegration() {
+        String externalCustId = "marketplace_cust_9900";
+        modeAWallet.seedCustomerBalance(externalCustId, 20_000L); // Customer has GH₵200.00 initially
 
-        // Authorize and capture in JumiaPay to establish state
+        // Authorize and capture in test wallet to establish state
         EnterpriseTokenService tokenService = walletEngine.getTokenService();
         tokenService.registerPartner(PartnerAuthCredentials.create(
-                "partner_jumiapay_gh", "Jumia Ghana", "client_1", "secret_1", "signing_key_1",
+                "partner_test_wallet", "Marketplace Ghana", "client_1", "secret_1", "signing_key_1",
                 Set.of(PartnerScope.WALLET_AUTHORIZE, PartnerScope.WALLET_CAPTURE, PartnerScope.WALLET_REFUND)
         ));
 
-        String orderRef = "JUMIA-ORD-MODEA-1";
+        String orderRef = "MARKETPLACE-ORD-MODEA-1";
         refundService.registerOrderGross(enterpriseId, orderRef, 50_000L);
 
         // Process refund of GH₵300.00 (30,000 pesewas) to external wallet
@@ -236,29 +236,29 @@ class EnterpriseItemRefundTest {
                 "jpa_cap_001",
                 externalCustId,
                 RefundDestination.EXTERNAL_WALLET,
-                Map.of("connectorId", "jumiapay-gh-v1"),
+                Map.of("connectorId", "test-wallet-v1"),
                 "GHS",
-                "Defective item refund to Jumia wallet",
+                "Defective item refund to Marketplace wallet",
                 List.of(EnterpriseRefundItemSpecification.of("ITEM-A1", merchantIds.get(0), 30_000L, 1000, "Refund")),
                 null,
                 Map.of()
         );
 
         // Before refund, customer balance was 20,000
-        ExternalBalanceQueryResult balBefore = jumiaPayAdapter.queryWalletBalance(
-                new ExternalBalanceQueryRequest("partner_jumiapay_gh", externalCustId, "GHS")
+        ExternalBalanceQueryResult balBefore = modeAWallet.queryWalletBalance(
+                new ExternalBalanceQueryRequest("partner_test_wallet", externalCustId, "GHS")
         );
         assertThat(balBefore.availableBalanceMinorUnits()).isEqualTo(20_000L);
 
-        // Pre-create authorization in JumiaPay so refundToWallet finds capture
+        // Pre-create authorization in test wallet so refundToWallet finds capture
         ExternalPaymentAuthRequest authReq = new ExternalPaymentAuthRequest(
-                "auth_idem_1", "partner_jumiapay_gh", WalletOperatingMode.MODE_A_ENTERPRISE_OWNED, "TX-REF-1", externalCustId, 30_000L, "GHS",
+                "auth_idem_1", "partner_test_wallet", WalletOperatingMode.MODE_A_ENTERPRISE_OWNED, "TX-REF-1", externalCustId, 30_000L, "GHS",
                 com.elepay.common.HmacVerification.computeHex("signing_key_1", externalCustId + ":30000:GHS:TX-REF-1"),
                 Map.of()
         );
-        jumiaPayAdapter.seedCustomerBalance(externalCustId, 50_000L);
-        var authRes = jumiaPayAdapter.authorizePayment(authReq);
-        var capRes = jumiaPayAdapter.capturePayment(new ExternalPaymentCaptureRequest(
+        modeAWallet.seedCustomerBalance(externalCustId, 50_000L);
+        var authRes = modeAWallet.authorizePayment(authReq);
+        var capRes = modeAWallet.capturePayment(new ExternalPaymentCaptureRequest(
                 "cap_idem_1", authRes.authorizationId(), "TX-REF-1", 30_000L, "GHS",
                 List.of(new PaymentAllocationSplit(merchantIds.get(0).toString(), 30_000L, 0L, 0L, "ITEM-A1", "Item sale"))
         ));
@@ -271,7 +271,7 @@ class EnterpriseItemRefundTest {
                 capRes.captureId(),
                 externalCustId,
                 RefundDestination.EXTERNAL_WALLET,
-                Map.of("connectorId", "jumiapay-gh-v1"),
+                Map.of("connectorId", "test-wallet-v1"),
                 "GHS",
                 "Defective item refund",
                 List.of(EnterpriseRefundItemSpecification.of("ITEM-A1", merchantIds.get(0), 30_000L, 1000, "Refund")),
@@ -284,8 +284,8 @@ class EnterpriseItemRefundTest {
         assertThat(result.connectorRefundId()).isNotNull();
 
         // Check customer balance in external wallet was credited by 30,000
-        ExternalBalanceQueryResult balAfter = jumiaPayAdapter.queryWalletBalance(
-                new ExternalBalanceQueryRequest("partner_jumiapay_gh", externalCustId, "GHS")
+        ExternalBalanceQueryResult balAfter = modeAWallet.queryWalletBalance(
+                new ExternalBalanceQueryRequest("partner_test_wallet", externalCustId, "GHS")
         );
         assertThat(balAfter.availableBalanceMinorUnits()).isEqualTo(50_000L); // 20,000 remaining + 30,000 refund = 50,000
     }
@@ -293,7 +293,7 @@ class EnterpriseItemRefundTest {
     @Test
     @DisplayName("Alternative Destinations: Domestic MoMo and Bank refund rails")
     void testMoMoAndBankRefundDestinations() {
-        String orderRef = "JUMIA-ORD-MOMO-1";
+        String orderRef = "MARKETPLACE-ORD-MOMO-1";
         refundService.registerOrderGross(enterpriseId, orderRef, 50_000L);
 
         // 1. Domestic MoMo refund
@@ -340,7 +340,7 @@ class EnterpriseItemRefundTest {
     @Test
     @DisplayName("Cumulative Refund Limit Enforcement: Cannot exceed captured amount")
     void testCumulativeRefundLimitExceededRejection() {
-        String orderRef = "JUMIA-ORD-CUMULATIVE-LIMIT";
+        String orderRef = "MARKETPLACE-ORD-CUMULATIVE-LIMIT";
         long capturedAmount = 100_000L; // GH₵1,000.00
         refundService.registerOrderGross(enterpriseId, orderRef, capturedAmount);
 
@@ -352,7 +352,7 @@ class EnterpriseItemRefundTest {
                 null,
                 "cust_cum_1",
                 RefundDestination.EXTERNAL_WALLET,
-                Map.of(),
+                Map.of("connectorId", "test-wallet-v1"),
                 "GHS",
                 "First refund",
                 List.of(EnterpriseRefundItemSpecification.of("ITEM-1", merchantIds.get(0), 70_000L, 1000, "Refund 1")),
@@ -369,7 +369,7 @@ class EnterpriseItemRefundTest {
                 null,
                 "cust_cum_1",
                 RefundDestination.EXTERNAL_WALLET,
-                Map.of(),
+                Map.of("connectorId", "test-wallet-v1"),
                 "GHS",
                 "Second refund exceeding limit",
                 List.of(EnterpriseRefundItemSpecification.of("ITEM-2", merchantIds.get(1), 40_000L, 1000, "Refund 2")),
@@ -385,7 +385,7 @@ class EnterpriseItemRefundTest {
     @Test
     @DisplayName("Strict Duplicate Prevention & Idempotency Key Handling")
     void testIdempotencyAndDuplicatePrevention() {
-        String orderRef = "JUMIA-ORD-IDEMPOTENCY";
+        String orderRef = "MARKETPLACE-ORD-IDEMPOTENCY";
         refundService.registerOrderGross(enterpriseId, orderRef, 50_000L);
 
         EnterpriseItemRefundRequest req = new EnterpriseItemRefundRequest(
@@ -395,7 +395,7 @@ class EnterpriseItemRefundTest {
                 null,
                 "cust_idem_1",
                 RefundDestination.EXTERNAL_WALLET,
-                Map.of(),
+                Map.of("connectorId", "test-wallet-v1"),
                 "GHS",
                 "Return item",
                 List.of(EnterpriseRefundItemSpecification.of("ITEM-1", merchantIds.get(0), 10_000L, 1000, "Return")),
@@ -420,7 +420,7 @@ class EnterpriseItemRefundTest {
                 null,
                 "cust_idem_1",
                 RefundDestination.EXTERNAL_WALLET,
-                Map.of(),
+                Map.of("connectorId", "test-wallet-v1"),
                 "GHS",
                 "Different reason",
                 List.of(EnterpriseRefundItemSpecification.of("ITEM-1", merchantIds.get(0), 20_000L, 1000, "Different")),
@@ -457,7 +457,7 @@ class EnterpriseItemRefundTest {
     @Test
     @DisplayName("Concurrency: Concurrent refunds on same order with distinct idempotency keys cannot exceed gross")
     void testConcurrentRefundsOnSameOrderWithDistinctKeysSerialized() throws InterruptedException {
-        String orderRef = "JUMIA-ORD-CONCURRENT-001";
+        String orderRef = "MARKETPLACE-ORD-CONCURRENT-001";
         long originalGross = 100_000L; // GH₵1,000.00
         refundService.registerOrderGross(enterpriseId, orderRef, originalGross);
 
@@ -483,7 +483,7 @@ class EnterpriseItemRefundTest {
                             null,
                             "cust_conc_1",
                             RefundDestination.EXTERNAL_WALLET,
-                            Map.of(),
+                            Map.of("connectorId", "test-wallet-v1"),
                             "GHS",
                             "Item return",
                             List.of(EnterpriseRefundItemSpecification.of("ITEM-1", merchantIds.get(0), refundPerThread, 1000, "Return")),

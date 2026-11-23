@@ -24,7 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Coordinates full and item-level refunds, multi-merchant reversals,
  * commission clawbacks, tax/delivery adjustments, double-entry ledger postings,
- * external wallet connector instructions (e.g. JumiaPay Mode A), and refund liability tracking.
+ * external wallet connector instructions (Mode A enterprise-owned wallets), and refund liability tracking.
  */
 @Service
 public class EnterpriseRefundService {
@@ -268,7 +268,11 @@ public class EnterpriseRefundService {
         String destinationAccount;
         switch (request.destination()) {
             case EXTERNAL_WALLET -> {
-                String connectorId = request.destinationDetails().getOrDefault("connectorId", "jumiapay-gh-v1");
+                String connectorId = request.destinationDetails() == null ? null : request.destinationDetails().get("connectorId");
+                if (connectorId == null || connectorId.isBlank()) {
+                    throw ApiException.badRequest("connector_required",
+                            "destinationDetails.connectorId is required for an external wallet refund");
+                }
                 String channel = sanitizeCode(connectorId);
                 destinationAccount = ledger.openSystem("system:clearing:" + channel + ":" + currency, "clearing", currency, true);
             }
@@ -311,7 +315,7 @@ public class EnterpriseRefundService {
 
         Ledger.Posted posted = ledger.post(posting);
 
-        // 6. External Wallet Connector Call (e.g. JumiaPay Mode A refundToWallet)
+        // 6. External wallet connector call (Mode A refundToWallet through the enterprise's registered connector)
         String connectorRefundId = null;
         if (request.destination() == RefundDestination.EXTERNAL_WALLET && walletEngine != null && request.externalCaptureId() != null) {
             // The enterprise must name its wallet connector explicitly; no partner is assumed by default.

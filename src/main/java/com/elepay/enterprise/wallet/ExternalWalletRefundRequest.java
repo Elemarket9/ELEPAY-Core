@@ -30,7 +30,7 @@ public record ExternalWalletRefundRequest(
             throw new IllegalArgumentException("Currency is required");
         }
         if (partnerId == null || partnerId.isBlank()) {
-            partnerId = "partner_jumiapay_gh";
+            throw new IllegalArgumentException("Partner id is required");
         }
         if (transactionReference == null || transactionReference.isBlank()) {
             transactionReference = "TX-REF-" + idempotencyKey;
@@ -48,16 +48,4 @@ public record ExternalWalletRefundRequest(
         }
     }
 
-    public ExternalWalletRefundRequest(
-            String idempotencyKey,
-            String originalCaptureId,
-            String externalCustomerId,
-            long refundAmountMinorUnits,
-            String currency,
-            String refundReason,
-            List<RefundAllocationItem> items
-    ) {
-        this(idempotencyKey, "partner_jumiapay_gh", originalCaptureId, "TX-REF-" + idempotencyKey,
-                externalCustomerId, refundAmountMinorUnits, currency, refundReason, items);
-    }
 }

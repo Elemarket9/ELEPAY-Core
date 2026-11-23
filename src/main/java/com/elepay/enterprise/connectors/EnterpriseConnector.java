@@ -10,10 +10,10 @@ import java.util.List;
  */
 public interface EnterpriseConnector {
 
-    /** Returns unique connector identifier (e.g. "jumiapay-gh-v1"). */
+    /** Returns unique connector identifier (e.g. "acme-wallet-v1"). */
     String getConnectorId();
 
-    /** Returns connector type (e.g. "JUMIAPAY", "REST_WEBHOOK", "SFTP_RECON"). */
+    /** Returns connector type (e.g. "EXTERNAL_WALLET", "REST_WEBHOOK", "SFTP_RECON"). */
     String getConnectorType();
 
     /** Returns active circuit breaker instance for this connector. */

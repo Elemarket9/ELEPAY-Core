@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * External Wallet Withdrawal Engine.
  *
  * <p>Processes authorized customer withdrawal requests from enterprise-owned wallets
- * (e.g. JumiaPay refund balance) into domestic mobile money (MTN, Telecel, AirtelTigo) or bank rails.
+ * (e.g. a refund balance held in an enterprise-owned wallet) into domestic mobile money (MTN, Telecel, AirtelTigo) or bank rails.
  * Coordinates delegated token validation, settlement funding checks, Ghana E.164 phone verification,
  * Bank of Ghana KYC daily tier limits, sanctions screening, and domestic payout dispatch.
  */

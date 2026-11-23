@@ -255,6 +255,7 @@ class EnterpriseSettlementTest extends PostgresTestBase {
 
     private void seedPending(UUID merchant, long amount) {
         ledger.open("merchant", merchant, "pending", "GHS");
+        ledger.openSystem("system:clearing:test:GHS", "clearing", "GHS", true);
         ledger.post(Ledger.Posting.of("test", "SEED-" + UUID.randomUUID(), "seed", List.of(
                 Ledger.Leg.debit("system:clearing:test:GHS", amount),
                 Ledger.Leg.credit(Ledger.code("merchant", merchant, "pending", "GHS"), amount))));

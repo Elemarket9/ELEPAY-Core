@@ -122,7 +122,7 @@ class VirtualCardIssuingAndSpendingControlTest extends PostgresTestBase {
 
         // 1. Valid purchase of 80 GHS (within limits) -> Approved
         var eval1 = velocityService.evaluateAndCommitSpend(
-                card.cardId(), "JUMIA ONLINE", "ACCRA", "5411", 8_000L, "GHS"
+                card.cardId(), "ONLINE MARKETPLACE", "ACCRA", "5411", 8_000L, "GHS"
         );
         assertThat(eval1.approved()).isTrue();
         assertThat(eval1.authCode()).startsWith("AUTH-");

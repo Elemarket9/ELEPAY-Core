@@ -5,7 +5,7 @@ package com.elepay.enterprise.wallet;
  */
 public enum WalletOperatingMode {
     /**
-     * Mode A: Enterprise-owned wallet connector (e.g. JumiaPay).
+     * Mode A: Enterprise-owned wallet connector (the enterprise keeps the authoritative customer wallet).
      * The external enterprise maintains the authoritative customer balance and dispatches
      * cryptographically signed payment authorizations. ELEPAY manages multi-merchant splits,
      * escrow allocations, item-level refunds, and settlement payouts.

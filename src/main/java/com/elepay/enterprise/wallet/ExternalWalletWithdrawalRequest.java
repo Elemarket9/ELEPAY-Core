@@ -17,6 +17,9 @@ public record ExternalWalletWithdrawalRequest(
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new IllegalArgumentException("Idempotency key is required");
         }
+        if (partnerId == null || partnerId.isBlank()) {
+            throw new IllegalArgumentException("Partner id is required");
+        }
         if (amountMinorUnits <= 0) {
             throw new IllegalArgumentException("Withdrawal amount must be positive: " + amountMinorUnits);
         }
@@ -31,18 +34,4 @@ public record ExternalWalletWithdrawalRequest(
         }
     }
 
-    public ExternalWalletWithdrawalRequest(
-            String idempotencyKey,
-            String externalCustomerId,
-            String kycTier,
-            long amountMinorUnits,
-            String currency,
-            String destinationRail,
-            String network,
-            String destinationPhoneOrAccount,
-            String delegatedToken
-    ) {
-        this(idempotencyKey, "partner_jumiapay_gh", externalCustomerId, amountMinorUnits,
-                currency, destinationRail, destinationPhoneOrAccount, kycTier);
-    }
 }

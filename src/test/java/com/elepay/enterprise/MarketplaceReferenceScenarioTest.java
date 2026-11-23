@@ -20,33 +20,33 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 /**
- * End-to-End Jumia 17-Step Flagship Reference Scenario Automated Verification Suite.
+ * End-to-End Marketplace 17-Step Flagship Reference Scenario Automated Verification Suite.
  *
  * <p><strong>Isolated test integration.</strong> The customer wallet is an in-memory test double
- * ({@link InMemoryModeAWalletSimulator}); this is not a JumiaPay partnership or live connection.
+ * ({@link InMemoryModeAWalletSimulator}); this is not a partnership or live connection with any enterprise.
  *
  * <p>Executes the complete 17-step embedded finance lifecycle:
  * <ol>
  *   <li>Step 1: Enterprise onboarding & API credential issue.</li>
  *   <li>Step 2: Sub-merchant bulk provisioning (10 merchants).</li>
- *   <li>Step 3: JumiaPay external wallet mode configuration.</li>
+ *   <li>Step 3: test wallet external wallet mode configuration.</li>
  *   <li>Step 4: Customer places GH₵1,520 cart across 10 merchants.</li>
- *   <li>Step 5: External payment collected via JumiaPay.</li>
+ *   <li>Step 5: External payment collected via test wallet.</li>
  *   <li>Step 6: Split calculation with nested commissions & delivery fees.</li>
  *   <li>Step 7: Ingestion & ledger journal entry posting (total credits == total debits).</li>
  *   <li>Step 8: Funds held in conditional settlement escrow.</li>
  *   <li>Step 9: Delivery confirmed for 8 merchants.</li>
  *   <li>Step 10: Missing delivery confirmation for 1 merchant (held in escrow).</li>
  *   <li>Step 11: 1 merchant item rejected/cancelled -> GH₵300 item-level refund initiated.</li>
- *   <li>Step 12: Refund instructed to JumiaPay connector.</li>
- *   <li>Step 13: Customer requests withdrawal of GH₵300 from Jumia wallet to MTN MoMo.</li>
+ *   <li>Step 12: Refund instructed to test wallet connector.</li>
+ *   <li>Step 13: Customer requests withdrawal of GH₵300 from Marketplace wallet to MTN MoMo.</li>
  *   <li>Step 14: Withdrawal authorization & domestic MoMo payout execution.</li>
  *   <li>Step 15: Settlement released for delivered items to merchant available balances.</li>
  *   <li>Step 16: Payout batch executed to merchants.</li>
  *   <li>Step 17: End-of-day 10-way reconciliation & audit proof.</li>
  * </ol>
  */
-class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
+class MarketplaceReferenceScenarioTest extends PostgresTestBase {
 
     @Autowired
     private EnterpriseManagedAccountService enterpriseService;
@@ -67,7 +67,7 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
     private EnterpriseTreasuryService treasuryService;
 
     /** Isolated test connector: wraps an in-memory wallet double, never the production adapter. */
-    private JumiaPayConnectorAdapter jumiaPayConnector;
+    private ResilientWalletConnector walletConnector;
 
     private InMemoryModeAWalletSimulator walletSimulator;
 
@@ -95,26 +95,26 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
     @BeforeEach
     void setup() {
         walletSimulator = new InMemoryModeAWalletSimulator(tokenService, webhookVerifier);
-        jumiaPayConnector = new JumiaPayConnectorAdapter(walletSimulator, webhookSigner, reconHandler);
+        walletConnector = new ResilientWalletConnector(walletSimulator, webhookSigner, reconHandler, 0L);
         deliveryPartnerId = UUID.randomUUID();
-        externalCustomerId = "jumia_cust_kofi_mensah";
-        orderReference = "JUMIA-GH-ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        externalCustomerId = "marketplace_cust_kofi_mensah";
+        orderReference = "MARKETPLACE-GH-ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
     }
 
     @Test
-    @DisplayName("Complete End-to-End Execution of the Jumia 17-Step Flagship Scenario")
-    void testFullJumia17StepReferenceScenario() {
+    @DisplayName("Complete End-to-End Execution of the Marketplace 17-Step Flagship Scenario")
+    void testFullMarketplace17StepReferenceScenario() {
 
         // =========================================================================
         // Step 1: Enterprise Onboarding & API Credential Issue
         // =========================================================================
-        String enterpriseCode = "JUMIA-GH-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        String enterpriseCode = "MARKETPLACE-GH-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
         enterprise = enterpriseService.registerEnterprise(
                 enterpriseCode,
-                "Jumia Ghana Marketplace",
-                "marketplace-ops@jumia.com.gh",
+                "Marketplace Ghana Marketplace",
+                "marketplace-ops@marketplace.com.gh",
                 "+233302123456",
-                "https://api.jumia.com.gh/elepay/webhooks"
+                "https://api.marketplace.com.gh/elepay/webhooks"
         );
         assertThat(enterprise).isNotNull();
         assertThat(enterprise.id()).isNotNull();
@@ -123,13 +123,13 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         // Set up segregated treasury accounts & prefund liquidity buffer (GH₵ 10,000.00 = 1,000,000 pesewas)
         treasuryService.setupEnterpriseTreasury(enterprise.id(), "GHS");
 
-        // Register JumiaPay partner credentials
+        // Register test wallet partner credentials
         tokenService.registerPartner(PartnerAuthCredentials.create(
-                "partner_jumiapay_gh",
-                "Jumia Ghana Marketplace",
-                "jumia_client_id_001",
-                "jumia_client_secret_xyz",
-                "jumia_signing_key_2026",
+                "partner_test_wallet",
+                "Marketplace Ghana Marketplace",
+                "marketplace_client_id_001",
+                "marketplace_client_secret_xyz",
+                "marketplace_signing_key_2026",
                 Set.of(PartnerScope.values())
         ));
 
@@ -147,16 +147,16 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         // Step 2: Sub-Merchant Bulk Provisioning (10 merchants)
         // =========================================================================
         List<CreateManagedAccountRequest> merchantRequests = List.of(
-                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_tech_01").accountType("merchant").displayName("TechGadgets Ltd").phone("+233241000001").email("tech@jumia.gh").nationalId("GHA-001").initialTier(3).currency("GHS").metadata(Map.of("category", "ELECTRONICS")).duplicateAction(DuplicateAction.FLAG).build(),
-                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_fash_02").accountType("merchant").displayName("Accra Trends").phone("+233241000002").email("fash@jumia.gh").nationalId("GHA-002").initialTier(2).currency("GHS").metadata(Map.of("category", "FASHION")).duplicateAction(DuplicateAction.FLAG).build(),
-                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_beau_03").accountType("merchant").displayName("Shea Luxe").phone("+233241000003").email("beau@jumia.gh").nationalId("GHA-003").initialTier(2).currency("GHS").metadata(Map.of("category", "BEAUTY")).duplicateAction(DuplicateAction.FLAG).build(),
-                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_groc_04").accountType("merchant").displayName("Fresh Harvest").phone("+233241000004").email("groc@jumia.gh").nationalId("GHA-004").initialTier(1).currency("GHS").metadata(Map.of("category", "GROCERIES")).duplicateAction(DuplicateAction.FLAG).build(),
-                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_appl_05").accountType("merchant").displayName("Apex Appliances").phone("+233241000005").email("appl@jumia.gh").nationalId("GHA-005").initialTier(2).currency("GHS").metadata(Map.of("category", "HOME")).duplicateAction(DuplicateAction.FLAG).build(),
-                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_book_06").accountType("merchant").displayName("Scholastic Books").phone("+233241000006").email("book@jumia.gh").nationalId("GHA-006").initialTier(1).currency("GHS").metadata(Map.of("category", "BOOKS")).duplicateAction(DuplicateAction.FLAG).build(),
-                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_auto_07").accountType("merchant").displayName("MotorWorks Ghana").phone("+233241000007").email("auto@jumia.gh").nationalId("GHA-007").initialTier(2).currency("GHS").metadata(Map.of("category", "AUTOMOTIVE")).duplicateAction(DuplicateAction.FLAG).build(),
-                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_spor_08").accountType("merchant").displayName("Fitness Pro").phone("+233241000008").email("spor@jumia.gh").nationalId("GHA-008").initialTier(1).currency("GHS").metadata(Map.of("category", "SPORTS")).duplicateAction(DuplicateAction.FLAG).build(),
-                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_toys_09").accountType("merchant").displayName("Kids World").phone("+233241000009").email("toys@jumia.gh").nationalId("GHA-009").initialTier(1).currency("GHS").metadata(Map.of("category", "TOYS")).duplicateAction(DuplicateAction.FLAG).build(),
-                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_offi_10").accountType("merchant").displayName("Stationery Express").phone("+233241000010").email("offi@jumia.gh").nationalId("GHA-010").initialTier(1).currency("GHS").metadata(Map.of("category", "OFFICE")).duplicateAction(DuplicateAction.FLAG).build()
+                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_tech_01").accountType("merchant").displayName("TechGadgets Ltd").phone("+233241000001").email("tech@marketplace.gh").nationalId("GHA-001").initialTier(3).currency("GHS").metadata(Map.of("category", "ELECTRONICS")).duplicateAction(DuplicateAction.FLAG).build(),
+                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_fash_02").accountType("merchant").displayName("Accra Trends").phone("+233241000002").email("fash@marketplace.gh").nationalId("GHA-002").initialTier(2).currency("GHS").metadata(Map.of("category", "FASHION")).duplicateAction(DuplicateAction.FLAG).build(),
+                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_beau_03").accountType("merchant").displayName("Shea Luxe").phone("+233241000003").email("beau@marketplace.gh").nationalId("GHA-003").initialTier(2).currency("GHS").metadata(Map.of("category", "BEAUTY")).duplicateAction(DuplicateAction.FLAG).build(),
+                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_groc_04").accountType("merchant").displayName("Fresh Harvest").phone("+233241000004").email("groc@marketplace.gh").nationalId("GHA-004").initialTier(1).currency("GHS").metadata(Map.of("category", "GROCERIES")).duplicateAction(DuplicateAction.FLAG).build(),
+                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_appl_05").accountType("merchant").displayName("Apex Appliances").phone("+233241000005").email("appl@marketplace.gh").nationalId("GHA-005").initialTier(2).currency("GHS").metadata(Map.of("category", "HOME")).duplicateAction(DuplicateAction.FLAG).build(),
+                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_book_06").accountType("merchant").displayName("Scholastic Books").phone("+233241000006").email("book@marketplace.gh").nationalId("GHA-006").initialTier(1).currency("GHS").metadata(Map.of("category", "BOOKS")).duplicateAction(DuplicateAction.FLAG).build(),
+                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_auto_07").accountType("merchant").displayName("MotorWorks Ghana").phone("+233241000007").email("auto@marketplace.gh").nationalId("GHA-007").initialTier(2).currency("GHS").metadata(Map.of("category", "AUTOMOTIVE")).duplicateAction(DuplicateAction.FLAG).build(),
+                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_spor_08").accountType("merchant").displayName("Fitness Pro").phone("+233241000008").email("spor@marketplace.gh").nationalId("GHA-008").initialTier(1).currency("GHS").metadata(Map.of("category", "SPORTS")).duplicateAction(DuplicateAction.FLAG).build(),
+                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_toys_09").accountType("merchant").displayName("Kids World").phone("+233241000009").email("toys@marketplace.gh").nationalId("GHA-009").initialTier(1).currency("GHS").metadata(Map.of("category", "TOYS")).duplicateAction(DuplicateAction.FLAG).build(),
+                CreateManagedAccountRequest.builder().enterpriseId(enterprise.id()).externalCustomerId("m_offi_10").accountType("merchant").displayName("Stationery Express").phone("+233241000010").email("offi@marketplace.gh").nationalId("GHA-010").initialTier(1).currency("GHS").metadata(Map.of("category", "OFFICE")).duplicateAction(DuplicateAction.FLAG).build()
         );
 
         BulkCreateResult bulkResult = enterpriseService.createAccountsBulk(
@@ -173,17 +173,17 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         assertThat(subMerchants).hasSize(10);
 
         // =========================================================================
-        // Step 3: JumiaPay External Wallet Mode Configuration
+        // Step 3: test wallet External Wallet Mode Configuration
         // =========================================================================
-        assertThat(jumiaPayConnector.getConnectorId()).isEqualTo("jumiapay-gh-v1");
-        assertThat(jumiaPayConnector.getConnectorType()).isEqualTo("JUMIAPAY");
+        assertThat(walletConnector.getConnectorId()).isEqualTo("test-wallet-v1");
+        assertThat(walletConnector.getConnectorType()).isEqualTo("EXTERNAL_WALLET");
 
-        // Seed customer's external wallet balance on JumiaPay: GH₵ 2,500.00 (250,000 pesewas)
+        // Seed customer's external wallet balance on test wallet: GH₵ 2,500.00 (250,000 pesewas)
         long initialCustomerWalletPesewas = 250_000L;
         walletSimulator.seedCustomerBalance(externalCustomerId, initialCustomerWalletPesewas);
 
-        var balanceCheck = jumiaPayConnector.queryWalletBalance(
-                new ExternalBalanceQueryRequest("partner_jumiapay_gh", externalCustomerId, "GHS")
+        var balanceCheck = walletConnector.queryWalletBalance(
+                new ExternalBalanceQueryRequest("partner_test_wallet", externalCustomerId, "GHS")
         );
         assertThat(balanceCheck.availableBalance()).isEqualTo(initialCustomerWalletPesewas);
 
@@ -225,15 +225,15 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         );
 
         // =========================================================================
-        // Step 5: External Payment Collected via JumiaPay
+        // Step 5: External Payment Collected via test wallet
         // =========================================================================
         String authIdempotency = "AUTH-IDEM-" + orderReference;
         String canonical = externalCustomerId + ":" + totalOrderPesewas + ":GHS:" + orderReference;
-        String authSig = com.elepay.common.HmacVerification.computeHex("jumia_signing_key_2026", canonical);
+        String authSig = com.elepay.common.HmacVerification.computeHex("marketplace_signing_key_2026", canonical);
 
-        var authResult = jumiaPayConnector.authorizePayment(new ExternalPaymentAuthRequest(
+        var authResult = walletConnector.authorizePayment(new ExternalPaymentAuthRequest(
                 authIdempotency,
-                "partner_jumiapay_gh",
+                "partner_test_wallet",
                 orderReference,
                 externalCustomerId,
                 totalOrderPesewas,
@@ -242,7 +242,7 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         ));
         assertThat(authResult.isSuccessful()).isTrue();
 
-        var captureResult = jumiaPayConnector.capturePayment(new ExternalPaymentCaptureRequest(
+        var captureResult = walletConnector.capturePayment(new ExternalPaymentCaptureRequest(
                 "CAP-IDEM-" + orderReference,
                 authResult.authorizationId(),
                 totalOrderPesewas,
@@ -251,9 +251,9 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         ));
         assertThat(captureResult.isSuccessful()).isTrue();
 
-        // Customer wallet in JumiaPay is debited: 250,000 - 152,000 = 98,000 pesewas
-        long remainingWalletPesewas = jumiaPayConnector.queryWalletBalance(
-                new ExternalBalanceQueryRequest("partner_jumiapay_gh", externalCustomerId, "GHS")
+        // Customer wallet in test wallet is debited: 250,000 - 152,000 = 98,000 pesewas
+        long remainingWalletPesewas = walletConnector.queryWalletBalance(
+                new ExternalBalanceQueryRequest("partner_test_wallet", externalCustomerId, "GHS")
         ).availableBalance();
         assertThat(remainingWalletPesewas).isEqualTo(98_000L);
 
@@ -274,7 +274,7 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         // =========================================================================
         // Step 7: Ingestion & Ledger Journal Entry Posting (Total Credits == Total Debits)
         // =========================================================================
-        String clearingCode = "system:clearing:jumiapay:GHS";
+        String clearingCode = "system:clearing:test_wallet:GHS";
         long clearingBefore = ledger.balance(clearingCode);
         long platformRevenueBefore = ledger.balance(Ledger.REVENUE);
 
@@ -283,8 +283,8 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
                         "IDEM-" + orderReference,
                         enterprise.id(),
                         orderReference,
-                        "jumiapay_auth_ref",
-                        "jumiapay",
+                        "test_wallet_auth_ref",
+                        "test_wallet",
                         "GHS",
                         totalOrderPesewas,
                         cartItems,
@@ -373,11 +373,13 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         ).describedAs("Item level refund reversal for TechGadgets Wireless Headphones"));
 
         // =========================================================================
-        // Step 12: Refund Instructed to JumiaPay Connector
+        // Step 12: Refund Instructed to test wallet Connector
         // =========================================================================
-        var refundResult = jumiaPayConnector.refundToWallet(new ExternalWalletRefundRequest(
+        var refundResult = walletConnector.refundToWallet(new ExternalWalletRefundRequest(
                 "REF-IDEM-" + orderReference,
+                "partner_test_wallet",
                 captureResult.captureId(),
+                "TX-REF-" + orderReference,
                 externalCustomerId,
                 30_000L, // GH₵ 300.00
                 "GHS",
@@ -386,19 +388,19 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         ));
         assertThat(refundResult.isSuccessful()).isTrue();
 
-        // Customer wallet balance in JumiaPay credited back by GH₵300: 98,000 + 30,000 = 128,000 pesewas
-        long walletAfterRefund = jumiaPayConnector.queryWalletBalance(
-                new ExternalBalanceQueryRequest("partner_jumiapay_gh", externalCustomerId, "GHS")
+        // Customer wallet balance in test wallet credited back by GH₵300: 98,000 + 30,000 = 128,000 pesewas
+        long walletAfterRefund = walletConnector.queryWalletBalance(
+                new ExternalBalanceQueryRequest("partner_test_wallet", externalCustomerId, "GHS")
         ).availableBalance();
         assertThat(walletAfterRefund).isEqualTo(128_000L);
 
         // =========================================================================
-        // Step 13: Customer Requests Withdrawal of GH₵300 from Jumia Wallet to MTN MoMo
+        // Step 13: Customer Requests Withdrawal of GH₵300 from Marketplace Wallet to MTN MoMo
         // =========================================================================
         String customerMtnPhone = "+233241234567";
         var withdrawalRequest = new ExternalWalletWithdrawalRequest(
                 "WITHDRAW-IDEM-" + UUID.randomUUID().toString().substring(0, 8),
-                "partner_jumiapay_gh",
+                "partner_test_wallet",
                 externalCustomerId,
                 30_000L, // GH₵ 300.00
                 "GHS",
@@ -416,13 +418,13 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         );
         assertThat(withdrawFundingCheck.hasShortfall()).isFalse();
 
-        var withdrawalResult = jumiaPayConnector.requestWithdrawal(withdrawalRequest);
+        var withdrawalResult = walletConnector.requestWithdrawal(withdrawalRequest);
         assertThat(withdrawalResult.isSuccessful()).isTrue();
         assertThat(withdrawalResult.state()).isEqualTo("SUBMITTED");
 
-        // Customer wallet in JumiaPay is debited: 128,000 - 30,000 = 98,000 pesewas
-        long walletAfterWithdrawal = jumiaPayConnector.queryWalletBalance(
-                new ExternalBalanceQueryRequest("partner_jumiapay_gh", externalCustomerId, "GHS")
+        // Customer wallet in test wallet is debited: 128,000 - 30,000 = 98,000 pesewas
+        long walletAfterWithdrawal = walletConnector.queryWalletBalance(
+                new ExternalBalanceQueryRequest("partner_test_wallet", externalCustomerId, "GHS")
         ).availableBalance();
         assertThat(walletAfterWithdrawal).isEqualTo(98_000L);
 
@@ -510,7 +512,7 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
         // 6. Merchant payout batch executed matching exactly the delivered sellers
         assertThat(deliveredMerchantIds).hasSize(8);
 
-        // 7. Refund correctly instructed and credited to Jumia wallet
+        // 7. Refund correctly instructed and credited to Marketplace wallet
         assertThat(refundResult.refundedAmountMinorUnits()).isEqualTo(30_000L);
 
         // 8. Customer MoMo withdrawal authorized and executed
@@ -527,10 +529,10 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
                 new SftpReconRecord("TX-WITHDRAW-KOFI", "WD-" + orderReference, enterprise.id(), "WITHDRAWAL", 30_000L, 30_000L, 0L, "PAID_OUT", LocalDate.now())
         );
 
-        String reconFile = jumiaPayConnector.generateDailyReconciliationFile(
+        String reconFile = walletConnector.generateDailyReconciliationFile(
                 "BATCH-" + orderReference, LocalDate.now(), "GHS", reconRecords
         );
-        SftpReconBatch parsedRecon = jumiaPayConnector.parseReconciliationFile(reconFile);
+        SftpReconBatch parsedRecon = walletConnector.parseReconciliationFile(reconFile);
         assertThat(parsedRecon).isNotNull();
         assertThat(parsedRecon.totalRecords()).isEqualTo(3);
         assertThat(parsedRecon.totalGrossPesewas()).isEqualTo(212_000L);

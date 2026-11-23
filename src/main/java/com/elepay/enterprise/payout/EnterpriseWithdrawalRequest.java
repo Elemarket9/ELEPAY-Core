@@ -4,7 +4,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Customer withdrawal request from an enterprise-owned wallet (e.g. JumiaPay refund) to domestic payout rails (MTN MoMo, Bank).
+ * Customer withdrawal request from an enterprise-owned wallet (e.g. a refund credited there) to domestic payout rails (MTN MoMo, Bank).
  */
 public record EnterpriseWithdrawalRequest(
         String idempotencyKey,

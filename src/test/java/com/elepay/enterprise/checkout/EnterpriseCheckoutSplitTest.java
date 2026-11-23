@@ -17,7 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
  *
  * <p>Verifies:
  * <ul>
- *   <li>10-sub-merchant checkout ingestion and multi-tier splitting (e.g. Jumia GH₵1,520 order)</li>
+ *   <li>10-sub-merchant checkout ingestion and multi-tier splitting (e.g. Marketplace GH₵1,520 order)</li>
  *   <li>Delivery partner fulfillment fees and marketplace commission deductions</li>
  *   <li>Strict conservation of money: {@code totalPesewas == sum(allocations)}</li>
  *   <li>Integer minor-unit arithmetic throughout; deterministic largest-remainder distribution</li>
@@ -51,7 +51,7 @@ class EnterpriseCheckoutSplitTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Flagship Acceptance Scenario: Jumia order with GH₵1,520 across 10 sub-merchants and delivery partner")
+    @DisplayName("Flagship Acceptance Scenario: Marketplace order with GH₵1,520 across 10 sub-merchants and delivery partner")
     void testTenMerchantSplitWithExactConservationAndLedgerPosting() {
         // Total order = GH₵1,520.00 = 152,000 pesewas
         // 10 sub-merchants selling products totaling GH₵1,470.00 = 147,000 pesewas
@@ -102,9 +102,9 @@ class EnterpriseCheckoutSplitTest extends PostgresTestBase {
         );
 
         String idempotencyKey = "EP-IDEMP-" + UUID.randomUUID();
-        String orderRef = "JUMIA-ORD-" + System.currentTimeMillis();
-        String paymentRef = "JUMIAPAY-TXN-GH-" + System.currentTimeMillis();
-        String channel = "JUMIAPAY_WALLET";
+        String orderRef = "MARKETPLACE-ORD-" + System.currentTimeMillis();
+        String paymentRef = "WALLET-TXN-GH-" + System.currentTimeMillis();
+        String channel = "ENTERPRISE_WALLET";
         String clearingAccount = "system:clearing:" + channel.toLowerCase() + ":GHS";
         long initialClearingBalance = ledger.balance(clearingAccount);
 
@@ -118,7 +118,7 @@ class EnterpriseCheckoutSplitTest extends PostgresTestBase {
                 totalOrderPesewas,
                 items,
                 deliveryAllocations,
-                Map.of("platform", "JUMIA_GHANA", "channel", "WEB")
+                Map.of("platform", "MARKETPLACE_GHANA", "channel", "WEB")
         );
 
         // Execute Ingestion & Multi-Merchant Split
@@ -400,7 +400,7 @@ class EnterpriseCheckoutSplitTest extends PostgresTestBase {
 
         EnterpriseCheckoutPaymentRequest req = new EnterpriseCheckoutPaymentRequest(
                 "IDEMP-" + UUID.randomUUID(), enterpriseMarketplaceId, orderRef, "PAY-REF-01",
-                "JUMIAPAY_WALLET", Ledger.GHS, amount, items, List.of(), Map.of()
+                "ENTERPRISE_WALLET", Ledger.GHS, amount, items, List.of(), Map.of()
         );
 
         EnterpriseCheckoutResult ingested = checkoutService.ingestExternalPayment(req);

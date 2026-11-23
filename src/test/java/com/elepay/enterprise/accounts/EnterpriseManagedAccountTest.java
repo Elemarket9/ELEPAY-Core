@@ -22,31 +22,31 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
     @Autowired
     private Ledger ledger;
 
-    private Enterprise jumiaEnterprise;
+    private Enterprise marketplaceEnterprise;
 
     @BeforeEach
     void setUp() {
-        String code = "JUMIA_" + UUID.randomUUID().toString().substring(0, 8);
-        jumiaEnterprise = accountService.registerEnterprise(
+        String code = "MARKETPLACE_" + UUID.randomUUID().toString().substring(0, 8);
+        marketplaceEnterprise = accountService.registerEnterprise(
                 code,
-                "Jumia Ghana Marketplace",
+                "Marketplace Ghana Marketplace",
                 "finance@" + code.toLowerCase() + ".com",
                 "0241000001",
-                "https://api.jumia.com.gh/webhooks/elepay"
+                "https://api.marketplace.com.gh/webhooks/elepay"
         );
     }
 
     @Test
     @DisplayName("Enterprise registration initializes default tier limits and clearing accounts")
     void enterpriseRegistrationInitializesDefaults() {
-        assertThat(jumiaEnterprise).isNotNull();
-        assertThat(jumiaEnterprise.id()).isNotNull();
-        assertThat(jumiaEnterprise.isActive()).isTrue();
+        assertThat(marketplaceEnterprise).isNotNull();
+        assertThat(marketplaceEnterprise.id()).isNotNull();
+        assertThat(marketplaceEnterprise.isActive()).isTrue();
 
         // Verify tier limits 1, 2, 3 exist
-        EnterpriseTierLimit t1 = accountService.getTierLimit(jumiaEnterprise.id(), 1);
-        EnterpriseTierLimit t2 = accountService.getTierLimit(jumiaEnterprise.id(), 2);
-        EnterpriseTierLimit t3 = accountService.getTierLimit(jumiaEnterprise.id(), 3);
+        EnterpriseTierLimit t1 = accountService.getTierLimit(marketplaceEnterprise.id(), 1);
+        EnterpriseTierLimit t2 = accountService.getTierLimit(marketplaceEnterprise.id(), 2);
+        EnterpriseTierLimit t3 = accountService.getTierLimit(marketplaceEnterprise.id(), 3);
 
         assertThat(t1.maxBalance()).isEqualTo(100_000L);
         assertThat(t2.maxBalance()).isEqualTo(1_000_000L);
@@ -54,19 +54,19 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
 
         // Verify custom tier configuration
         EnterpriseTierLimit custom = accountService.configureTierLimit(
-                jumiaEnterprise.id(), 1, 150_000L, 120_000L, 1_500_000L, 120_000L
+                marketplaceEnterprise.id(), 1, 150_000L, 120_000L, 1_500_000L, 120_000L
         );
         assertThat(custom.maxBalance()).isEqualTo(150_000L);
-        assertThat(accountService.getTierLimit(jumiaEnterprise.id(), 1).maxBalance()).isEqualTo(150_000L);
+        assertThat(accountService.getTierLimit(marketplaceEnterprise.id(), 1).maxBalance()).isEqualTo(150_000L);
     }
 
     @Test
     @DisplayName("Single account creation generates deterministic identity mapping and ledger subaccounts")
     void createAccountGeneratesDeterministicMappingAndLedgerSubaccounts() {
-        String externalId = "JUMIA-CUST-" + UUID.randomUUID().toString().substring(0, 8);
+        String externalId = "MARKETPLACE-CUST-" + UUID.randomUUID().toString().substring(0, 8);
 
         CreateManagedAccountRequest req = CreateManagedAccountRequest.builder()
-                .enterpriseId(jumiaEnterprise.id())
+                .enterpriseId(marketplaceEnterprise.id())
                 .externalCustomerId(externalId)
                 .displayName("Kofi Mensah")
                 .phone("0244123456")
@@ -74,13 +74,13 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
                 .nationalId("GHA-123456789-1")
                 .initialTier(1)
                 .currency("GHS")
-                .metadata(Map.of("jumia_tier", "gold"))
+                .metadata(Map.of("marketplace_tier", "gold"))
                 .build();
 
         EnterpriseManagedAccount account = accountService.createAccount(req);
 
         assertThat(account).isNotNull();
-        assertThat(account.enterpriseId()).isEqualTo(jumiaEnterprise.id());
+        assertThat(account.enterpriseId()).isEqualTo(marketplaceEnterprise.id());
         assertThat(account.externalCustomerId()).isEqualTo(externalId);
         assertThat(account.displayName()).isEqualTo("Kofi Mensah");
         assertThat(account.phone()).isEqualTo("233244123456");
@@ -90,14 +90,14 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
         assertThat(account.status()).isEqualTo("active");
 
         // Verify deterministic ID
-        UUID expectedId = accountService.deriveDeterministicAccountId(jumiaEnterprise.id(), externalId);
+        UUID expectedId = accountService.deriveDeterministicAccountId(marketplaceEnterprise.id(), externalId);
         assertThat(account.id()).isEqualTo(expectedId);
 
         // Verify identity mapping lookup
-        EnterpriseManagedAccount resolved = accountService.getAccount(jumiaEnterprise.id(), externalId);
+        EnterpriseManagedAccount resolved = accountService.getAccount(marketplaceEnterprise.id(), externalId);
         assertThat(resolved.id()).isEqualTo(account.id());
 
-        String hash = accountService.computeIdentityHash(jumiaEnterprise.id(), externalId);
+        String hash = accountService.computeIdentityHash(marketplaceEnterprise.id(), externalId);
         EnterpriseManagedAccount byHash = accountService.findAccountByIdentityHash(hash).orElseThrow();
         assertThat(byHash.id()).isEqualTo(account.id());
 
@@ -110,16 +110,16 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
         assertThat(balances.total()).isEqualTo(0L);
 
         // Verify ledger account codes match deterministic pattern
-        String opCode = accountService.getLedgerAccountCode(jumiaEnterprise.id(), externalId, SubaccountBucket.OPERATING, "GHS");
+        String opCode = accountService.getLedgerAccountCode(marketplaceEnterprise.id(), externalId, SubaccountBucket.OPERATING, "GHS");
         assertThat(opCode).isEqualTo("enterprise_managed:" + account.id() + ":operating:GHS");
     }
 
     @Test
     @DisplayName("Create account is idempotent: repeated requests return existing account")
     void createAccountIsIdempotent() {
-        String externalId = "JUMIA-CUST-IDEMPOTENT-01";
+        String externalId = "MARKETPLACE-CUST-IDEMPOTENT-01";
         CreateManagedAccountRequest req = CreateManagedAccountRequest.builder()
-                .enterpriseId(jumiaEnterprise.id())
+                .enterpriseId(marketplaceEnterprise.id())
                 .externalCustomerId(externalId)
                 .displayName("Ama Serwaa")
                 .phone("0201112233")
@@ -141,7 +141,7 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
         String nationalId = "GHA-999888777-2";
 
         CreateManagedAccountRequest primary = CreateManagedAccountRequest.builder()
-                .enterpriseId(jumiaEnterprise.id())
+                .enterpriseId(marketplaceEnterprise.id())
                 .externalCustomerId("PRIMARY-001")
                 .displayName("Original Customer")
                 .phone(phone)
@@ -153,7 +153,7 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
 
         // 1. Duplicate phone with FLAG action -> created with flagged_duplicate status
         CreateManagedAccountRequest dupPhone = CreateManagedAccountRequest.builder()
-                .enterpriseId(jumiaEnterprise.id())
+                .enterpriseId(marketplaceEnterprise.id())
                 .externalCustomerId("DUP-PHONE-002")
                 .displayName("Duplicate Phone")
                 .phone(phone)
@@ -175,7 +175,7 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
 
         // 3. Duplicate email with REJECT action -> throws ApiException conflict
         CreateManagedAccountRequest dupEmail = CreateManagedAccountRequest.builder()
-                .enterpriseId(jumiaEnterprise.id())
+                .enterpriseId(marketplaceEnterprise.id())
                 .externalCustomerId("DUP-EMAIL-003")
                 .displayName("Duplicate Email")
                 .email(email)
@@ -187,7 +187,7 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
 
         // 4. Duplicate national ID with REJECT action -> throws ApiException conflict
         CreateManagedAccountRequest dupNid = CreateManagedAccountRequest.builder()
-                .enterpriseId(jumiaEnterprise.id())
+                .enterpriseId(marketplaceEnterprise.id())
                 .externalCustomerId("DUP-NID-004")
                 .displayName("Duplicate National ID")
                 .nationalId(nationalId)
@@ -203,19 +203,19 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
     void bulkAccountCreation() {
         List<CreateManagedAccountRequest> batch = List.of(
                 CreateManagedAccountRequest.builder()
-                        .enterpriseId(jumiaEnterprise.id())
+                        .enterpriseId(marketplaceEnterprise.id())
                         .externalCustomerId("BULK-001")
                         .displayName("Bulk User 1")
                         .phone("0240000001")
                         .build(),
                 CreateManagedAccountRequest.builder()
-                        .enterpriseId(jumiaEnterprise.id())
+                        .enterpriseId(marketplaceEnterprise.id())
                         .externalCustomerId("BULK-002")
                         .displayName("Bulk User 2")
                         .phone("0240000002")
                         .build(),
                 CreateManagedAccountRequest.builder()
-                        .enterpriseId(jumiaEnterprise.id())
+                        .enterpriseId(marketplaceEnterprise.id())
                         .externalCustomerId("BULK-003")
                         .displayName("Bulk User 3 (Duplicate Phone)")
                         .phone("0240000001") // duplicate with BULK-001
@@ -224,7 +224,7 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
         );
 
         BulkCreateAccountsRequest bulkReq = new BulkCreateAccountsRequest(
-                jumiaEnterprise.id(), batch, DuplicateAction.FLAG
+                marketplaceEnterprise.id(), batch, DuplicateAction.FLAG
         );
 
         BulkCreateResult result = accountService.createAccountsBulk(bulkReq);
@@ -244,10 +244,10 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
     @Test
     @DisplayName("KYC Tier synchronization updates tier limits and enforces maximum balance rules")
     void kycTierSynchronizationEnforcesLimits() {
-        String externalId = "JUMIA-KYC-SYNC-01";
+        String externalId = "MARKETPLACE-KYC-SYNC-01";
         EnterpriseManagedAccount account = accountService.createAccount(
                 CreateManagedAccountRequest.builder()
-                        .enterpriseId(jumiaEnterprise.id())
+                        .enterpriseId(marketplaceEnterprise.id())
                         .externalCustomerId(externalId)
                         .displayName("Kwame Nkrumah")
                         .initialTier(1)
@@ -279,10 +279,10 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
     @Test
     @DisplayName("Double-entry subaccount lifecycle: operating, reserved, holding, and rewards")
     void doubleEntrySubaccountLifecycleAndConservationOfMoney() {
-        String externalId = "JUMIA-LIFECYCLE-01";
+        String externalId = "MARKETPLACE-LIFECYCLE-01";
         EnterpriseManagedAccount account = accountService.createAccount(
                 CreateManagedAccountRequest.builder()
-                        .enterpriseId(jumiaEnterprise.id())
+                        .enterpriseId(marketplaceEnterprise.id())
                         .externalCustomerId(externalId)
                         .displayName("Esi Taylor")
                         .initialTier(2)
@@ -334,7 +334,7 @@ class EnterpriseManagedAccountTest extends PostgresTestBase {
 
         // 6. Award GH₵20 (2,000 pesewas) rewards points
         accountService.creditRewards(
-                account.id(), 2_000L, "GHS", "tx-reward-01", "Jumia loyalty cashback"
+                account.id(), 2_000L, "GHS", "tx-reward-01", "Marketplace loyalty cashback"
         );
         SubaccountBalances b6 = accountService.getSubaccountBalances(account.id(), "GHS");
         assertThat(b6.rewards()).isEqualTo(2_000L);

@@ -12,15 +12,14 @@ import java.util.concurrent.ConcurrentHashMap;
  * TEST-ONLY in-memory stand-in for an enterprise-owned (Mode A) customer wallet.
  *
  * <p>This class lives in test sources on purpose. It keeps customer balances in memory and returns
- * locally generated success results, so it must never be packaged into production. It reuses the
- * {@code jumiapay-gh-v1} connector id only so the isolated reference scenario exercises the same
- * routing path; it does not implement, and must not be presented as, the real JumiaPay API.
+ * locally generated success results, so it must never be packaged into production. It represents
+ * no real provider: ELEPAY is provider-neutral and ships no partner-specific wallet adapter.
  */
 public class InMemoryModeAWalletSimulator implements ExternalWalletConnector {
 
-    public static final String CONNECTOR_ID = "jumiapay-gh-v1";
-    public static final String PROVIDER_NAME = "Isolated test Mode A wallet simulator (not a JumiaPay connection)";
-    public static final String DEFAULT_PARTNER_ID = "partner_jumiapay_gh";
+    public static final String CONNECTOR_ID = "test-wallet-v1";
+    public static final String PROVIDER_NAME = "Isolated test Mode A wallet simulator";
+    public static final String DEFAULT_PARTNER_ID = "partner_test_wallet";
 
     // Tier limits in minor units (Ghana Pesewas)
     public static final long BOG_TIER_1_LIMIT_PESEWAS = 100_000L;   // GH₵ 1,000.00
@@ -67,7 +66,7 @@ public class InMemoryModeAWalletSimulator implements ExternalWalletConnector {
     }
 
     /**
-     * Seeds or updates an external customer wallet balance in JumiaPay.
+     * Seeds or updates an external customer wallet balance in test wallet.
      */
     public void seedCustomerBalance(String externalCustomerId, long balanceMinorUnits) {
         externalCustomerBalances.put(externalCustomerId, balanceMinorUnits);
@@ -139,7 +138,7 @@ public class InMemoryModeAWalletSimulator implements ExternalWalletConnector {
             );
         }
 
-        // Cryptographic signature verification of JumiaPay authorization
+        // Cryptographic signature verification of test wallet authorization
         String expectedCanonical = request.externalCustomerId() + ":" + request.amountMinorUnits()
                 + ":" + request.currency().toUpperCase() + ":" + request.transactionReference();
 
@@ -156,12 +155,12 @@ public class InMemoryModeAWalletSimulator implements ExternalWalletConnector {
             );
         }
 
-        // Verify customer has sufficient balance in JumiaPay external wallet
+        // Verify customer has sufficient balance in test wallet external wallet
         long currentBalance = externalCustomerBalances.getOrDefault(request.externalCustomerId(), 0L);
         if (currentBalance < request.amountMinorUnits()) {
             throw new EnterpriseWalletException(
                     EnterpriseWalletException.ErrorCode.INSUFFICIENT_FUNDS,
-                    "Insufficient external balance in JumiaPay: available=" + currentBalance + ", required=" + request.amountMinorUnits(),
+                    "Insufficient external balance in test wallet: available=" + currentBalance + ", required=" + request.amountMinorUnits(),
                     400
             );
         }
@@ -194,7 +193,7 @@ public class InMemoryModeAWalletSimulator implements ExternalWalletConnector {
                 request.transactionReference(),
                 request.amountMinorUnits(),
                 request.currency(),
-                "JUMIAPAY_CRYPTOGRAPHIC_AUTH_OK"
+                "WALLET_CRYPTOGRAPHIC_AUTH_OK"
         );
     }
 
@@ -277,7 +276,7 @@ public class InMemoryModeAWalletSimulator implements ExternalWalletConnector {
             );
         }
 
-        // Release held balance back to external JumiaPay customer
+        // Release held balance back to external test wallet customer
         long currentBalance = externalCustomerBalances.getOrDefault(auth.externalCustomerId(), 0L);
         externalCustomerBalances.put(auth.externalCustomerId(), currentBalance + auth.authorizedAmount());
 
@@ -331,7 +330,7 @@ public class InMemoryModeAWalletSimulator implements ExternalWalletConnector {
             );
         }
 
-        // Credit customer's JumiaPay wallet balance
+        // Credit customer's test wallet wallet balance
         long currentBalance = externalCustomerBalances.getOrDefault(request.externalCustomerId(), 0L);
         externalCustomerBalances.put(request.externalCustomerId(), currentBalance + request.refundAmountMinorUnits());
 
@@ -398,7 +397,7 @@ public class InMemoryModeAWalletSimulator implements ExternalWalletConnector {
             );
         }
 
-        // Validate customer has sufficient balance in JumiaPay wallet
+        // Validate customer has sufficient balance in test wallet wallet
         long available = externalCustomerBalances.getOrDefault(request.externalCustomerId(), 0L);
         if (available < request.amountMinorUnits()) {
             throw new EnterpriseWalletException(
@@ -408,7 +407,7 @@ public class InMemoryModeAWalletSimulator implements ExternalWalletConnector {
             );
         }
 
-        // Debit customer wallet balance in JumiaPay
+        // Debit customer wallet balance in test wallet
         externalCustomerBalances.put(request.externalCustomerId(), available - request.amountMinorUnits());
 
         String withdrawalId = "jpw_" + UUID.randomUUID().toString().replace("-", "");

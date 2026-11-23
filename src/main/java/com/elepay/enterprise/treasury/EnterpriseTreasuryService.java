@@ -146,7 +146,7 @@ public class EnterpriseTreasuryService {
     }
 
     /**
-     * Records an external receivable incurred when an order is collected externally (e.g. by JumiaPay).
+     * Records an external receivable incurred when an order is collected externally by the enterprise's own payment platform.
      */
     @Transactional
     public PrefundingLedgerEntry recordReceivable(UUID enterpriseId, String orderReference,

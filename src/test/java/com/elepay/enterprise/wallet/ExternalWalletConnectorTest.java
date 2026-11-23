@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Comprehensive verification of the Universal External Wallet Integration Engine:
- * - Mode A: Enterprise-owned wallet connector (JumiaPay)
+ * - Mode A: Enterprise-owned wallet connector (test wallet)
  * - Mode B: White-label wallet connector
  * - Mode C: External settlement-only connector
  * - Partner request authentication & token lifecycle management
@@ -25,15 +25,15 @@ class ExternalWalletConnectorTest {
 
     private EnterpriseTokenService tokenService;
     private HmacWebhookVerifier webhookVerifier;
-    private InMemoryModeAWalletSimulator jumiaPayAdapter;
+    private InMemoryModeAWalletSimulator modeAWallet;
     private WhiteLabelWalletConnector whiteLabelConnector;
     private ExternalSettlementConnector settlementConnector;
     private ExternalWalletEngine walletEngine;
 
-    private static final String PARTNER_ID = "partner_jumiapay_gh";
-    private static final String CLIENT_ID = "client_jumia_live";
-    private static final String CLIENT_SECRET = "sec_jumia_super_secret_9988";
-    private static final String SIGNING_KEY = "k_jumia_hmac_sha256_enterprise_signing_secret_key";
+    private static final String PARTNER_ID = "partner_test_wallet";
+    private static final String CLIENT_ID = "client_marketplace_live";
+    private static final String CLIENT_SECRET = "sec_marketplace_super_secret_9988";
+    private static final String SIGNING_KEY = "k_marketplace_hmac_sha256_enterprise_signing_secret_key";
 
     @BeforeEach
     void setUp() {
@@ -41,20 +41,20 @@ class ExternalWalletConnectorTest {
         webhookVerifier = new HmacWebhookVerifier();
         webhookVerifier.clearNonceCacheForTesting();
 
-        jumiaPayAdapter = new InMemoryModeAWalletSimulator(tokenService, webhookVerifier);
+        modeAWallet = new InMemoryModeAWalletSimulator(tokenService, webhookVerifier);
         whiteLabelConnector = new WhiteLabelWalletConnector(tokenService, webhookVerifier);
         settlementConnector = new ExternalSettlementConnector(tokenService, webhookVerifier);
 
         walletEngine = new ExternalWalletEngine(
-                List.of(jumiaPayAdapter, whiteLabelConnector, settlementConnector),
+                List.of(modeAWallet, whiteLabelConnector, settlementConnector),
                 tokenService,
                 webhookVerifier
         );
 
-        // Register default JumiaPay partner credentials
+        // Register default test wallet partner credentials
         PartnerAuthCredentials creds = PartnerAuthCredentials.create(
                 PARTNER_ID,
-                "Jumia Ghana",
+                "Marketplace Ghana",
                 CLIENT_ID,
                 CLIENT_SECRET,
                 SIGNING_KEY,
@@ -73,27 +73,27 @@ class ExternalWalletConnectorTest {
     }
 
     @Test
-    @DisplayName("Mode A: JumiaPay enterprise-owned wallet full lifecycle (Auth, Split Capture, Refund, MoMo Withdrawal)")
+    @DisplayName("Mode A: test wallet enterprise-owned wallet full lifecycle (Auth, Split Capture, Refund, MoMo Withdrawal)")
     void testModeAEnterpriseOwnedWalletIntegration() {
-        String customerId = "jumia_cust_1001";
-        // Seed external balance in JumiaPay (GH₵ 500.00 = 50,000 pesewas)
-        jumiaPayAdapter.seedCustomerBalance(customerId, 50_000L);
+        String customerId = "marketplace_cust_1001";
+        // Seed external balance in test wallet (GH₵ 500.00 = 50,000 pesewas)
+        modeAWallet.seedCustomerBalance(customerId, 50_000L);
 
         // 1. Verify connector discovery and capabilities
-        assertEquals(WalletOperatingMode.MODE_A_ENTERPRISE_OWNED, jumiaPayAdapter.getOperatingMode());
-        assertTrue(jumiaPayAdapter.getCapabilities().supportsExternalBalances());
-        assertTrue(jumiaPayAdapter.getCapabilities().supportsCryptoAuthorizations());
-        assertTrue(jumiaPayAdapter.getCapabilities().supportsItemLevelRefund());
-        assertTrue(jumiaPayAdapter.getCapabilities().supportsWithdrawals());
+        assertEquals(WalletOperatingMode.MODE_A_ENTERPRISE_OWNED, modeAWallet.getOperatingMode());
+        assertTrue(modeAWallet.getCapabilities().supportsExternalBalances());
+        assertTrue(modeAWallet.getCapabilities().supportsCryptoAuthorizations());
+        assertTrue(modeAWallet.getCapabilities().supportsItemLevelRefund());
+        assertTrue(modeAWallet.getCapabilities().supportsWithdrawals());
 
         // 2. Query initial balance
-        ExternalBalanceQueryResult balance = jumiaPayAdapter.queryWalletBalance(
+        ExternalBalanceQueryResult balance = modeAWallet.queryWalletBalance(
                 new ExternalBalanceQueryRequest(PARTNER_ID, customerId, "GHS")
         );
         assertTrue(balance.success());
         assertEquals(50_000L, balance.availableBalanceMinorUnits());
 
-        // 3. Cryptographically sign authorization payload from JumiaPay
+        // 3. Cryptographically sign authorization payload from test wallet
         String txRef = "JPA-TX-20261122-001";
         long orderAmount = 30_000L; // GH₵ 300.00
         String canonicalAuth = customerId + ":" + orderAmount + ":GHS:" + txRef;
@@ -108,16 +108,16 @@ class ExternalWalletConnectorTest {
                 orderAmount,
                 "GHS",
                 cryptoSignature,
-                Map.of("platform", "Jumia Ghana Android")
+                Map.of("platform", "Marketplace Ghana Android")
         );
 
-        ExternalPaymentAuthResult authResult = jumiaPayAdapter.authorizePayment(authRequest);
+        ExternalPaymentAuthResult authResult = modeAWallet.authorizePayment(authRequest);
         assertTrue(authResult.success());
         assertNotNull(authResult.authorizationId());
         assertEquals(PaymentExecutionState.AUTHORIZED, authResult.state());
 
-        // Verify external balance held in JumiaPay
-        ExternalBalanceQueryResult balAfterAuth = jumiaPayAdapter.queryWalletBalance(
+        // Verify external balance held in test wallet
+        ExternalBalanceQueryResult balAfterAuth = modeAWallet.queryWalletBalance(
                 new ExternalBalanceQueryRequest(PARTNER_ID, customerId, "GHS")
         );
         assertEquals(20_000L, balAfterAuth.availableBalanceMinorUnits());
@@ -137,12 +137,12 @@ class ExternalWalletConnectorTest {
                 splits
         );
 
-        ExternalPaymentCaptureResult captureResult = jumiaPayAdapter.capturePayment(captureRequest);
+        ExternalPaymentCaptureResult captureResult = modeAWallet.capturePayment(captureRequest);
         assertTrue(captureResult.success());
         assertEquals(PaymentExecutionState.CAPTURED, captureResult.state());
         assertNotNull(captureResult.captureId());
 
-        // 5. Item-level partial refund back to JumiaPay wallet (customer returned the mouse)
+        // 5. Item-level partial refund back to test wallet (customer returned the mouse)
         long refundAmount = 12_000L;
         List<RefundAllocationItem> refundItems = List.of(
                 new RefundAllocationItem("merch_elec_gh", "ITEM-MOUSE-BT", 12_000L, 1_200L, "Defective scroll wheel")
@@ -160,17 +160,17 @@ class ExternalWalletConnectorTest {
                 refundItems
         );
 
-        ExternalWalletRefundResult refundResult = jumiaPayAdapter.refundToWallet(refundRequest);
+        ExternalWalletRefundResult refundResult = modeAWallet.refundToWallet(refundRequest);
         assertTrue(refundResult.success());
         assertEquals(PaymentExecutionState.PARTIALLY_REFUNDED, refundResult.state());
 
-        // Verify customer wallet balance in JumiaPay is credited back: 20,000 + 12,000 = 32,000 pesewas
-        ExternalBalanceQueryResult balAfterRefund = jumiaPayAdapter.queryWalletBalance(
+        // Verify customer wallet balance in test wallet is credited back: 20,000 + 12,000 = 32,000 pesewas
+        ExternalBalanceQueryResult balAfterRefund = modeAWallet.queryWalletBalance(
                 new ExternalBalanceQueryRequest(PARTNER_ID, customerId, "GHS")
         );
         assertEquals(32_000L, balAfterRefund.availableBalanceMinorUnits());
 
-        // 6. Customer withdraws refund balance from JumiaPay wallet to MTN Mobile Money
+        // 6. Customer withdraws refund balance from test wallet to MTN Mobile Money
         long withdrawalAmount = 15_000L; // GH₵ 150.00 (within Tier 1 limit of GH₵ 1,000)
         ExternalWalletWithdrawalRequest withdrawRequest = new ExternalWalletWithdrawalRequest(
                 "idem_wdr_001",
@@ -183,13 +183,13 @@ class ExternalWalletConnectorTest {
                 "TIER_1"
         );
 
-        ExternalWalletWithdrawalResult withdrawResult = jumiaPayAdapter.requestWithdrawal(withdrawRequest);
+        ExternalWalletWithdrawalResult withdrawResult = modeAWallet.requestWithdrawal(withdrawRequest);
         assertTrue(withdrawResult.success());
         assertNotNull(withdrawResult.withdrawalId());
         assertEquals("SUBMITTED", withdrawResult.state());
 
         // Customer wallet balance after withdrawal: 32,000 - 15,000 = 17,000 pesewas
-        ExternalBalanceQueryResult balAfterWithdrawal = jumiaPayAdapter.queryWalletBalance(
+        ExternalBalanceQueryResult balAfterWithdrawal = modeAWallet.queryWalletBalance(
                 new ExternalBalanceQueryRequest(PARTNER_ID, customerId, "GHS")
         );
         assertEquals(17_000L, balAfterWithdrawal.availableBalanceMinorUnits());
@@ -207,7 +207,7 @@ class ExternalWalletConnectorTest {
         );
 
         EnterpriseWalletException limitEx = assertThrows(EnterpriseWalletException.class, () ->
-                jumiaPayAdapter.requestWithdrawal(overLimitWithdrawal)
+                modeAWallet.requestWithdrawal(overLimitWithdrawal)
         );
         assertEquals(EnterpriseWalletException.ErrorCode.LIMIT_EXCEEDED, limitEx.getErrorCode());
     }
@@ -372,7 +372,7 @@ class ExternalWalletConnectorTest {
         DelegatedTokenRequest delReq = new DelegatedTokenRequest(
                 PARTNER_ID,
                 "elepay_user_777",
-                "jumia_user_888",
+                "marketplace_user_888",
                 authorizedLimit,
                 "GHS",
                 Set.of(PartnerScope.WALLET_READ, PartnerScope.WALLET_AUTHORIZE, PartnerScope.WALLET_CAPTURE),
@@ -433,11 +433,11 @@ class ExternalWalletConnectorTest {
                 "1"
         );
 
-        WebhookSignatureVerificationResult res = jumiaPayAdapter.verifyWebhook(req);
+        WebhookSignatureVerificationResult res = modeAWallet.verifyWebhook(req);
         assertTrue(res.valid());
 
         // 2. Replay attack rejection (identical nonce)
-        WebhookSignatureVerificationResult replayRes = jumiaPayAdapter.verifyWebhook(req);
+        WebhookSignatureVerificationResult replayRes = modeAWallet.verifyWebhook(req);
         assertFalse(replayRes.valid());
         assertTrue(replayRes.failureReason().contains("Replay attack detected"));
 
@@ -453,7 +453,7 @@ class ExternalWalletConnectorTest {
                 newNonce,
                 "1"
         );
-        WebhookSignatureVerificationResult tamperedRes = jumiaPayAdapter.verifyWebhook(tamperedReq);
+        WebhookSignatureVerificationResult tamperedRes = modeAWallet.verifyWebhook(tamperedReq);
         assertFalse(tamperedRes.valid());
         assertEquals("HMAC signature mismatch", tamperedRes.failureReason());
 
@@ -469,7 +469,7 @@ class ExternalWalletConnectorTest {
                 expiredNonce,
                 "1"
         );
-        WebhookSignatureVerificationResult expiredRes = jumiaPayAdapter.verifyWebhook(expiredReq);
+        WebhookSignatureVerificationResult expiredRes = modeAWallet.verifyWebhook(expiredReq);
         assertFalse(expiredRes.valid());
         assertTrue(expiredRes.failureReason().contains("Timestamp expired"));
 
@@ -488,7 +488,7 @@ class ExternalWalletConnectorTest {
                 rotatedNonce,
                 "1"
         );
-        WebhookSignatureVerificationResult prevKeyRes = jumiaPayAdapter.verifyWebhook(prevKeyReq);
+        WebhookSignatureVerificationResult prevKeyRes = modeAWallet.verifyWebhook(prevKeyReq);
         assertTrue(prevKeyRes.valid(), "Signature signed with previous key during rollover must be valid");
     }
 
@@ -496,7 +496,7 @@ class ExternalWalletConnectorTest {
     @DisplayName("Idempotency protection: duplicate authorization returns cached result, altered payload returns 409")
     void testIdempotencyProtection() {
         String customerId = "idem_cust_001";
-        jumiaPayAdapter.seedCustomerBalance(customerId, 100_000L);
+        modeAWallet.seedCustomerBalance(customerId, 100_000L);
 
         String txRef = "IDEM-REF-101";
         long amount = 20_000L;
@@ -515,11 +515,11 @@ class ExternalWalletConnectorTest {
                 Map.of()
         );
 
-        ExternalPaymentAuthResult res1 = jumiaPayAdapter.authorizePayment(originalReq);
+        ExternalPaymentAuthResult res1 = modeAWallet.authorizePayment(originalReq);
         assertTrue(res1.success());
 
         // Repeated request with exact same payload
-        ExternalPaymentAuthResult res2 = jumiaPayAdapter.authorizePayment(originalReq);
+        ExternalPaymentAuthResult res2 = modeAWallet.authorizePayment(originalReq);
         assertTrue(res2.success());
         assertEquals(res1.authorizationId(), res2.authorizationId());
 
@@ -537,7 +537,7 @@ class ExternalWalletConnectorTest {
         );
 
         EnterpriseWalletException conflictEx = assertThrows(EnterpriseWalletException.class, () ->
-                jumiaPayAdapter.authorizePayment(alteredReq)
+                modeAWallet.authorizePayment(alteredReq)
         );
         assertEquals(EnterpriseWalletException.ErrorCode.IDEMPOTENCY_CONFLICT, conflictEx.getErrorCode());
         assertEquals(409, conflictEx.getHttpStatus());
@@ -547,17 +547,17 @@ class ExternalWalletConnectorTest {
     @DisplayName("Ledger reconciliation sync between external partner and internal records")
     void testLedgerReconciliationSync() {
         String customerId = "recon_cust_001";
-        jumiaPayAdapter.seedCustomerBalance(customerId, 50_000L);
+        modeAWallet.seedCustomerBalance(customerId, 50_000L);
 
         String txRef = "RECON-TX-001";
         String canonical = customerId + ":10000:GHS:" + txRef;
         String sig = HmacVerification.computeHex(SIGNING_KEY, canonical);
 
-        ExternalPaymentAuthResult auth = jumiaPayAdapter.authorizePayment(new ExternalPaymentAuthRequest(
+        ExternalPaymentAuthResult auth = modeAWallet.authorizePayment(new ExternalPaymentAuthRequest(
                 "idem_recon_1", PARTNER_ID, WalletOperatingMode.MODE_A_ENTERPRISE_OWNED, txRef, customerId, 10_000L, "GHS", sig, Map.of()
         ));
 
-        ExternalPaymentCaptureResult cap = jumiaPayAdapter.capturePayment(new ExternalPaymentCaptureRequest(
+        ExternalPaymentCaptureResult cap = modeAWallet.capturePayment(new ExternalPaymentCaptureRequest(
                 "idem_recon_cap_1", auth.authorizationId(), txRef, 10_000L, "GHS",
                 List.of(new PaymentAllocationSplit("merch_1", 10_000L, 1_000L, 500L, "SKU-R", "Item"))
         ));
@@ -568,7 +568,7 @@ class ExternalWalletConnectorTest {
                 new ExternalLedgerRecord("EXT-LINE-2", "non_existent_ref", "CAPTURE", 5_000L, "GHS", "SUCCESS", Instant.now())
         );
 
-        ExternalReconciliationSyncResult syncResult = jumiaPayAdapter.syncLedgerReconciliation(
+        ExternalReconciliationSyncResult syncResult = modeAWallet.syncLedgerReconciliation(
                 new ExternalReconciliationSyncRequest(PARTNER_ID, LocalDate.now(), "GHS", records)
         );
 
@@ -587,7 +587,7 @@ class ExternalWalletConnectorTest {
         assertEquals(1, walletEngine.getConnectorsByMode(WalletOperatingMode.MODE_B_WHITE_LABEL).size());
         assertEquals(1, walletEngine.getConnectorsByMode(WalletOperatingMode.MODE_C_SETTLEMENT_ONLY).size());
 
-        assertTrue(walletEngine.getConnector("jumiapay-gh-v1").isPresent());
+        assertTrue(walletEngine.getConnector("test-wallet-v1").isPresent());
         assertTrue(walletEngine.getConnector("elepay-whitelabel-v1").isPresent());
         assertTrue(walletEngine.getConnector("elepay-settlement-only-v1").isPresent());
         assertFalse(walletEngine.getConnector("non_existent").isPresent());
