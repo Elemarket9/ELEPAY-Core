@@ -37,8 +37,6 @@ public class CardTokenVault {
 
     /** Ciphertext written with the configured key carries this prefix; older rows have none. */
     static final String V2 = "v2:";
-    /** The key earlier releases used when none was configured. Only for upgrading old rows. */
-    static final String LEGACY_DEFAULT_KEY = "elepay-default-secret-card-vault-key-32b!";
 
     private final JdbcClient db;
     private final CardBinLookupService binLookup;
@@ -63,8 +61,10 @@ public class CardTokenVault {
         this.vaultKey = vaultKey(masterKey);
         // Separate key for fingerprints, derived from the vault key (key separation).
         this.fingerprintKey = hmac(vaultKey, "elepay:card-fingerprint:v2".getBytes(StandardCharsets.UTF_8));
-        String legacy = legacyMasterKey == null || legacyMasterKey.isBlank() ? LEGACY_DEFAULT_KEY : legacyMasterKey;
-        this.legacyKey = Arrays.copyOf(legacy.getBytes(StandardCharsets.UTF_8), 32);
+        // Legacy token migration is opt-in, with the old key supplied externally.
+        // A hardcoded fallback would allow anyone with the source to decrypt historic PANs.
+        this.legacyKey = legacyMasterKey == null || legacyMasterKey.isBlank()
+                ? null : Arrays.copyOf(legacyMasterKey.getBytes(StandardCharsets.UTF_8), 32);
     }
 
     /**
@@ -356,6 +356,10 @@ public class CardTokenVault {
 
     private String decrypt(String stored) {
         boolean current = stored.startsWith(V2);
+        if (!current && legacyKey == null) {
+            throw new IllegalStateException(
+                    "Legacy card tokens require an externally supplied migration key; refusing fallback decryption");
+        }
         String base64Combined = current ? stored.substring(V2.length()) : stored;
         try {
             byte[] combined = Base64.getDecoder().decode(base64Combined);

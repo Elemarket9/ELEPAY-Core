@@ -21,6 +21,8 @@ class CardVaultSecurityIT extends PostgresTestBase {
     @LocalServerPort int port;
     @Autowired CardTokenVault vault;
     @Autowired JdbcClient db;
+    @org.springframework.beans.factory.annotation.Value("${elepay.vault.legacy-master-key}")
+    private String legacyFixtureKey;
 
     Map<String, Object> card() {
         return Map.of("pan", "4111111111111111", "expiryMonth", 12, "expiryYear", 2030,
@@ -57,7 +59,7 @@ class CardVaultSecurityIT extends PostgresTestBase {
     void cardsSavedByEarlierReleasesAreUpgraded() throws Exception {
         // A row as the old code wrote it: the published default key, no AAD, unkeyed fingerprint.
         String pan = "5123456789012346";
-        byte[] key = Arrays.copyOf(CardTokenVault.LEGACY_DEFAULT_KEY.getBytes(StandardCharsets.UTF_8), 32);
+        byte[] key = Arrays.copyOf(legacyFixtureKey.getBytes(StandardCharsets.UTF_8), 32);
         byte[] iv = new byte[12];
         new SecureRandom().nextBytes(iv);
         Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
