@@ -132,7 +132,7 @@ $GLOBALS['responses'][] = response(array('reference' => 'CH-101', 'status' => 'p
 $gateway->check_order_status_on_return(101);
 yes($order->is_paid(), 'matching authoritative status marks paid');
 
-$checkout = array('reference' => 'CH-101', 'status' => 'paid', 'lines' => array(
+$checkout = array('reference' => 'CH-101', 'status' => 'paid', 'subtotal' => 12500, 'lines' => array(
     array('line' => 0, 'amount' => 12500, 'refunded' => 0),
     array('line' => 1, 'amount' => 1, 'refunded' => 0),
 ));
@@ -165,7 +165,7 @@ yes($pending instanceof WP_Error, 'pending external rail refund must not be repo
 yes($order->get_meta('_elepay_refund_pending_key') !== '', 'pending refund retains retry key');
 
 $timestamp = time();
-$raw = '{"event":"checkout.paid","data":{"reference":"CH-101"}}';
+$raw = '{"type":"checkout.paid","data":{"reference":"CH-101"}}';
 $sig = hash_hmac('sha256', $timestamp . '.' . $raw, 'webhook-fixture');
 yes(WC_Elepay_API::verify_webhook_signature($raw, 't=' . $timestamp . ',v1=' . $sig, 'webhook-fixture'), 'good signed webhook');
 yes(!WC_Elepay_API::verify_webhook_signature($raw . 'x', 't=' . $timestamp . ',v1=' . $sig, 'webhook-fixture'), 'tampered webhook fails');
