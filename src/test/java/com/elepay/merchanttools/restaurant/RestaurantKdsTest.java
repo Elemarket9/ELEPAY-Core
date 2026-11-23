@@ -108,6 +108,33 @@ public class RestaurantKdsTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Additional restaurant rounds stay on the same bill and reach kitchen exactly once")
+    void additionalRoundIsAtomicAndIdempotent() {
+        var floor = tableService.createFloorPlan(merchantId, "Dining", "{}");
+        var table = tableService.createTable(merchantId, floor.id(), "C-7", 4);
+        var first = List.of(new PosOrderService.OrderItemInput(null, "Banku", BigDecimal.ONE,
+                2000L, 0L, 0L, "[]", 1, "MAIN", null));
+        var second = List.of(new PosOrderService.OrderItemInput(null, "Sobolo", BigDecimal.valueOf(2),
+                500L, 0L, 0L, "[]", 1, "BEVERAGE", null));
+        var order = posOrderService.createOrder(merchantId, null, null, null, null,
+                first, 0L, 0L, 0L, "DINE_IN", table.id());
+        var after = posOrderService.addItems(order.id(), second, "round-2");
+        assertThat(after.totalPesewas()).isEqualTo(3000L);
+        assertThat(posOrderService.listOrderItems(order.id())).hasSize(2);
+        var replay = posOrderService.addItems(order.id(), second, "round-2");
+        assertThat(replay.totalPesewas()).isEqualTo(3000L);
+        var tickets = kdsService.getActiveTickets(merchantId).stream()
+                .filter(t -> t.orderId().equals(order.id())).toList();
+        assertThat(tickets).hasSize(2);
+        assertThat(tickets.stream().flatMap(ticket ->
+                kdsService.listTicketItems(ticket.id()).stream()).count()).isEqualTo(2);
+        posOrderService.startDigital(order.id(), "cashier-1");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                posOrderService.addItems(order.id(), second, "round-3"))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+    }
+
+    @Test
     @DisplayName("Dine-in POS order automatically claims its table and opens one kitchen ticket")
     void dineInPosOrderFlowsIntoKitchen() {
         var floor = tableService.createFloorPlan(merchantId, "New floor", "{}");

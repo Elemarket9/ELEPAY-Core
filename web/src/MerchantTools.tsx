@@ -263,7 +263,8 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         const latest = await api<PosOrder>(`/v1/pos/orders/${order.id}/items`, {
           body: { items: cart.map((c) => ({
             variantId: c.row.variantId, itemName: itemLabel(c.row), quantity: c.qty,
-            unitPricePesewas: c.row.retailPricePesewas, discountPesewas: 0, taxPesewas: 0,
+            unitPricePesewas: c.row.retailPricePesewas, discountPesewas: 0,
+            taxPesewas: taxValid ? Math.round(c.row.retailPricePesewas * c.qty * taxRate / 100) : 0,
             modifiersJson: "[]", seatNumber: null, course: "MAIN", notes: null,
           })) }, idempotencyKey: newKey() });
         setOrder(latest); setCart([]); setAddingRound(false); setSplitPreview([]);

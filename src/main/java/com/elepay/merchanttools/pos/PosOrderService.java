@@ -256,12 +256,18 @@ public class PosOrderService {
         PosOrder order = lockOrder(orderId);
         if (!java.util.Set.of("DINE_IN", "TAKEOUT", "DELIVERY", "QR").contains(order.orderType()))
             throw ApiException.conflict("restaurant_order_required", "Only restaurant orders can add a new round");
-        if (!"PENDING".equals(order.status()) || order.paidPesewas() != 0 || link(orderId).isPresent())
-            throw ApiException.conflict("order_payment_started", "Cannot change items after payment has started");
-        if (inputs == null || inputs.isEmpty())
-            throw ApiException.badRequest("items_required", "Choose items for the new round");
+        if (inputs == null || inputs.isEmpty() || inputs.size() > 100)
+            throw ApiException.badRequest("items_required", "Choose 1-100 items for the new round");
         if (operationKey == null || operationKey.isBlank() || operationKey.length() > 128)
             throw ApiException.badRequest("idempotency_required", "New rounds need an idempotency key");
+        String key = "round:" + UUID.nameUUIDFromBytes(
+                (orderId + ":" + operationKey).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        // Reconciliation safety even when a service caller is not routed through HTTP idempotency.
+        long already = db.sql("SELECT count(*) FROM restaurant_kds_ticket WHERE merchant_id = :m AND client_ref = :ref")
+                .param("m", order.merchantId()).param("ref", key).query(Long.class).single();
+        if (already > 0) return order;
+        if (!"PENDING".equals(order.status()) || order.paidPesewas() != 0 || link(orderId).isPresent())
+            throw ApiException.conflict("order_payment_started", "Cannot change items after payment has started");
         UUID tableId = db.sql("SELECT id FROM restaurant_table WHERE current_order_id = :order")
                 .param("order", orderId).query(UUID.class).optional().orElse(null);
         if (("DINE_IN".equals(order.orderType()) || "QR".equals(order.orderType())) && tableId == null)
@@ -298,8 +304,6 @@ public class PosOrderService {
             case "DELIVERY" -> DiningMode.DELIVERY;
             default -> DiningMode.DINE_IN;
         };
-        String key = "round:" + UUID.nameUUIDFromBytes(
-                (orderId + ":" + operationKey).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         kitchen.createTicket(order.merchantId(), orderId, tableId, mode, null,
                 "ALL", kitchenItems, "ADDITIONAL ROUND", key);
         return getOrder(orderId).orElseThrow();
