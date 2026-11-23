@@ -6,20 +6,7 @@ interface Item { id: string; kind: string; severity: string; subject: string; de
 interface MerchantView { id: string; legalName: string; tradingName: string; kind: string; status: string }
 interface Integrity { accountsWithDrift: number; netByCurrency: Record<string, number>; unbalancedTransactions: number }
 
-// Agent Banking
-interface Agent {
-  id: string; code: string; businessName: string; location: string; region: string;
-  floatBalancePesewas: number; dailyCashInPesewas: number; dailyCashOutPesewas: number;
-  status: "ACTIVE" | "SUSPENDED" | "FLAGGED"; minFloatThresholdPesewas: number;
-}
-
-// Lending Portfolio
-interface LoanProductSummary {
-  id: string; name: string; activeCount: number; principalOutstandingPesewas: number;
-  delinquentCount: number; defaultRatePct: number; lossProvisionPesewas: number;
-}
-
-const TABS = [
+const TABSconst TABS = [
   "Overview", "Agent Banking", "Lending Portfolio", "System Health",
   "Exceptions", "Onboarding", "Disputes", "Reconciliation"
 ] as const;
@@ -56,114 +43,10 @@ function useAction() {
 // 1. Agent Banking Oversight
 // -------------------------------------------------------------------------------------------------
 function AgentBanking() {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [topUpAgent, setTopUpAgent] = useState<Agent | null>(null);
-  const [topUpAmount, setTopUpAmount] = useState("5000");
-
-  const totalFloat = agents.reduce((acc, a) => acc + a.floatBalancePesewas, 0);
-  const totalIn = agents.reduce((acc, a) => acc + a.dailyCashInPesewas, 0);
-  const totalOut = agents.reduce((acc, a) => acc + a.dailyCashOutPesewas, 0);
-
-  function toggleSuspend(id: string) {
-    setAgents(agents.map((a) => {
-      if (a.id === id) {
-        const next = a.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE";
-        return { ...a, status: next };
-      }
-      return a;
-    }));
-    setMsg("Agent status updated.");
-  }
-
-  function doTopUp() {
-    if (!topUpAgent) return;
-    const pesewas = Math.round(Number(topUpAmount) * 100);
-    setAgents(agents.map((a) => a.id === topUpAgent.id ? { ...a, floatBalancePesewas: a.floatBalancePesewas + pesewas } : a));
-    setMsg(`Float top-up of GH₵ ${topUpAmount} allocated to ${topUpAgent.businessName}.`);
-    setTopUpAgent(null);
-  }
-
   return (
     <div>
-      <div className="cards">
-        <div className="card"><div className="muted">Total Agent Network</div><div className="big">{agents.length}</div></div>
-        <div className="card"><div className="muted">Total Floating Liquidity</div><div className="big">{formatMoney(totalFloat)}</div></div>
-        <div className="card"><div className="muted">Daily Cash-In Volume</div><div className="big">{formatMoney(totalIn)}</div></div>
-        <div className="card"><div className="muted">Daily Cash-Out Volume</div><div className="big">{formatMoney(totalOut)}</div></div>
-      </div>
-
-      <div className="flex-between">
-        <h3>Agent Banking Roster &amp; Liquidity Oversight</h3>
-        <span className="small muted">Live Cash-In / Cash-Out Monitoring</span>
-      </div>
-
-      {msg && <p className="notice ok">{msg}</p>}
-
-      <table className="grid" style={{ marginTop: "1rem" }}>
-        <thead>
-          <tr>
-            <th>Agent Code</th>
-            <th>Business Name</th>
-            <th>Region / Location</th>
-            <th className="num">Float Balance</th>
-            <th className="num">Daily Cash-In</th>
-            <th className="num">Daily Cash-Out</th>
-            <th>Liquidity Health</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {agents.map((ag) => {
-            const isLow = ag.floatBalancePesewas < ag.minFloatThresholdPesewas;
-            return (
-              <tr key={ag.id}>
-                <td className="mono font-bold">{ag.code}</td>
-                <td><strong>{ag.businessName}</strong></td>
-                <td>{ag.region} ({ag.location})</td>
-                <td className="num font-bold">{formatMoney(ag.floatBalancePesewas)}</td>
-                <td className="num">{formatMoney(ag.dailyCashInPesewas)}</td>
-                <td className="num">{formatMoney(ag.dailyCashOutPesewas)}</td>
-                <td>
-                  <span className={`tag ${ag.status === "SUSPENDED" ? "failed" : isLow ? "warn" : "active"}`}>
-                    {ag.status === "SUSPENDED" ? "Suspended" : isLow ? "Low Float" : "Healthy"}
-                  </span>
-                </td>
-                <td>
-                  <button className="small secondary" onClick={() => setTopUpAgent(ag)}>+ Float</button>
-                  <button
-                    className="small secondary"
-                    style={{ color: ag.status === "ACTIVE" ? "#a12a1f" : "#0b5d3b" }}
-                    onClick={() => toggleSuspend(ag.id)}
-                  >
-                    {ag.status === "ACTIVE" ? "Suspend" : "Activate"}
-                  </button>
-                </td>
-              </tr>
-            );
-          })}
-          {agents.length === 0 && (
-            <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No registered agency banking terminals in network. Onboard certified agents to monitor cash-in/out float liquidity.</td></tr>
-          )}
-        </tbody>
-      </table>
-
-      {topUpAgent && (
-        <div className="modal-backdrop">
-          <div className="modal-content" style={{ maxWidth: "420px" }}>
-            <h3>Top Up Agent Float</h3>
-            <p><strong>{topUpAgent.businessName}</strong> ({topUpAgent.code})</p>
-            <p className="muted small">Current Float: {formatMoney(topUpAgent.floatBalancePesewas)}</p>
-            <label>Amount in GH₵
-              <input type="number" value={topUpAmount} onChange={(e) => setTopUpAmount(e.target.value)} />
-            </label>
-            <div style={{ marginTop: "1rem" }}>
-              <button onClick={() => doTopUp()}>Transfer Float</button>
-              <button className="secondary" onClick={() => setTopUpAgent(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <h3>Agent banking</h3>
+      <p className="muted">Verified agent-status and float-management APIs are not connected to this view. Agent state and funds cannot be changed locally.</p>
     </div>
   );
 }
@@ -172,79 +55,10 @@ function AgentBanking() {
 // 2. Lending Portfolio Review
 // -------------------------------------------------------------------------------------------------
 function LendingPortfolio() {
-  const [products] = useState<LoanProductSummary[]>([]);
-  const [selectedProduct, setSelectedProduct] = useState<LoanProductSummary | null>(null);
-
-  const totalOutstanding = products.reduce((acc, p) => acc + p.principalOutstandingPesewas, 0);
-  const totalActive = products.reduce((acc, p) => acc + p.activeCount, 0);
-  const totalProvision = products.reduce((acc, p) => acc + p.lossProvisionPesewas, 0);
-
   return (
     <div>
-      <div className="cards">
-        <div className="card"><div className="muted">Total Active Loans</div><div className="big">{totalActive}</div></div>
-        <div className="card"><div className="muted">Total Principal Outstanding</div><div className="big">{formatMoney(totalOutstanding)}</div></div>
-        <div className="card"><div className="muted">Expected Credit Loss Provision (ECL)</div><div className="big" style={{ color: "#8a5a00" }}>{formatMoney(totalProvision)}</div></div>
-        <div className="card"><div className="muted">Portfolio NPL Delinquency Rate</div><div className="big" style={{ color: "#0b5d3b" }}>{products.length === 0 ? "0.0% (Zero Delinquencies)" : "0.0%"}</div></div>
-      </div>
-
-      <h3>Lending Portfolio Performance &amp; Delinquency Aging</h3>
-      <table className="grid" style={{ marginTop: "1rem" }}>
-        <thead>
-          <tr>
-            <th>Loan Product</th>
-            <th className="num">Active Borrowers</th>
-            <th className="num">Principal Outstanding</th>
-            <th className="num">Delinquent Accounts</th>
-            <th className="num">NPL Rate</th>
-            <th className="num">Loss Provision (IFRS 9)</th>
-            <th>Review</th>
-          </tr>
-        </thead>
-        <tbody>
-          {products.map((p) => (
-            <tr key={p.id}>
-              <td><strong>{p.name}</strong></td>
-              <td className="num">{p.activeCount}</td>
-              <td className="num font-bold">{formatMoney(p.principalOutstandingPesewas)}</td>
-              <td className="num" style={{ color: p.delinquentCount > 0 ? "#a12a1f" : "inherit" }}>{p.delinquentCount}</td>
-              <td className="num">{p.defaultRatePct}%</td>
-              <td className="num">{formatMoney(p.lossProvisionPesewas)}</td>
-              <td>
-                <button className="small secondary" onClick={() => setSelectedProduct(p)}>Aging Breakdown</button>
-              </td>
-            </tr>
-          ))}
-          {products.length === 0 && (
-            <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No active lending products or originated loan facilities in portfolio. Lending metrics and IFRS 9 ECL provisions will appear once facilities are approved and originated.</td></tr>
-          )}
-        </tbody>
-      </table>
-
-      {selectedProduct && (
-        <div className="modal-backdrop">
-          <div className="modal-content" style={{ maxWidth: "550px" }}>
-            <div className="flex-between">
-              <h3>Portfolio Aging: {selectedProduct.name}</h3>
-              <button className="small secondary" onClick={() => setSelectedProduct(null)}>✕</button>
-            </div>
-            <p className="muted small">IFRS 9 Staged Impairment &amp; Days-Past-Due (DPD) Buckets</p>
-            <table className="lines">
-              <tbody>
-                <tr><td>Stage 1: Current (0 - 30 DPD)</td><td className="num">GH₵ {(selectedProduct.principalOutstandingPesewas * 0.94 / 100).toFixed(2)} (94%)</td></tr>
-                <tr><td>Stage 2: Watchlist (31 - 60 DPD)</td><td className="num">GH₵ {(selectedProduct.principalOutstandingPesewas * 0.035 / 100).toFixed(2)} (3.5%)</td></tr>
-                <tr><td>Stage 3: Substandard (61 - 90 DPD)</td><td className="num">GH₵ {(selectedProduct.principalOutstandingPesewas * 0.015 / 100).toFixed(2)} (1.5%)</td></tr>
-                <tr><td>Stage 3: Doubtful &amp; Default (90+ DPD)</td><td className="num" style={{ color: "#a12a1f" }}>GH₵ {(selectedProduct.principalOutstandingPesewas * 0.01 / 100).toFixed(2)} (1.0%)</td></tr>
-                <tr className="total"><td>Required ECL Loss Provision</td><td className="num">{formatMoney(selectedProduct.lossProvisionPesewas)}</td></tr>
-              </tbody>
-            </table>
-            <div style={{ marginTop: "1rem" }}>
-              <button onClick={() => alert("Restructuring file dispatched to credit risk committee.")}>Authorize Restructuring</button>
-              <button className="secondary" onClick={() => setSelectedProduct(null)}>Close</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <h3>Lending portfolio</h3>
+      <p className="muted">No verified loan portfolio source is connected to this view. Principal, arrears, impairment and NPL figures are unavailable rather than fabricated.</p>
     </div>
   );
 }
@@ -253,105 +67,11 @@ function LendingPortfolio() {
 // 4. System Health Status
 // -------------------------------------------------------------------------------------------------
 function SystemHealth() {
-  const [diagnosticRan, setDiagnosticRan] = useState(false);
-
   return (
     <div>
-      <div className="flex-between">
-        <div>
-          <h3>ELEPAY Core Infrastructure &amp; Rail Telemetry</h3>
-          <p className="muted small">Ledger integrity, Redis distributed rate limits, database connection pool, and payment partner health.</p>
-        </div>
-        <button onClick={() => setDiagnosticRan(true)}>
-          {diagnosticRan ? "✓ All Systems Green" : "⚡ Run Diagnostic Health Check"}
-        </button>
-      </div>
-
-      <div className="cards" style={{ marginTop: "1rem" }}>
-        <div className="card">
-          <div className="flex-between">
-            <strong>Immutable Core Ledger</strong>
-            <span className="tag active">OPERATIONAL</span>
-          </div>
-          <p className="small muted" style={{ margin: ".5rem 0" }}>Sha-256 Hash Chain verification: 0 drift detected. Double-entry accounting balanced.</p>
-          <div className="small">Unbalanced transactions: <strong>0</strong></div>
-        </div>
-
-        <div className="card">
-          <div className="flex-between">
-            <strong>PostgreSQL Connection Pool</strong>
-            <span className="tag active">HEALTHY</span>
-          </div>
-          <p className="small muted" style={{ margin: ".5rem 0" }}>HikariCP pool: 12 active, 38 idle, 50 max. Average query response: 1.4ms.</p>
-          <div className="small">Replication lag: <strong>0ms</strong></div>
-        </div>
-
-        <div className="card">
-          <div className="flex-between">
-            <strong>Redis Distributed Cache &amp; Limiter</strong>
-            <span className="tag active">ONLINE</span>
-          </div>
-          <p className="small muted" style={{ margin: ".5rem 0" }}>Distributed token-bucket rate limiter active. Cache hit ratio: 98.6%.</p>
-          <div className="small">Memory usage: <strong>42 MB / 2 GB</strong></div>
-        </div>
-
-        <div className="card">
-          <div className="flex-between">
-            <strong>Transactional Outbox &amp; Webhooks</strong>
-            <span className="tag active">DISPATCHING</span>
-          </div>
-          <p className="small muted" style={{ margin: ".5rem 0" }}>Backlog: 0 events pending. Webhook delivery 24h success rate: 99.8%.</p>
-          <div className="small">Average webhook latency: <strong>142ms</strong></div>
-        </div>
-      </div>
-
-      <h3>External Payment Rails &amp; Acquirers Uptime</h3>
-      <table className="grid" style={{ marginTop: "1rem" }}>
-        <thead>
-          <tr>
-            <th>Rail / Provider</th>
-            <th>Type</th>
-            <th>Status</th>
-            <th className="num">24h Uptime</th>
-            <th className="num">Avg Latency</th>
-            <th>Fallback Routing</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><strong>GhIPSS Instant Pay (GIP) &amp; GhQR</strong></td>
-            <td>National Switch</td>
-            <td><span className="tag active">Operational</span></td>
-            <td className="num">99.98%</td>
-            <td className="num">310ms</td>
-            <td>Direct GhIPSS ISO 8583 Gateway</td>
-          </tr>
-          <tr>
-            <td><strong>MTN Mobile Money Direct Rail</strong></td>
-            <td>Mobile Money Telco</td>
-            <td><span className="tag active">Operational</span></td>
-            <td className="num">99.85%</td>
-            <td className="num">420ms</td>
-            <td>Automatic retry via GhIPSS proxy</td>
-          </tr>
-          <tr>
-            <td><strong>Telecel Cash Direct Rail</strong></td>
-            <td>Mobile Money Telco</td>
-            <td><span className="tag active">Operational</span></td>
-            <td className="num">99.52%</td>
-            <td className="num">480ms</td>
-            <td>Healthy</td>
-          </tr>
-          <tr>
-            <td><strong>Visa &amp; Mastercard 3DS Acquirer Rail</strong></td>
-            <td>Card Schemes</td>
-            <td><span className="tag active">Operational</span></td>
-            <td className="num">100.00%</td>
-            <td className="num">240ms</td>
-            <td>Dual Acquirer Multi-Hop</td>
-          </tr>
-        </tbody>
-      </table>
+      <h3>Infrastructure and payment rails</h3>
+      <p className="muted">No authenticated live telemetry is connected to this screen. Rail uptime, ledger integrity, database health, queue backlog and webhook reliability are unavailable rather than assumed healthy.</p>
+      <p className="small muted">For operational decisions, use verified runtime health metrics and reconciliation evidence.</p>
     </div>
   );
 }
