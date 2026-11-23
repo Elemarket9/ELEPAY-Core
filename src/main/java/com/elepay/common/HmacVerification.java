@@ -48,6 +48,9 @@ public final class HmacVerification {
     public static boolean verify(String secret, String payload, String signatureHex) {
         if (secret == null || payload == null || signatureHex == null) return false;
         String computed = computeHex(secret, payload);
+        // Note: comparing hex strings lets MessageDigest.isEqual return early on a length mismatch, which
+        // leaks only the signature length (not its content). Impact is negligible for fixed-width SHA-256
+        // hex, so this is accepted as-is rather than decoding to fixed-length raw bytes.
         return MessageDigest.isEqual(
                 computed.getBytes(StandardCharsets.UTF_8),
                 signatureHex.trim().toLowerCase().getBytes(StandardCharsets.UTF_8)

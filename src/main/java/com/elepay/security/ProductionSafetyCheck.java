@@ -34,6 +34,22 @@ public class ProductionSafetyCheck {
 
     static List<String> problems(Environment env) {
         List<String> p = new ArrayList<>();
+        // Explicit environment anchor: flipping a Spring profile must not silently remove this guardrail.
+        // A production deployment must declare elepay.environment=production AND must not run any
+        // non-production (sandbox/dev/test) profile, which would otherwise relax money/secret settings.
+        String declaredEnv = env.getProperty("elepay.environment", "");
+        boolean productionDeclared = "production".equalsIgnoreCase(declaredEnv) || "prod".equalsIgnoreCase(declaredEnv);
+        if (!productionDeclared) {
+            p.add("elepay.environment must be set to 'production' for a production deployment "
+                    + "(explicit guardrail anchor; current value: '" + declaredEnv + "')");
+        }
+        List<String> activeProfiles = List.of(env.getActiveProfiles());
+        for (String profile : activeProfiles) {
+            if (profile.equalsIgnoreCase("sandbox") || profile.equalsIgnoreCase("dev") || profile.equalsIgnoreCase("test")) {
+                p.add("A production deployment must not run with the '" + profile + "' profile active "
+                        + "(active profiles: " + activeProfiles + ")");
+            }
+        }
         if (env.getProperty("elepay.rails.sandbox.enabled", Boolean.class, false)) {
             p.add("elepay.rails.sandbox.enabled must be false (simulated money)");
         }
@@ -84,6 +100,13 @@ public class ProductionSafetyCheck {
         if (env.getProperty("elepay.outbound.allow-http", Boolean.class, false)
                 || env.getProperty("elepay.outbound.allow-private-hosts", Boolean.class, false)) {
             p.add("elepay.outbound.allow-http and allow-private-hosts must be false (webhook SSRF)");
+        }
+        // Scoped egress posture (OutboundUrlGuard.validatePartnerEgress): partner/system calls must be
+        // constrained to an explicit host allowlist. This does NOT apply to merchant webhook delivery.
+        String partnerEgressHosts = env.getProperty("elepay.outbound.partner-egress.allowed-hosts", "");
+        if (partnerEgressHosts.isBlank()) {
+            p.add("elepay.outbound.partner-egress.allowed-hosts must list the partner/system egress hosts "
+                    + "(scoped allowlist for OutboundUrlGuard.validatePartnerEgress)");
         }
         int coolingOffHours = env.getProperty("elepay.security.destination-cooling-off-hours", Integer.class, 24);
         if (coolingOffHours < 24) {

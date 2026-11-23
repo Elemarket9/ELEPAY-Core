@@ -1,0 +1,94 @@
+# Production deployment stack for ELEPAY-Core.
+#
+# Unlike the repo-root docker-compose.yml (local sandbox, simulated rails, dev tokens, default DB
+# password), this file runs the real "prod" profile with NO default secrets. Every secret MUST be
+# supplied via the environment (a secrets manager, Docker/Swarm/K8s secrets, or a CI-injected .env):
+# the ":?" syntax makes the stack refuse to start if a required value is missing.
+#
+# Usage:
+#   export ELEPAY_DB_PASSWORD=...  ELEPAY_OIDC_ISSUER=...  (and the rest below)
+#   docker compose -f deploy/docker-compose.prod.yml up -d
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ${ELEPAY_DB_NAME:?set me}
+      POSTGRES_USER: ${ELEPAY_DB_USER:?set me}
+      # No default: fail fast if the production DB password is not injected.
+      POSTGRES_PASSWORD: ${ELEPAY_DB_PASSWORD:?set me}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    # Not published to the host: only the app on the private network reaches it.
+    expose:
+      - "5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # Redis AUTH required in production; no default password.
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${ELEPAY_REDIS_PASSWORD:?set me}"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${ELEPAY_REDIS_PASSWORD:?set me}
+    expose:
+      - "6379"
+    restart: unless-stopped
+
+  elepay:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    # Non-root runtime (uid 10001 defined in the Dockerfile).
+    user: "10001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Real production profile. ProductionSafetyCheck fails closed unless elepay.environment=production
+      # (set in application-prod.properties) AND no sandbox/dev/test profile is active.
+      SPRING_PROFILES_ACTIVE: prod
+      ELEPAY_BIND_ADDRESS: 0.0.0.0
+      ELEPAY_DB_URL: jdbc:postgresql://postgres:5432/${ELEPAY_DB_NAME:?set me}
+      ELEPAY_DB_USER: ${ELEPAY_DB_USER:?set me}
+      ELEPAY_DB_PASSWORD: ${ELEPAY_DB_PASSWORD:?set me}
+      ELEPAY_REDIS_HOST: redis
+      ELEPAY_REDIS_PORT: "6379"
+      ELEPAY_REDIS_PASSWORD: ${ELEPAY_REDIS_PASSWORD:?set me}
+      ELEPAY_PUBLIC_BASE_URL: ${ELEPAY_PUBLIC_BASE_URL:?set me}
+      # OIDC resource-server config (required by ProductionSafetyCheck).
+      ELEPAY_OIDC_ISSUER: ${ELEPAY_OIDC_ISSUER:?set me}
+      ELEPAY_OIDC_AUDIENCE: ${ELEPAY_OIDC_AUDIENCE:?set me}
+      # Cryptographic material: inject from a KMS/secrets manager, never commit. base64 of 32 random bytes.
+      ELEPAY_VAULT_MASTER_KEY: ${ELEPAY_VAULT_MASTER_KEY:?set me}
+      ELEPAY_INTEGRITY_MAC_KEY: ${ELEPAY_INTEGRITY_MAC_KEY:?set me}
+      ELEPAY_INTEGRITY_ED25519_KEY: ${ELEPAY_INTEGRITY_ED25519_KEY:?set me}
+      ELEPAY_INTEGRITY_MLDSA65_KEY: ${ELEPAY_INTEGRITY_MLDSA65_KEY:?set me}
+      ELEPAY_POS_DUKPT_BDK: ${ELEPAY_POS_DUKPT_BDK:?set me}
+      ELEPAY_TRUSTED_PROXIES: ${ELEPAY_TRUSTED_PROXIES:?set me}
+      # Scoped partner egress allowlist (optional override; prod default lives in application-prod.properties).
+      ELEPAY_PARTNER_EGRESS_HOSTS: ${ELEPAY_PARTNER_EGRESS_HOSTS:-}
+      # Optional mobile TLS pins (empty = no-op). Format documented in application.properties.
+      ELEPAY_MOBILE_CERT_PINS: ${ELEPAY_MOBILE_CERT_PINS:-}
+      # Management endpoint reachable from inside the container for the Docker healthcheck.
+      ELEPAY_MANAGEMENT_ADDRESS: 0.0.0.0
+    ports:
+      # Public API only. Management port 9090 stays internal; do not publish it.
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

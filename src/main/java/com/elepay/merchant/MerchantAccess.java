@@ -32,7 +32,11 @@ public class MerchantAccess {
             Permission.VIEW, "view", Permission.FINANCE_VIEW, "view", Permission.COLLECT, "collect",
             Permission.REFUND, "refund", Permission.WITHDRAW, "withdraw", Permission.PAYOUT, "payouts");
     private static final Set<Permission> OPS_READ = EnumSet.of(Permission.VIEW, Permission.FINANCE_VIEW);
-    private static final Set<Permission> REQUIRE_ACTIVE = EnumSet.of(Permission.COLLECT, Permission.WITHDRAW);
+    // Any money movement — inbound (COLLECT), to the merchant's own destination (WITHDRAW), to third
+    // parties (PAYOUT), or back to a payer (REFUND) — requires status == "active". A suspended or closed
+    // merchant must not be able to push funds out via batch payouts or refunds.
+    private static final Set<Permission> REQUIRE_ACTIVE =
+            EnumSet.of(Permission.COLLECT, Permission.WITHDRAW, Permission.PAYOUT, Permission.REFUND);
 
     private final JdbcClient db;
 

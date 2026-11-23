@@ -23,6 +23,22 @@ import org.springframework.stereotype.Component;
  * allow http and private hosts for local receivers. An operator can additionally allow specific
  * CIDRs ({@code elepay.outbound.allowed-cidrs}); that list is empty unless set, so the default
  * SSRF checks stay in force.
+ *
+ * <p><b>Two scopes, deliberately different.</b> The always-on SSRF checks here must apply to every
+ * outbound call. On top of them a host allowlist can apply, but only for internal/partner/system
+ * egress — never for merchant webhook delivery, which must reach arbitrary merchant-supplied public
+ * hosts. Callers therefore choose a method by scope:
+ * <ul>
+ *   <li><b>Merchant webhook delivery</b> (e.g. {@code com.elepay.outbox.Webhooks}): use
+ *       {@link #validate(String)} / {@link #problem(String)} / {@link #resolveForConnection(String)}.
+ *       These enforce the SSRF guard but NOT the partner allowlist (unless the global
+ *       {@code strictAllowlistEnabled} flag is set, which is off by default so merchant delivery works).</li>
+ *   <li><b>Internal / partner / system calls</b> (e.g. {@code com.elepay.emtech.EmtechClient} and
+ *       partner-rail clients): use {@link #validatePartnerEgress(String)}, which enforces the SSRF
+ *       guard AND the partner host allowlist regardless of the global strict flag.</li>
+ * </ul>
+ * Do NOT flip {@code strictAllowlistEnabled} on globally to protect partner calls: that would also
+ * block merchant webhooks. Use {@link #validatePartnerEgress(String)} at the partner/system call sites.
  */
 @Component
 public class OutboundUrlGuard {
@@ -47,20 +63,39 @@ public class OutboundUrlGuard {
     private final boolean allowPrivateHosts;
     private volatile boolean strictAllowlistEnabled;
     private final Set<String> allowedHosts;
+    /**
+     * Host allowlist enforced ONLY for partner/system egress (see {@link #validatePartnerEgress(String)}).
+     * Defaults to {@link #allowedHosts} when not separately configured. It is NOT applied to merchant
+     * webhook delivery, which must be able to reach arbitrary merchant-supplied public hosts.
+     */
+    private final Set<String> partnerEgressHosts;
     private final List<Cidr> allowedCidrs;
 
     public OutboundUrlGuard(boolean allowHttp, boolean allowPrivateHosts) {
-        this(allowHttp, allowPrivateHosts, false, DEFAULT_STAGE1_ALLOWED_HOSTS, Set.of());
+        this(allowHttp, allowPrivateHosts, false, DEFAULT_STAGE1_ALLOWED_HOSTS, Set.of(), Set.of());
     }
 
-    /** {@code allowedCidrs} is empty unless an egress proxy range is configured. */
+    public OutboundUrlGuard(boolean allowHttp, boolean allowPrivateHosts, boolean strictAllowlistEnabled,
+                            Set<String> allowedHosts, Set<String> allowedCidrs) {
+        this(allowHttp, allowPrivateHosts, strictAllowlistEnabled, allowedHosts, allowedCidrs, Set.of());
+    }
+
+    /**
+     * {@code allowedCidrs} is empty unless an egress proxy range is configured.
+     *
+     * <p>{@code partnerEgressHosts} is the scoped allowlist used by {@link #validatePartnerEgress(String)}
+     * for internal/partner/system calls; when empty it falls back to {@code allowedHosts}. The global
+     * {@code strictAllowlistEnabled} flag is intentionally left independent so that enabling the partner
+     * allowlist never breaks merchant webhook delivery.
+     */
     @org.springframework.beans.factory.annotation.Autowired
     public OutboundUrlGuard(
             @Value("${elepay.outbound.allow-http:false}") boolean allowHttp,
             @Value("${elepay.outbound.allow-private-hosts:false}") boolean allowPrivateHosts,
             @Value("${elepay.outbound.strict-allowlist-enabled:false}") boolean strictAllowlistEnabled,
             @Value("${elepay.outbound.allowed-hosts:custodian.gcb.com.gh,custodian.ecobank.com.gh,custodian.stanbic.com.gh,proxy.momoapi.mtn.com,momoapi.momo.africa,api.telecelcash.com.gh,openapi.telecel.com.gh,api.airteltigomoney.com.gh,openapi.at.com.gh,gip.ghipss.com,api.ghipss.com,switch.ghipss.com,api.emtech.com}") Set<String> allowedHosts,
-            @Value("${elepay.outbound.allowed-cidrs:}") Set<String> allowedCidrs
+            @Value("${elepay.outbound.allowed-cidrs:}") Set<String> allowedCidrs,
+            @Value("${elepay.outbound.partner-egress.allowed-hosts:}") Set<String> partnerEgressHosts
     ) {
         this.allowHttp = allowHttp;
         this.allowPrivateHosts = allowPrivateHosts;
@@ -68,6 +103,9 @@ public class OutboundUrlGuard {
         this.allowedHosts = allowedHosts != null && !allowedHosts.isEmpty()
                 ? allowedHosts.stream().map(h -> h.trim().toLowerCase(Locale.ROOT)).collect(java.util.stream.Collectors.toUnmodifiableSet())
                 : DEFAULT_STAGE1_ALLOWED_HOSTS;
+        this.partnerEgressHosts = partnerEgressHosts != null && !partnerEgressHosts.isEmpty()
+                ? partnerEgressHosts.stream().map(h -> h.trim().toLowerCase(Locale.ROOT)).collect(java.util.stream.Collectors.toUnmodifiableSet())
+                : this.allowedHosts;
         this.allowedCidrs = parseCidrs(allowedCidrs);
     }
 
@@ -86,6 +124,51 @@ public class OutboundUrlGuard {
     public boolean isHostAllowlisted(String host) {
         if (host == null || host.isBlank()) return false;
         return allowedHosts.contains(host.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /** The scoped partner/system egress host allowlist. */
+    public Set<String> partnerEgressHosts() {
+        return partnerEgressHosts;
+    }
+
+    public boolean isPartnerEgressHost(String host) {
+        if (host == null || host.isBlank()) return false;
+        return partnerEgressHosts.contains(host.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Validates a URL destined for an internal/partner/system call. Applies the always-on SSRF guard
+     * (via {@link #problem(String)}) AND enforces the partner host allowlist, independently of the global
+     * {@code strictAllowlistEnabled} flag. Use this at partner-rail and partner-API call sites (e.g.
+     * {@code EmtechClient}); do NOT use it for merchant webhook delivery.
+     *
+     * @throws ApiException {@code 400 unsafe_url} if the URL fails the SSRF guard, or
+     *         {@code 403 egress_host_not_allowlisted} if its host is not on the partner allowlist.
+     */
+    public void validatePartnerEgress(String url) {
+        validate(url);
+        String problem = partnerEgressProblem(url);
+        if (problem != null) {
+            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN, "egress_host_not_allowlisted", problem);
+        }
+    }
+
+    /** Why the partner-egress host allowlist refuses this URL, or null when its host is allowlisted. */
+    public String partnerEgressProblem(String url) {
+        if (url == null || url.isBlank()) return "Enter an https URL";
+        URI uri;
+        try {
+            uri = URI.create(url.trim());
+        } catch (IllegalArgumentException e) {
+            return "The URL is not valid";
+        }
+        String host = uri.getHost();
+        if (host == null || host.isBlank()) return "The URL needs a host name";
+        String lower = host.toLowerCase(Locale.ROOT);
+        if (!isPartnerEgressHost(lower)) {
+            return "Partner egress destination host is not allowlisted: " + lower;
+        }
+        return null;
     }
 
     /** Throws {@code 400 unsafe_url} (or {@code 403 egress_host_not_allowlisted} in strict mode) when ELEPAY must not call this URL. */

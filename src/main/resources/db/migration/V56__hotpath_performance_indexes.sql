@@ -1,0 +1,35 @@
+-- Hot-path performance indexes.
+--
+-- Scope: the confirmation / idempotency / ledger-lookup hot paths were audited against the existing
+-- schema (V4 ledger_core, V6 domain, V9 payouts, V11 platform_api, V15 mandates, V49 velocity).
+-- The vast majority of hot lookups are ALREADY backed by primary keys or UNIQUE constraints and are
+-- intentionally NOT re-indexed here:
+--   * idempotent_request           PK (scope, key)
+--   * journal_transaction          UNIQUE (idempotency_scope, idempotency_key); PK (id)
+--   * journal_entry                PK (transaction_id, line) -> covers WHERE transaction_id = ? ORDER BY line
+--   * ledger_account               UNIQUE code; UNIQUE (owner_type, owner_id, bucket, currency)
+--   * rail_callback                UNIQUE (rail, dedupe_key) -> backs recordCallbackOnce dedupe
+--   * rail_transaction             UNIQUE reference; PK (id)
+--   * payout                       UNIQUE reference; PK (id); payout_single_retry (retry_of);
+--                                  payout_batch_client_reference (batch_id, ...); payout_owner (owner_type, owner_id, ...)
+--   * payout_batch                 UNIQUE reference; PK (id)
+--   * mandate_charge               UNIQUE idempotency_key
+--   * checkout                     UNIQUE reference; checkout_order_reference (collector_id, order_reference)
+--   * checkout_allocation          PK (checkout_id, line)
+--   * payout_global_velocity_window PK (window_type, window_start)
+--
+-- Only the single genuinely uncovered hot query below gets a new index.
+--
+-- NOTE: Flyway runs each migration in a transaction, so these use plain CREATE INDEX. In production,
+-- on a large live table, build it out-of-band with CREATE INDEX CONCURRENTLY (which cannot run inside a
+-- transaction) and record it as an already-applied/baseline migration instead of letting Flyway build it.
+
+-- The public checkout status-polling endpoint (CheckoutService#status) runs, on every poll:
+--     SELECT id, method, status, rail_tx FROM payment_attempt
+--     WHERE checkout_id = ? ORDER BY created_at DESC LIMIT 1
+-- The only existing index on payment_attempt(checkout_id) is the PARTIAL unique index
+-- payment_attempt_one_active ... WHERE status IN ('pending','succeeded'); it excludes 'failed' rows and
+-- carries no created_at ordering, so it cannot serve this query. This also provides a backing index for
+-- the payment_attempt.checkout_id foreign key.
+CREATE INDEX IF NOT EXISTS payment_attempt_by_checkout
+    ON payment_attempt (checkout_id, created_at DESC);
