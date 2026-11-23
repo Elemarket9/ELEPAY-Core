@@ -1,4 +1,4 @@
--- V52: Kitchen Display System built for Ghanaian kitchens.
+-- V53: Kitchen Display System built for Ghanaian kitchens.
 -- Stations with item routing, daily order numbers, duplicate-safe ticket creation and bumps,
 -- a change feed that devices sync from after internet drops, and kitchen printer jobs.
 

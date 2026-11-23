@@ -1,4 +1,4 @@
--- V53: Pair kitchen tablets and printer devices once with a short code instead of a staff sign-in.
+-- V54: Pair kitchen tablets and printer devices once with a short code instead of a staff sign-in.
 
 ALTER TABLE api_credential DROP CONSTRAINT IF EXISTS api_credential_key_type_check;
 -- NOT VALID: existing rows are left as they are; new and updated rows must use a known key type.

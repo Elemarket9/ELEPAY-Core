@@ -34,6 +34,35 @@ class OutboundUrlGuardTest {
     }
 
     @Test
+    void benchmarkRangeNamesTheBlockedAddressInsteadOfADnsMiss() {
+        String problem = prod.problem("https://198.18.0.10/hook");
+        assertThat(problem).contains("198.18.0.10").contains("blocked address range");
+        assertThat(problem).doesNotContain("does not resolve");
+        assertThatThrownBy(() -> prod.resolveForConnection("198.18.0.10"))
+                .isInstanceOf(java.net.UnknownHostException.class)
+                .hasMessageContaining("198.18.0.10")
+                .hasMessageContaining("blocked address range");
+    }
+
+    @Test
+    void explicitCidrAllowsAnEgressProxyRangeAndNothingElse() {
+        var proxy = new OutboundUrlGuard(false, false, false, OutboundUrlGuard.DEFAULT_STAGE1_ALLOWED_HOSTS,
+                java.util.Set.of("198.18.0.0/15"));
+        assertThat(proxy.problem("https://198.18.4.8/integration")).isNull();
+        assertThat(proxy.problem("https://198.19.255.1/integration")).isNull();
+        assertThat(proxy.problem("https://10.1.1.1/hook")).contains("10.1.1.1").contains("blocked address range");
+        assertThat(new OutboundUrlGuard(false, false).problem("https://198.18.4.8/integration"))
+                .contains("blocked address range");
+        assertThatThrownBy(() -> new OutboundUrlGuard(false, false, false, OutboundUrlGuard.DEFAULT_STAGE1_ALLOWED_HOSTS,
+                java.util.Set.of("not-a-cidr"))).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void aNameThatDoesNotResolveStillSaysSo() {
+        assertThat(prod.problem("https://elepay-no-such-host.invalid/hook")).isEqualTo("The host name does not resolve");
+    }
+
+    @Test
     void connectionTimeDnsResolutionRejectsPrivateAndTransitionAddresses() throws Exception {
         for (String host : java.util.List.of("127.0.0.1", "169.254.169.254", "168.63.129.16", "64:ff9b::7f00:1", "2002:7f00:1::")) {
             assertThatThrownBy(() -> prod.resolveForConnection(host)).isInstanceOf(java.net.UnknownHostException.class);

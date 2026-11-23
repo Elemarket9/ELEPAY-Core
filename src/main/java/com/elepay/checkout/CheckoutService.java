@@ -10,6 +10,7 @@ import com.elepay.merchant.MerchantAccess;
 import com.elepay.outbox.Outbox;
 import com.elepay.rails.RailEvents;
 import com.elepay.rails.RailTransactions;
+import com.elepay.operations.EmtechCapture;
 import com.elepay.wallet.CustomerDirectory;
 import java.time.OffsetDateTime;
 import java.util.*;
@@ -49,6 +50,7 @@ class CheckoutService {
     private final boolean jobsEnabled;
     private final CustomerDirectory customers;
     private final CheckoutConfigService config;
+    private final EmtechCapture regulatory;
     private com.elepay.identity.KillSwitchService killSwitch;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -58,6 +60,7 @@ class CheckoutService {
 
     CheckoutService(JdbcClient db, Ledger ledger, MerchantAccess merchants, RailTransactions rails, Outbox outbox,
                     Audit audit, OpsQueue ops, CustomerDirectory customers, CheckoutConfigService config,
+                    EmtechCapture regulatory,
                     @Value("${elepay.fees.customer.wallet-bps:0}") int walletBps,
                     @Value("${elepay.fees.customer.wallet-fixed:0}") int walletFixed,
                     @Value("${elepay.fees.customer.momo-bps:0}") int momoBps,
@@ -67,6 +70,7 @@ class CheckoutService {
                     @Value("${elepay.checkout.jobs-enabled:true}") boolean jobsEnabled) {
         this.db = db;
         this.customers = customers;
+        this.regulatory = regulatory;
         this.ledger = ledger;
         this.merchants = merchants;
         this.rails = rails;
@@ -510,6 +514,13 @@ class CheckoutService {
                 "allocations", c.allocations().stream().map(a -> Map.of("line", a.line(),
                         "merchantId", a.merchantId().toString(), "amount", a.amount())).toList()), recipients(c));
         audit.record("system", "checkout.paid", "checkout:" + c.reference(), Map.of("method", method, "total", total));
+        regulatory.paidCheckout(c.id());
+    }
+
+    /** Stamps the customer channel. Web and app are not inferred from the handset's location. */
+    void noteChannel(String reference, String channel) {
+        if (channel == null || channel.isBlank()) return;
+        db.sql("UPDATE checkout SET channel = :c WHERE reference = :r").param("c", channel).param("r", reference).update();
     }
 
     private static Set<UUID> recipients(Checkout c) {
@@ -545,6 +556,7 @@ class CheckoutService {
         db.sql("UPDATE payment_attempt SET status = 'failed' WHERE id = :id").param("id", event.purposeId()).update();
         db.sql("UPDATE checkout SET status = 'open', payment_method = NULL WHERE id = :id AND status = 'processing'")
                 .param("id", checkoutId).update();
+        regulatory.failedCheckout(checkoutId, event.reason());
     }
 
     // ---- taking money back from a line ------------------------------------------------------
@@ -651,6 +663,7 @@ class CheckoutService {
         outbox.publish("refund", refundRef, toWallet ? "refund.completed" : "refund.pending", Map.of(
                 "refund", refundRef, "checkout", c.reference(), "line", line, "amount", amount),
                 setOf(a.merchantId(), c.collectorId()));
+        if (toWallet) regulatory.refund(id);
         return new Refund(id, refundRef, c.reference(), line, amount, t.fee(), t.platform(),
                 toWallet ? "wallet" : "rail", toWallet ? "completed" : "pending", posted.transactionId());
     }
@@ -670,12 +683,15 @@ class CheckoutService {
                 List.of(Leg.debit(Ledger.REFUNDS_IN_FLIGHT, amount), Leg.credit(Ledger.clearing(event.rail()), amount))));
         db.sql("UPDATE refund SET status = 'completed', completion_tx = :tx WHERE id = :id")
                 .param("tx", posted.transactionId()).param("id", event.purposeId()).update();
+        regulatory.refund(event.purposeId());
     }
 
     @EventListener
     void onRefundRailFailed(RailEvents.Failed event) {
         if (!event.purpose().equals("refund")) return;
-        db.sql("UPDATE refund SET status = 'failed' WHERE id = :id AND status = 'pending'").param("id", event.purposeId()).update();
+        int failed = db.sql("UPDATE refund SET status = 'failed' WHERE id = :id AND status = 'pending'")
+                .param("id", event.purposeId()).update();
+        if (failed == 1) regulatory.refund(event.purposeId());
         ops.raise("refund_delivery_failed", "high", "refund:" + event.purposeId(), Map.of(
                 "amount", event.amount(), "reason", String.valueOf(event.reason()),
                 "note", "Funds are held in refunds_in_flight; retry or credit the customer's wallet"));
@@ -771,6 +787,7 @@ class CheckoutService {
         audit.record(actor, "dispute.opened", "checkout:" + reference, Map.of("line", line, "amount", amount));
         outbox.publish("dispute", id, "dispute.opened", Map.of("dispute", id.toString(), "checkout", reference,
                 "line", line, "amount", amount), setOf(a.merchantId(), c.collectorId()));
+        regulatory.disputeOpened(id);
         return dispute(id);
     }
 
@@ -861,6 +878,7 @@ class CheckoutService {
         audit.record(actor, "dispute.resolved", "dispute:" + id, Map.of("outcome", outcome));
         outbox.publish("dispute", id, "dispute.resolved", Map.of("dispute", id.toString(), "outcome", outcome,
                 "checkout", c.reference()), setOf(a.merchantId(), c.collectorId()));
+        regulatory.disputeResolved(id);
         return dispute(id);
     }
 

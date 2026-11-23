@@ -247,6 +247,46 @@ class Merchants {
         return new Branch(branch, request.name(), true);
     }
 
+    public record Locality(@jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 80) String city,
+                           @jakarta.validation.constraints.Size(max = 10) String region,
+                           @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Pattern(regexp = "[A-Z]{2}") String country) {}
+
+    @PutMapping("/merchants/{id}/locality")
+    @Transactional
+    public Map<String, String> merchantLocality(@PathVariable UUID id, @Valid @RequestBody Locality request) {
+        access.require(id, MANAGE);
+        db.sql("UPDATE merchant SET city = :city, region = :region, country = :country WHERE id = :id")
+                .param("city", request.city()).param("region", request.region()).param("country", request.country())
+                .param("id", id).update();
+        return Map.of("status", "saved");
+    }
+
+    @PutMapping("/merchants/{id}/branches/{branchId}/locality")
+    @Transactional
+    public Map<String, String> branchLocality(@PathVariable UUID id, @PathVariable UUID branchId,
+                                              @Valid @RequestBody Locality request) {
+        access.require(id, MANAGE);
+        if (!access.branchBelongs(id, branchId)) throw ApiException.notFound("Branch not found");
+        db.sql("UPDATE merchant_branch SET city = :city, region = :region, country = :country WHERE id = :id")
+                .param("city", request.city()).param("region", request.region()).param("country", request.country())
+                .param("id", branchId).update();
+        return Map.of("status", "saved");
+    }
+
+    @PutMapping("/merchants/{id}/settlement-destinations/{destination}/locality")
+    @Transactional
+    public Map<String, String> destinationLocality(@PathVariable UUID id, @PathVariable UUID destination,
+                                                   @Valid @RequestBody Locality request) {
+        access.require(id, MANAGE);
+        int updated = db.sql("""
+                UPDATE settlement_destination SET city = :city, region = :region, country = :country
+                WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m""")
+                .param("city", request.city()).param("region", request.region()).param("country", request.country())
+                .param("d", destination).param("m", id).update();
+        if (updated == 0) throw ApiException.notFound("Destination not found");
+        return Map.of("status", "saved");
+    }
+
     @GetMapping("/merchants/{id}/branches")
     public List<Branch> branches(@PathVariable UUID id) {
         access.require(id, VIEW);

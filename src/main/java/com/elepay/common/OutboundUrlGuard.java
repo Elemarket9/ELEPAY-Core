@@ -5,6 +5,8 @@ import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,8 +18,11 @@ import org.springframework.stereotype.Component;
  * <p>In production only {@code https} to public internet hosts on ports 443 or 8443 is allowed. Every
  * address the host resolves to is checked, at registration and again before each call (DNS can change):
  * loopback, private (RFC 1918), carrier-grade NAT, link-local (including cloud metadata at
- * 169.254.169.254), multicast, unique-local IPv6 and reserved ranges are refused. Development profiles may
- * allow http and private hosts for local receivers.
+ * 169.254.169.254), multicast, unique-local IPv6 and reserved ranges are refused, including the
+ * benchmarking range 198.18.0.0/15 that some egress proxies publish. Development profiles may
+ * allow http and private hosts for local receivers. An operator can additionally allow specific
+ * CIDRs ({@code elepay.outbound.allowed-cidrs}); that list is empty unless set, so the default
+ * SSRF checks stay in force.
  */
 @Component
 public class OutboundUrlGuard {
@@ -34,24 +39,28 @@ public class OutboundUrlGuard {
             "openapi.at.com.gh",
             "gip.ghipss.com",
             "api.ghipss.com",
-            "switch.ghipss.com"
+            "switch.ghipss.com",
+            "api.emtech.com"
     );
 
     private final boolean allowHttp;
     private final boolean allowPrivateHosts;
     private volatile boolean strictAllowlistEnabled;
     private final Set<String> allowedHosts;
+    private final List<Cidr> allowedCidrs;
 
     public OutboundUrlGuard(boolean allowHttp, boolean allowPrivateHosts) {
-        this(allowHttp, allowPrivateHosts, false, DEFAULT_STAGE1_ALLOWED_HOSTS);
+        this(allowHttp, allowPrivateHosts, false, DEFAULT_STAGE1_ALLOWED_HOSTS, Set.of());
     }
 
+    /** {@code allowedCidrs} is empty unless an egress proxy range is configured. */
     @org.springframework.beans.factory.annotation.Autowired
     public OutboundUrlGuard(
             @Value("${elepay.outbound.allow-http:false}") boolean allowHttp,
             @Value("${elepay.outbound.allow-private-hosts:false}") boolean allowPrivateHosts,
             @Value("${elepay.outbound.strict-allowlist-enabled:false}") boolean strictAllowlistEnabled,
-            @Value("${elepay.outbound.allowed-hosts:custodian.gcb.com.gh,custodian.ecobank.com.gh,custodian.stanbic.com.gh,proxy.momoapi.mtn.com,momoapi.momo.africa,api.telecelcash.com.gh,openapi.telecel.com.gh,api.airteltigomoney.com.gh,openapi.at.com.gh,gip.ghipss.com,api.ghipss.com,switch.ghipss.com}") Set<String> allowedHosts
+            @Value("${elepay.outbound.allowed-hosts:custodian.gcb.com.gh,custodian.ecobank.com.gh,custodian.stanbic.com.gh,proxy.momoapi.mtn.com,momoapi.momo.africa,api.telecelcash.com.gh,openapi.telecel.com.gh,api.airteltigomoney.com.gh,openapi.at.com.gh,gip.ghipss.com,api.ghipss.com,switch.ghipss.com,api.emtech.com}") Set<String> allowedHosts,
+            @Value("${elepay.outbound.allowed-cidrs:}") Set<String> allowedCidrs
     ) {
         this.allowHttp = allowHttp;
         this.allowPrivateHosts = allowPrivateHosts;
@@ -59,6 +68,7 @@ public class OutboundUrlGuard {
         this.allowedHosts = allowedHosts != null && !allowedHosts.isEmpty()
                 ? allowedHosts.stream().map(h -> h.trim().toLowerCase(Locale.ROOT)).collect(java.util.stream.Collectors.toUnmodifiableSet())
                 : DEFAULT_STAGE1_ALLOWED_HOSTS;
+        this.allowedCidrs = parseCidrs(allowedCidrs);
     }
 
     public boolean isStrictAllowlistEnabled() {
@@ -121,10 +131,13 @@ public class OutboundUrlGuard {
         try {
             addresses = resolveForConnection(host);
         } catch (UnknownHostException e) {
+            String detail = e.getMessage() == null ? "" : e.getMessage();
+            if (detail.contains("blocked address range") || detail.contains("not allowlisted")) return detail;
             return "The host name does not resolve";
         }
-        for (InetAddress a : addresses) {
-            if (!isPublic(a)) return "The URL must point to a public host";
+        for (InetAddress address : addresses) {
+            String blocked = blockedAddress(host, address);
+            if (blocked != null) return blocked;
         }
         return null;
     }
@@ -138,10 +151,78 @@ public class OutboundUrlGuard {
         if (addresses.length == 0) throw new UnknownHostException("Destination did not resolve");
         if (!allowPrivateHosts) {
             for (InetAddress address : addresses) {
-                if (!isPublic(address)) throw new UnknownHostException("Non-public destination refused");
+                String blocked = blockedAddress(host, address);
+                if (blocked != null) throw new UnknownHostException(blocked);
             }
         }
         return addresses;
+    }
+
+    /**
+     * Why this resolved address is refused, or null when it is a public address or sits in an
+     * explicitly configured egress CIDR.
+     */
+    public String blockedAddress(String host, InetAddress address) {
+        if (address == null || isPublic(address) || isExplicitlyAllowed(address)) return null;
+        return "The host " + host + " resolved to " + address.getHostAddress()
+                + ", which is in a blocked address range";
+    }
+
+    private boolean isExplicitlyAllowed(InetAddress address) {
+        for (Cidr cidr : allowedCidrs) {
+            if (cidr.contains(address)) return true;
+        }
+        return false;
+    }
+
+    private static List<Cidr> parseCidrs(Set<String> raw) {
+        if (raw == null || raw.isEmpty()) return List.of();
+        List<Cidr> parsed = new ArrayList<>();
+        for (String entry : raw) {
+            if (entry == null || entry.isBlank()) continue;
+            for (String item : entry.split(",")) {
+                if (!item.isBlank()) parsed.add(Cidr.parse(item.trim()));
+            }
+        }
+        return List.copyOf(parsed);
+    }
+
+    /** One IPv4 or IPv6 prefix. A malformed value fails closed at startup rather than being ignored. */
+    record Cidr(byte[] network, int prefix) {
+        static Cidr parse(String text) {
+            int slash = text.indexOf('/');
+            if (slash < 1 || slash == text.length() - 1) {
+                throw new IllegalArgumentException("Egress CIDR must look like 198.18.0.0/15: " + text);
+            }
+            InetAddress base;
+            try {
+                base = InetAddress.getByName(text.substring(0, slash));
+            } catch (UnknownHostException e) {
+                throw new IllegalArgumentException("Egress CIDR has no address: " + text);
+            }
+            int bits;
+            try {
+                bits = Integer.parseInt(text.substring(slash + 1));
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Egress CIDR has no prefix length: " + text);
+            }
+            int max = base.getAddress().length * 8;
+            if (bits < 0 || bits > max) throw new IllegalArgumentException("Egress CIDR prefix is out of range: " + text);
+            return new Cidr(base.getAddress(), bits);
+        }
+
+        boolean contains(InetAddress address) {
+            byte[] ip = address.getAddress();
+            if (ip.length != network.length) return false;
+            int full = prefix / 8;
+            int remainder = prefix % 8;
+            for (int i = 0; i < full; i++) {
+                if (ip[i] != network[i]) return false;
+            }
+            if (remainder == 0) return true;
+            int mask = (0xff << (8 - remainder)) & 0xff;
+            return (ip[full] & mask) == (network[full] & mask);
+        }
     }
 
     static boolean isPublic(InetAddress a) {

@@ -4,6 +4,7 @@ import com.elepay.common.ApiException;
 import com.elepay.common.Idempotency;
 import com.elepay.common.References;
 import com.elepay.ledger.Ledger;
+import com.elepay.operations.EmtechCapture;
 import com.elepay.outbox.Outbox;
 import com.elepay.rails.RailEvents;
 import com.elepay.rails.RailTransactions;
@@ -13,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -36,13 +38,14 @@ class WalletFunding {
     private final Ledger ledger;
     private final Outbox outbox;
     private final TransactionTemplate tx;
+    private final EmtechCapture regulatory;
     private final TransferLimits limits;
 
     @org.springframework.beans.factory.annotation.Value("${elepay.wallet.topup-own-msisdn-only:true}")
     private boolean ownMsisdnOnly = true;
 
     WalletFunding(JdbcClient db, Wallets wallets, RailTransactions rails, Idempotency idempotency, Ledger ledger,
-                  Outbox outbox, PlatformTransactionManager tm, TransferLimits limits) {
+                  Outbox outbox, PlatformTransactionManager tm, EmtechCapture regulatory, TransferLimits limits) {
         this.db = db;
         this.wallets = wallets;
         this.rails = rails;
@@ -50,6 +53,7 @@ class WalletFunding {
         this.ledger = ledger;
         this.outbox = outbox;
         this.tx = new TransactionTemplate(tm);
+        this.regulatory = regulatory;
         this.limits = limits;
     }
 
@@ -60,7 +64,10 @@ class WalletFunding {
                      String redirectUrl, java.time.OffsetDateTime createdAt) {}
 
     @PostMapping("/topups")
-    public Operation topUp(@RequestHeader("Idempotency-Key") String key, @Valid @RequestBody TopUp request) {
+    public Operation topUp(@RequestHeader("Idempotency-Key") String key,
+                           @RequestHeader(value = "X-Elepay-Channel", required = false) String channel,
+                           HttpServletRequest http,
+                           @Valid @RequestBody TopUp request) {
         UUID customer = wallets.customer(com.elepay.identity.Actor.current());
         String msisdn = null;
         if (request.method().equals("momo")) {
@@ -74,18 +81,24 @@ class WalletFunding {
                 throw ApiException.badRequest("phone_not_on_file", "Top up only from the wallet's verified phone number");
             }
         }
+        String payChannel = "MOBILE_APP".equals(channel) ? "MOBILE_APP" : "WEB";
+        String coarseIp = http.getRemoteAddr();
         Operation created = tx.execute(s -> idempotency.execute("wallet-topup:" + customer, key, request, Operation.class, () -> {
             limits.checkCredit(customer, request.amount());
             UUID id = UUID.randomUUID();
             String reference = References.next("TOP");
+            var origin = regulatory.customerOrigin(customer, payChannel, coarseIp);
             var railTx = rails.create(rails.defaultRail(), "charge", "wallet_topup", id, request.amount(),
                     new RailTransactions.Request(request.method(), phone, request.network(), null, null,
                             "ELEPAY wallet top-up " + reference, null, null, null, null, null, null));
             db.sql("""
-                    INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status, rail_tx, counterparty)
-                    VALUES (:id, :ref, :c, 'topup', :amount, 'pending', :tx, :cp)""")
+                    INSERT INTO wallet_operation (id, reference, customer_id, kind, amount, status, rail_tx, counterparty,
+                        channel, origin_city, origin_region, origin_country, origin_source)
+                    VALUES (:id, :ref, :c, 'topup', :amount, 'pending', :tx, :cp, :channel, :city, :region, :country, :source)""")
                     .param("id", id).param("ref", reference).param("c", customer).param("amount", request.amount())
-                    .param("tx", railTx.id()).param("cp", request.method() + (phone == null ? "" : " +" + phone)).update();
+                    .param("tx", railTx.id()).param("cp", request.method() + (phone == null ? "" : " +" + phone))
+                    .param("channel", payChannel).param("city", origin.city()).param("region", origin.region())
+                    .param("country", origin.country()).param("source", origin.source()).update();
             return operation(id);
         }));
         UUID railTx = db.sql("SELECT rail_tx FROM wallet_operation WHERE id = :id").param("id", created.id())
@@ -165,6 +178,7 @@ class WalletFunding {
                 Ledger.Leg.credit(CustomerDirectory.available(customer), event.amount()))).describedAs((String) op.get()[1]));
         db.sql("UPDATE wallet_operation SET status = 'completed', journal_tx = :tx, updated_at = now() WHERE id = :id")
                 .param("tx", posted.transactionId()).param("id", event.purposeId()).update();
+        regulatory.walletTopup(event.purposeId(), null);
         outbox.publish("wallet", op.get()[1], "wallet.topup.completed",
                 Map.of("reference", op.get()[1], "amount", event.amount()), Set.of());
     }
@@ -172,7 +186,8 @@ class WalletFunding {
     @EventListener
     void onFailed(RailEvents.Failed event) {
         if (!event.purpose().equals("wallet_topup")) return;
-        db.sql("UPDATE wallet_operation SET status = 'failed', updated_at = now() WHERE id = :id AND status = 'pending'")
+        int failed = db.sql("UPDATE wallet_operation SET status = 'failed', updated_at = now() WHERE id = :id AND status = 'pending'")
                 .param("id", event.purposeId()).update();
+        if (failed == 1) regulatory.walletTopup(event.purposeId(), null);
     }
 }
