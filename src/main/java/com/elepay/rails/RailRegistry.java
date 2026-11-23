@@ -30,7 +30,6 @@ public class RailRegistry {
 
     /** Select by explicit channel/network; never cross networks merely because one adapter is installed. */
     public String select(String direction, String channel, String network) {
-        if ("sandbox".equals(defaultName)) return "sandbox"; // Only a test-classpath bean can supply this name.
         String name = switch (channel == null ? "" : channel.toLowerCase(java.util.Locale.ROOT)) {
             case "momo" -> network == null ? "" : network.toLowerCase(java.util.Locale.ROOT);
             case "bank" -> "ghipss";
