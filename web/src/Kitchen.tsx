@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, newKey } from "./api";
+import { KDS_LANGUAGES, kdsText, readKdsLocale, type KdsLanguage } from "./kds/i18n";
 import { LanKitchenBoard } from "./LanKitchenBoard";
 import { getToken } from "./auth";
 import { kitchenClient, learnServerTime, loadDevice, pairDevice, saveDevice, type DeviceCredential, type KitchenCall } from "./kds/device";
@@ -184,6 +185,25 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [lang, setLang] = useState<KdsLanguage>(readKdsLocale);
+
+  const canRecall = (view: TicketView) => {
+    const timestamp = view.ticket.status === "SERVED" ? view.ticket.servedAt : view.ticket.readyAt;
+    return !!timestamp && ["SERVED", "READY"].includes(view.ticket.status)
+      && now >= Date.parse(timestamp) && now - Date.parse(timestamp) <= 300000;
+  };
+
+  async function recall(view: TicketView) {
+    try {
+      const result = await client<BumpResult>(`${BASE}/tickets/${view.ticket.id}/recall`, {
+        method: "POST", body: { from: view.ticket.status, actionId: newKey() },
+      });
+      if (result.applied) {
+        update((s) => ({ ...s, tickets: { ...s.tickets, [view.ticket.id]: result.view } }));
+        setNotice("Last kitchen bump recalled.");
+      } else setNotice("Recall refused: " + (result.reason ?? "status changed"));
+    } catch (e) { setNotice(e instanceof Error ? e.message : "Recall failed"); }
+  }
 
   const update = useCallback((fn: (s: KdsState) => KdsState) => {
     const next = fn(stateRef.current);
@@ -267,7 +287,16 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
       <div className="kitchen-bar">
         <strong>{setup.stationName}</strong>
         <span className="muted">{setup.merchantName}</span>
-        <span className="kitchen-count">{tickets.length} open</span>
+        <span className="kitchen-count">{tickets.length} {kdsText(lang, "orders")}</span>
+        <label className="kitchen-locale">{kdsText(lang, "language")}
+          <select value={lang} onChange={(e) => {
+            const selected = e.target.value as KdsLanguage;
+            setLang(selected);
+            try { localStorage.setItem("elepay.kds.lang", selected); } catch { /* optional preference */ }
+          }}>
+            {KDS_LANGUAGES.map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+          </select>
+        </label>
         <span className={`kitchen-net ${online ? "on" : "off"}`}>
           {online ? "● Online" : "● No internet"}
           {waiting > 0 && ` · ${waiting} update${waiting > 1 ? "s" : ""} waiting to send`}
@@ -284,7 +313,7 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
         </div>
       ))}
       {notice && <div className="kitchen-notice">{notice}</div>}
-      {tickets.length === 0 && <p className="kitchen-empty">No open orders</p>}
+      {tickets.length === 0 && <p className="kitchen-empty">No open {kdsText(lang, "orders")}</p>}
       <div className="kitchen-grid">
         {tickets.map((v) => {
           const status = stationStatus(v, setup.stationId);
@@ -312,8 +341,17 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
               <footer>
                 {next && !(setup.stationId && next === "SERVED") && (
                   <button className={`kitchen-bump to-${next.toLowerCase()}`}
-                    onClick={() => update((s) => bump(s, v.ticket.id, setup.stationId, newKey()))}>{LABEL[next]}</button>
+                    onClick={() => update((s) => bump(s, v.ticket.id, setup.stationId, newKey()))>{next === "PREPARING" ? kdsText(lang, "start") : next === "READY" ? kdsText(lang, "ready") : kdsText(lang, "served")}</button>
                 )}
+                {canRecall(v) && !setup.stationId && <button className="secondary"
+                  onClick={() => void recall(v)}>Recall last bump (5 min)</button>}
+                {v.ticket.status === "READY" && <button className="secondary" onClick={() => {
+                  if ("speechSynthesis" in window) {
+                    const say = new SpeechSynthesisUtterance("Order " + num(v) + " is ready");
+                    say.lang = lang === "en" ? "en-GH" : lang;
+                    speechSynthesis.speak(say);
+                  }
+                }}>Speak ready</button>}
                 <button className="kitchen-more secondary" aria-label="More actions"
                   onClick={() => { setMenuFor(menuFor === v.ticket.id ? null : v.ticket.id); setConfirmCancel(null); }}>⋯</button>
               </footer>
@@ -330,11 +368,17 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
         })}
       </div>
       <LanKitchenBoard merchantId={setup.merchantId} now={now} />
+      <section className="kitchen-recent">
+        <h3>Recently served — recall within 5 minutes</h3>
+        {Object.values(state.tickets).filter((v) => v.ticket.status === "SERVED" && canRecall(v))
+          .map((v) => <button key={v.ticket.id} className="secondary"
+            onClick={() => void recall(v)}>
+            {num(v)} · Recall served order
+          </button>)}
+      </section>
     </div>
   );
 }
-
-const LABEL: Record<Status, string> = { NEW: "", PREPARING: "Start", READY: "Ready", SERVED: "Served", CANCELLED: "" };
 
 function num(v: TicketView) {
   return v.ticket.ticketNumber != null ? `#${String(v.ticket.ticketNumber).padStart(3, "0")}` : "#—";
