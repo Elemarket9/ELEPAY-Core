@@ -52,6 +52,7 @@
       "AllocationInput" : {
         "properties" : {
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -91,6 +92,7 @@
       "AmountRequest" : {
         "properties" : {
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -604,6 +606,7 @@
       "ConfirmedTransfer" : {
         "properties" : {
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -694,6 +697,7 @@
             "type" : "string"
           },
           "estDeliveryMinutes" : {
+            "exclusiveMinimum" : 0,
             "format" : "int32",
             "type" : "integer"
           },
@@ -705,6 +709,7 @@
           },
           "feeFixed" : {
             "format" : "int64",
+            "minimum" : 0,
             "type" : "integer"
           },
           "fundingMethod" : {
@@ -712,10 +717,12 @@
             "type" : "string"
           },
           "maxAmount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
           "minAmount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -759,6 +766,7 @@
             "type" : "array"
           },
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -1623,10 +1631,12 @@
           },
           "commissionMin" : {
             "format" : "int64",
+            "minimum" : 0,
             "type" : "integer"
           },
           "processingFee" : {
             "format" : "int64",
+            "minimum" : 0,
             "type" : "integer"
           },
           "reserveBps" : {
@@ -1775,9 +1785,11 @@
       "IngestRateRequest" : {
         "properties" : {
           "askRate" : {
+            "exclusiveMinimum" : 0,
             "type" : "number"
           },
           "bidRate" : {
+            "exclusiveMinimum" : 0,
             "type" : "number"
           },
           "destinationCurrency" : {
@@ -1793,6 +1805,7 @@
             "type" : "string"
           },
           "weight" : {
+            "exclusiveMinimum" : 0,
             "format" : "double",
             "type" : "number"
           }
@@ -1867,6 +1880,7 @@
             "type" : "string"
           },
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -2137,6 +2151,7 @@
       "LinkRequest" : {
         "properties" : {
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -2548,6 +2563,7 @@
       "OpenDispute" : {
         "properties" : {
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -2664,6 +2680,7 @@
           },
           "minAmount" : {
             "format" : "int64",
+            "minimum" : 0,
             "type" : "integer"
           },
           "mode" : {
@@ -3133,6 +3150,7 @@
       "PricingRequest" : {
         "properties" : {
           "baseRate" : {
+            "exclusiveMinimum" : 0,
             "type" : "number"
           },
           "corridor" : {
@@ -3143,6 +3161,7 @@
             "type" : "string"
           },
           "sourceAmount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           }
@@ -3615,6 +3634,7 @@
       "RefundRequest" : {
         "properties" : {
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -3746,6 +3766,7 @@
       "ReserveReleaseRequest" : {
         "properties" : {
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -3851,6 +3872,7 @@
         "properties" : {
           "minAmount" : {
             "format" : "int64",
+            "minimum" : 0,
             "type" : "integer"
           },
           "mode" : {
@@ -4315,6 +4337,7 @@
       "TopUp" : {
         "properties" : {
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "maximum" : 100000000,
             "type" : "integer"
@@ -4341,6 +4364,7 @@
       "Transfer" : {
         "properties" : {
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
@@ -4658,6 +4682,7 @@
       "Withdrawal" : {
         "properties" : {
           "amount" : {
+            "exclusiveMinimum" : 0,
             "format" : "int64",
             "type" : "integer"
           },
