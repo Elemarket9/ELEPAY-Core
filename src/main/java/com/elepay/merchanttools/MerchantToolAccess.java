@@ -29,7 +29,14 @@ public class MerchantToolAccess {
         CASHIER("SELECT merchant_id FROM pos_cashier WHERE id = :id"),
         SHIFT("SELECT merchant_id FROM pos_shift WHERE id = :id"),
         CART("SELECT merchant_id FROM pos_cart_held WHERE id = :id"),
-        ORDER("SELECT merchant_id FROM pos_order WHERE id = :id");
+        ORDER("SELECT merchant_id FROM pos_order WHERE id = :id"),
+        ORDER_ITEM("SELECT o.merchant_id FROM pos_order_item i JOIN pos_order o ON o.id = i.order_id WHERE i.id = :id"),
+        FLOOR_PLAN("SELECT merchant_id FROM restaurant_floor_plan WHERE id = :id"),
+        TABLE("SELECT merchant_id FROM restaurant_table WHERE id = :id"),
+        MODIFIER_GROUP("SELECT merchant_id FROM restaurant_modifier_group WHERE id = :id"),
+        RECIPE("SELECT merchant_id FROM restaurant_recipe WHERE id = :id"),
+        KDS_TICKET("SELECT merchant_id FROM restaurant_kds_ticket WHERE id = :id"),
+        KDS_ITEM("SELECT t.merchant_id FROM restaurant_kds_item i JOIN restaurant_kds_ticket t ON t.id = i.ticket_id WHERE i.id = :id");
 
         private final String sql;
         Resource(String sql) { this.sql = sql; }
@@ -41,6 +48,24 @@ public class MerchantToolAccess {
         if (access.branchScoped()) throw ApiException.forbidden("Merchant-wide administrator required");
         return merchantId;
     }
+
+    /** Read access for any merchant member, including branch-scoped staff. */
+    public UUID view(UUID merchantId) {
+        if (merchantId == null) throw ApiException.badRequest("merchant_required", "Merchant is required");
+        merchants.require(merchantId, MerchantAccess.Permission.VIEW);
+        return merchantId;
+    }
+
+    public UUID view(Resource type, UUID id) { return view(owner(type, id)); }
+
+    /** Day-to-day operation (cashiers, waiters, kitchen staff): placing and progressing orders. */
+    public UUID operate(UUID merchantId) {
+        if (merchantId == null) throw ApiException.badRequest("merchant_required", "Merchant is required");
+        merchants.require(merchantId, MerchantAccess.Permission.COLLECT);
+        return merchantId;
+    }
+
+    public UUID operate(Resource type, UUID id) { return operate(owner(type, id)); }
 
     public UUID owner(Resource type, UUID id) {
         if (id == null) throw ApiException.badRequest("resource_required", "Resource is required");
