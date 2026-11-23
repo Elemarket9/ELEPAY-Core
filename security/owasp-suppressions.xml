@@ -2,26 +2,19 @@
 <suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.4.xsd">
   <suppress>
     <notes><![CDATA[
-      Evidence (reviewed 2026-11-23):
+      Reviewed 2026-11-23. GHSA-8988-4f7v-96qf / CVE-2026-54285
+      concerns JavaScript npm @opentelemetry/core (opentelemetry-js < 2.8.0).
       https://github.com/advisories/GHSA-8988-4f7v-96qf
-      CVE-2026-54285 affects npm @opentelemetry/core (opentelemetry-js
-      before 2.8.0), not io.opentelemetry:opentelemetry-api (Java).
-      OWASP CPE heuristic incorrectly associates the JS product with
-      this particular Java artifact version. Exempt ONLY this exact
-      GAV and CVE; all other CVEs and all future versions remain scanned.
-      Java API/SDK are kept aligned by io.opentelemetry:opentelemetry-bom.
+
+      OWASP 13.0.0 incorrectly correlates that JS-only vulnerability to multiple
+      Java OpenTelemetry 1.68.0 modules (api, sdk, common, etc.) using the
+      general vendor/product CPE. This rule suppresses ONLY this one CVE when
+      matched against an io.opentelemetry Java Maven module at exactly 1.68.0.
+      No other CVE is suppressed; no future Java versions are exempt.
+      Java 1.68.0 API/SDK are aligned through the OpenTelemetry BOM.
+      See also https://issues.apache.org/jira/browse/ZOOKEEPER-5087
     ]]></notes>
-    <gav>io.opentelemetry:opentelemetry-api:1.68.0</gav>
-    <cve>CVE-2026-54285</cve>
-  </suppress>
-  <suppress>
-    <notes><![CDATA[
-      Same JS-only CVE matched to Java SDK, also a false positive:
-      https://github.com/advisories/GHSA-8988-4f7v-96qf
-      This rule is limited to Java SDK 1.68.0 and this single CVE.
-      All other vulnerability IDs stay reportable and blocking.
-    ]]></notes>
-    <gav>io.opentelemetry:opentelemetry-sdk:1.68.0</gav>
+    <packageUrl regex="true">^pkg:maven/io\.opentelemetry/opentelemetry-[A-Za-z0-9.-]+@1\.68\.0$</packageUrl>
     <cve>CVE-2026-54285</cve>
   </suppress>
 </suppressions>

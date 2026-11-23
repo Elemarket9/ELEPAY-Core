@@ -184,7 +184,7 @@ jobs:
           extra_args: --only-verified --fail-on-scan-errors
 
       - name: Verify scan gate rejects unreadable and zero-byte scans
-        run: python3 -m unittest discover -s scripts -p 'test_assert_trufflehog_scan.py' -v
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
       - name: Scan actual packaged image for verified secrets (no empty-scan success)
         shell: bash
