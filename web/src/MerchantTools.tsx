@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { Code128Barcode } from "./Barcode128";
+import { addCashLocally, loadOfflineCatalog, newOfflineOrder, offlineDb, reconcileQueued,
+  saveOfflineCatalog, type OfflineOrder, type OfflinePayload, type ReconcileResult } from "./offline-pos";
 import { api, ApiError, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
 
@@ -188,7 +190,9 @@ interface TerminalSession { status: string; instructions: string | null; checkou
 const TAX_KEY = (merchantId: string) => `elepay.pos.taxPercent.${merchantId}`;
 
 export function PosRegister({ merchant }: { merchant: MerchantRef }) {
-  const [catalog, reloadCatalog, loadError] = useLoad<CatalogRow[]>(`/v1/inventory/catalog/merchant/${merchant.id}`, []);
+  const [serverCatalog, reloadCatalog, loadError] = useLoad<CatalogRow[]>(`/v1/inventory/catalog/merchant/${merchant.id}`, []);
+  const [cachedCatalog, setCachedCatalog] = useState<CatalogRow[]>([]);
+  const catalog = serverCatalog.length ? serverCatalog : cachedCatalog;
   const [tables, reloadTables] = useLoad<DiningTableOption[]>(`/v1/restaurant/tables/merchant/${merchant.id}`, []);
   const [terminals] = useLoad<PaymentTerminal[]>(`/v1/pos/terminals/available/${merchant.id}`, []);
   const [orderType, setOrderType] = useState("RETAIL");
@@ -214,6 +218,62 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [receipt, setReceipt] = useState<{ receipt: PosReceipt; order: PosOrder } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine);
+  const [offlineOrders, setOfflineOrders] = useState<OfflineOrder[]>([]);
+  const [activeOffline, setActiveOffline] = useState<OfflineOrder | null>(null);
+  const [offlineWarning, setOfflineWarning] = useState("");
+  const syncBusy = useRef(false);
+
+  async function refreshOffline() {
+    const saved = await offlineDb.list(merchant.id);
+    setOfflineOrders(saved);
+    setActiveOffline((selected) => selected
+      ? saved.find((o) => o.offlineTxId === selected.offlineTxId) ?? selected : null);
+  }
+
+  async function syncPending() {
+    if (syncBusy.current || !navigator.onLine) return;
+    syncBusy.current = true;
+    try {
+      await reconcileQueued(offlineDb, merchant.id,
+        (payload: OfflinePayload) => api<ReconcileResult>("/v1/pos/sync", { body: payload }));
+      await refreshOffline();
+    } catch (e) {
+      setOfflineWarning(`Local orders retained: ${message(e)}`);
+    } finally {
+      syncBusy.current = false;
+    }
+  }
+
+  useEffect(() => {
+    let live = true;
+    void loadOfflineCatalog<CatalogRow>(merchant.id).then((snapshot) => {
+      if (live && snapshot) setCachedCatalog(snapshot.rows);
+    }).catch(() => {});
+    void refreshOffline().catch(() => setOfflineWarning("Offline storage cannot be opened on this device"));
+    const status = () => {
+      setNetworkOnline(navigator.onLine);
+      if (navigator.onLine) void syncPending();
+    };
+    window.addEventListener("online", status);
+    window.addEventListener("offline", status);
+    const interval = window.setInterval(() => {
+      if (navigator.onLine) void syncPending();
+    }, 12000);
+    if (navigator.onLine) void syncPending();
+    void navigator.storage?.persist?.().catch(() => false);
+    return () => {
+      live = false;
+      clearInterval(interval);
+      window.removeEventListener("online", status);
+      window.removeEventListener("offline", status);
+    };
+  }, [merchant.id]);
+
+  useEffect(() => {
+    if (serverCatalog.length) void saveOfflineCatalog(merchant.id, serverCatalog).catch(() =>
+      setOfflineWarning("Menu snapshot could not be saved for offline operation"));
+  }, [merchant.id, serverCatalog]);
 
   const subtotal = cart.reduce((s, c) => s + c.row.retailPricePesewas * c.qty, 0);
   const discountP = discount.trim() ? money(discount) : 0;
@@ -221,7 +281,9 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const taxValid = Number.isFinite(taxRate) && taxRate >= 0 && taxRate <= 100;
   const tax = discountP !== null && taxValid ? Math.round((subtotal - Math.min(discountP, subtotal)) * taxRate / 100) : 0;
   const total = discountP !== null ? subtotal - Math.min(discountP, subtotal) + tax : subtotal;
-  const balanceDue = order ? Math.max(0, order.totalPesewas - order.paidPesewas) : total;
+  const locallyCollected = activeOffline?.payments.reduce((sum, x) => sum + x.amountPesewas, 0) ?? 0;
+  const balanceDue = activeOffline ? Math.max(0, activeOffline.totalPesewas - locallyCollected)
+    : order ? Math.max(0, order.totalPesewas - order.paidPesewas) : total;
   const shown = catalog.filter((r) => `${itemLabel(r)} ${r.sku} ${r.barcode ?? ""}`.toLowerCase().includes(search.toLowerCase()));
 
   useEffect(() => { try { localStorage.setItem(TAX_KEY(merchant.id), taxPercent); } catch { /* ignore */ } }, [taxPercent, merchant.id]);
@@ -230,6 +292,35 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const add = (row: CatalogRow) => setCart((c) => c.some((x) => x.row.variantId === row.variantId)
     ? c.map((x) => x.row.variantId === row.variantId ? { ...x, qty: x.qty + 1 } : x) : [...c, { row, qty: 1 }]);
   const setQty = (id: string, qty: number) => setCart((c) => qty <= 0 ? c.filter((x) => x.row.variantId !== id) : c.map((x) => x.row.variantId === id ? { ...x, qty } : x));
+
+  async function queueCurrentOffline(receivedCashPesewas = 0) {
+    if (order || activeOffline || addingRound || digital)
+      throw new Error("Finish the current sale before offline capture");
+    if (discountP === null || !taxValid || cart.length === 0)
+      throw new Error("Choose items with a valid discount and tax");
+    if (orderType === "DINE_IN" && !tableId) throw new Error("Select a table");
+    const terminal = terminals.find((t) => t.id === terminalId);
+    let draft = newOfflineOrder({
+      merchantId: merchant.id, branchId: terminal?.branchId ?? null, terminalId: terminal?.id ?? null,
+      cashierId: null, customerId: null, orderType: orderType as OfflineOrder["orderType"],
+      tableId: tableId || null,
+      items: cart.map((c) => ({
+        variantId: c.row.variantId, itemName: itemLabel(c.row), quantity: c.qty,
+        unitPricePesewas: c.row.retailPricePesewas, discountPesewas: 0, taxPesewas: 0,
+        modifiersJson: "[]", seatNumber: null, course: "MAIN", notes: null,
+      })),
+      discountPesewas: Math.min(discountP, subtotal), taxPesewas: tax, tipPesewas: 0,
+      totalPesewas: total, payments: [],
+    });
+    if (receivedCashPesewas) draft = addCashLocally(draft, receivedCashPesewas);
+    await offlineDb.put(draft);
+    setActiveOffline(draft);
+    setCart([]);
+    setTendered("");
+    await refreshOffline();
+    setTableNotice("Saved locally. Other kitchen devices cannot see this order until it reaches the server.");
+    return draft;
+  }
 
   async function ensureOrder(): Promise<PosOrder> {
     if (order) return order;
