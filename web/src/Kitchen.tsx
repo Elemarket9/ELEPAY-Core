@@ -85,6 +85,7 @@ export function Kitchen() {
         <h1>{setup.merchantName}</h1>
         <p className="kitchen-station-name">{setup.stationName}</p>
         <button className="kitchen-big" onClick={() => { unlockAudio(); void keepAwake(); setStarted(true); }}>Start kitchen screen</button>
+        <p><a href="/kitchen/lan">Open restaurant LAN kitchen (works without cloud when edge is paired)</a></p>
         <button className="link" onClick={() => { try { store()?.removeItem(SETUP_KEY); } catch { /* ignore */ } setSetup(null); }}>
           Change station
         </button>
