@@ -15,6 +15,7 @@ class WP_Error {
     public function __construct($code, $message) { $this->code = $code; $this->message = $message; }
 }
 function __($message, $domain = null) { return $message; }
+function get_bloginfo($field) { return 'Test WordPress'; }
 function wc_format_decimal($amount, $decimals = 2) { return number_format((float) $amount, $decimals, '.', ''); }
 function wp_json_encode($data) { return json_encode($data); }
 function wp_generate_uuid4() {
