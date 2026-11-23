@@ -6,7 +6,7 @@ import { getToken } from "./auth";
 import { kitchenClient, learnServerTime, loadDevice, pairDevice, saveDevice, type DeviceCredential, type KitchenCall } from "./kds/device";
 import {
   applySync, backoff, bump, cancel, elapsed, load, save, settle, stationStatus, storageKey, urgency, visible,
-  nextStatus, type BumpResult, type KdsState, type QueuedAction, type Status, type SyncResult, type TicketView,
+  nextStatus, type BumpResult, type KdsState, type QueuedAction, type SyncResult, type TicketView,
 } from "./kds/engine";
 
 interface MerchantView { id: string; tradingName: string; role: string }
