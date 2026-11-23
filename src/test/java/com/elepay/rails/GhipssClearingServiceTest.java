@@ -14,6 +14,9 @@ class GhipssClearingServiceTest extends PostgresTestBase {
     @Autowired
     private GhipssClearingService ghipssService;
 
+    @Autowired
+    private org.springframework.jdbc.core.simple.JdbcClient db;
+
     @Test
     @DisplayName("GhIPSS clearing lifecycle: proxy registration, transfer initiation, and ledger settlement")
     void testGhipssClearingLifecycle() {
@@ -63,5 +66,46 @@ class GhipssClearingServiceTest extends PostgresTestBase {
         assertThat(queried).isPresent();
         assertThat(queried.get().status()).isEqualTo("SETTLED");
         assertThat(queried.get().ledgerTxId()).isEqualTo(settled.ledgerTxId());
+
+        // 5. Query by RRN and STAN
+        var byRrnStan = ghipssService.findByRrnAndStan(session.rrn(), session.stan());
+        assertThat(byRrnStan).isPresent();
+        assertThat(byRrnStan.get().sessionId()).isEqualTo(session.sessionId());
+    }
+
+    @Test
+    @DisplayName("Unique constraint on (rrn, stan) rejects duplicate records")
+    void testUniqueRrnStanConstraint() {
+        var session = ghipssService.initiateTransfer(
+                "ELEPAY_030",
+                "GCB_040",
+                "1010009999999",
+                "Aba Mansa",
+                GhipssClearingService.ProxyType.PHONE,
+                "+233240001122",
+                50_000L,
+                "GHS",
+                "pacs.008"
+        );
+
+        // Attempt direct insertion of duplicate (rrn, stan) pair
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> {
+            db.sql("""
+                INSERT INTO ghipss_clearing_record (
+                    id, session_id, clearing_cycle, originating_institution_code,
+                    destination_institution_code, destination_account_number, destination_account_name,
+                    amount_pesewas, currency, iso_message_type, stan, rrn, status, created_at, updated_at
+                ) VALUES (
+                    :id, :sessionId, 'CYCLE_1', 'ELEPAY_030',
+                    'GCB_040', '1010009999999', 'Duplicate Test',
+                    50000, 'GHS', 'pacs.008', :stan, :rrn, 'PENDING', now(), now()
+                )
+            """)
+                    .param("id", UUID.randomUUID())
+                    .param("sessionId", "GIP-DUP-" + UUID.randomUUID().toString().substring(0, 8))
+                    .param("stan", session.stan())
+                    .param("rrn", session.rrn())
+                    .update();
+        }).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     }
 }

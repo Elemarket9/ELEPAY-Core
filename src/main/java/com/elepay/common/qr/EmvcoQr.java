@@ -70,6 +70,9 @@ public final class EmvcoQr {
 
     public static Map<String, String> parseTlv(String raw) {
         Map<String, String> result = new LinkedHashMap<>();
+        if (raw == null) {
+            return result;
+        }
         int index = 0;
         while (index + 4 <= raw.length()) {
             String tag = raw.substring(index, index + 2);
@@ -79,9 +82,12 @@ public final class EmvcoQr {
             } catch (NumberFormatException e) {
                 break;
             }
+            if (len < 0) {
+                break;
+            }
             int valStart = index + 4;
             int valEnd = valStart + len;
-            if (len < 0 || valEnd > raw.length()) {
+            if (valEnd > raw.length() || valEnd < valStart) {
                 break;
             }
             String value = raw.substring(valStart, valEnd);

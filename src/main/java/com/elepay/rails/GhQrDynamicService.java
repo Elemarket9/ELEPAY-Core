@@ -129,14 +129,41 @@ public class GhQrDynamicService {
             return new QrValidationResult(false, null, null, null, null, "Payload too short");
         }
 
-        if (!rawPayload.regionMatches(true, rawPayload.length() - 8, "6304", 0, 4)) {
+        // Parse TLV sequentially from the beginning to locate root-level Tag 63 (CRC)
+        int index = 0;
+        int crcTagOffset = -1;
+        int crcLength = -1;
+        while (index + 4 <= rawPayload.length()) {
+            String tag = rawPayload.substring(index, index + 2);
+            int len;
+            try {
+                len = Integer.parseInt(rawPayload.substring(index + 2, index + 4));
+            } catch (NumberFormatException e) {
+                break;
+            }
+            if (len < 0) {
+                break;
+            }
+            int valStart = index + 4;
+            int valEnd = valStart + len;
+            if (valEnd > rawPayload.length() || valEnd < valStart) {
+                break;
+            }
+            if (EmvcoQr.TAG_CRC.equals(tag)) {
+                crcTagOffset = index;
+                crcLength = len;
+                break;
+            }
+            index = valEnd;
+        }
+
+        if (crcTagOffset < 0 || crcLength != 4 || crcTagOffset + 8 != rawPayload.length()) {
             return new QrValidationResult(false, null, null, null, null, "Malformed CRC-16 block");
         }
 
-        int crcIndex = rawPayload.length() - 8;
-        String dataWithoutCrcVal = rawPayload.substring(0, rawPayload.length() - 4);
+        String dataWithoutCrcVal = rawPayload.substring(0, crcTagOffset + 4);
         String expectedCrc = EmvcoQr.calculateCrc(dataWithoutCrcVal);
-        String actualCrc = rawPayload.substring(rawPayload.length() - 4);
+        String actualCrc = rawPayload.substring(crcTagOffset + 4, crcTagOffset + 8);
 
         if (!expectedCrc.equalsIgnoreCase(actualCrc)) {
             return new QrValidationResult(false, null, null, null, null, "Invalid CRC-16 checksum");
@@ -158,7 +185,7 @@ public class GhQrDynamicService {
         Long amountPesewas = null;
         if (amtStr != null) {
             try {
-                amountPesewas = new BigDecimal(amtStr).multiply(BigDecimal.valueOf(100)).longValueExact();
+                amountPesewas = new BigDecimal(amtStr).multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP).longValue();
             } catch (Exception ignored) {}
         }
 

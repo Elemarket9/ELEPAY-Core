@@ -281,6 +281,39 @@ public class GhipssClearingService {
                         rs.getObject("ledger_tx_id", UUID.class),
                         rs.getObject("created_at", OffsetDateTime.class),
                         rs.getObject("updated_at", OffsetDateTime.class)
+                )).optional();
+    }
+
+    public Optional<GhipssClearingSession> findByRrnAndStan(String rrn, String stan) {
+        return db.sql("""
+            SELECT id, session_id, clearing_cycle, originating_institution_code,
+                   destination_institution_code, destination_account_number, destination_account_name,
+                   beneficiary_proxy_type, beneficiary_proxy_value, amount_pesewas, currency,
+                   iso_message_type, stan, rrn, status, ledger_tx_id, created_at, updated_at
+            FROM ghipss_clearing_record
+            WHERE rrn = :rrn AND stan = :stan
+        """)
+                .param("rrn", rrn)
+                .param("stan", stan)
+                .query((rs, rowNum) -> new GhipssClearingSession(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("session_id"),
+                        rs.getString("clearing_cycle"),
+                        rs.getString("originating_institution_code"),
+                        rs.getString("destination_institution_code"),
+                        rs.getString("destination_account_number"),
+                        rs.getString("destination_account_name"),
+                        rs.getString("beneficiary_proxy_type"),
+                        rs.getString("beneficiary_proxy_value"),
+                        rs.getLong("amount_pesewas"),
+                        rs.getString("currency"),
+                        rs.getString("iso_message_type"),
+                        rs.getString("stan"),
+                        rs.getString("rrn"),
+                        rs.getString("status"),
+                        rs.getObject("ledger_tx_id", UUID.class),
+                        rs.getObject("created_at", OffsetDateTime.class),
+                        rs.getObject("updated_at", OffsetDateTime.class)
                 ))
                 .optional();
     }

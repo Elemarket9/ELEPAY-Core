@@ -56,13 +56,28 @@ public class TenWayClearingReconciliationEngine {
     ) {}
 
     private final JdbcClient db;
+    private final ReconSuspenseService suspenseService;
 
-    public TenWayClearingReconciliationEngine(JdbcClient db) {
+    public TenWayClearingReconciliationEngine(JdbcClient db, ReconSuspenseService suspenseService) {
         this.db = db;
+        this.suspenseService = suspenseService;
     }
 
     @Transactional
     public BatchReconciliationReport reconcileBatch(UUID batchId) {
+        // Retrieve batch metadata for bank code and currency
+        var batchOpt = db.sql("""
+            SELECT bank_code, currency FROM recon_bank_statement_batch WHERE id = :batchId
+        """)
+                .param("batchId", batchId)
+                .query((rs, rowNum) -> new Object() {
+                    String bankCode = rs.getString("bank_code");
+                    String currency = rs.getString("currency");
+                })
+                .optional();
+        String bankCode = batchOpt.map(b -> b.bankCode).orElse("GENERAL");
+        String currency = batchOpt.map(b -> b.currency).orElse("GHS");
+
         // Retrieve all lines for this statement batch
         var statementLines = db.sql("""
             SELECT id, line_number, debit_credit_mark, amount_pesewas,
@@ -90,14 +105,18 @@ public class TenWayClearingReconciliationEngine {
         long totalVariance = 0L;
 
         for (var line : statementLines) {
-            String rawRef = (line.bankRef != null && !line.bankRef.isBlank()) ? line.bankRef : line.custRef;
-            String searchRef = (rawRef != null) ? rawRef.trim() : "";
+            String searchRef = null;
+            if (line.bankRef != null && !line.bankRef.isBlank() && !line.bankRef.equalsIgnoreCase("NONREF") && !line.bankRef.startsWith("REF-") && !line.bankRef.startsWith("LINE-")) {
+                searchRef = line.bankRef.trim();
+            } else if (line.custRef != null && !line.custRef.isBlank() && !line.custRef.equalsIgnoreCase("NONREF") && !line.custRef.startsWith("REF-") && !line.custRef.startsWith("LINE-")) {
+                searchRef = line.custRef.trim();
+            }
 
-            // 1. Search for corresponding Direct Carrier Session (guard against blank search)
+            // 1. Search for corresponding Direct Carrier Session (guard against null/blank search)
             UUID railSessionId = null;
             Long railAmount = null;
 
-            if (!searchRef.isBlank()) {
+            if (searchRef != null && !searchRef.isBlank()) {
                 var carrierOpt = db.sql("""
                     SELECT id, amount_pesewas FROM direct_carrier_session
                     WHERE reference_id = :ref OR external_transaction_id = :ref
@@ -120,7 +139,7 @@ public class TenWayClearingReconciliationEngine {
             UUID ledgerTxId = null;
             Long ledgerAmount = null;
 
-            if (!searchRef.isBlank()) {
+            if (searchRef != null && !searchRef.isBlank()) {
                 var ledgerOpt = db.sql("""
                     SELECT jt.id, jt.idempotency_key, COALESCE(SUM(je.amount), 0) AS total_amount
                     FROM journal_transaction jt
@@ -195,6 +214,11 @@ public class TenWayClearingReconciliationEngine {
                     .param("variance", variance)
                     .param("status", matchStatus.name())
                     .update();
+
+            // Wire suspense ledger posting if discrepancy occurs
+            if (matchStatus == MatchStatus.SUSPENSE_POSTED && variance != 0L) {
+                suspenseService.postSuspenseVariance(matchRecordId, bankCode, variance, currency);
+            }
 
             // Update statement line status
             db.sql("""

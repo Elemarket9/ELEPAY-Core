@@ -270,7 +270,7 @@ public class Mt940StatementParser {
     }
 
     private long parseAmountPesewas(String amtStr) {
-        if (amtStr == null) return 0L;
+        if (amtStr == null || amtStr.isBlank()) return 0L;
         String normalized = amtStr.replace(',', '.').trim();
         return new java.math.BigDecimal(normalized).multiply(java.math.BigDecimal.valueOf(100)).setScale(0, java.math.RoundingMode.HALF_UP).longValue();
     }

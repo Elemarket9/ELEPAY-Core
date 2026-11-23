@@ -113,4 +113,27 @@ class GeoVelocityServiceTest extends PostgresTestBase {
                 new GeoVelocityService.GeoLocation(95.0, 0.0, 50.0, "Invalid", "GH", "102.176.0.1", false, OffsetDateTime.now())))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    @DisplayName("Algorithm 027: recordCheckpoint and checkAndRecord synchronize consistently via geo_velocity_checkpoint")
+    void testRecordCheckpointSynchronizesWithCheckAndRecord() {
+        String actor = "actor-sync-" + UUID.randomUUID();
+        OffsetDateTime t0 = OffsetDateTime.now().minusHours(2);
+
+        // 1. Record checkpoint directly via recordCheckpoint (e.g. background audit or login hook)
+        geoVelocityService.recordCheckpoint(actor, 5.6037, -0.1870, "102.176.0.1", "Accra", "GH", t0);
+
+        // 2. Perform transaction checkAndRecord 2 hours later at Tema (~25 km away)
+        OffsetDateTime t1 = t0.plusHours(2);
+        var result = geoVelocityService.checkAndRecord(
+                actor,
+                "ref-sync-tx",
+                new GeoVelocityService.GeoLocation(5.6698, -0.0166, 50.0, "Tema", "GH", "102.176.0.2", false, t1)
+        );
+
+        assertThat(result.decision()).isEqualTo(RiskDecision.ALLOW);
+        assertThat(result.impossibleTravel()).isFalse();
+        assertThat(result.distanceKm()).isGreaterThan(20.0).isLessThan(30.0);
+        assertThat(result.speedKmh()).isGreaterThan(0.0).isLessThan(25.0);
+    }
 }

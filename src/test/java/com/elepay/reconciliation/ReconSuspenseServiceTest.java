@@ -82,4 +82,36 @@ class ReconSuspenseServiceTest extends PostgresTestBase {
         assertThat(queried).isPresent();
         assertThat(queried.get().status()).isEqualTo(ReconSuspenseService.SuspenseStatus.RESOLVED);
     }
+
+    @Test
+    @DisplayName("Resolving suspense variance requires non-empty target adjustment account")
+    void testResolveVarianceRequiresTargetAdjustmentAccount() {
+        String unreconRef = "DISCREPANT-VAL-" + UUID.randomUUID().toString().substring(0, 8);
+        String mt940 = """
+                :20:GCB-SUSPENSE-VAL
+                :25:1010008888889
+                :28C:00003/001
+                :60F:C260301GHS1000,00
+                :61:2603010301CR100,00NTRFNONREF//%s
+                :86:UNMATCHED VALIDATION
+                :62F:C260301GHS1100,00
+                -
+                """.formatted(unreconRef);
+
+        var batch = parser.ingestStatement("GCB", mt940);
+        var report = reconEngine.reconcileBatch(batch.batchId());
+        UUID matchRecordId = report.outcomes().get(0).matchRecordId();
+
+        var record = suspenseService.postSuspenseVariance(matchRecordId, "GCB", 10_000L, "GHS");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                suspenseService.resolveVariance(record.id(), "Invalid resolve without adjustment account", "ops_user", null)
+        ).isInstanceOf(IllegalArgumentException.class)
+         .hasMessageContaining("Target adjustment account is required");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                suspenseService.resolveVariance(record.id(), "Invalid resolve without adjustment account", "ops_user", "   ")
+        ).isInstanceOf(IllegalArgumentException.class)
+         .hasMessageContaining("Target adjustment account is required");
+    }
 }

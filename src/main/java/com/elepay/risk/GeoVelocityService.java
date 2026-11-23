@@ -73,11 +73,11 @@ public class GeoVelocityService {
 
         OffsetDateTime now = currentLocation.recordedAt() != null ? currentLocation.recordedAt() : OffsetDateTime.now();
 
-        // Retrieve latest previous location
+        // Retrieve latest previous location consistently from geo_velocity_checkpoint
         Optional<GeoLocation> previousOpt = db.sql("""
-            SELECT latitude, longitude, accuracy_radius_meters, city, country, ip_address, is_vpn, recorded_at
-            FROM risk_geo_locations
-            WHERE actor_id = :actorId
+            SELECT latitude, longitude, accuracy_radius_meters, city, country_code, ip_address, is_vpn, recorded_at
+            FROM geo_velocity_checkpoint
+            WHERE entity_id = :actorId
             ORDER BY recorded_at DESC
             LIMIT 1
         """)
@@ -87,7 +87,7 @@ public class GeoVelocityService {
                         rs.getDouble("longitude"),
                         rs.getObject("accuracy_radius_meters") != null ? rs.getDouble("accuracy_radius_meters") : null,
                         rs.getString("city"),
-                        rs.getString("country"),
+                        rs.getString("country_code"),
                         rs.getString("ip_address"),
                         rs.getBoolean("is_vpn"),
                         rs.getObject("recorded_at", OffsetDateTime.class)
@@ -118,21 +118,25 @@ public class GeoVelocityService {
                 .param("now", now)
                 .update();
 
-        // Also record to V43 geo_velocity_checkpoint for unified state
-        String countryCode = currentLocation.country() != null && currentLocation.country().length() <= 2
+        // Also record to geo_velocity_checkpoint for unified state
+        String countryCode = currentLocation.country() != null && currentLocation.country().length() <= 4
                 ? currentLocation.country()
                 : "GH";
         db.sql("""
             INSERT INTO geo_velocity_checkpoint (
-                id, entity_id, latitude, longitude, ip_address, city, country_code, recorded_at, created_at
+                id, entity_id, latitude, longitude, accuracy_radius_meters, is_vpn,
+                ip_address, city, country_code, recorded_at, created_at
             ) VALUES (
-                :id, :entityId, :lat, :lon, :ip, :city, :country, :now, now()
+                :id, :entityId, :lat, :lon, :acc, :isVpn,
+                :ip, :city, :country, :now, now()
             )
         """)
                 .param("id", UUID.randomUUID())
-                .param("entityId", actorId.toString())
+                .param("entityId", actorId)
                 .param("lat", currentLocation.latitude())
                 .param("lon", currentLocation.longitude())
+                .param("acc", currentLocation.accuracyRadiusMeters())
+                .param("isVpn", currentLocation.isVpn())
                 .param("ip", currentLocation.ipAddress())
                 .param("city", currentLocation.city())
                 .param("country", countryCode)
@@ -252,11 +256,14 @@ public class GeoVelocityService {
 
     @Transactional
     public void recordCheckpoint(String entityId, double latitude, double longitude, String ipAddress, String city, String countryCode, OffsetDateTime recordedAt) {
+        OffsetDateTime now = recordedAt != null ? recordedAt : OffsetDateTime.now();
         db.sql("""
             INSERT INTO geo_velocity_checkpoint (
-                id, entity_id, latitude, longitude, ip_address, city, country_code, recorded_at, created_at
+                id, entity_id, latitude, longitude, accuracy_radius_meters, is_vpn,
+                ip_address, city, country_code, recorded_at, created_at
             ) VALUES (
-                :id, :entityId, :lat, :lon, :ip, :city, :country, :recordedAt, now()
+                :id, :entityId, :lat, :lon, null, false,
+                :ip, :city, :country, :recordedAt, now()
             )
         """)
                 .param("id", UUID.randomUUID())
@@ -266,7 +273,27 @@ public class GeoVelocityService {
                 .param("ip", ipAddress)
                 .param("city", city)
                 .param("country", countryCode)
-                .param("recordedAt", recordedAt != null ? recordedAt : OffsetDateTime.now())
+                .param("recordedAt", now)
+                .update();
+
+        // Also record to risk_geo_locations for backward compatibility
+        db.sql("""
+            INSERT INTO risk_geo_locations (
+                id, actor_id, reference_id, latitude, longitude,
+                accuracy_radius_meters, city, country, ip_address, is_vpn, recorded_at
+            ) VALUES (
+                :id, :actorId, 'CHECKPOINT', :lat, :lon,
+                null, :city, :country, :ip, false, :now
+            )
+        """)
+                .param("id", UUID.randomUUID())
+                .param("actorId", entityId)
+                .param("lat", latitude)
+                .param("lon", longitude)
+                .param("city", city)
+                .param("country", countryCode)
+                .param("ip", ipAddress)
+                .param("now", now)
                 .update();
     }
 }

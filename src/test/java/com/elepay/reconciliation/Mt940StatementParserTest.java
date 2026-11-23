@@ -55,4 +55,35 @@ class Mt940StatementParserTest extends PostgresTestBase {
         assertThat(ingestion.totalLines()).isEqualTo(2);
         assertThat(ingestion.status()).isEqualTo("INGESTED");
     }
+
+    @Test
+    @DisplayName("Fractional pesewas rounds with HALF_UP and lineCounter maintains strict sequence with malformed lines")
+    void testFractionalPesewasAndSequentialLineCounterWithMalformedLines() {
+        String mt940WithFractionalAndMalformed = """
+                :20:GCB-FRACTIONAL
+                :25:1010005555555
+                :28C:00005/001
+                :60F:C260301GHS5000,00
+                :61:2603010301CR1500,556NTRFNONREF//LINE-1-REF
+                :86:FRACTIONAL PESEWAS LINE 1
+                :61:MALFORMED NON-STANDARD STATEMENT LINE WITHOUT TAGS
+                :61:2603010301CR200,444NTRFNONREF//LINE-3-REF
+                :62F:C260301GHS6701,00
+                -
+                """;
+
+        var parsed = parser.parse(mt940WithFractionalAndMalformed);
+        assertThat(parsed.lines()).hasSize(3);
+
+        // Line 1: 1500,556 * 100 = 150055.6 -> 150056 pesewas
+        assertThat(parsed.lines().get(0).lineNumber()).isEqualTo(1);
+        assertThat(parsed.lines().get(0).amountPesewas()).isEqualTo(150056L);
+
+        // Line 2: fallback line should have line number 2
+        assertThat(parsed.lines().get(1).lineNumber()).isEqualTo(2);
+
+        // Line 3: 200,444 * 100 = 20044.4 -> 20044 pesewas, line number 3
+        assertThat(parsed.lines().get(2).lineNumber()).isEqualTo(3);
+        assertThat(parsed.lines().get(2).amountPesewas()).isEqualTo(20044L);
+    }
 }

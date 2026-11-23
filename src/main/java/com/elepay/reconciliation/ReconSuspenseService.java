@@ -72,6 +72,19 @@ public class ReconSuspenseService {
             throw new IllegalArgumentException("Variance amount cannot be zero for suspense posting");
         }
 
+        // Return existing open suspense record if already posted for this match
+        var existing = db.sql("""
+            SELECT id FROM recon_suspense_ledger
+            WHERE match_record_id = :matchId AND status IN ('OPEN', 'UNDER_INVESTIGATION')
+            LIMIT 1
+        """)
+                .param("matchId", matchRecordId)
+                .query((rs, rowNum) -> rs.getObject("id", UUID.class))
+                .optional();
+        if (existing.isPresent()) {
+            return findById(existing.get()).orElseThrow();
+        }
+
         UUID id = UUID.randomUUID();
         String curr = (currency != null && !currency.isBlank()) ? currency : "GHS";
         String bank = (bankCode != null && !bankCode.isBlank()) ? bankCode.toUpperCase() : "GENERAL";
@@ -174,10 +187,11 @@ public class ReconSuspenseService {
 
         OffsetDateTime now = OffsetDateTime.now();
 
-        // Always clear suspense balance in Double-Entry Ledger to prevent un-cleared ledger drift
-        String targetAccount = (targetAdjustmentAccount != null && !targetAdjustmentAccount.isBlank())
-                ? targetAdjustmentAccount
-                : "system:clearing:recon_resolution:" + record.currency();
+        // Mandate non-null adjustment account to ensure balanced double-entry ledger postings
+        if (targetAdjustmentAccount == null || targetAdjustmentAccount.isBlank()) {
+            throw new IllegalArgumentException("Target adjustment account is required to resolve suspense variance in double-entry ledger");
+        }
+        String targetAccount = targetAdjustmentAccount.trim();
 
         ledger.openSystem(targetAccount, "clearing", record.currency(), true);
         long absVariance = Math.abs(record.variancePesewas());
