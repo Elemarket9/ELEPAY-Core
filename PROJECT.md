@@ -18,12 +18,13 @@ ELEPAY is a Ghana-first financial platform designed as a modular monolith in Jav
 - `com.elepay.outbox`: Transactional outbox pattern and idempotent consumer inbox for reliable domain event dispatch.
 - `com.elepay.operations`: Operations console backend, ops items queue, maker-checker approvals, and operational health metrics.
 - `com.elepay.ussd`: Telco USSD session menu state machine with signed callbacks and secure PIN verification.
+- `com.elepay.enterprise`: Enterprise embedded finance engine powering marketplaces and platforms (Jumia/JumiaPay, ELEMARKET, ELESEND, ride-hailing): managed accounts bulk provisioning, universal external wallet connectors (Modes A, B, C), Hare-Niemeyer multi-merchant 10-split engine, item-level refunds and liability tracking, BoG KYC-tier customer withdrawals, conditional delivery escrow release, and safeguarded treasury prefunding with shortfall protection.
 - `web/`: React 19 + TypeScript frontend with Customer Wallet (`/app`), Merchant Dashboard (`/merchant`), Operations Console (`/ops`), and Checkout (`/pay/*`).
 
 ## Code Layout
 - Java Backend: `src/main/java/com/elepay/`
 - Java Tests: `src/test/java/com/elepay/`
-- Database Migrations: `src/main/resources/db/migration/` (`V1__*.sql` through `V12__*.sql`)
+- Database Migrations: `src/main/resources/db/migration/` (`V1__*.sql` through `V42__*.sql`)
 - Web Frontend: `web/src/`
 - Scripts & Runbooks: `scripts/`, `docs/runbooks/`
 - Specification & Docs: `docs/product-specification.md`, `docs/openapi.json`, `docs/readiness-scorecard.md`
@@ -172,8 +173,39 @@ Extending ELEPAY into a comprehensive, independent financial and business manage
 
 | Stream | Name | Domains Covered | Scope / Package | Migration | Status |
 |---|---|---|---|---|---|
-| S1 | In-Store Commerce & POS | Domains 1, 3: ELEPAY POS, Inventory & Warehouses (Restaurant & KDS removed in `V27__remove_restaurant.sql`) | `com.elepay.pos`, `com.elepay.inventory` | `V22__pos_inventory_restaurant.sql` | IN_PROGRESS |
+| S1 | In-Store Commerce & POS | Domains 1, 3: ELEPAY POS, Inventory & Warehouses (Restaurant & KDS removed in `V27__remove_restaurant.sql`) | `com.elepay.pos`, `com.elepay.inventory` | `V22__pos_inventory_restaurant.sql` | DONE (14 tests pass, 26 tables) |
 | S2 | Business Accounting, Invoicing, Payroll & CRM | Domains 5, 6, 7: Merchant GL, Invoices, AR/AP, Payroll, Statutory Deductions, CRM, Loyalty, Gift Cards | `com.elepay.accounting`, `com.elepay.payroll`, `com.elepay.crm` | `V23__accounting_payroll_crm.sql` | DONE (commit: e1ff7bc) |
 | S3 | Fintech Expansion | Domains 8, 9, 10, 11: Lending Lifecycle, Bill Payments (Airtime/Utilities), Card Issuing, Agent Banking | `com.elepay.lending`, `com.elepay.bills`, `com.elepay.cards`, `com.elepay.agents` | `V24__fintech_expansion.sql` | DONE (commit: 105d86e) |
-| S4 | Developer Platform & Responsive Web | Domains 2, 12, 13: BackOffice, Developer Portal, Webhook Replay, WooCommerce Plugin, Wallet/Merchant/Ops/Checkout UI | `com.elepay.developer`, `web/src/` | `V25__developer_portal.sql` | COMPLETED |
+| S4 | Developer Platform & Responsive Web | Domains 2, 12, 13: BackOffice, Developer Portal, Webhook Replay, WooCommerce Plugin, Wallet/Merchant/Ops/Checkout UI | `com.elepay.developer`, `web/src/` | `V25__developer_portal.sql` | DONE (commit: abae8d1) |
 | S5 | Financial Hardening & Production Infra | Domains 14, 15: Security Defect Fixes, Request Signing, Signing Secrets, Distributed Controls, Redis, OTEL, CI/CD | `com.elepay.common`, `com.elepay.identity`, `com.elepay.reliability` | `V26__security_hardening.sql` | DONE (commit: 1302a85) |
+
+# Phase 3: 800K Advanced Algorithm Verification & Enterprise Embedded Finance Expansion
+
+## Phase A: Existing 100-Algorithm Foundation Verification & Remediation
+- **Verification Register**: `ALGORITHM_VERIFICATION_REGISTER.md` cataloging all 100 algorithms.
+- **Production Baseline**: 32,493 SLOC core (29,029 Java, 3,464 Web). Gap to 800K: 767,507 SLOC.
+- **Defects Remediated**:
+  - Test compilation blockers resolved (MultiMerchantSettlementTest, CheckoutServiceTest, MerchantGlAndFiscalizationTest).
+  - Multi-currency settlement allocation & suspense clearing parameterized by currency.
+  - Floating-point interest & limit math eliminated, replaced with checked integer arithmetic.
+  - Double-entry ledger integration with row-level locking enforced on savings goals.
+  - Fuzzy statement matching boolean logic bug fixed with OpsQueue maker-checker dual control.
+  - Algorithmic FX pricing & routing wired into customer quotes.
+  - Payment rails hardened with partner circuit breakers and full-jitter retries.
+  - AES-GCM envelope encryption wired into CardTokenVault.
+  - SettlementNettingService implemented for bilateral/multilateral netting.
+  - Spring Modulith circular package dependency cycle (`checkout <-> rails`) resolved via `com.elepay.common.qr.EmvcoQr`.
+  - PIN sequence validation hardened against repeating patterns and progressions (41 test assertions).
+- **Status**: **DONE** (Gate 2 Passed, commits: `0914cbf`, `3d7ecca`, `8db79bb`, `f3459e5`).
+
+## Phase B: Enterprise Embedded Finance, External Wallets & Intelligent Settlement
+Expanding ELEPAY into enterprise-grade embedded finance and multi-merchant commerce platforms (e.g. Jumia/JumiaPay model) across 5 core enterprise engines:
+
+| Stream | Name | Scope / Package | Key Capabilities | Status |
+|---|---|---|---|---|
+| E1 | Enterprise Managed Accounts | `com.elepay.enterprise.accounts` | Bulk creation, external ID mapping, phone/email dedupe, tier KYC sync, subaccount balances | DONE (commit: e75f8bc, V40 migration, 7/7 tests pass) |
+| E2 | Universal External Wallet Engine | `com.elepay.enterprise.wallet` | 3 Modes (Enterprise-owned e.g. JumiaPay, White-label, External settlement), OAuth/OIDC delegation | DONE (commit: d4d6767, JumiaPay adapter, 9/9 tests pass) |
+| E3 | External Collections & Split Engine | `com.elepay.enterprise.checkout` | Multi-merchant external collections, nested commissions, delivery splits, integer minor units | DONE (commit: 4a538be, 10-sub-merchant split, 7/7 tests pass) |
+| E4 | Enterprise Refunds & Withdrawals | `com.elepay.enterprise.refund`, `com.elepay.enterprise.payout` | Item-level refunds via JumiaPay connector, MoMo/bank refunds, wallet withdrawals to MTN MoMo with BoG limits | DONE (commit: 5299c38, V41 migration, 25/25 tests pass) |
+| E5 | Enterprise Settlement, Treasury & Connectors | `com.elepay.enterprise.settlement`, `com.elepay.enterprise.connectors` | Conditional release, missing delivery confirmations, safeguarded funds, SFTP/mTLS connector, 10-way recon | DONE (V42 migration, Jumia 17-step scenario verified, 53/53 tests pass) |
+
