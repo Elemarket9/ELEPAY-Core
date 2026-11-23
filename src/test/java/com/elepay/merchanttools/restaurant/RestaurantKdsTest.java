@@ -83,6 +83,7 @@ public class RestaurantKdsTest extends PostgresTestBase {
         assertThat(table1.status()).isEqualTo("AVAILABLE");
         assertThat(table1.capacity()).isEqualTo(4);
 
+
         // Seat table with an order
         var posOrder = posOrderService.createOrder(
                 merchantId, null, null, null, null,
@@ -92,6 +93,9 @@ public class RestaurantKdsTest extends PostgresTestBase {
         var seated = tableService.seatTable(table1.id(), posOrder.id());
         assertThat(seated.status()).isEqualTo("OCCUPIED");
         assertThat(seated.currentOrderId()).isEqualTo(posOrder.id());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                tableService.updateTableStatus(table1.id(), TableStatus.AVAILABLE))
+                .isInstanceOf(com.elepay.common.ApiException.class);
 
         // Vacate table and mark as DIRTY for busboy
         var vacated = tableService.vacateTable(table1.id(), true);

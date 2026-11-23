@@ -70,3 +70,12 @@ returns the pending hosted checkout, and **never captures or settles payment**.
   Real Bluetooth/USB/ESC-POS hardware integrations still need device testing.
 - Splits are **quotes on one original order**, not independently settled child bills.
   Separate customer-specific settlement records remain a future feature.
+
+**Staff attribution:** Authenticated POS API order creation stores the authenticated
+server actor subject in pos_order.created_by_subject, rather than trusting a
+client-supplied employee identity. Legacy orders remain unchanged. Staff PIN-based
+session binding and waiter/chef role granularity still need further development.
+
+**Temporary access restriction:** Table transfers are available only to
+merchant-wide administrators until branch ownership is explicitly represented
+on floor plans. Branch-scoped cashiers may close only their own branch's orders.

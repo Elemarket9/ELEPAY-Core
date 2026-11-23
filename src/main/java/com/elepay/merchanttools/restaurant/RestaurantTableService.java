@@ -105,7 +105,7 @@ public class RestaurantTableService {
         if (status == null) throw ApiException.badRequest("status_required", "Choose a table status");
         int updated = db.sql("""
             UPDATE restaurant_table SET status = :status WHERE id = :id
-              AND (current_order_id IS NULL OR status = 'OCCUPIED')
+              AND current_order_id IS NULL
             """).param("status", status.name()).param("id", tableId).update();
         if (updated != 1)
             throw ApiException.conflict("table_has_order", "Cannot change an occupied table before its order closes");

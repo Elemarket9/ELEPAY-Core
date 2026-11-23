@@ -130,6 +130,19 @@ public class PosOrderService {
             List<OrderItemInput> items, long discountPesewas, long taxPesewas,
             long tipPesewas, String orderType, UUID tableId
     ) {
+        return createOrder(merchantId, branchId, terminalId, cashierId, customerId, items,
+                discountPesewas, taxPesewas, tipPesewas, orderType, tableId, null);
+    }
+
+    /** The actor is supplied by server authentication, not by the cashier's request JSON. */
+    @Transactional
+    public PosOrder createOrder(
+            UUID merchantId, UUID branchId, UUID terminalId, UUID cashierId, UUID customerId,
+            List<OrderItemInput> items, long discountPesewas, long taxPesewas,
+            long tipPesewas, String orderType, UUID tableId, String actorSubject
+    ) {
+        if (actorSubject != null && (actorSubject.isBlank() || actorSubject.length() > 200))
+            throw ApiException.badRequest("actor_invalid", "Invalid authenticated staff identity");
         String channel = orderType == null ? "STANDARD" : orderType;
         boolean toKitchen = java.util.Set.of("DINE_IN", "TAKEOUT", "DELIVERY", "QR").contains(channel);
         if (!toKitchen && !java.util.Set.of("STANDARD", "RETAIL", "RESTAURANT", "OFFLINE_SYNC").contains(channel))
@@ -152,11 +165,11 @@ public class PosOrderService {
             INSERT INTO pos_order (
                 id, order_number, merchant_id, branch_id, terminal_id, cashier_id,
                 customer_id, subtotal_pesewas, discount_pesewas, tax_pesewas, tip_pesewas,
-                total_pesewas, paid_pesewas, change_pesewas, status, order_type, created_at
+                total_pesewas, paid_pesewas, change_pesewas, status, order_type, created_by_subject, created_at
             ) VALUES (
                 :id, :orderNumber, :merchantId, :branchId, :terminalId, :cashierId,
                 :customerId, :subtotal, :discount, :tax, :tip,
-                :total, 0, 0, 'PENDING', :orderType, now()
+                :total, 0, 0, 'PENDING', :orderType, :createdBy, now()
             )
             """)
             .param("id", orderId)
@@ -172,6 +185,7 @@ public class PosOrderService {
             .param("tip", tipPesewas)
             .param("total", total)
             .param("orderType", channel)
+            .param("createdBy", actorSubject)
             .update();
 
         for (OrderItemInput item : items) {

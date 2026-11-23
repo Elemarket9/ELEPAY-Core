@@ -1,6 +1,7 @@
 package com.elepay.merchanttools.restaurant;
 
 import com.elepay.merchanttools.MerchantToolAccess;
+import com.elepay.merchanttools.pos.PosOrderService;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -21,6 +22,7 @@ public class RestaurantController {
     private final RecipeCostingService recipeService;
     private final RestaurantSplitBillService splitBillService;
     private final MerchantToolAccess access;
+    private final PosOrderService orderService;
 
     public RestaurantController(
             RestaurantTableService tableService,
@@ -31,12 +33,14 @@ public class RestaurantController {
             KitchenStationService stationService,
             KdsPrintService printService,
             KitchenDeviceService deviceService,
-            MerchantToolAccess access
+            MerchantToolAccess access,
+            PosOrderService orderService
     ) {
         this.deviceService = deviceService;
         this.stationService = stationService;
         this.printService = printService;
         this.access = access;
+        this.orderService = orderService;
         this.tableService = tableService;
         this.modifierService = modifierService;
         this.kdsService = kdsService;
@@ -84,6 +88,11 @@ public class RestaurantController {
     public RestaurantTableService.RestaurantTable seatTable(@PathVariable UUID tableId, @RequestParam UUID orderId) {
         UUID merchantId = access.operate(TABLE, tableId);
         access.belongs(merchantId, ORDER, orderId);
+        UUID allowedBranch = access.operatingBranch(merchantId);
+        var order = orderService.getOrder(orderId)
+                .orElseThrow(() -> com.elepay.common.ApiException.notFound("Order not found"));
+        if (allowedBranch != null && !allowedBranch.equals(order.branchId()))
+            throw com.elepay.common.ApiException.forbidden("Order belongs to another branch");
         return tableService.seatTable(tableId, orderId);
     }
 
@@ -97,7 +106,9 @@ public class RestaurantController {
     @PostMapping("/tables/{tableId}/move")
     public RestaurantTableService.RestaurantTable moveTable(@PathVariable UUID tableId,
             @RequestParam UUID destinationId) {
-        UUID merchantId = access.operate(TABLE, tableId);
+        // Until floor plans have explicit branch ownership, merchant-wide operators
+        // alone may transfer tables; prevent cross-branch cashier table moves.
+        UUID merchantId = access.manage(TABLE, tableId);
         access.belongs(merchantId, TABLE, destinationId);
         var table = tableService.getTable(tableId).orElseThrow(() -> com.elepay.common.ApiException.notFound("Table not found"));
         if (table.currentOrderId() == null)
@@ -108,7 +119,16 @@ public class RestaurantController {
 
     @PostMapping("/tables/{tableId}/close")
     public RestaurantTableService.RestaurantTable closeTable(@PathVariable UUID tableId) {
-        access.operate(TABLE, tableId);
+        UUID merchantId = access.operate(TABLE, tableId);
+        var table = tableService.getTable(tableId)
+                .orElseThrow(() -> com.elepay.common.ApiException.notFound("Table not found"));
+        if (table.currentOrderId() == null)
+            throw com.elepay.common.ApiException.conflict("table_not_occupied", "Table has no open order");
+        UUID allowedBranch = access.operatingBranch(merchantId);
+        var order = orderService.getOrder(table.currentOrderId())
+                .orElseThrow(() -> com.elepay.common.ApiException.notFound("Order not found"));
+        if (allowedBranch != null && !allowedBranch.equals(order.branchId()))
+            throw com.elepay.common.ApiException.forbidden("Order belongs to another branch");
         return tableService.closeServedAndPaid(tableId);
     }
 

@@ -198,7 +198,8 @@ public class PosController {
         if (req.tableId() != null) access.belongs(req.merchantId(), TABLE, req.tableId());
         return orderService.createOrder(
                 req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(),
-                req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType(), req.tableId()
+                req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType(),
+                req.tableId(), com.elepay.identity.Actor.current().subject()
         );
     }
 

@@ -222,6 +222,18 @@ public class PosCommerceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("POS order staff attribution is supplied by the service's authenticated actor")
+    void posOrderAttribution() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Sobolo", BigDecimal.ONE,
+                        1200L, 0L, 0L, "[]", null, null, null)),
+                0L, 0L, 0L, "RETAIL", null, "staff:cashier-47");
+        String actor = db.sql("SELECT created_by_subject FROM pos_order WHERE id = :order")
+                .param("order", order.id()).query(String.class).single();
+        assertThat(actor).isEqualTo("staff:cashier-47");
+    }
+
+    @Test
     @DisplayName("Repeated receipt creation issues exactly one paid receipt")
     void receiptCreationIsIdempotent() {
         var order = orderService.createOrder(merchantId, null, null, null, null,
