@@ -221,7 +221,9 @@ class FxService {
                     .param("r", reference).query(Boolean.class).single();
             FxPartner.Execution e = partner(partnerName).query(reference);
             if (e.status() == FxPartner.Status.NOT_FOUND && !submitted) {
-                submit(db.sql("SELECT id FROM fx_transfer WHERE reference = :r").param("r", reference).query(UUID.class).single());
+                // Legacy record only: international payout resubmission is disabled.
+                ops.raise("fx_legacy_unsubmitted", "high", "fx:" + reference,
+                        Map.of("note", "Manual investigation required; foreign recipient payout is out of scope"));
                 continue;
             }
             apply(reference, e.status(), e.partnerReference(), e.message());
