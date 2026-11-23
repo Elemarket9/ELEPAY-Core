@@ -341,7 +341,7 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
               <footer>
                 {next && !(setup.stationId && next === "SERVED") && (
                   <button className={`kitchen-bump to-${next.toLowerCase()}`}
-                    onClick={() => update((s) => bump(s, v.ticket.id, setup.stationId, newKey()))>{next === "PREPARING" ? kdsText(lang, "start") : next === "READY" ? kdsText(lang, "ready") : kdsText(lang, "served")}</button>
+                    onClick={() => update((s) => bump(s, v.ticket.id, setup.stationId, newKey()))}>{next === "PREPARING" ? kdsText(lang, "start") : next === "READY" ? kdsText(lang, "ready") : kdsText(lang, "served")}</button>
                 )}
                 {canRecall(v) && !setup.stationId && <button className="secondary"
                   onClick={() => void recall(v)}>Recall last bump (5 min)</button>}

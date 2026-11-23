@@ -28,10 +28,13 @@ public class RestaurantTableQrService {
     private final JdbcClient db;
     private final PosOrderService orders;
     private final KillSwitchService killSwitches;
+    private final com.elepay.merchant.MerchantAccess merchants;
     private final SecureRandom random = new SecureRandom();
 
-    public RestaurantTableQrService(JdbcClient db, PosOrderService orders, KillSwitchService killSwitches) {
+    public RestaurantTableQrService(JdbcClient db, PosOrderService orders, KillSwitchService killSwitches,
+                                    com.elepay.merchant.MerchantAccess merchants) {
         this.db = db; this.orders = orders; this.killSwitches = killSwitches;
+        this.merchants = merchants;
     }
     public record TableOffer(UUID merchantId, UUID tableId, String tableNumber,
                              String merchantName, List<MenuItem> menu) {}
@@ -83,14 +86,20 @@ public class RestaurantTableQrService {
             throw ApiException.notFound("Restaurant table QR not found");
         return db.sql("""
                 SELECT q.merchant_id AS merchant_id, q.table_id AS table_id,
-                       t.table_number AS table_number, m.trading_name AS merchant_name
+                       t.table_number AS table_number
                 FROM restaurant_table_qr q
                 JOIN restaurant_table t ON t.id = q.table_id
-                JOIN merchant m ON m.id = q.merchant_id
                 WHERE q.token_hash = :hash AND q.enabled = true
-                  AND m.status = 'active'
                 """).param("hash", digest(token))
-                .query(Table.class).optional()
+                .query((rs, n) -> new Table(rs.getObject("merchant_id", UUID.class),
+                        rs.getObject("table_id", UUID.class), rs.getString("table_number"), null))
+                .optional()
+                .map(found -> {
+                    var merchant = merchants.find(found.merchantId())
+                            .filter(m -> "active".equals(m.status()))
+                            .orElseThrow(() -> ApiException.notFound("Restaurant QR unavailable"));
+                    return new Table(found.merchantId(), found.tableId(), found.tableNumber(), merchant.tradingName());
+                })
                 .orElseThrow(() -> ApiException.notFound("Restaurant QR is expired or disabled"));
     }
 

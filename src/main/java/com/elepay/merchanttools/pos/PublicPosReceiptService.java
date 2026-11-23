@@ -11,14 +11,19 @@ import org.springframework.stereotype.Service;
 @Service
 public class PublicPosReceiptService {
     private final JdbcClient db;
-    public PublicPosReceiptService(JdbcClient db) { this.db = db; }
+    private final com.elepay.merchant.MerchantAccess merchants;
+
+    public PublicPosReceiptService(JdbcClient db, com.elepay.merchant.MerchantAccess merchants) {
+        this.db = db;
+        this.merchants = merchants;
+    }
 
     public record Item(String name, BigDecimal quantity, long amountPesewas) {}
     public record ReceiptView(String merchantName, String receiptNumber, String orderNumber,
                               OffsetDateTime createdAt, long subtotalPesewas, long discountPesewas,
                               long taxPesewas, long tipPesewas, long totalPesewas,
                               List<Item> items) {}
-    private record Header(String merchantName, String receiptNumber, String orderNumber,
+    private record Header(java.util.UUID merchantId, String receiptNumber, String orderNumber,
                           OffsetDateTime createdAt, long subtotalPesewas, long discountPesewas,
                           long taxPesewas, long tipPesewas, long totalPesewas,
                           java.util.UUID orderId) {}
@@ -27,14 +32,13 @@ public class PublicPosReceiptService {
         if (token == null || !token.matches("[0-9a-fA-F]{64}"))
             throw ApiException.notFound("Receipt link not found");
         var header = db.sql("""
-                SELECT m.trading_name AS merchant_name, r.receipt_number, p.order_number,
+                SELECT p.merchant_id AS merchant_id, r.receipt_number, p.order_number,
                        r.created_at, p.subtotal_pesewas, p.discount_pesewas,
                        p.tax_pesewas, p.tip_pesewas, p.total_pesewas, p.id AS order_id
                 FROM pos_receipt_public_token t
                 JOIN pos_receipt r ON r.id = t.receipt_id
                 JOIN pos_order p ON p.id = r.order_id
-                JOIN merchant m ON m.id = p.merchant_id
-                WHERE t.token_hash = :hash AND t.revoked = false
+                 WHERE t.token_hash = :hash AND t.revoked = false
                     AND t.expires_at > now()
                 """).param("hash", PosReceiptService.receiptTokenHash(token))
                 .query(Header.class).optional()
@@ -45,7 +49,9 @@ public class PublicPosReceiptService {
                 FROM pos_order_item WHERE order_id = :order ORDER BY id
                 """).param("order",header.orderId())
                 .query(Item.class).list();
-        return new ReceiptView(header.merchantName(),header.receiptNumber(),header.orderNumber(),
+        String merchantName = merchants.find(header.merchantId()).map(
+                com.elepay.merchant.MerchantAccess.Merchant::tradingName).orElse("Restaurant");
+        return new ReceiptView(merchantName,header.receiptNumber(),header.orderNumber(),
                 header.createdAt(),header.subtotalPesewas(),header.discountPesewas(),
                 header.taxPesewas(),header.tipPesewas(),header.totalPesewas(),items);
     }
