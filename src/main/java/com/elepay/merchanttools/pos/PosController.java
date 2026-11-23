@@ -364,7 +364,7 @@ public class PosController {
     // Offline Sync
     @PostMapping("/sync")
     public PosOfflineSyncService.SyncResult syncOfflineOrder(@RequestBody PosOfflineSyncService.OfflineOrderPayload payload) {
-        access.manage(payload.merchantId());
+        access.operate(payload.merchantId());
         verifyOrderInputs(payload.merchantId(), payload.branchId(), payload.terminalId(), payload.cashierId(), payload.customerId(), payload.items());
         return syncService.syncOfflineOrder(payload);
     }

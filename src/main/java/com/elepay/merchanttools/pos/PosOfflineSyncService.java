@@ -91,6 +91,7 @@ public class PosOfflineSyncService {
     @Transactional
     public SyncResult syncOfflineOrder(OfflineOrderPayload payload) {
         validate(payload);
+        long expected = calculateTotal(payload);
         String hash = fingerprint(payload);
         // The UNIQUE merchant/transaction constraint serializes concurrent retries, including
         // a caller retrying the *same* offline transaction with a new idempotency key.
@@ -116,7 +117,6 @@ public class PosOfflineSyncService {
                     prior.serverOrderId(), prior.resolutionApplied(), "Already processed offline transaction");
         }
 
-        long expected = calculateTotal(payload);
         if (expected != payload.totalPesewas()) {
             db.sql("""
                     UPDATE pos_offline_sync_log

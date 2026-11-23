@@ -37,6 +37,16 @@ function App() {
   const path = window.location.pathname;
   const [callbackDone, setCallbackDone] = useState(false);
   useEffect(() => {
+    if (path.startsWith("/merchant") && "serviceWorker" in navigator) {
+      void navigator.serviceWorker.register("/pos-sw.js", { scope: "/" }).then((registration) => {
+        const files = performance.getEntriesByType("resource")
+          .map((entry) => new URL(entry.name).pathname)
+          .filter((pathname) => pathname.startsWith("/assets/"));
+        registration.active?.postMessage({ type: "cache-assets", files });
+      }).catch(() => {});
+    }
+  }, [path]);
+  useEffect(() => {
     if (path === "/app/callback") completeSignIn().then((to) => { window.history.replaceState(null, "", to); setCallbackDone(true); });
   }, [path]);
   if (path === "/app/callback" && !callbackDone) return <p>Signing in…</p>;
