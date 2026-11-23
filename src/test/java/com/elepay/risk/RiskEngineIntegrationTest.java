@@ -42,9 +42,6 @@ class RiskEngineIntegrationTest extends PostgresTestBase {
     private MerchantRiskService merchantRiskService;
 
     @Autowired
-    private PromotionAbuseService promoAbuseService;
-
-    @Autowired
     private MuleGraphService muleGraphService;
 
     @Autowired
@@ -272,33 +269,6 @@ class RiskEngineIntegrationTest extends PostgresTestBase {
                    eval.riskTier() == MerchantRiskService.MerchantRiskTier.SUSPENDED);
         assertTrue(eval.riskFactors().stream().anyMatch(f -> f.contains("CRITICAL_REFUND_RATE")));
         assertTrue(eval.riskFactors().stream().anyMatch(f -> f.contains("CRITICAL_DISPUTE_RATE")));
-    }
-
-    @Test
-    @DisplayName("Algorithm 031: Promotion and referral abuse graph cycle detection")
-    void testPromotionReferralCycleDetection() {
-        String camp = "camp_bonus_2026";
-        String userA = "usr_ref_A_" + UUID.randomUUID();
-        String userB = "usr_ref_B_" + UUID.randomUUID();
-        String userC = "usr_ref_C_" + UUID.randomUUID();
-
-        // Edge 1: A refers B
-        var edgeAB = new PromotionAbuseService.ReferralEdge(userA, userB, camp, "dev1", "1.1.1.1", 1000L);
-        var resAB = promoAbuseService.evaluateAndRecord(edgeAB);
-        assertEquals(PromotionAbuseService.ReferralStatus.ALLOWED, resAB.status());
-        assertFalse(resAB.isCircular());
-
-        // Edge 2: B refers C
-        var edgeBC = new PromotionAbuseService.ReferralEdge(userB, userC, camp, "dev2", "1.1.1.2", 1000L);
-        var resBC = promoAbuseService.evaluateAndRecord(edgeBC);
-        assertEquals(PromotionAbuseService.ReferralStatus.ALLOWED, resBC.status());
-
-        // Edge 3: C refers A (Completing the cycle A -> B -> C -> A)
-        var edgeCA = new PromotionAbuseService.ReferralEdge(userC, userA, camp, "dev3", "1.1.1.3", 1000L);
-        var resCA = promoAbuseService.evaluateAndRecord(edgeCA);
-        assertTrue(resCA.isCircular(), "Circular referral cycle must be detected");
-        assertEquals(PromotionAbuseService.ReferralStatus.REJECTED_ABUSE, resCA.status());
-        assertTrue(resCA.detectedAnomalies().stream().anyMatch(a -> a.contains("CIRCULAR_REFERRAL_CYCLE")));
     }
 
     @Test

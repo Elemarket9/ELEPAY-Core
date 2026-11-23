@@ -104,7 +104,6 @@ This is an evidence-first baseline created from the supplied master specificatio
 | 95 | Customer | phone normalisation | Implemented in code; not production-proven | `com.elepay.common.References#msisdn`, verified in `RecipientConfirmationIT`, `WalletTransferFlowIT` | 65d3279 |
 | 96 | Customer | spending categorisation | Implemented in code; not production-proven | `com.elepay.growth.SpendingCategorizationService`, `V21__credit_growth_platform.sql`, verified in `GrowthPlatformTest` | m6-plat |
 | 97 | Customer | savings goals | Implemented in code; not production-proven | `com.elepay.growth.SavingsGoalsService`, `V21__credit_growth_platform.sql`, verified in `GrowthPlatformTest` | m6-plat |
-| 98 | Customer | churn prediction | Implemented in code; not production-proven | `com.elepay.growth.ChurnPredictionService`, `V21__credit_growth_platform.sql`, verified in `GrowthPlatformTest` | m6-plat |
 | 99 | Customer | notification timing | Implemented in code; not production-proven | `com.elepay.growth.NotificationTimingService`, `V21__credit_growth_platform.sql`, verified in `GrowthPlatformTest` | m6-plat |
 | 100 | Customer | personalised limits | Implemented in code; not production-proven | `com.elepay.growth.PersonalizedLimitService`, `V21__credit_growth_platform.sql`, verified in `GrowthPlatformTest` | m6-plat |
 

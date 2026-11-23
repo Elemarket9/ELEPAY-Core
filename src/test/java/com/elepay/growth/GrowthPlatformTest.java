@@ -21,9 +21,6 @@ public class GrowthPlatformTest extends PostgresTestBase {
     private SavingsGoalsService savingsGoalsService;
 
     @Autowired
-    private ChurnPredictionService churnPredictionService;
-
-    @Autowired
     private NotificationTimingService notificationTimingService;
 
     @Autowired
@@ -99,28 +96,6 @@ public class GrowthPlatformTest extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Algorithm 098: Customer churn dormancy survival analysis and negative time delta guard")
-    void testChurnPrediction() {
-        UUID customerId = UUID.randomUUID();
-
-        // Highly active customer (last txn 1 day ago, 5 txns/week)
-        var active = churnPredictionService.evaluateChurnRisk(customerId, 1, 5.0);
-        assertThat(active.riskTier()).isEqualTo(ChurnPredictionService.ChurnRiskTier.ACTIVE);
-        assertThat(active.dormancyProbability()).isLessThan(0.15);
-
-        // Dormant customer (last txn 45 days ago, 0.5 txns/week)
-        var dormant = churnPredictionService.evaluateChurnRisk(customerId, 45, 0.5);
-        assertThat(dormant.riskTier()).isIn(ChurnPredictionService.ChurnRiskTier.DORMANT, ChurnPredictionService.ChurnRiskTier.CHURNED);
-        assertThat(dormant.dormancyProbability()).isGreaterThan(0.50);
-
-        // Negative time delta guard: clock skew or negative input does NOT produce NaN
-        var negativeDays = churnPredictionService.evaluateChurnRisk(customerId, -10, 4.0);
-        assertThat(Double.isNaN(negativeDays.dormancyProbability())).isFalse();
-        assertThat(Double.isNaN(negativeDays.hazardRate())).isFalse();
-        assertThat(negativeDays.riskTier()).isEqualTo(ChurnPredictionService.ChurnRiskTier.ACTIVE);
-    }
-
-    @Test
     @DisplayName("Algorithm 099: Notification timing, quiet-hours boundaries, and scheduled dispatch")
     void testNotificationTiming() {
         UUID customerId = UUID.randomUUID();
@@ -141,12 +116,12 @@ public class GrowthPlatformTest extends PostgresTestBase {
         assertThat(urgent.sentImmediately()).isTrue();
         assertThat(urgent.status()).isEqualTo("SENT");
 
-        // Marketing notification queued until morning
-        var marketing = notificationTimingService.enqueueNotification(customerId, "Weekend Special", "Earn 2% cashback",
-                NotificationTimingService.Urgency.MARKETING, nightUtc);
-        assertThat(marketing.sentImmediately()).isFalse();
-        assertThat(marketing.status()).isEqualTo("QUEUED");
-        assertThat(marketing.scheduledDeliveryTime().getHour()).isEqualTo(8);
+        // Routine account statement notification waits until morning.
+        var routine = notificationTimingService.enqueueNotification(customerId, "Account statement", "Your transaction statement is available",
+                NotificationTimingService.Urgency.ROUTINE, nightUtc);
+        assertThat(routine.sentImmediately()).isFalse();
+        assertThat(routine.status()).isEqualTo("QUEUED");
+        assertThat(routine.scheduledDeliveryTime().getHour()).isEqualTo(8);
 
         // Test scheduled poller and dispatcher: dispatches queued notifications due as of morning
         OffsetDateTime morningUtc = nightUtc.plusDays(1).withHour(8).withMinute(5);

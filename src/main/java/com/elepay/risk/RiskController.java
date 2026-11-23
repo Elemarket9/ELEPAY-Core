@@ -44,13 +44,6 @@ public class RiskController {
         return ResponseEntity.ok(riskEngine.getMerchantRiskService().evaluateMerchantRisk(metrics));
     }
 
-    @PostMapping("/referral/check")
-    public ResponseEntity<PromotionAbuseService.ReferralAbuseResult> checkReferral(
-            @RequestBody PromotionAbuseService.ReferralEdge edge
-    ) {
-        return ResponseEntity.ok(riskEngine.getPromotionAbuseService().evaluateAndRecord(edge));
-    }
-
     @PostMapping("/mule/flow")
     public ResponseEntity<MuleGraphService.MuleNodeAssessment> recordMuleFlow(
             @RequestBody MuleGraphService.TransactionFlow flow

@@ -23,7 +23,6 @@ public class RiskEngineService {
     private final AccountTakeoverService atoService;
     private final StepUpAuthService stepUpAuthService;
     private final MerchantRiskService merchantRiskService;
-    private final PromotionAbuseService promotionAbuseService;
     private final MuleGraphService muleGraphService;
     private final SyntheticIdentityService syntheticIdentityService;
     private final BehavioralBiometricsService biometricsService;
@@ -39,7 +38,6 @@ public class RiskEngineService {
             AccountTakeoverService atoService,
             StepUpAuthService stepUpAuthService,
             MerchantRiskService merchantRiskService,
-            PromotionAbuseService promotionAbuseService,
             MuleGraphService muleGraphService,
             SyntheticIdentityService syntheticIdentityService,
             BehavioralBiometricsService biometricsService,
@@ -54,7 +52,6 @@ public class RiskEngineService {
         this.atoService = atoService;
         this.stepUpAuthService = stepUpAuthService;
         this.merchantRiskService = merchantRiskService;
-        this.promotionAbuseService = promotionAbuseService;
         this.muleGraphService = muleGraphService;
         this.syntheticIdentityService = syntheticIdentityService;
         this.biometricsService = biometricsService;
@@ -222,7 +219,6 @@ public class RiskEngineService {
     public AccountTakeoverService getAtoService() { return atoService; }
     public StepUpAuthService getStepUpAuthService() { return stepUpAuthService; }
     public MerchantRiskService getMerchantRiskService() { return merchantRiskService; }
-    public PromotionAbuseService getPromotionAbuseService() { return promotionAbuseService; }
     public MuleGraphService getMuleGraphService() { return muleGraphService; }
     public SyntheticIdentityService getSyntheticIdentityService() { return syntheticIdentityService; }
     public BehavioralBiometricsService getBiometricsService() { return biometricsService; }

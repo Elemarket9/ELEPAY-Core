@@ -11,7 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Algorithm 099: Notification timing and quiet-hours scheduling.
  * Prioritizes urgent security/fraud notifications for instant delivery while deferring
- * marketing and non-urgent notices during quiet hours (e.g. 21:00 - 07:00 UTC/GMT).
+ * routine non-promotional financial notices during quiet hours (e.g. 21:00 - 07:00 UTC/GMT).
  */
 @Service
 public class NotificationTimingService {
@@ -25,7 +25,7 @@ public class NotificationTimingService {
     public enum Urgency {
         URGENT,         // Bypasses quiet hours immediately (e.g., OTP, fraud alerts)
         TRANSACTIONAL,  // Standard receipt; bypasses unless strictly nocturnal
-        MARKETING       // Defers until morning after quiet hours
+        ROUTINE         // Routine account notices defer until quiet hours end
     }
 
     public record QueuedNotification(
