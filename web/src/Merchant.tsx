@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { RestaurantInsights } from "./RestaurantInsights";
 import { TableQrManagement } from "./TableQrManagement";
+import { LoyaltyRulesManager } from "./LoyaltyRulesManager";
 import { api, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
 import { BusinessAccounting, CustomersAndLoyalty, FloorPlanView, InventoryAndStock, InvoicesAndQuotes, PayrollAndEmployees, PosRegister } from "./MerchantTools";
@@ -56,7 +57,10 @@ export function MerchantDashboard() {
           {tab === "Restaurant Insights" && <RestaurantInsights merchantId={merchant.id} />}
           {tab === "Invoices & Quotes" && <InvoicesAndQuotes merchantId={merchant.id} />}
           {tab === "Payroll & Employees" && <PayrollAndEmployees merchantId={merchant.id} />}
-          {tab === "Customers & Loyalty" && <CustomersAndLoyalty merchantId={merchant.id} />}
+          {tab === "Customers & Loyalty" && <>
+            <LoyaltyRulesManager merchantId={merchant.id} />
+            <CustomersAndLoyalty merchantId={merchant.id} />
+          </>}
           {tab === "Business Accounting" && <BusinessAccounting merchantId={merchant.id} />}
           {tab === "Transactions" && <Transactions id={merchant.id} />}
           {tab === "Settlements" && <Rows id={merchant.id} path="settlements" columns={["reference", "amount", "lines", "createdAt"]} />}
