@@ -1,8 +1,9 @@
 package com.elepay.identity;
 
 import com.elepay.common.ApiException;
-import com.elepay.security.DualControl;
 import java.util.*;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -21,11 +22,14 @@ import org.springframework.web.bind.annotation.*;
 public class KillSwitchController {
     private final KillSwitchService killSwitchService;
     private final ApiKeys apiKeys;
-    private final DualControl dualControl;
+    private final JdbcClient db;
+    private final boolean dualControl;
 
-    public KillSwitchController(KillSwitchService killSwitchService, ApiKeys apiKeys, DualControl dualControl) {
+    public KillSwitchController(KillSwitchService killSwitchService, ApiKeys apiKeys, JdbcClient db,
+                                @Value("${elepay.security.dual-control.enforced:true}") boolean dualControl) {
         this.killSwitchService = killSwitchService;
         this.apiKeys = apiKeys;
+        this.db = db;
         this.dualControl = dualControl;
     }
 
@@ -89,9 +93,9 @@ public class KillSwitchController {
         if (!freeze) {
             actor.requireOpsAdmin();
             String freezer = killSwitchService.globalFrozenBy();
-            if (dualControl.enforced()) {
-                dualControl.hold("KILL_SWITCH_CHANGE", "kill_switch", "global", null,
-                        Map.of("target", "global", "frozen", false), reason, actor);
+            if (dualControl) {
+                propose("KILL_SWITCH_CHANGE", "kill_switch", "global", null,
+                        "{\"target\":\"global\",\"frozen\":false}", reason, actor.subject());
             }
             if (freezer != null && freezer.equals(actor.subject())) {
                 throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
@@ -121,9 +125,9 @@ public class KillSwitchController {
                 : (freeze ? "Merchant emergency payout freeze" : "Merchant payout unfreeze");
         if (!freeze) {
             actor.requireOpsAdmin();
-            if (dualControl.enforced()) {
-                dualControl.hold("MERCHANT_UNFREEZE", "merchant", merchantId.toString(), merchantId,
-                        Map.of("merchantId", merchantId.toString(), "frozen", false), reason, actor);
+            if (dualControl) {
+                propose("MERCHANT_UNFREEZE", "merchant", merchantId.toString(), merchantId,
+                        "{\"merchantId\":\"" + merchantId + "\",\"frozen\":false}", reason, actor.subject());
             }
             String freezer = killSwitchService.merchantFrozenBy(merchantId);
             if (freezer != null && freezer.equals(actor.subject())) {
@@ -152,10 +156,11 @@ public class KillSwitchController {
         String reason = (request != null && request.reason() != null)
                 ? request.reason()
                 : (enabled ? "Module enabled" : "Module disabled by kill switch");
-        if (enabled && dualControl.enforced()) {
+        if (enabled && dualControl) {
             actor.requireOpsAdmin();
-            dualControl.hold("MODULE_ENABLE", "module", moduleKey, null,
-                    Map.of("target", "module", "module", moduleKey, "frozen", false), reason, actor);
+            propose("MODULE_ENABLE", "module", moduleKey, null,
+                    "{\"target\":\"module\",\"module\":\"" + moduleKey.replace("\"", "") + "\",\"frozen\":false}",
+                    reason, actor.subject());
         }
         killSwitchService.setModuleEnabled(moduleKey, enabled, reason, actor.subject());
         return Map.of(
@@ -175,5 +180,21 @@ public class KillSwitchController {
                 "revoked", revoked,
                 "status", revoked ? "REVOKED" : "NOT_FOUND"
         );
+    }
+
+    private void propose(String action, String resourceType, String resourceId, UUID merchantId,
+                         String payloadJson, String reason, String proposer) {
+        UUID id = UUID.randomUUID();
+        db.sql("""
+                INSERT INTO maker_checker_proposal (
+                    id, action_type, resource_type, resource_id, merchant_id,
+                    payload, reason, status, proposed_by, proposed_at, expires_at)
+                VALUES (:id, :action, :rt, :rid, :mid,
+                    CAST(:payload AS jsonb), :reason, 'PENDING', :by, now(), now() + interval '24 hours')""")
+                .param("id", id).param("action", action).param("rt", resourceType).param("rid", resourceId)
+                .param("mid", merchantId).param("payload", payloadJson).param("reason", reason).param("by", proposer)
+                .update();
+        throw new ApiException(org.springframework.http.HttpStatus.ACCEPTED, "pending_approval",
+                "A different operations administrator must approve proposal " + id);
     }
 }

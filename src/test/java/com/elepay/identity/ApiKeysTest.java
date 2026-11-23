@@ -29,7 +29,7 @@ class ApiKeysTest {
 
         assertThat(created).isNotNull();
         assertThat(created.id()).isNotNull();
-        assertThat(created.prefix()).startsWith("ek_");
+        assertThat(created.prefix()).startsWith("sk_live_");
         assertThat(created.secret()).startsWith(created.prefix() + "_");
         assertThat(created.apiKey()).isEqualTo(created.secret());
 

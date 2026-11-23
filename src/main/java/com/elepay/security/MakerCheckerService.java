@@ -182,7 +182,8 @@ public class MakerCheckerService {
                 SET status = 'APPROVED',
                     reviewed_by = :by,
                     reviewed_at = now(),
-                    review_note = :note
+                    review_note = :note,
+                    executed_at = now()
                 WHERE id = :id""")
                 .param("by", approverSubject)
                 .param("note", note)
@@ -203,11 +204,16 @@ public class MakerCheckerService {
                         approved.reason(), approverSubject);
             }
         }
+        if (killSwitchService != null && "MERCHANT_UNFREEZE".equals(approved.actionType()) && approved.merchantId() != null) {
+            killSwitchService.setMerchantFrozen(approved.merchantId(), false, approved.reason(), approverSubject);
+        }
+        if (killSwitchService != null && "MODULE_ENABLE".equals(approved.actionType())) {
+            killSwitchService.setModuleEnabled(String.valueOf(approved.payload().get("module")), true,
+                    approved.reason(), approverSubject);
+        }
         for (ApprovedActionHandler handler : handlers) {
             if (handler.supports(approved.actionType())) handler.execute(approved);
         }
-        db.sql("UPDATE maker_checker_proposal SET executed_at = now() WHERE id = :id AND executed_at IS NULL")
-                .param("id", proposalId).update();
 
         if (audit != null) {
             audit.record(approverSubject, "maker_checker.approved",

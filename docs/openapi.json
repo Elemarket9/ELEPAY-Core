@@ -418,6 +418,26 @@
         },
         "type" : "object"
       },
+      "CeilingChange" : {
+        "properties" : {
+          "autoFreezeOnBreach" : {
+            "type" : "boolean"
+          },
+          "dailyCeilingPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "hourlyCeilingPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "maxSinglePayoutPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "ChargeRequest" : {
         "properties" : {
           "amount" : {
@@ -789,6 +809,11 @@
             "maxLength" : 100,
             "minLength" : 0,
             "pattern" : "[A-Za-z0-9._:-]+",
+            "type" : "string"
+          },
+          "payerPhone" : {
+            "maxLength" : 40,
+            "minLength" : 0,
             "type" : "string"
           }
         },
@@ -2949,6 +2974,10 @@
       },
       "PinRequest" : {
         "properties" : {
+          "currentPin" : {
+            "pattern" : "[0-9]{4,6}",
+            "type" : "string"
+          },
           "pin" : {
             "pattern" : "[0-9]{4,6}",
             "type" : "string"
@@ -3541,10 +3570,6 @@
           },
           "currency" : {
             "type" : "string"
-          },
-          "recipientBalance" : {
-            "format" : "int64",
-            "type" : "integer"
           },
           "reference" : {
             "type" : "string"
@@ -6771,6 +6796,43 @@
         "tags" : [ "checkouts" ]
       }
     },
+    "/v1/merchants/{merchantId}/checkouts/{reference}/reset-payment" : {
+      "post" : {
+        "operationId" : "resetPayment",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "reference",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "checkouts" ]
+      }
+    },
     "/v1/merchants/{merchantId}/disputes" : {
       "get" : {
         "operationId" : "disputes_1",
@@ -7959,6 +8021,36 @@
         "tags" : [ "customer-admin" ]
       }
     },
+    "/v1/ops/customers/{id}/ussd-pin/reset" : {
+      "post" : {
+        "operationId" : "resetUssdPin",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "customer-admin" ]
+      }
+    },
     "/v1/ops/disputes" : {
       "get" : {
         "operationId" : "disputes",
@@ -8813,6 +8905,37 @@
           }
         },
         "tags" : [ "payout-policy-api" ]
+      }
+    },
+    "/v1/ops/payouts/velocity-ceilings" : {
+      "put" : {
+        "operationId" : "update",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CeilingChange"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : {
+                    "type" : "string"
+                  },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "velocity-ceiling-controller" ]
       }
     },
     "/v1/ops/platform-payout-routes" : {
@@ -10189,6 +10312,20 @@
         "parameters" : [ {
           "in" : "header",
           "name" : "X-Ussd-Signature",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "X-Ussd-Timestamp",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "X-Ussd-Nonce",
           "required" : false,
           "schema" : {
             "type" : "string"
