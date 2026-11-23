@@ -104,6 +104,27 @@ public class RestaurantKdsTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Dine-in POS order automatically claims its table and opens one kitchen ticket")
+    void dineInPosOrderFlowsIntoKitchen() {
+        var floor = tableService.createFloorPlan(merchantId, "New floor", "{}");
+        var table = tableService.createTable(merchantId, floor.id(), "T-28", 4);
+        var food = List.of(new PosOrderService.OrderItemInput(
+                null, "Jollof and chicken", BigDecimal.ONE, 3500L, 0L, 0L, "[]", 1, "MAIN", null));
+        var order = posOrderService.createOrder(merchantId, null, null, null, null,
+                food, 0L, 0L, 0L, "DINE_IN", table.id());
+        var tickets = kdsService.getActiveTickets(merchantId).stream()
+                .filter(t -> t.orderId().equals(order.id())).toList();
+        assertThat(tickets).hasSize(1);
+        assertThat(tickets.get(0).paymentStatus()).isEqualTo("PENDING");
+        assertThat(tickets.get(0).tableNumber()).isEqualTo("T-28");
+        assertThat(kdsService.listTicketItems(tickets.get(0).id())).hasSize(1);
+        assertThat(tableService.getTable(table.id()).orElseThrow().currentOrderId()).isEqualTo(order.id());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                posOrderService.createOrder(merchantId, null, null, null, null, food, 0L, 0L, 0L, "DINE_IN", table.id()))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+    }
+
+    @Test
     @DisplayName("Domain 4: Modifiers and options for customized dishes")
     void testItemModifiers() {
         var group = modifierService.createModifierGroup(merchantId, "Meat Choice", 1, 1, true);

@@ -2,6 +2,9 @@ package com.elepay.merchanttools.pos;
 
 import com.elepay.merchanttools.inventory.MovementType;
 import com.elepay.merchanttools.inventory.StockService;
+import com.elepay.merchanttools.restaurant.DiningMode;
+import com.elepay.merchanttools.restaurant.KdsService;
+import com.elepay.common.ApiException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -20,13 +23,15 @@ public class PosOrderService {
     private final StockService stockService;
     private final PosCashierService cashierService;
     private final com.elepay.checkout.PosCheckoutGateway checkout;
+    private final KdsService kitchen;
 
     public PosOrderService(JdbcClient db, StockService stockService, PosCashierService cashierService,
-                           com.elepay.checkout.PosCheckoutGateway checkout) {
+                           com.elepay.checkout.PosCheckoutGateway checkout, KdsService kitchen) {
         this.db = db;
         this.stockService = stockService;
         this.cashierService = cashierService;
         this.checkout = checkout;
+        this.kitchen = kitchen;
     }
 
     public record PosOrder(
@@ -106,17 +111,33 @@ public class PosOrderService {
 
     @Transactional
     public PosOrder createOrder(
-            UUID merchantId,
-            UUID branchId,
-            UUID terminalId,
-            UUID cashierId,
-            UUID customerId,
-            List<OrderItemInput> items,
-            long discountPesewas,
-            long taxPesewas,
-            long tipPesewas,
-            String orderType
+            UUID merchantId, UUID branchId, UUID terminalId, UUID cashierId, UUID customerId,
+            List<OrderItemInput> items, long discountPesewas, long taxPesewas,
+            long tipPesewas, String orderType
     ) {
+        return createOrder(merchantId, branchId, terminalId, cashierId, customerId, items,
+                discountPesewas, taxPesewas, tipPesewas, orderType, null);
+    }
+
+    /**
+     * A restaurant order, table assignment and the first kitchen ticket commit atomically.
+     * Legacy RETAIL, STANDARD and RESTAURANT orders retain their existing behavior.
+     * The latter is used by existing integrations that explicitly create their own kitchen tickets.
+     */
+    @Transactional
+    public PosOrder createOrder(
+            UUID merchantId, UUID branchId, UUID terminalId, UUID cashierId, UUID customerId,
+            List<OrderItemInput> items, long discountPesewas, long taxPesewas,
+            long tipPesewas, String orderType, UUID tableId
+    ) {
+        String channel = orderType == null ? "STANDARD" : orderType;
+        boolean toKitchen = java.util.Set.of("DINE_IN", "TAKEOUT", "DELIVERY", "QR").contains(channel);
+        if (!toKitchen && !java.util.Set.of("STANDARD", "RETAIL", "RESTAURANT", "OFFLINE_SYNC").contains(channel))
+            throw ApiException.badRequest("order_channel_invalid", "Unknown POS order channel");
+        if (tableId != null && !java.util.Set.of("DINE_IN", "QR").contains(channel))
+            throw ApiException.badRequest("table_channel_invalid", "Only dine-in and table QR orders may select a table");
+        if (("DINE_IN".equals(channel) || "QR".equals(channel)) && tableId == null)
+            throw ApiException.badRequest("table_required", "Select a table for dine-in orders");
         UUID orderId = UUID.randomUUID();
         String orderNumber = generateOrderNumber();
 
@@ -150,7 +171,7 @@ public class PosOrderService {
             .param("tax", taxPesewas)
             .param("tip", tipPesewas)
             .param("total", total)
-            .param("orderType", orderType == null ? "STANDARD" : orderType)
+            .param("orderType", channel)
             .update();
 
         for (OrderItemInput item : items) {
@@ -184,6 +205,30 @@ public class PosOrderService {
                 .update();
         }
 
+        if (tableId != null) {
+            // Claim only a currently free table; concurrent waiters cannot overwrite each other's orders.
+            int claimed = db.sql("""
+                    UPDATE restaurant_table SET status = 'OCCUPIED', current_order_id = :order
+                    WHERE id = :table AND merchant_id = :merchant
+                      AND status = 'AVAILABLE' AND current_order_id IS NULL
+                    """).param("order", orderId).param("table", tableId).param("merchant", merchantId).update();
+            if (claimed != 1)
+                throw ApiException.conflict("table_unavailable", "Table is occupied or not available");
+        }
+        if (toKitchen) {
+            DiningMode mode = switch (channel) {
+                case "TAKEOUT" -> DiningMode.TAKEOUT;
+                case "DELIVERY" -> DiningMode.DELIVERY;
+                default -> DiningMode.DINE_IN;
+            };
+            List<KdsService.KdsItemInput> kitchenItems = listOrderItems(orderId).stream()
+                    .map(i -> new KdsService.KdsItemInput(i.id(), i.itemName(), i.quantity(),
+                            i.modifiersJson(), i.course() == null ? "MAIN" : i.course()))
+                    .toList();
+            // Client reference prevents duplicate cooking tickets if this integration is retried.
+            kitchen.createTicket(merchantId, orderId, tableId, mode, null, "ALL", kitchenItems,
+                    null, "pos:" + orderId);
+        }
         return getOrder(orderId).orElseThrow();
     }
 

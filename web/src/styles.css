@@ -123,3 +123,8 @@ body.kitchen-body { min-height: 100vh; }
 .doc-line { display: grid; grid-template-columns: 3fr 1fr 1fr 1fr auto; gap: .4rem; align-items: center; margin: .3rem 0; }
 .doc-line input { margin: 0; }
 td.num, .lines .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* A kitchen ticket must show authoritative payment status without confusing payment with preparation. */
+.kitchen-pay { font-size: 1rem; font-weight: 800; padding: .2rem .45rem; border-radius: 6px; background: #58401e; color: #ffe29b; }
+.kitchen-pay.paid { background: #124c31; color: #b4f9cf; }
+.kitchen-pay.partial { background: #58401e; color: #ffe29b; }

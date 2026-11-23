@@ -169,16 +169,17 @@ public class PosController {
     public record CreateOrderRequest(
             UUID merchantId, UUID branchId, UUID terminalId, UUID cashierId, UUID customerId,
             List<PosOrderService.OrderItemInput> items, long discountPesewas, long taxPesewas,
-            long tipPesewas, String orderType
+            long tipPesewas, String orderType, UUID tableId
     ) {}
 
     @PostMapping("/orders")
     public PosOrderService.PosOrder createOrder(@RequestBody CreateOrderRequest req) {
         access.operate(req.merchantId());
         verifyOrderInputs(req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(), req.items());
+        if (req.tableId() != null) access.belongs(req.merchantId(), TABLE, req.tableId());
         return orderService.createOrder(
                 req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(),
-                req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType()
+                req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType(), req.tableId()
         );
     }
 

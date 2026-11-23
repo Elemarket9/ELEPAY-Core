@@ -17,6 +17,7 @@ export interface Ticket {
   serverName: string | null; status: Status; course: string; notes: string | null;
   createdAt: string; startedAt: string | null; readyAt: string | null; servedAt: string | null;
   ticketNumber: number | null; clientRef: string | null; cancelledAt: string | null; changeSeq: number;
+  paymentStatus?: string | null; tableNumber?: string | null;
 }
 
 export interface Item {
@@ -176,7 +177,7 @@ export function visible(state: KdsState, stationId: string | null): TicketView[]
 
 export function urgency(view: TicketView, now = Date.now()): "normal" | "warning" | "critical" {
   const minutes = (now - Date.parse(view.ticket.createdAt)) / 60000;
-  return minutes >= 25 ? "critical" : minutes >= 15 ? "warning" : "normal";
+  return minutes >= 15 ? "critical" : minutes >= 10 ? "warning" : "normal";
 }
 
 export function elapsed(view: TicketView, now = Date.now()): string {
