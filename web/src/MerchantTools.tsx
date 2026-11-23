@@ -336,7 +336,8 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     await refreshOffline();
     if (lanSettings) {
       try {
-        await publishLanOrder(lanSettings, draft);
+        await publishLanOrder(lanSettings, draft,
+          tables.find((t) => t.id === draft.tableId)?.tableNumber ?? null);
         setTableNotice("Saved locally and delivered to the paired LAN kitchen relay.");
       } catch (e) {
         setTableNotice("Order saved on this device, but not yet delivered to a kitchen screen.");

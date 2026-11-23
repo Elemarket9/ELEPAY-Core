@@ -8,7 +8,8 @@ export interface LanSettings { url: string; token: string }
 export interface LanTicket {
   offlineTxId: string; merchantId: string; orderType: string; tableId: string | null;
   items: { itemName: string; quantity: number; notes?: string | null }[];
-  totalPesewas: number; payments: { tenderType: "CASH"; amountPesewas: number }[];
+  totalPesewas: number; tableLabel?: string | null;
+  payments: { tenderType: "CASH"; amountPesewas: number }[];
   status: "NEW" | "PREPARING" | "READY" | "SERVED";
   serverOrderId: string | null; createdAt: string;
 }
@@ -41,8 +42,8 @@ async function request<T>(settings: LanSettings, pathname: string, body?: unknow
   if (!response.ok) throw new Error("LAN edge returned " + response.status);
   return await response.json() as T;
 }
-export function publishLanOrder(settings: LanSettings, order: OfflineOrder): Promise<LanTicket> {
-  return request(settings, "/lan/orders", offlinePayload(order));
+export function publishLanOrder(settings: LanSettings, order: OfflineOrder, tableLabel: string | null = null): Promise<LanTicket> {
+  return request(settings, "/lan/orders", { ...offlinePayload(order), tableLabel });
 }
 export function linkLanOrder(settings: LanSettings, id: string, serverOrderId: string): Promise<LanTicket> {
   return request(settings, "/lan/orders/" + encodeURIComponent(id) + "/link", { serverOrderId });
