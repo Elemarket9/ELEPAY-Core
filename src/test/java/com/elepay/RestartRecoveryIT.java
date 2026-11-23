@@ -23,7 +23,7 @@ class RestartRecoveryIT {
 
     static ConfigurableApplicationContext start() {
         var db = PostgresTestBase.DATABASE;
-        return new SpringApplicationBuilder(SandboxApplication.class).profiles("test").run(
+        return new SpringApplicationBuilder(ElepayApplication.class).profiles("test").run(
                 "--server.port=0",
                 "--spring.datasource.url=" + db.url(),
                 "--spring.datasource.username=" + db.username(),
