@@ -17,6 +17,12 @@ Baseline main revision `f14bb72959cf7db2038074cb11915f53c075d4e6`. The recursive
 
 Ghana repealed the E-Levy in April 2025. See [Act 1127](https://repository.parliament.gh/items/e9133f9a-1df6-43c8-852a-967b61561cff) and the [GRA repeal notice](https://gra.gov.gh/news/portfolio/electronic-transfer-levy-repealed-in-april-2025/). Existing historical batch statuses require independent corroboration before external reporting.
 
+## Verification environment and remaining gates
+
+The candidate was built with Java 25, Maven 3.9.11 and a disposable PostgreSQL 18.7 database. The Maven suites cover 515 Surefire tests and 69 Failsafe integration tests. The frontend suite has 10 tests. The runner also executed type checking, the production web bundle and npm audit. The OpenAPI comparison uses the generated contract from the running test application and requires a committed file. Sandbox endpoints in that contract belong to the test application.
+
+The hosted push and pull request runs on this branch failed before recording job steps. No hosted backend, frontend, container or security pass is established. A clean PostgreSQL install and the V3 upgrade are covered. Live bank, mobile-money, NIA and partner-wallet verification, a full security scan, recovery from a production backup and the complete Ghana compliance review remain outstanding.
+
 ## Production code baseline
 
 Nonblank noncomment Java under src/main, SQL migrations, and TypeScript, TSX and CSS under web/src. Counts exclude tests, generated files, configuration and documentation. This source-set measure includes partially implemented features.
@@ -29,7 +35,7 @@ Nonblank noncomment Java under src/main, SQL migrations, and TypeScript, TSX and
 | cards | 1671 | 805 |
 | checkout | 2117 | 2117 |
 | common | 1511 | 1511 |
-| compliance | 2420 | 2024 |
+| compliance | 2420 | 2003 |
 | credit | 989 | 989 |
 | database migrations | 3954 | 3954 |
 | developer | 796 | 796 |
@@ -54,7 +60,7 @@ Nonblank noncomment Java under src/main, SQL migrations, and TypeScript, TSX and
 | ussd | 216 | 216 |
 | wallet | 1080 | 1080 |
 | web | 3464 | 3464 |
-| **Total** | **50854** | **46073** |
+| **Total** | **50854** | **46052** |
 
 ## Original algorithm traceability
 
