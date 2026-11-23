@@ -128,3 +128,10 @@ td.num, .lines .num { text-align: right; font-variant-numeric: tabular-nums; }
 .kitchen-pay { font-size: 1rem; font-weight: 800; padding: .2rem .45rem; border-radius: 6px; background: #58401e; color: #ffe29b; }
 .kitchen-pay.paid { background: #124c31; color: #b4f9cf; }
 .kitchen-pay.partial { background: #58401e; color: #ffe29b; }
+
+/* Touch-first POS controls shared by phone, tablet, terminal and browser. */
+.pos-item { min-height: 80px; min-width: 80px; }
+.kitchen-bump, .kitchen-more, .kitchen-menu button { min-width: 80px; min-height: 80px; }
+@media (max-width: 599px) { .pos-items { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 600px) and (max-width: 1199px) { .pos-items { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 1200px) { .pos-items { grid-template-columns: repeat(6, minmax(0, 1fr)); } }

@@ -25,6 +25,7 @@ public class PosController {
     private final PosReceiptService receiptService;
     private final PosOfflineSyncService syncService;
     private final DeviceEvents deviceEvents;
+    private final PosTerminalAcceptanceService cardPresent;
 
     public PosController(
             MerchantToolAccess access,
@@ -36,7 +37,8 @@ public class PosController {
             PosSplitBillService splitBillService,
             PosReceiptService receiptService,
             PosOfflineSyncService syncService,
-            DeviceEvents deviceEvents
+            DeviceEvents deviceEvents,
+            PosTerminalAcceptanceService cardPresent
     ) {
         this.access = access;
         this.idempotency = idempotency;
@@ -48,6 +50,7 @@ public class PosController {
         this.receiptService = receiptService;
         this.syncService = syncService;
         this.deviceEvents = deviceEvents;
+        this.cardPresent = cardPresent;
     }
 
     // Terminal endpoints
@@ -96,6 +99,19 @@ public class PosController {
     public List<PosTerminalService.PosTerminal> listTerminals(@PathVariable UUID merchantId) {
         access.manage(merchantId);
         return terminalService.listTerminals(merchantId);
+    }
+
+    /** Only paired active terminals belonging to the operator's branch are offered for payment. */
+    public record TerminalChoice(UUID id, String serialNumber, String model, UUID branchId) {}
+
+    @GetMapping("/terminals/available/{merchantId}")
+    public List<TerminalChoice> availableTerminals(@PathVariable UUID merchantId) {
+        UUID allowedBranch = access.operatingBranch(merchantId);
+        return terminalService.listTerminals(merchantId).stream()
+                .filter(t -> "ACTIVE".equals(t.status()))
+                .filter(t -> allowedBranch == null || java.util.Objects.equals(allowedBranch, t.branchId()))
+                .map(t -> new TerminalChoice(t.id(), t.serialNumber(), t.model(), t.branchId()))
+                .toList();
     }
 
     // Cashier & Shift endpoints
@@ -222,6 +238,42 @@ public class PosController {
         verifyOrder(orderId);
         orderService.cancelDigital(orderId, com.elepay.identity.Actor.current().subject());
         return ResponseEntity.noContent().build();
+    }
+
+    /** Generate merchant-presented QR/2D-barcode payment data bound to a real pending checkout.
+     * Scanning the code opens the customer's hosted checkout; it never means payment succeeded.
+     */
+    public record PaymentCode(String checkoutReference, String barcodeValue, String qrPayload,
+                              long amountPesewas, String status) {}
+
+    @PostMapping("/orders/{orderId}/payment-code")
+    public PaymentCode paymentCode(@PathVariable UUID orderId) {
+        var order = verifyOrder(orderId);
+        var checkout = orderService.startDigital(order.id(), com.elepay.identity.Actor.current().subject());
+        if (!"open".equals(checkout.status()))
+            throw ApiException.conflict("checkout_not_open", "Payment code is no longer active");
+        return new PaymentCode(checkout.reference(), "ELEPAY-PAY:" + checkout.reference(),
+                checkout.payUrl(), checkout.amount(), "PENDING");
+    }
+
+    public record TerminalPaymentRequest(UUID terminalId, PosTerminalAcceptanceService.Mode mode) {}
+
+    @PostMapping("/orders/{orderId}/terminal-payments")
+    @Transactional
+    public PosTerminalAcceptanceService.TerminalSession startTerminalPayment(
+            @PathVariable UUID orderId, @RequestHeader("Idempotency-Key") String key,
+            @RequestBody TerminalPaymentRequest req) {
+        var order = verifyOrder(orderId);
+        UUID allowedBranch = access.operatingBranch(order.merchantId());
+        if (allowedBranch != null && !java.util.Objects.equals(allowedBranch, order.branchId()))
+            throw ApiException.forbidden("Order belongs to another branch");
+        if (req.terminalId() == null)
+            throw ApiException.badRequest("terminal_required", "Select a registered payment terminal");
+        access.belongs(order.merchantId(), TERMINAL, req.terminalId());
+        return idempotency.execute("pos-terminal:" + order.merchantId() + ":" + orderId, key, req,
+                PosTerminalAcceptanceService.TerminalSession.class,
+                () -> cardPresent.begin(orderId, req.terminalId(), req.mode(),
+                        com.elepay.identity.Actor.current().subject()));
     }
 
     // Split Bills

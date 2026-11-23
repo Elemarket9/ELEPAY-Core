@@ -40,6 +40,9 @@ public class PosCommerceTest extends PostgresTestBase {
     private PosOfflineSyncService syncService;
 
     @Autowired
+    private PosTerminalAcceptanceService terminalAcceptance;
+
+    @Autowired
     private WarehouseService warehouseService;
 
     @Autowired
@@ -113,6 +116,26 @@ public class PosCommerceTest extends PostgresTestBase {
         var closedShift = cashierService.closeShift(shift.id(), 24800L, "2 GHS minor coin shortage");
         assertThat(closedShift.status()).isEqualTo("CLOSED");
         assertThat(closedShift.cashDiscrepancyPesewas()).isEqualTo(-200L);
+    }
+
+    @Test
+    @DisplayName("Unconfigured NFC terminal never fakes an approval or debits the ledger")
+    void unconfiguredNfcFailsClosed() {
+        String serial = "NFC-" + UUID.randomUUID();
+        var terminal = terminalService.registerTerminal(merchantId, null, serial, "Partner terminal");
+        terminalService.pairTerminal(serial, terminal.pairingCode(), "device-hardware-fingerprint");
+        var order = orderService.createOrder(merchantId, null, terminal.id(), null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Food", BigDecimal.ONE,
+                        2500L, 0L, 0L, "[]", null, null, null)),
+                0L, 0L, 0L, "RETAIL");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                terminalAcceptance.begin(order.id(), terminal.id(),
+                        PosTerminalAcceptanceService.Mode.NFC_TAP, "tester"))
+                .isInstanceOf(com.elepay.common.ApiException.class)
+                .hasMessageContaining("No certified card-present provider");
+        assertThat(orderService.getOrder(order.id()).orElseThrow().status()).isEqualTo("PENDING");
+        assertThat(db.sql("SELECT count(*) FROM pos_checkout_link WHERE order_id = :id")
+                .param("id", order.id()).query(Long.class).single()).isZero();
     }
 
     @Test

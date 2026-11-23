@@ -178,11 +178,22 @@ export function InventoryAndStock({ merchantId }: { merchantId: string }) {
 interface PosOrder { id: string; orderNumber: string; totalPesewas: number; paidPesewas: number; changePesewas: number; status: string }
 interface DigitalCheckout { id: string; reference: string; amount: number; status: string; payUrl: string | null }
 interface PosReceipt { receiptNumber: string; escposFormattedText: string }
+interface PaymentTerminal { id: string; model: string; serialNumber: string; branchId: string | null }
+interface DiningTableOption { id: string; tableNumber: string; status: string }
+interface PaymentCode { checkoutReference: string; barcodeValue: string; qrPayload: string; amountPesewas: number; status: string }
+interface TerminalSession { status: string; instructions: string | null; checkoutReference: string; providerReference: string }
 
 const TAX_KEY = (merchantId: string) => `elepay.pos.taxPercent.${merchantId}`;
 
 export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [catalog, reloadCatalog, loadError] = useLoad<CatalogRow[]>(`/v1/inventory/catalog/merchant/${merchant.id}`, []);
+  const [tables] = useLoad<DiningTableOption[]>(`/v1/restaurant/tables/merchant/${merchant.id}`, []);
+  const [terminals] = useLoad<PaymentTerminal[]>(`/v1/pos/terminals/available/${merchant.id}`, []);
+  const [orderType, setOrderType] = useState("RETAIL");
+  const [tableId, setTableId] = useState("");
+  const [terminalId, setTerminalId] = useState("");
+  const [paymentCode, setPaymentCode] = useState<PaymentCode | null>(null);
+  const [terminalSession, setTerminalSession] = useState<TerminalSession | null>(null);
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState<{ row: CatalogRow; qty: number }[]>([]);
   const [discount, setDiscount] = useState("");
@@ -214,10 +225,12 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     if (order) return order;
     if (discountP === null) throw new Error("Enter the discount like 5.00");
     if (!taxValid) throw new Error("Tax must be between 0 and 100%");
-    const created = await api<PosOrder>("/v1/pos/orders", { body: { merchantId: merchant.id, branchId: null, terminalId: null, cashierId: null, customerId: null,
+    if ((orderType === "DINE_IN" || orderType === "QR") && !tableId) throw new Error("Select a table first");
+    const chosenTerminal = terminals.find((t) => t.id === terminalId);
+    const created = await api<PosOrder>("/v1/pos/orders", { body: { merchantId: merchant.id, branchId: chosenTerminal?.branchId ?? null, terminalId: chosenTerminal?.id ?? null, cashierId: null, customerId: null, tableId: tableId || null,
       items: cart.map((c) => ({ variantId: c.row.variantId, itemName: itemLabel(c.row), quantity: c.qty, unitPricePesewas: c.row.retailPricePesewas,
         discountPesewas: 0, taxPesewas: 0, modifiersJson: "[]", seatNumber: null, course: null, notes: null })),
-      discountPesewas: Math.min(discountP, subtotal), taxPesewas: tax, tipPesewas: 0, orderType: "RETAIL" } });
+      discountPesewas: Math.min(discountP, subtotal), taxPesewas: tax, tipPesewas: 0, orderType } });
     setOrder(created);
     return created;
   }
@@ -227,7 +240,38 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     const latest = await api<PosOrder>(`/v1/pos/orders/${o.id}`);
     setReceipt({ receipt: r, order: latest });
     setCart([]); setDiscount(""); setTendered(""); setOrder(null); setDigital(null);
+    setPaymentCode(null); setTerminalSession(null);
     void reloadCatalog();
+  }
+
+  async function sendToKitchen() {
+    setError(null); setBusy(true);
+    try { await ensureOrder(); }
+    catch (e) { setError(`Could not send order: ${message(e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function showPaymentBarcode() {
+    setError(null); setBusy(true);
+    try {
+      const o = await ensureOrder();
+      const code = await api<PaymentCode>(`/v1/pos/orders/${o.id}/payment-code`, { method: "POST" });
+      setPaymentCode(code);
+      setDigital({ id: o.id, reference: code.checkoutReference, amount: code.amountPesewas, status: "open", payUrl: code.qrPayload });
+    } catch (e) { setError(`Could not generate payment barcode: ${message(e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function startContactless() {
+    if (!terminalId) { setError("Choose a paired payment terminal for NFC tap"); return; }
+    setError(null); setBusy(true);
+    try {
+      const o = await ensureOrder();
+      const s = await api<TerminalSession>(`/v1/pos/orders/${o.id}/terminal-payments`, {
+        body: { terminalId, mode: "NFC_TAP" }, idempotencyKey: newKey() });
+      setTerminalSession(s);
+    } catch (e) { setError(`NFC unavailable: ${message(e)}`); }
+    finally { setBusy(false); }
   }
 
   async function payCash() {
@@ -299,6 +343,26 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
       </div>
       <div className="panel">
         <h3>Sale</h3>
+        <div className="grid-2">
+          {terminals.length > 0 && <label>Payment terminal
+            <select value={terminalId} disabled={!!order} onChange={(e) => setTerminalId(e.target.value)}>
+              <option value="">No terminal selected</option>
+              {terminals.map((t) => <option key={t.id} value={t.id}>{t.model} – {t.serialNumber}</option>)}
+            </select>
+          </label>}
+          <label>Order channel
+            <select value={orderType} disabled={!!order} onChange={(e) => { setOrderType(e.target.value); setTableId(""); }}>
+              <option value="RETAIL">Retail</option><option value="DINE_IN">Dine-in</option>
+              <option value="TAKEOUT">Takeaway</option><option value="DELIVERY">Delivery</option>
+            </select>
+          </label>
+          {orderType === "DINE_IN" && <label>Table
+            <select value={tableId} disabled={!!order} onChange={(e) => setTableId(e.target.value)}>
+              <option value="">Select available table</option>
+              {tables.filter((t) => t.status === "AVAILABLE").map((t) => <option key={t.id} value={t.id}>{t.tableNumber}</option>)}
+            </select>
+          </label>}
+        </div>
         {cart.length === 0 ? <p className="muted">Tap products to add them.</p> : (
           <table className="grid">
             <tbody>
@@ -326,11 +390,15 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           <dt><strong>Total</strong></dt><dd><strong>{formatMoney(total)}</strong></dd>
         </dl>
         {error && <p className="error">{error}</p>}
+        {order && orderType !== "RETAIL" && <p className="notice ok">Order {order.orderNumber} sent to kitchen. Payment status: {order.status}.</p>}
+        {orderType !== "RETAIL" && cart.length > 0 && !order && <button onClick={() => void sendToKitchen()} disabled={busy}>Send to kitchen</button>}
+        {terminalSession && <p className="notice">Terminal request pending: {terminalSession.instructions ?? "Ask customer to tap their card."} Confirm only after your acquirer settles the checkout.</p>}
         {digital ? (
           <div className="notice">
             <p>Customer pays <strong>{formatMoney(digital.amount)}</strong> with MoMo or card:</p>
             {qr && <img src={qr} alt="Payment QR code" width={220} height={220} />}
             {digital.payUrl && <p className="small mono">{digital.payUrl}</p>}
+            {paymentCode && <p>2D payment barcode reference: <strong className="mono">{paymentCode.barcodeValue}</strong></p>}
             <button onClick={() => void checkDigital()} disabled={busy}>Check payment</button>
             <button className="secondary" onClick={() => void cancelDigital()} disabled={busy}>Cancel payment</button>
           </div>
@@ -340,6 +408,8 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
             <div className="flex-row">
               <button onClick={() => void payCash()} disabled={busy}>Cash</button>
               <button className="secondary" onClick={() => void startDigital()} disabled={busy}>MoMo / card</button>
+              <button className="secondary" onClick={() => void showPaymentBarcode()} disabled={busy}>Payment QR / barcode</button>
+              <button className="secondary" onClick={() => void startContactless()} disabled={busy || !terminalId}>NFC tap on terminal</button>
               {!order && <button className="secondary" onClick={() => setCart([])}>Clear</button>}
             </div>
           </>

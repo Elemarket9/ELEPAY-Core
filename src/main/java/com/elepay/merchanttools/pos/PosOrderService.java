@@ -361,12 +361,6 @@ public class PosOrderService {
             .param("reference", reference)
             .update();
 
-        // Update active shift if cash
-        if (tenderType == TenderType.CASH && order.terminalId() != null) {
-            cashierService.getActiveShift(order.terminalId())
-                    .ifPresent(shift -> cashierService.recordCashTender(shift.id(), amountPesewas));
-        }
-
         long newPaid = Math.addExact(order.paidPesewas(), amountPesewas);
         long change = 0;
         String status = "PARTIAL";
@@ -379,6 +373,13 @@ public class PosOrderService {
 
             // Deduct stock for inventory-tracked variants
             deductInventoryForOrder(orderId, order.merchantId());
+        }
+
+        // The cash drawer holds cash retained, not gross tender including change returned.
+        if (tenderType == TenderType.CASH && order.terminalId() != null) {
+            long retainedCash = Math.subtractExact(amountPesewas, change);
+            cashierService.getActiveShift(order.terminalId())
+                    .ifPresent(shift -> cashierService.recordCashTender(shift.id(), retainedCash));
         }
 
         db.sql("""
