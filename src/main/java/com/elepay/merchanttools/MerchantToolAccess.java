@@ -18,17 +18,9 @@ public class MerchantToolAccess {
     }
 
     public enum Resource {
-        WAREHOUSE("SELECT merchant_id FROM inventory_warehouse WHERE id = :id"),
-        CATEGORY("SELECT merchant_id FROM inventory_category WHERE id = :id"),
-        PRODUCT("SELECT merchant_id FROM inventory_product WHERE id = :id"),
-        VARIANT("SELECT merchant_id FROM inventory_variant WHERE id = :id"),
-        SUPPLIER("SELECT merchant_id FROM inventory_supplier WHERE id = :id"),
-        TRANSFER("SELECT merchant_id FROM inventory_transfer_order WHERE id = :id"),
-        PURCHASE_ORDER("SELECT merchant_id FROM inventory_purchase_order WHERE id = :id"),
         TERMINAL("SELECT merchant_id FROM pos_terminal WHERE id = :id"),
         CASHIER("SELECT merchant_id FROM pos_cashier WHERE id = :id"),
         SHIFT("SELECT merchant_id FROM pos_shift WHERE id = :id"),
-        CART("SELECT merchant_id FROM pos_cart_held WHERE id = :id"),
         ORDER("SELECT merchant_id FROM pos_order WHERE id = :id");
 
         private final String sql;
