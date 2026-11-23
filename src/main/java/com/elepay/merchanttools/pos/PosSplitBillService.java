@@ -106,7 +106,7 @@ public class PosSplitBillService {
         List<Long> totals = ProportionalAllocation.allocate(order.totalPesewas(), weights);
         for (int i = 0; i < sortedSeats.size(); i++)
             groups.add(new SeatSplitGroup(sortedSeats.get(i), weights.get(i), totals.get(i),
-                    bySeat.get(sortedSeats.get(i)));
+                    bySeat.get(sortedSeats.get(i))));
 
         return new SeatSplitResult(orderId, order.totalPesewas(), groups);
     }
