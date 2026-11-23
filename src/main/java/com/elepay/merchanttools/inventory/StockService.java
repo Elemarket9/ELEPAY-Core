@@ -103,6 +103,16 @@ public class StockService {
     }
 
     @Transactional
+    public Stock setReorderPoint(UUID warehouseId, UUID variantId, BigDecimal reorderPoint) {
+        if (reorderPoint == null || reorderPoint.signum() < 0)
+            throw new IllegalArgumentException("Reorder point must be zero or more");
+        Stock stock = getOrCreateStock(warehouseId, variantId);
+        db.sql("UPDATE inventory_stock SET reorder_point = :r, updated_at = now() WHERE id = :id")
+                .param("r", reorderPoint).param("id", stock.id()).update();
+        return getOrCreateStock(warehouseId, variantId);
+    }
+
+    @Transactional
     public Stock adjustStock(
             UUID warehouseId,
             UUID variantId,

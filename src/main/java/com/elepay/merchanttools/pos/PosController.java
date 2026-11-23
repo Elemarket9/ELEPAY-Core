@@ -174,7 +174,7 @@ public class PosController {
 
     @PostMapping("/orders")
     public PosOrderService.PosOrder createOrder(@RequestBody CreateOrderRequest req) {
-        access.manage(req.merchantId());
+        access.operate(req.merchantId());
         verifyOrderInputs(req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(), req.items());
         return orderService.createOrder(
                 req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(),
@@ -275,7 +275,7 @@ public class PosController {
     }
 
     private PosOrderService.PosOrder verifyOrder(UUID id) {
-        access.manage(ORDER, id);
+        access.operate(ORDER, id);
         var order = orderService.getOrder(id).orElseThrow(() -> ApiException.notFound("Order not found"));
         access.branch(order.merchantId(), order.branchId());
         if (order.terminalId() != null) access.belongs(order.merchantId(), TERMINAL, order.terminalId());

@@ -174,8 +174,8 @@ public class PosCommerceTest extends PostgresTestBase {
         // 4. Generate Printed & Digital Receipt
         var receipt = receiptService.generateReceipt(order.id());
         assertThat(receipt.receiptNumber()).startsWith("REC-");
-        assertThat(receipt.digitalReceiptUrl()).contains("https://receipts.elepay.com/r/");
-        assertThat(receipt.escposFormattedText()).contains("ELEPAY COMMERCE");
+        assertThat(receipt.digitalReceiptUrl()).as("no invented receipt page").isNull();
+        assertThat(receipt.escposFormattedText()).contains("POS MART").doesNotContain("ELEPAY COMMERCE");
         assertThat(receipt.escposFormattedText()).contains("TOTAL DUE:");
         assertThat(receipt.escposFormattedText()).contains("CHANGE GIVEN:");
     }

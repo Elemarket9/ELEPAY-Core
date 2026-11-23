@@ -15,8 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 public class PosReceiptService {
     private final JdbcClient db;
     private final PosOrderService orderService;
+    private final com.elepay.merchant.MerchantAccess merchants;
 
-    public PosReceiptService(JdbcClient db, PosOrderService orderService) {
+    public PosReceiptService(JdbcClient db, PosOrderService orderService, com.elepay.merchant.MerchantAccess merchants) {
+        this.merchants = merchants;
         this.db = db;
         this.orderService = orderService;
     }
@@ -46,13 +48,17 @@ public class PosReceiptService {
 
         String receiptNumber = generateReceiptNumber();
         UUID receiptId = UUID.randomUUID();
-        String digitalReceiptUrl = "https://receipts.elepay.com/r/" + receiptId;
-        String qrPayload = "ELEPAY:RECEIPT:" + receiptNumber + ":AMT:" + order.totalPesewas() + ":URL:" + digitalReceiptUrl;
+        // There is no public receipt page yet, so the receipt carries no link rather than a link that does not work.
+        String digitalReceiptUrl = null;
+        String qrPayload = "ELEPAY:RECEIPT:" + receiptNumber + ":AMT:" + order.totalPesewas();
+        String shopName = merchants.find(order.merchantId()).map(com.elepay.merchant.MerchantAccess.Merchant::tradingName)
+                .orElse("Receipt").toUpperCase();
+        if (shopName.length() > 40) shopName = shopName.substring(0, 40);
 
         // Build ESC/POS 80mm Plain Text format
         StringBuilder sb = new StringBuilder();
         sb.append("========================================\n");
-        sb.append("             ELEPAY COMMERCE            \n");
+        sb.append(" ".repeat((40 - shopName.length()) / 2)).append(shopName).append("\n");
         sb.append("========================================\n");
         sb.append("Receipt No: ").append(receiptNumber).append("\n");
         sb.append("Order No  : ").append(order.orderNumber()).append("\n");
@@ -62,7 +68,7 @@ public class PosReceiptService {
         sb.append("----------------------------------------\n");
 
         for (PosOrderService.PosOrderItem item : items) {
-            sb.append(String.format("%-20.20s %4s %12s\n", item.itemName(), item.quantity().toPlainString(), formatMinorUnits(item.totalPesewas())));
+            sb.append(String.format("%-20.20s %4s %12s\n", item.itemName(), item.quantity().stripTrailingZeros().toPlainString(), formatMinorUnits(item.totalPesewas())));
         }
 
         sb.append("----------------------------------------\n");
@@ -89,8 +95,10 @@ public class PosReceiptService {
         }
 
         sb.append("----------------------------------------\n");
-        sb.append("Scan for Digital Receipt & Verification:\n");
-        sb.append(digitalReceiptUrl).append("\n");
+        if (digitalReceiptUrl != null) {
+            sb.append("Scan for Digital Receipt & Verification:\n");
+            sb.append(digitalReceiptUrl).append("\n");
+        }
         sb.append("========================================\n");
         sb.append("       THANK YOU FOR YOUR PATRONAGE     \n");
         sb.append("========================================\n");

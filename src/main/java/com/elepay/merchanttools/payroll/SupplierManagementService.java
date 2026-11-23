@@ -241,20 +241,26 @@ public class SupplierManagementService {
      * Generates payout allocations, updates bill paid status, and records GL settlement postings.
      */
     @Transactional
-    public PaymentRunSummary executeAutomatedPaymentRun(UUID merchantId, LocalDate dueOnOrBefore, String bankAccountCode) {
+    /**
+     * Collects approved bills due by the given date into a payment run awaiting payout. No money moves and no
+     * bill is marked paid here: allocations stay PENDING without a payout reference until a real payout exists.
+     */
+    public PaymentRunSummary prepareSupplierPaymentRun(UUID merchantId, LocalDate dueOnOrBefore) {
         var eligibleBills = db.sql("""
-            SELECT id, bill_number, total_amount_pesewas, paid_amount_pesewas
+            SELECT id, total_amount_pesewas, paid_amount_pesewas
             FROM supplier_bill
-            WHERE merchant_id = ? AND status = 'APPROVED' AND due_date <= ? FOR UPDATE
+            WHERE merchant_id = ? AND status = 'APPROVED' AND due_date <= ?
+              AND NOT EXISTS (SELECT 1 FROM supplier_payment_allocation a
+                              WHERE a.bill_id = supplier_bill.id AND a.status = 'PENDING')
+            FOR UPDATE
         """).params(merchantId, dueOnOrBefore)
         .query((rs, rowNum) -> Map.of(
                 "id", (UUID) rs.getObject("id"),
-                "bill_number", rs.getString("bill_number"),
                 "payable", rs.getLong("total_amount_pesewas") - rs.getLong("paid_amount_pesewas")
         )).list();
 
         if (eligibleBills.isEmpty()) {
-            return new PaymentRunSummary(null, merchantId, "NONE", 0L, 0, "NO_BILLS_DUE", OffsetDateTime.now());
+            return new PaymentRunSummary(null, merchantId, "NONE", 0L, 0, "NO_BILLS_DUE", null);
         }
 
         UUID runId = UUID.randomUUID();
@@ -263,53 +269,19 @@ public class SupplierManagementService {
 
         db.sql("""
             INSERT INTO supplier_payment_run
-            (id, merchant_id, run_number, total_amount_pesewas, bill_count, status, executed_at)
-            VALUES (?, ?, ?, ?, ?, 'EXECUTED', now())
+            (id, merchant_id, run_number, total_amount_pesewas, bill_count, status)
+            VALUES (?, ?, ?, ?, ?, 'PENDING_PAYOUT')
         """).params(runId, merchantId, runNumber, totalAmount, eligibleBills.size())
         .update();
 
         for (var bill : eligibleBills) {
-            UUID allocId = UUID.randomUUID();
-            UUID bId = (UUID) bill.get("id");
-            long amt = (Long) bill.get("payable");
-            String payoutRef = "PAYOUT-SUPP-" + UUID.randomUUID().toString().substring(0, 8);
-
             db.sql("""
                 INSERT INTO supplier_payment_allocation
                 (id, payment_run_id, bill_id, amount_pesewas, payout_reference, status)
-                VALUES (?, ?, ?, ?, ?, 'SUCCESS')
-            """).params(allocId, runId, bId, amt, payoutRef).update();
-
-            db.sql("""
-                UPDATE supplier_bill
-                SET paid_amount_pesewas = total_amount_pesewas, status = 'PAID'
-                WHERE id = ?
-            """).param(bId).update();
+                VALUES (?, ?, ?, ?, NULL, 'PENDING')
+            """).params(UUID.randomUUID(), runId, (UUID) bill.get("id"), (Long) bill.get("payable")).update();
         }
 
-        // Post to General Ledger:
-        // Debit: Accounts Payable (2010) -> totalAmount
-        // Credit: Bank Account Operating (1020) -> totalAmount
-        String cashAccCode = bankAccountCode != null ? bankAccountCode : "1020";
-        var apAcc = glService.getAccountByCode(merchantId, "2010");
-        var bankAcc = glService.getAccountByCode(merchantId, cashAccCode);
-
-        if (apAcc.isPresent() && bankAcc.isPresent() && totalAmount > 0) {
-            glService.postJournalEntry(new MerchantGeneralLedgerService.PostJournalEntryCommand(
-                    merchantId,
-                    "SPAY-GL-" + runNumber,
-                    LocalDate.now(),
-                    "Supplier Payment Run: " + runNumber,
-                    "SUPPLIER_PAYMENT",
-                    runId,
-                    "GHS",
-                    List.of(
-                            new MerchantGeneralLedgerService.JournalLineCommand(apAcc.get().id(), totalAmount, 0L, "Clear AP: " + runNumber),
-                            new MerchantGeneralLedgerService.JournalLineCommand(bankAcc.get().id(), 0L, totalAmount, "Disburse Funds: " + runNumber)
-                    )
-            ));
-        }
-
-        return new PaymentRunSummary(runId, merchantId, runNumber, totalAmount, eligibleBills.size(), "EXECUTED", OffsetDateTime.now());
+        return new PaymentRunSummary(runId, merchantId, runNumber, totalAmount, eligibleBills.size(), "PENDING_PAYOUT", null);
     }
 }

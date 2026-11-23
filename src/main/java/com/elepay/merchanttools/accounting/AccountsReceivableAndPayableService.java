@@ -66,7 +66,7 @@ public class AccountsReceivableAndPayableService {
         var invoices = db.sql("""
             SELECT id, invoice_number, customer_name, due_date, total_pesewas, paid_amount_pesewas
             FROM merchant_invoice
-            WHERE merchant_id = ? AND status IN ('SENT', 'PARTIALLY_PAID', 'OVERDUE')
+            WHERE merchant_id = ? AND status IN ('ISSUED', 'SENT', 'PARTIALLY_PAID', 'OVERDUE')
         """).params(merchantId)
         .query((rs, rowNum) -> new OutstandingInvoice(
                 rs.getObject("id", UUID.class),

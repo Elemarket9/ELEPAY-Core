@@ -190,4 +190,29 @@ public class MarketingCampaignService {
 
         return new CampaignDispatchResult(campaignId, targets.size(), sent, failed, outbound);
     }
+
+    public record CustomerRow(UUID id, String customerCode, String fullName, String phone, String email,
+                              long totalSpendPesewas, int transactionCount, String rfmSegment, String loyaltyTier,
+                              long pointsBalance, java.time.OffsetDateTime lastPurchaseAt) {}
+
+    public List<CustomerRow> listCustomers(UUID merchantId) {
+        return db.sql("""
+            SELECT c.id, c.customer_code, c.full_name, c.phone, c.email, c.total_spend_pesewas, c.transaction_count,
+                   c.rfm_segment, COALESCE(l.current_tier, c.loyalty_tier) AS loyalty_tier,
+                   COALESCE(l.points_balance, 0) AS points_balance, c.last_purchase_at
+            FROM crm_customer c
+            LEFT JOIN crm_loyalty_account l ON l.customer_id = c.id AND l.merchant_id = c.merchant_id
+            WHERE c.merchant_id = ?
+            ORDER BY c.full_name
+            """).param(merchantId).query(CustomerRow.class).list();
+    }
+
+    public String nextCustomerCode(UUID merchantId) {
+        long n = db.sql("SELECT count(*) FROM crm_customer WHERE merchant_id = ?").param(merchantId).query(Long.class).single();
+        String code;
+        do { n++; code = String.format("CUS-%04d", n); }
+        while (db.sql("SELECT count(*) FROM crm_customer WHERE merchant_id = ? AND customer_code = ?")
+                .params(merchantId, code).query(Long.class).single() > 0);
+        return code;
+    }
 }

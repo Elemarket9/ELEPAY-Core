@@ -150,8 +150,8 @@ public class AccountingAndInvoicingTest extends PostgresTestBase {
                 LocalDate.now().plusDays(30)
         );
 
-        assertThat(inv.status()).isEqualTo("SENT");
-        assertThat(inv.paymentLinkUrl()).contains("https://pay.elepay.com/invoice/");
+        assertThat(inv.status()).isEqualTo("ISSUED");
+        assertThat(inv.paymentLinkUrl()).as("no invented payment page").isNull();
         assertThat(inv.graSdcReceiptNumber()).isNull();
 
         // Verify GL auto-posting for invoice issuance (Debit AR, Credit Revenue & VAT)

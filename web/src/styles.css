@@ -111,3 +111,15 @@ body.kitchen-body { margin: 0; background: #111614; color: #f2f5f3; }
 html:has(body.kitchen-body) { background: #111614; }
 body.kitchen-body { min-height: 100vh; }
 .kitchen-start a, .kitchen-start .link { color: var(--gold); }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .4rem 1rem; }
+.pos-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 1rem; align-items: start; }
+@media (max-width: 800px) { .pos-layout { grid-template-columns: 1fr; } }
+.pos-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem; margin-top: .6rem; }
+.pos-item { display: flex; flex-direction: column; align-items: flex-start; gap: .2rem; text-align: left; margin: 0; min-height: 5rem; }
+.receipt { background: #fff; border: 1px dashed var(--line); padding: .8rem; font-size: .85rem; overflow-x: auto; }
+.table-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .6rem; }
+.dining-table { border: 1px solid var(--line); border-left: 6px solid #0b5d3b; border-radius: 8px; padding: .6rem; background: #fff; display: flex; flex-direction: column; gap: .3rem; }
+.dining-table.occupied { border-left-color: #f5c542; } .dining-table.reserved { border-left-color: #1a73e8; } .dining-table.dirty { border-left-color: #a12a1f; }
+.doc-line { display: grid; grid-template-columns: 3fr 1fr 1fr 1fr auto; gap: .4rem; align-items: center; margin: .3rem 0; }
+.doc-line input { margin: 0; }
+td.num, .lines .num { text-align: right; font-variant-numeric: tabular-nums; }

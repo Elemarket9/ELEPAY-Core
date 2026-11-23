@@ -124,7 +124,7 @@ public class PayrollAndSupplierTest extends PostgresTestBase {
         assertThat(run.totalNetPayPesewas()).isGreaterThan(0L);
 
         // 3. Execution without approval should fail
-        assertThatThrownBy(() -> payrollService.executePayrollRun(merchantId, run.id()))
+        assertThatThrownBy(() -> payrollService.recordPayoutSubmission(merchantId, run.id(), "pob_test_1"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("must be APPROVED");
 
@@ -132,17 +132,21 @@ public class PayrollAndSupplierTest extends PostgresTestBase {
         payrollService.submitPayrollRun(merchantId, run.id());
         payrollService.approvePayrollRun(merchantId, run.id(), "cfo@elepay.com");
 
-        // 5. Execute batch payroll run
-        var executed = payrollService.executePayrollRun(merchantId, run.id());
-        assertThat(executed.status()).isEqualTo("EXECUTED");
+        // 5. Hand the approved payroll to a real payout batch. Nothing is marked PAID by payroll itself.
+        var executed = payrollService.recordPayoutSubmission(merchantId, run.id(), "pob_test_1");
+        assertThat(executed.status()).isEqualTo("PAYMENT_SUBMITTED");
         assertThat(executed.executedAt()).isNotNull();
+        assertThatThrownBy(() -> payrollService.recordPayoutSubmission(merchantId, run.id(), "pob_test_2"))
+                .isInstanceOf(IllegalStateException.class);
 
-        // Verify each payslip has a generated payout reference and PAID status
         var payslips = payrollService.listPayslipsForRun(run.id());
         for (var ps : payslips) {
-            assertThat(ps.paymentStatus()).isEqualTo("PAID");
-            assertThat(ps.payoutReference()).startsWith("PAYOUT-PR-");
+            assertThat(ps.paymentStatus()).isEqualTo("SUBMITTED");
+            assertThat(ps.payoutReference()).isEqualTo("pob_test_1");
         }
+        // Net wages are owed (Accrued Wages), not shown as paid out of the bank.
+        assertThat(glService.getAccountByCode(merchantId, "2050").orElseThrow().balancePesewas()).isEqualTo(run.totalNetPayPesewas());
+        assertThat(glService.getAccountByCode(merchantId, "1020").orElseThrow().balancePesewas()).isEqualTo(0L);
 
         // Verify GL postings (Salaries expense debited, wages disbursed credited)
         var wageExp = glService.getAccountByCode(merchantId, "6010").orElseThrow();
@@ -204,19 +208,15 @@ public class PayrollAndSupplierTest extends PostgresTestBase {
         assertThat(apReport.totalUnpaidBillsCount()).isEqualTo(1);
         assertThat(apReport.aging().currentPesewas()).isEqualTo(700_000L);
 
-        // 5. Execute Automated Payment Run
-        var payRun = supplierService.executeAutomatedPaymentRun(
-                merchantId,
-                LocalDate.now().plusDays(30),
-                "1020"
-        );
-
-        assertThat(payRun.status()).isEqualTo("EXECUTED");
+        // 5. Prepare a payment run: bills await a real payout, nothing is marked paid.
+        var payRun = supplierService.prepareSupplierPaymentRun(merchantId, LocalDate.now().plusDays(30));
+        assertThat(payRun.status()).isEqualTo("PENDING_PAYOUT");
         assertThat(payRun.billCount()).isEqualTo(1);
         assertThat(payRun.totalAmountPesewas()).isEqualTo(700_000L);
+        assertThat(supplierService.prepareSupplierPaymentRun(merchantId, LocalDate.now().plusDays(30)).billCount())
+                .as("a bill already awaiting payout is not added twice").isZero();
 
-        // Verify AP account cleared in GL
-        var apCleared = glService.getAccountByCode(merchantId, "2010").orElseThrow();
-        assertThat(apCleared.balancePesewas()).isEqualTo(0L);
+        // Still owed to the supplier until a real payout settles.
+        assertThat(glService.getAccountByCode(merchantId, "2010").orElseThrow().balancePesewas()).isEqualTo(700_000L);
     }
 }
