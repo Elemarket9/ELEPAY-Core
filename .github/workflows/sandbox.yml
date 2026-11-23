@@ -46,7 +46,7 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
-      - name: Dependency vulnerability scan (OWASP Dependency-Check, fails on CVSS >= 7)
+      - name: Dependency vulnerability scan (OWASP Dependency-Check, fails on CVSS >= 5)
         run: mvn -B -Psecurity-scan -DskipTests verify
       - name: npm audit (web, high and critical)
         working-directory: web

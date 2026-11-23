@@ -14,4 +14,14 @@
     <gav>io.opentelemetry:opentelemetry-api:1.68.0</gav>
     <cve>CVE-2026-54285</cve>
   </suppress>
+  <suppress>
+    <notes><![CDATA[
+      Same JS-only CVE matched to Java SDK, also a false positive:
+      https://github.com/advisories/GHSA-8988-4f7v-96qf
+      This rule is limited to Java SDK 1.68.0 and this single CVE.
+      All other vulnerability IDs stay reportable and blocking.
+    ]]></notes>
+    <gav>io.opentelemetry:opentelemetry-sdk:1.68.0</gav>
+    <cve>CVE-2026-54285</cve>
+  </suppress>
 </suppressions>
