@@ -244,9 +244,19 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
                 $order->update_meta_data('_elepay_checkout_idempotency_key', $key);
                 $order->save();
             }
+            // Scope references to this WordPress site to avoid collisions when a merchant has
+            // several stores. Persist before the network request so site migrations do not
+            // change the identifier used in retries.
+            $order_reference = (string) $order->get_meta('_elepay_checkout_order_reference');
+            if ($order_reference === '') {
+                $order_reference = 'wc_' . substr(hash('sha256', home_url('/')), 0, 12)
+                    . '_' . $order->get_id();
+                $order->update_meta_data('_elepay_checkout_order_reference', $order_reference);
+                $order->save();
+            }
             $payload = array(
                 'amount' => $total,
-                'orderReference' => 'wc_' . $order->get_id(),
+                'orderReference' => $order_reference,
                 'description' => sprintf(__('WooCommerce order #%s', 'woocommerce-elepay'), $order->get_order_number()),
             );
             $session = $api->create_checkout($payload, $key);
@@ -375,6 +385,11 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
                 $orders = wc_get_orders(array('limit' => 1,
                     'meta_key' => '_elepay_checkout_reference', 'meta_value' => $reference));
                 $order = empty($orders) ? null : $orders[0];
+            }
+            if (!$order && in_array($type, array('checkout.paid', 'payment.success'), true)) {
+                status_header(503);
+                wp_send_json_error(array('message' => 'WooCommerce order reference is not yet available; retry event.'));
+                return;
             }
             if ($order && $order->get_payment_method() === 'elepay'
                     && hash_equals((string) $order->get_meta('_elepay_checkout_reference'), $reference)) {
