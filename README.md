@@ -25,3 +25,7 @@ Run local isolated sandbox/test fixtures with: `docker compose up --build`. Alte
 
 **Live bank, MoMo, card networks: NOT YET CONNECTED. Local testing uses sandbox/test fixtures only.** No real GRA submission integration exists; **GRA integration NOT IMPLEMENTED - manual submission required.** Historic e-Levy data is retained for audit only: e-Levy was repealed in April 2025 and must not be charged. International card acceptance and FX conversion remain within scope; recipient payouts and remittances abroad are excluded.
 
+
+## Maintainer verification and operational handover
+
+Run `python3 scripts/verify_fintech_scope.py`, `mvn -B clean verify`, and `cd web && npm ci && npm run typecheck && npm test && npm run build` before merging. The source guard is a supplemental test, not evidence of live rails. Review `docs/security-operations.md` for required configuration, legacy vault migration, CI setup, and security controls. CI can only be called green when the jobs for the exact commit actually run and pass.

@@ -4,3 +4,11 @@ web/dist/
 .git/
 *.log
 .env
+
+# Never send local credential material into the Docker build context.
+**/.env*
+**/*.pem
+**/*.p12
+**/*.pfx
+**/*.key
+**/*.jks

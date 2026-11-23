@@ -14,7 +14,7 @@ RUN npm run build
 FROM maven:3.9-eclipse-temurin-25 AS build
 WORKDIR /src
 COPY pom.xml ./
-RUN mvn -B -q dependency:go-offline || true
+RUN mvn -B -q dependency:go-offline
 COPY src ./src
 COPY --from=web /web/dist ./src/main/resources/static
 RUN mvn -B -q -DskipTests package && cp target/elepay-core-*.jar /app.jar
