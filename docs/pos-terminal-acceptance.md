@@ -79,3 +79,10 @@ session binding and waiter/chef role granularity still need further development.
 **Temporary access restriction:** Table transfers are available only to
 merchant-wide administrators until branch ownership is explicitly represented
 on floor plans. Branch-scoped cashiers may close only their own branch's orders.
+
+### Additional restaurant rounds
+`POST /v1/pos/orders/{orderId}/items` requires an `Idempotency-Key` and
+adds new items to the *existing, unpaid* restaurant bill. New items produce a
+new kitchen ticket atomically. A paid or payment-in-progress order rejects
+new rounds so confirmed checkout amounts cannot silently change. The
+original order number and all prior kitchen tickets are preserved.

@@ -203,6 +203,24 @@ public class PosController {
         );
     }
 
+    public record AddRoundRequest(List<PosOrderService.OrderItemInput> items) {}
+
+    @PostMapping("/orders/{orderId}/items")
+    @Transactional
+    public PosOrderService.PosOrder addRound(@PathVariable UUID orderId,
+            @RequestHeader("Idempotency-Key") String key, @RequestBody AddRoundRequest req) {
+        var order = verifyOrder(orderId);
+        if (req == null || req.items() == null || req.items().isEmpty())
+            throw ApiException.badRequest("items_required", "Choose items for the new round");
+        for (var item : req.items()) {
+            if (item == null) throw ApiException.badRequest("item_required", "Invalid order item");
+            if (item.variantId() != null) access.belongs(order.merchantId(), VARIANT, item.variantId());
+        }
+        return idempotency.execute("pos-add-items:" + order.merchantId() + ":" + orderId, key, req,
+                PosOrderService.PosOrder.class,
+                () -> orderService.addItems(orderId, req.items(), key));
+    }
+
     @GetMapping("/orders/{orderId}")
     public ResponseEntity<PosOrderService.PosOrder> getOrder(@PathVariable UUID orderId) {
         verifyOrder(orderId);

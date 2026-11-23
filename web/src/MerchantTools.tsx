@@ -202,6 +202,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [splitAmount, setSplitAmount] = useState("");
   const [splitPreview, setSplitPreview] = useState<SplitQuoteLine[]>([]);
   const [tableNotice, setTableNotice] = useState("");
+  const [addingRound, setAddingRound] = useState(false);
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState<{ row: CatalogRow; qty: number }[]>([]);
   const [discount, setDiscount] = useState("");
@@ -241,6 +242,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         discountPesewas: 0, taxPesewas: 0, modifiersJson: "[]", seatNumber: null, course: null, notes: null })),
       discountPesewas: Math.min(discountP, subtotal), taxPesewas: tax, tipPesewas: 0, orderType } });
     setOrder(created);
+    setCart([]); // Once sent to the kitchen, the server is the order's source of truth.
     return created;
   }
 
@@ -249,18 +251,34 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     const latest = await api<PosOrder>(`/v1/pos/orders/${o.id}`);
     setReceipt({ receipt: r, order: latest });
     setCart([]); setDiscount(""); setTendered(""); setOrder(null); setDigital(null);
-    setPaymentCode(null); setTerminalSession(null); setSplitPreview([]);
+    setPaymentCode(null); setTerminalSession(null); setSplitPreview([]); setAddingRound(false);
     void reloadCatalog();
   }
 
   async function sendToKitchen() {
     setError(null); setBusy(true);
-    try { await ensureOrder(); }
+    try {
+      if (addingRound && order) {
+        if (cart.length === 0) throw new Error("Select items for the next round");
+        const latest = await api<PosOrder>(`/v1/pos/orders/${order.id}/items`, {
+          body: { items: cart.map((c) => ({
+            variantId: c.row.variantId, itemName: itemLabel(c.row), quantity: c.qty,
+            unitPricePesewas: c.row.retailPricePesewas, discountPesewas: 0, taxPesewas: 0,
+            modifiersJson: "[]", seatNumber: null, course: "MAIN", notes: null,
+          })) }, idempotencyKey: newKey() });
+        setOrder(latest); setCart([]); setAddingRound(false); setSplitPreview([]);
+        setTableNotice("Next round sent to the kitchen. Both rounds remain on one bill.");
+      } else {
+        await ensureOrder();
+        setTableNotice("Order sent to the kitchen.");
+      }
+    }
     catch (e) { setError(`Could not send order: ${message(e)}`); }
     finally { setBusy(false); }
   }
 
   async function showPaymentBarcode() {
+    if (addingRound && cart.length) { setError("Send the next round to the kitchen before payment"); return; }
     setError(null); setBusy(true);
     try {
       const o = await ensureOrder();
@@ -272,6 +290,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   }
 
   async function startContactless() {
+    if (addingRound && cart.length) { setError("Send the next round to the kitchen before payment"); return; }
     if (!terminalId) { setError("Choose a paired payment terminal for NFC tap"); return; }
     setError(null); setBusy(true);
     try {
@@ -306,6 +325,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   }
 
   async function previewBillSplit() {
+    if (addingRound && cart.length) { setError("Send the next round to the kitchen before splitting the bill"); return; }
     setError(null); setBusy(true);
     try {
       const o = await ensureOrder();
@@ -332,6 +352,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   }
 
   async function payCash() {
+    if (addingRound && cart.length) { setError("Send the next round to the kitchen before payment"); return; }
     setError(null);
     const cash = money(tendered);
     if (cash === null || cash <= 0) { setError("Enter the cash received, like 50.00"); return; }
@@ -347,6 +368,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   }
 
   async function startDigital() {
+    if (addingRound && cart.length) { setError("Send the next round to the kitchen before payment"); return; }
     setError(null); setBusy(true);
     try {
       const o = await ensureOrder();
@@ -400,7 +422,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         {catalog.length === 0 && !loadError && <p className="muted">No products yet. Add them in <strong>Inventory &amp; Stock</strong>.</p>}
         <div className="pos-items">
           {shown.map((r) => (
-            <button key={r.variantId} className="secondary pos-item" disabled={!!order} onClick={() => add(r)}>
+            <button key={r.variantId} className="secondary pos-item" disabled={!!order && !addingRound} onClick={() => add(r)}>
               <span>{itemLabel(r)}</span><strong>{formatMoney(r.retailPricePesewas)}</strong>
               {r.trackInventory && <span className="small muted">{Number(r.onHand)} in stock</span>}
             </button>
@@ -429,16 +451,18 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
             </select>
           </label>}
         </div>
-        {cart.length === 0 ? <p className="muted">Tap products to add them.</p> : (
+        {cart.length === 0 ? <p className="muted">{order
+          ? "Order open. Add another round or collect payment."
+          : "Tap products to add them."}</p> : (
           <table className="grid">
             <tbody>
               {cart.map((c) => (
                 <tr key={c.row.variantId}>
                   <td>{itemLabel(c.row)}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
-                    <button className="secondary small pos-qty" disabled={!!order} onClick={() => setQty(c.row.variantId, c.qty - 1)}>−</button>
+                    <button className="secondary small pos-qty" disabled={!!order && !addingRound} onClick={() => setQty(c.row.variantId, c.qty - 1)}>−</button>
                     {c.qty}
-                    <button className="secondary small pos-qty" disabled={!!order} onClick={() => setQty(c.row.variantId, c.qty + 1)}>+</button>
+                    <button className="secondary small pos-qty" disabled={!!order && !addingRound} onClick={() => setQty(c.row.variantId, c.qty + 1)}>+</button>
                   </td>
                   <td>{formatMoney(c.row.retailPricePesewas * c.qty)}</td>
                 </tr>
@@ -451,12 +475,26 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           <label>Tax %<input inputMode="decimal" value={taxPercent} disabled={!!order} onChange={(e) => setTaxPercent(e.target.value)} /></label>
         </div>
         <dl className="confirm">
-          <dt>Subtotal</dt><dd>{formatMoney(subtotal)}</dd>
-          {tax > 0 && <><dt>Tax</dt><dd>{formatMoney(tax)}</dd></>}
-          <dt><strong>Total</strong></dt><dd><strong>{formatMoney(total)}</strong></dd>
+          {order ? <>
+            <dt>Current bill total</dt><dd><strong>{formatMoney(order.totalPesewas)}</strong></dd>
+            {addingRound && cart.length > 0 && <>
+              <dt>Unsaved new items</dt><dd>{formatMoney(subtotal)}</dd>
+            </>}
+          </> : <>
+            <dt>Subtotal</dt><dd>{formatMoney(subtotal)}</dd>
+            {tax > 0 && <><dt>Tax</dt><dd>{formatMoney(tax)}</dd></>}
+            <dt><strong>Total</strong></dt><dd><strong>{formatMoney(total)}</strong></dd>
+          </>}
         </dl>
         {error && <p className="error">{error}</p>}
         {tableNotice && <p className="notice ok">{tableNotice}</p>}
+        {order && order.status === "PENDING" && orderType !== "RETAIL" && <>
+          {!addingRound ? <button className="secondary" onClick={() => { setAddingRound(true); setTableNotice(""); }}>
+            Add another round
+          </button> : <button className="secondary" onClick={() => { setAddingRound(false); setCart([]); }}>
+            Cancel new round
+          </button>}
+        </>}
         {order && tableId && orderType === "DINE_IN" && <div className="pos-transfer">
           <label>Move open order to an available table
             <select value={destinationTable} onChange={(e) => setDestinationTable(e.target.value)}>
@@ -467,7 +505,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           </label>
           <button className="secondary" disabled={busy || !destinationTable} onClick={() => void transferTable()}>Transfer table</button>
         </div>}
-        {cart.length > 0 && <div className="pos-bill-split">
+        {(cart.length > 0 || !!order) && <div className="pos-bill-split">
           <h4>Split the bill</h4>
           <div className="grid-2">
             <label>Split method
@@ -491,7 +529,10 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           </div>}
         </div>}
         {order && orderType !== "RETAIL" && <p className="notice ok">Order {order.orderNumber} sent to kitchen. Payment status: {order.status}.</p>}
-        {orderType !== "RETAIL" && cart.length > 0 && !order && <button onClick={() => void sendToKitchen()} disabled={busy}>Send to kitchen</button>}
+        {orderType !== "RETAIL" && cart.length > 0 && (!order || addingRound) && 
+          <button onClick={() => void sendToKitchen()} disabled={busy}>
+            {addingRound ? "Send new round to kitchen" : "Send to kitchen"}
+          </button>}}
         {terminalSession && <p className="notice">Terminal request pending: {terminalSession.instructions ?? "Ask customer to tap their card."} Confirm only after your acquirer settles the checkout.</p>}
         {order && <p>Paid: {formatMoney(order.paidPesewas)} · Remaining balance: <strong>{formatMoney(balanceDue)}</strong></p>}
         {digital ? (
@@ -508,7 +549,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
             <button onClick={() => void checkDigital()} disabled={busy}>Check payment</button>
             <button className="secondary" onClick={() => void cancelDigital()} disabled={busy}>Cancel payment</button>
           </div>
-        ) : cart.length > 0 && (
+        ) : (cart.length > 0 || !!order) && (
           <>
             <label>Cash received (GH₵) — full or partial
               <input inputMode="decimal" value={tendered} onChange={(e) => setTendered(e.target.value)}

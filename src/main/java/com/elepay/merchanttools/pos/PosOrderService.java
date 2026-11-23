@@ -246,6 +246,65 @@ public class PosOrderService {
         return getOrder(orderId).orElseThrow();
     }
 
+    /**
+     * Add a second round to an unpaid restaurant order. One customer bill, one set
+     * of tender payments, and one NEW kitchen ticket for only the added items.
+     * All changes (items, total, ticket) commit in the same database transaction.
+     */
+    @Transactional
+    public PosOrder addItems(UUID orderId, List<OrderItemInput> inputs, String operationKey) {
+        PosOrder order = lockOrder(orderId);
+        if (!java.util.Set.of("DINE_IN", "TAKEOUT", "DELIVERY", "QR").contains(order.orderType()))
+            throw ApiException.conflict("restaurant_order_required", "Only restaurant orders can add a new round");
+        if (!"PENDING".equals(order.status()) || order.paidPesewas() != 0 || link(orderId).isPresent())
+            throw ApiException.conflict("order_payment_started", "Cannot change items after payment has started");
+        if (inputs == null || inputs.isEmpty())
+            throw ApiException.badRequest("items_required", "Choose items for the new round");
+        if (operationKey == null || operationKey.isBlank() || operationKey.length() > 128)
+            throw ApiException.badRequest("idempotency_required", "New rounds need an idempotency key");
+        UUID tableId = db.sql("SELECT id FROM restaurant_table WHERE current_order_id = :order")
+                .param("order", orderId).query(UUID.class).optional().orElse(null);
+        if (("DINE_IN".equals(order.orderType()) || "QR".equals(order.orderType())) && tableId == null)
+            throw ApiException.conflict("table_unavailable", "The original table is no longer occupied by this order");
+        long extraTotal = 0;
+        List<KdsService.KdsItemInput> kitchenItems = new java.util.ArrayList<>();
+        for (OrderItemInput item : inputs) {
+            long amount = itemTotal(item);
+            extraTotal = Math.addExact(extraTotal, amount);
+            UUID lineId = UUID.randomUUID();
+            db.sql("""
+                    INSERT INTO pos_order_item (id, order_id, variant_id, item_name, quantity,
+                        unit_price_pesewas, discount_pesewas, tax_pesewas, total_pesewas,
+                        modifiers_json, seat_number, course, notes)
+                    VALUES (:id, :order, :variant, :name, :quantity, :price, :discount, :tax,
+                        :total, :modifiers, :seat, :course, :notes)
+                    """)
+                    .param("id", lineId).param("order", orderId).param("variant", item.variantId())
+                    .param("name", item.itemName()).param("quantity", item.quantity())
+                    .param("price", item.unitPricePesewas()).param("discount", item.discountPesewas())
+                    .param("tax", item.taxPesewas()).param("total", amount)
+                    .param("modifiers", item.modifiersJson() == null ? "[]" : item.modifiersJson())
+                    .param("seat", item.seatNumber()).param("course", item.course())
+                    .param("notes", item.notes()).update();
+            kitchenItems.add(new KdsService.KdsItemInput(lineId, item.itemName(), item.quantity(),
+                    item.modifiersJson(), item.course() == null ? "MAIN" : item.course()));
+        }
+        db.sql("""
+                UPDATE pos_order SET subtotal_pesewas = subtotal_pesewas + :amount,
+                    total_pesewas = total_pesewas + :amount WHERE id = :id
+                """).param("amount", extraTotal).param("id", orderId).update();
+        DiningMode mode = switch (order.orderType()) {
+            case "TAKEOUT" -> DiningMode.TAKEOUT;
+            case "DELIVERY" -> DiningMode.DELIVERY;
+            default -> DiningMode.DINE_IN;
+        };
+        String key = "round:" + UUID.nameUUIDFromBytes(
+                (orderId + ":" + operationKey).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        kitchen.createTicket(order.merchantId(), orderId, tableId, mode, null,
+                "ALL", kitchenItems, "ADDITIONAL ROUND", key);
+        return getOrder(orderId).orElseThrow();
+    }
+
     public Optional<PosOrder> getOrder(UUID id) {
         return db.sql("""
             SELECT id, order_number, merchant_id, branch_id, terminal_id, cashier_id,
