@@ -10,6 +10,7 @@ const Wallet = lazy(() => import("./Wallet").then((m) => ({ default: m.Wallet })
 const Kitchen = lazy(() => import("./Kitchen").then((m) => ({ default: m.Kitchen })));
 const CustomerDisplay = lazy(() => import("./CustomerDisplay").then((m) => ({ default: m.CustomerDisplay })));
 const TableQrOrder = lazy(() => import("./TableQrOrder").then((m) => ({ default: m.TableQrOrder })));
+const DigitalReceipt = lazy(() => import("./DigitalReceipt").then((m) => ({ default: m.DigitalReceipt })));
 const LanKitchen = lazy(() => import("./LanKitchen").then((m) => ({ default: m.LanKitchen })));
 const DeveloperPortal = lazy(() => import("./Developer").then((m) => ({ default: m.DeveloperPortal })));
 import "./styles.css";
@@ -55,6 +56,7 @@ function App() {
   if (path === "/app/callback" && !callbackDone) return <p>Signing in…</p>;
 
   let m: RegExpMatchArray | null;
+  if ((m = path.match(/^\/receipt\/([0-9a-fA-F]{64})$/))) return <Suspense fallback={<p>Loading receipt…</p>}><DigitalReceipt token={m[1]} /></Suspense>;
   if ((m = path.match(/^\/restaurant\/table\/([0-9a-fA-F]{64})$/))) return <Suspense fallback={<p>Loading table menu…</p>}><TableQrOrder token={m[1]} /></Suspense>;
   if ((m = path.match(/^\/pay\/l\/([\w-]+)$/))) return <StartFromLink slug={m[1]} />;
   if ((m = path.match(/^\/pay\/m\/(\d{6})$/))) return <StartFromLink code={m[1]} />;

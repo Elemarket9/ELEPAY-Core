@@ -90,7 +90,7 @@ class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**", "/pay/**", "/favicon.svg",
                                 "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**", "/developer", "/developer/**",
                                 "/kitchen", "/kitchen/**", "/kitchen-sw.js", "/kitchen.webmanifest",
-                                "/pos-sw.js", "/customer-display", "/restaurant/table/**").permitAll()
+                                "/pos-sw.js", "/customer-display", "/restaurant/table/**", "/receipt/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter())))
                 .addFilterBefore(stage1KillSwitchFilter, BearerTokenAuthenticationFilter.class)

@@ -198,3 +198,11 @@ td.num, .lines .num { text-align: right; font-variant-numeric: tabular-nums; }
   .table-qr-manager > :not(.qr-to-print) { display: none !important; }
   .qr-to-print button { display: none !important; }
 }
+
+.digital-receipt { max-width: 760px; padding: 2rem; margin: auto; }
+.digital-receipt .grid { width: 100%; }
+.digital-receipt .flex-row button { min-height: 56px; }
+@media print {
+  .digital-receipt .flex-row { display: none !important; }
+  .digital-receipt { max-width: unset; padding: 0; }
+}

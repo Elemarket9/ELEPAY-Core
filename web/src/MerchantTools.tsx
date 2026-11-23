@@ -182,7 +182,7 @@ export function InventoryAndStock({ merchantId }: { merchantId: string }) {
 
 interface PosOrder { id: string; orderNumber: string; totalPesewas: number; paidPesewas: number; changePesewas: number; status: string }
 interface DigitalCheckout { id: string; reference: string; amount: number; status: string; payUrl: string | null }
-interface PosReceipt { receiptNumber: string; escposFormattedText: string }
+interface PosReceipt { receiptNumber: string; escposFormattedText: string; digitalReceiptUrl: string | null }
 interface PaymentTerminal { id: string; model: string; serialNumber: string; branchId: string | null }
 interface DiningTableOption { id: string; tableNumber: string; status: string; currentOrderId: string | null }
 interface SplitQuoteLine { label: string; amountPesewas: number }
@@ -547,6 +547,14 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         <p>Order {receipt.order.orderNumber} · {formatMoney(receipt.order.totalPesewas)}
           {receipt.order.changePesewas > 0 && <> · <strong>Change {formatMoney(receipt.order.changePesewas)}</strong></>}</p>
         <pre className="receipt">{receipt.receipt.escposFormattedText}</pre>
+        {receipt.receipt.digitalReceiptUrl && <div className="flex-row">
+          <a href={receipt.receipt.digitalReceiptUrl} target="_blank" rel="noopener noreferrer">Open digital receipt</a>
+          <button className="secondary" onClick={() => {
+            const url = location.origin + receipt.receipt.digitalReceiptUrl;
+            if (navigator.share) void navigator.share({ url, title: "ELEPAY receipt" }).catch(() => {});
+            else void navigator.clipboard?.writeText(url).catch(() => {});
+          }}>Share via WhatsApp / SMS / email or copy</button>
+        </div>}
         {tableNotice && <p className="notice ok">{tableNotice}</p>}
         {error && <p className="error">{error}</p>}
         {orderType === "DINE_IN" && tableId && <button disabled={busy} onClick={() => void closeCompletedTable()}>
