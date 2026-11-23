@@ -5,7 +5,7 @@ This handbook is written for a human engineering team. The product is a strict f
 ## Fintech boundary
 
 Retain ledger, wallets, domestic collections/payouts, multi-merchant financial allocation, escrow, settlement, reconciliation, FX conversion into domestic Ghana merchant settlement, lending, virtual cards, bill-payment integration boundaries, POS financial evidence, fraud, KYC/AML, security, developer APIs and merchant financial dashboards.
-Do not reintroduce inventory, catalogs for merchandise, purchasing, restaurant operations, retail carts, CRM, marketing, loyalty, gift cards, obsolete E-Levy charging, fake agency submissions, or foreign-beneficiary remittances.
+Do not reintroduce obsolete E-Levy charging, fake agency submissions, or foreign-beneficiary remittances. Merchant tools were restored Nov 23 2026; gift cards and store credit must not hold live customer value until BoG confirms the e-money position.
 International card acceptance and FX conversion are within scope; **international payouts / remittance remain excluded**.
 
 ## Reproducible verification

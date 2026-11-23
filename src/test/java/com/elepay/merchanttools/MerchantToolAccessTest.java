@@ -16,14 +16,14 @@ class MerchantToolAccessTest {
 
     @Test
     void resourceOwnershipCannotBeOverriddenByCaller() {
-        UUID a = UUID.randomUUID(), b = UUID.randomUUID(), terminal = UUID.randomUUID();
-        when(db.sql("SELECT merchant_id FROM pos_terminal WHERE id = :id").param("id", terminal)
+        UUID a = UUID.randomUUID(), b = UUID.randomUUID(), warehouse = UUID.randomUUID();
+        when(db.sql("SELECT merchant_id FROM inventory_warehouse WHERE id = :id").param("id", warehouse)
                 .query(UUID.class).optional()).thenReturn(Optional.of(b));
-        assertThatThrownBy(() -> access.belongs(a, MerchantToolAccess.Resource.TERMINAL, terminal))
+        assertThatThrownBy(() -> access.belongs(a, MerchantToolAccess.Resource.WAREHOUSE, warehouse))
                 .isInstanceOf(ApiException.class);
-        access.belongs(b, MerchantToolAccess.Resource.TERMINAL, terminal);
+        access.belongs(b, MerchantToolAccess.Resource.WAREHOUSE, warehouse);
         when(merchants.require(b, MerchantAccess.Permission.MANAGE)).thenThrow(ApiException.notFound("Merchant not found"));
-        assertThatThrownBy(() -> access.manage(MerchantToolAccess.Resource.TERMINAL, terminal))
+        assertThatThrownBy(() -> access.manage(MerchantToolAccess.Resource.WAREHOUSE, warehouse))
                 .isInstanceOf(ApiException.class);
     }
 

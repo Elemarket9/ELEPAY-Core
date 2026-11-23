@@ -16,12 +16,13 @@ WEB = ROOT / "web/src"
 
 REMOVED_TYPES = re.compile(
     r"\b(?:ElevyCalculationEngine|ElevyStatutoryReportingService|GraFiscalDataService|"
-    r"PosCartService|PromotionAbuseService|PromoAbuseService|ChurnPredictionService|"
+    r"PromotionAbuseService|PromoAbuseService|ChurnPredictionService|"
     r"LEGACY_DEFAULT_KEY|JumiaPay)\b"
 )
+# Merchant tools (POS cart, inventory, CRM, payroll, restaurant/KDS) were restored on
+# Nov 23 2026 by founder decision; only international payout references stay banned.
 NON_FINTECH_SOURCE = re.compile(
-    r"(?:merchanttools[./\\](?:inventory|crm|payroll)[./\\]|"
-    r"\b(?:sendMoneyAbroad|crossBorderPayout|internationalPayout)\b)"
+    r"\b(?:sendMoneyAbroad|crossBorderPayout|internationalPayout)\b"
 )
 WEB_FALSE_SUCCESS = re.compile(
     r"(?:Authenticity Hash:|All Systems Green|Recharge successful!|Bill payment completed!|"
@@ -49,8 +50,6 @@ def audit() -> list[str]:
 
     for path in source_files(JAVA, (".java",)):
         rel = path.relative_to(ROOT).as_posix()
-        if any(f"/merchanttools/{name}/" in f"/{rel}" for name in ("inventory", "crm", "payroll")):
-            failures.append(f"{rel}: excluded package reappeared")
         for line_num, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if REMOVED_TYPES.search(line) or NON_FINTECH_SOURCE.search(line):
                 failures.append(f"{rel}:{line_num}: deleted module or international payout reference")

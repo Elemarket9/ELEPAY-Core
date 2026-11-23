@@ -18,6 +18,7 @@ public class PosController {
     private final Idempotency idempotency;
     private final PosTerminalService terminalService;
     private final PosCashierService cashierService;
+    private final PosCartService cartService;
     private final PosOrderService orderService;
     private final PosSplitBillService splitBillService;
     private final PosReceiptService receiptService;
@@ -28,6 +29,7 @@ public class PosController {
             Idempotency idempotency,
             PosTerminalService terminalService,
             PosCashierService cashierService,
+            PosCartService cartService,
             PosOrderService orderService,
             PosSplitBillService splitBillService,
             PosReceiptService receiptService,
@@ -37,6 +39,7 @@ public class PosController {
         this.idempotency = idempotency;
         this.terminalService = terminalService;
         this.cashierService = cashierService;
+        this.cartService = cartService;
         this.orderService = orderService;
         this.splitBillService = splitBillService;
         this.receiptService = receiptService;
@@ -112,6 +115,29 @@ public class PosController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    // Held Cart endpoints
+    public record HoldCartRequest(UUID terminalId, UUID cashierId, UUID merchantId, String customerName, String cartPayloadJson, long totalPesewas) {}
+
+    @PostMapping("/carts/hold")
+    public PosCartService.HeldCart holdCart(@RequestBody HoldCartRequest req) {
+        access.manage(req.merchantId());
+        access.belongs(req.merchantId(), TERMINAL, req.terminalId());
+        access.belongs(req.merchantId(), CASHIER, req.cashierId());
+        return cartService.holdCart(req.terminalId(), req.cashierId(), req.merchantId(), req.customerName(), req.cartPayloadJson(), req.totalPesewas());
+    }
+
+    @GetMapping("/carts/held/{terminalId}")
+    public List<PosCartService.HeldCart> listHeldCarts(@PathVariable UUID terminalId) {
+        access.manage(TERMINAL, terminalId);
+        return cartService.listHeldCarts(terminalId);
+    }
+
+    @PostMapping("/carts/held/{cartId}/recall")
+    public PosCartService.HeldCart recallHeldCart(@PathVariable UUID cartId) {
+        access.manage(CART, cartId);
+        return cartService.recallHeldCart(cartId);
+    }
+
     // Order & Tender Payment endpoints
     public record CreateOrderRequest(
             UUID merchantId, UUID branchId, UUID terminalId, UUID cashierId, UUID customerId,
@@ -177,6 +203,12 @@ public class PosController {
         return splitBillService.splitBillEven(orderId, count);
     }
 
+    @PostMapping("/orders/{orderId}/split/seats")
+    public PosSplitBillService.SeatSplitResult splitBillBySeats(@PathVariable UUID orderId) {
+        verifyOrder(orderId);
+        return splitBillService.splitBillBySeats(orderId);
+    }
+
     // Receipts
     @PostMapping("/orders/{orderId}/receipt")
     public PosReceiptService.PosReceipt generateReceipt(@PathVariable UUID orderId) {
@@ -212,6 +244,7 @@ public class PosController {
         if (cashier != null) access.belongs(merchant, CASHIER, cashier);
         if (customer != null) throw ApiException.badRequest("customer_link_unverified", "POS customer linking is not enabled");
         if (items == null || items.isEmpty()) throw ApiException.badRequest("items_required", "Order items required");
+        items.forEach(item -> { if (item.variantId() != null) access.belongs(merchant, VARIANT, item.variantId()); });
     }
 
     private PosOrderService.PosOrder verifyOrder(UUID id) {
@@ -220,6 +253,9 @@ public class PosController {
         access.branch(order.merchantId(), order.branchId());
         if (order.terminalId() != null) access.belongs(order.merchantId(), TERMINAL, order.terminalId());
         if (order.cashierId() != null) access.belongs(order.merchantId(), CASHIER, order.cashierId());
+        orderService.listOrderItems(id).forEach(item -> {
+            if (item.variantId() != null) access.belongs(order.merchantId(), VARIANT, item.variantId());
+        });
         return order;
     }
 }
