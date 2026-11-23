@@ -11,6 +11,7 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PosDukptAndOfflineTest extends PostgresTestBase {
 
@@ -53,6 +54,14 @@ class PosDukptAndOfflineTest extends PostgresTestBase {
         assertThat(pinRes).isNotNull();
         assertThat(pinRes.encryptedPinBlock()).hasSize(16);
         assertThat(pinRes.transactionCounter()).isEqualTo(3L);
+
+        // Non-numeric PIN must be rejected
+        assertThatThrownBy(() -> dukptService.encryptPinBlock(terminalId, "12A4", "4022341234567890"))
+                .hasMessageContaining("numeric");
+
+        // Re-provisioning an existing terminal must preserve and reflect persistent transaction counter
+        var reProfile = dukptService.provisionTerminal(terminalId, merchantId, "BDK-GH-01");
+        assertThat(reProfile.transactionCounter()).isEqualTo(3L);
 
         // 4. Offline store-and-forward: valid transaction within 50 GHS floor limit (35 GHS)
         var offline1 = offlineEngine.processOfflineTransaction(new PosOfflineTransactionEngine.OfflineTransactionRequest(

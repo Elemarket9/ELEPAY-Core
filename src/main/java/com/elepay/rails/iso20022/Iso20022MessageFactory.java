@@ -169,6 +169,12 @@ public class Iso20022MessageFactory {
             throw ApiException.badRequest("empty_transfers", "pacs.008 requires at least one transfer instruction");
         }
 
+        for (var tx : transfers) {
+            if (tx.amountPesewas() <= 0) {
+                throw ApiException.badRequest("invalid_amount", "Transfer amount must be positive");
+            }
+        }
+
         String msgId = "PACS008-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
         OffsetDateTime now = OffsetDateTime.now();
         int nbOfTxs = transfers.size();
@@ -193,10 +199,10 @@ public class Iso20022MessageFactory {
             xml.append("        <InstrId>").append(escapeXml(tx.instructionId())).append("</InstrId>\n");
             xml.append("        <EndToEndId>").append(escapeXml(tx.endToEndId())).append("</EndToEndId>\n");
             xml.append("      </PmtId>\n");
-            xml.append("      <IntrBkSttlmAmt Ccy=\"").append(tx.currency()).append("\">").append(amtMajor.toPlainString()).append("</IntrBkSttlmAmt>\n");
-            xml.append("      <ChrgBr>").append(tx.chargeBearer() != null ? tx.chargeBearer() : "SLEV").append("</ChrgBr>\n");
-            xml.append("      <InstgAgt><FinInstnId><BICFI>").append(originatingBankBic).append("</BICFI></FinInstnId></InstgAgt>\n");
-            xml.append("      <InstdAgt><FinInstnId><BICFI>").append(destinationBankBic).append("</BICFI></FinInstnId></InstdAgt>\n");
+            xml.append("      <IntrBkSttlmAmt Ccy=\"").append(escapeXml(tx.currency())).append("\">").append(amtMajor.toPlainString()).append("</IntrBkSttlmAmt>\n");
+            xml.append("      <ChrgBr>").append(escapeXml(tx.chargeBearer() != null ? tx.chargeBearer() : "SLEV")).append("</ChrgBr>\n");
+            xml.append("      <InstgAgt><FinInstnId><BICFI>").append(escapeXml(originatingBankBic)).append("</BICFI></FinInstnId></InstgAgt>\n");
+            xml.append("      <InstdAgt><FinInstnId><BICFI>").append(escapeXml(destinationBankBic)).append("</BICFI></FinInstnId></InstdAgt>\n");
             xml.append("      <DbtrAcct><Id><Othr><Id>").append(escapeXml(tx.debtorAccount())).append("</Id></Othr></Id></DbtrAcct>\n");
             xml.append("      <CdtrAcct><Id><Othr><Id>").append(escapeXml(tx.creditorAccount())).append("</Id></Othr></Id></CdtrAcct>\n");
             xml.append("    </CdtTrfTxInf>\n");
@@ -215,12 +221,105 @@ public class Iso20022MessageFactory {
     }
 
     // =========================================================================
+    // 3. camt.053.001.08: Bank-to-Customer Statement
+    // =========================================================================
+
+    @Transactional
+    public GeneratedIsoMessage buildCamt053(
+            String bankBic,
+            Camt053Statement statement
+    ) {
+        if (statement == null) {
+            throw ApiException.badRequest("null_statement", "camt.053 statement must not be null");
+        }
+        if (statement.entries() != null) {
+            for (var entry : statement.entries()) {
+                if (entry.amountPesewas() <= 0) {
+                    throw ApiException.badRequest("invalid_amount", "Statement entry amount must be positive");
+                }
+            }
+        }
+
+        String safeBic = escapeXml(bankBic != null ? bankBic : "ELEPGHAC");
+        String msgId = "CAMT053-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
+        OffsetDateTime now = OffsetDateTime.now();
+        int nbOfTxs = statement.entries() != null ? statement.entries().size() : 0;
+        long ctrlSumPesewas = statement.entries() != null ? statement.entries().stream().mapToLong(Camt053Entry::amountPesewas).sum() : 0L;
+        BigDecimal openingMajor = BigDecimal.valueOf(statement.openingBalancePesewas(), 2);
+        BigDecimal closingMajor = BigDecimal.valueOf(statement.closingBalancePesewas(), 2);
+        String ccy = escapeXml(statement.currency() != null ? statement.currency() : "GHS");
+
+        StringBuilder xml = new StringBuilder();
+        xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.append("<Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:camt.053.001.08\">\n");
+        xml.append("  <BkToCstmrStmt>\n");
+        xml.append("    <GrpHdr>\n");
+        xml.append("      <MsgId>").append(msgId).append("</MsgId>\n");
+        xml.append("      <CreDtTm>").append(now.format(ISO_DT)).append("</CreDtTm>\n");
+        xml.append("    </GrpHdr>\n");
+        xml.append("    <Stmt>\n");
+        xml.append("      <Id>").append(escapeXml(statement.statementId())).append("</Id>\n");
+        xml.append("      <Acct>\n");
+        xml.append("        <Id><Othr><Id>").append(escapeXml(statement.accountNumber())).append("</Id></Othr></Id>\n");
+        xml.append("        <Ccy>").append(ccy).append("</Ccy>\n");
+        xml.append("        <Svcr><FinInstnId><BICFI>").append(safeBic).append("</BICFI></FinInstnId></Svcr>\n");
+        xml.append("      </Acct>\n");
+        xml.append("      <Bal>\n");
+        xml.append("        <Tp><CdOrPrtry><Cd>OPBD</Cd></CdOrPrtry></Tp>\n");
+        xml.append("        <Amt Ccy=\"").append(ccy).append("\">").append(openingMajor.toPlainString()).append("</Amt>\n");
+        xml.append("        <CdtDbtInd>").append(statement.openingBalancePesewas() >= 0 ? "CRDT" : "DBIT").append("</CdtDbtInd>\n");
+        xml.append("        <Dt><Dt>").append(now.toLocalDate().toString()).append("</Dt></Dt>\n");
+        xml.append("      </Bal>\n");
+
+        if (statement.entries() != null) {
+            for (var entry : statement.entries()) {
+                BigDecimal entryAmtMajor = BigDecimal.valueOf(entry.amountPesewas(), 2);
+                xml.append("      <Ntry>\n");
+                xml.append("        <Amt Ccy=\"").append(ccy).append("\">").append(entryAmtMajor.toPlainString()).append("</Amt>\n");
+                xml.append("        <CdtDbtInd>").append(escapeXml(entry.creditDebitIndicator() != null ? entry.creditDebitIndicator() : "CRDT")).append("</CdtDbtInd>\n");
+                xml.append("        <Sts>BOOK</Sts>\n");
+                xml.append("        <BookgDt><Dt>").append(escapeXml(entry.bookingDate() != null ? entry.bookingDate() : now.toLocalDate().toString())).append("</Dt></BookgDt>\n");
+                xml.append("        <NtryDtls><TxDtls>\n");
+                xml.append("          <Refs><EndToEndId>").append(escapeXml(entry.entryReference())).append("</EndToEndId></Refs>\n");
+                if (entry.narrative() != null) {
+                    xml.append("          <RmtInf><Ustrd>").append(escapeXml(entry.narrative())).append("</Ustrd></RmtInf>\n");
+                }
+                xml.append("        </TxDtls></NtryDtls>\n");
+                xml.append("      </Ntry>\n");
+            }
+        }
+
+        xml.append("      <Bal>\n");
+        xml.append("        <Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp>\n");
+        xml.append("        <Amt Ccy=\"").append(ccy).append("\">").append(closingMajor.toPlainString()).append("</Amt>\n");
+        xml.append("        <CdtDbtInd>").append(statement.closingBalancePesewas() >= 0 ? "CRDT" : "DBIT").append("</CdtDbtInd>\n");
+        xml.append("        <Dt><Dt>").append(now.toLocalDate().toString()).append("</Dt></Dt>\n");
+        xml.append("      </Bal>\n");
+        xml.append("    </Stmt>\n");
+        xml.append("  </BkToCstmrStmt>\n");
+        xml.append("</Document>");
+
+        String payload = xml.toString();
+        String sha256 = hashSha256(payload);
+        UUID logId = UUID.randomUUID();
+
+        logMessage(logId, msgId, "camt.053.001.08", "OUTBOUND", bankBic, null, nbOfTxs, ctrlSumPesewas, payload, sha256);
+
+        return new GeneratedIsoMessage(logId, msgId, "camt.053.001.08", payload, sha256, nbOfTxs, ctrlSumPesewas);
+    }
+
+    @Transactional
+    public GeneratedIsoMessage buildCamt053(Camt053Statement statement) {
+        return buildCamt053("ELEPGHAC", statement);
+    }
+
+    // =========================================================================
     // 3. Parser Utilities
     // =========================================================================
 
     public List<Pain001CreditTransfer> parsePain001(String xmlPayload) {
         List<Pain001CreditTransfer> results = new ArrayList<>();
-        Pattern pmtPattern = Pattern.compile("<CdtTrfTxInf>(.*?)</CdtTrfTxInf>", Pattern.DOTALL);
+        Pattern pmtPattern = Pattern.compile("<(?:[a-zA-Z0-9]+:)?CdtTrfTxInf(?:\\s+[^>]*)?>(.*?)</(?:[a-zA-Z0-9]+:)?CdtTrfTxInf>", Pattern.DOTALL);
         Matcher m = pmtPattern.matcher(xmlPayload);
 
         while (m.find()) {
@@ -290,19 +389,19 @@ public class Iso20022MessageFactory {
     }
 
     private String extractTag(String xml, String tag) {
-        Pattern p = Pattern.compile("<" + tag + ">(.*?)</" + tag + ">");
+        Pattern p = Pattern.compile("<(?:[a-zA-Z0-9]+:)?" + tag + "(?:\\s+[^>]*)?>(.*?)</(?:[a-zA-Z0-9]+:)?" + tag + ">", Pattern.DOTALL);
         Matcher m = p.matcher(xml);
         return m.find() ? m.group(1).trim() : null;
     }
 
     private String extractTagWithAttr(String xml, String tag) {
-        Pattern p = Pattern.compile("<" + tag + "[^>]*>(.*?)</" + tag + ">");
+        Pattern p = Pattern.compile("<(?:[a-zA-Z0-9]+:)?" + tag + "[^>]*>(.*?)</(?:[a-zA-Z0-9]+:)?" + tag + ">", Pattern.DOTALL);
         Matcher m = p.matcher(xml);
         return m.find() ? m.group(1).trim() : null;
     }
 
     private String extractAttribute(String xml, String tag, String attr) {
-        Pattern p = Pattern.compile("<" + tag + "[^>]*" + attr + "=\"([^\"]+)\"");
+        Pattern p = Pattern.compile("<(?:[a-zA-Z0-9]+:)?" + tag + "[^>]*" + attr + "=\"([^\"]+)\"");
         Matcher m = p.matcher(xml);
         return m.find() ? m.group(1).trim() : null;
     }

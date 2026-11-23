@@ -7,6 +7,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.UUID;
+import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -71,7 +72,7 @@ public class PosDukptKeyManagementService {
         UUID id = UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now();
 
-        db.sql("""
+        return db.sql("""
             INSERT INTO pos_terminal_dukpt_key (
                 id, terminal_id, merchant_id, bdk_id, initial_ksn,
                 current_ksn, transaction_counter, encrypted_ipek, status,
@@ -84,6 +85,8 @@ public class PosDukptKeyManagementService {
             ON CONFLICT (terminal_id) DO UPDATE SET
                 status = 'ACTIVE',
                 updated_at = EXCLUDED.updated_at
+            RETURNING id, terminal_id, merchant_id, bdk_id, initial_ksn,
+                      current_ksn, transaction_counter, status, created_at
         """)
                 .param("id", id)
                 .param("tid", terminalId)
@@ -92,11 +95,18 @@ public class PosDukptKeyManagementService {
                 .param("initKsn", initialKsn)
                 .param("ipek", encryptedIpek)
                 .param("now", now)
-                .update();
-
-        return new TerminalDukptProfile(
-                id, terminalId, merchantId, bdkId, initialKsn, initialKsn, 0L, "ACTIVE", now
-        );
+                .query((rs, rowNum) -> new TerminalDukptProfile(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("terminal_id"),
+                        rs.getObject("merchant_id", UUID.class),
+                        rs.getString("bdk_id"),
+                        rs.getString("initial_ksn"),
+                        rs.getString("current_ksn"),
+                        rs.getLong("transaction_counter"),
+                        rs.getString("status"),
+                        rs.getObject("created_at", OffsetDateTime.class)
+                ))
+                .single();
     }
 
     @Transactional
@@ -160,8 +170,8 @@ public class PosDukptKeyManagementService {
 
     @Transactional
     public PinEncryptionResult encryptPinBlock(String terminalId, String pin, String pan) {
-        if (pin == null || pin.length() < 4 || pin.length() > 12) {
-            throw ApiException.badRequest("invalid_pin", "PIN length must be between 4 and 12 digits");
+        if (pin == null || pin.length() < 4 || pin.length() > 12 || !pin.chars().allMatch(Character::isDigit)) {
+            throw ApiException.badRequest("invalid_pin", "PIN must consist of 4 to 12 numeric digits");
         }
 
         DukptTransactionKey key = stepTransactionKey(terminalId);
@@ -195,8 +205,20 @@ public class PosDukptKeyManagementService {
             xorResult.append(Integer.toHexString(pVal ^ aVal).toUpperCase());
         }
 
-        // Encrypt with HMAC of transaction key to generate 16-hex ciphertext
-        return hmacSha256(keyHex, xorResult.toString()).substring(0, 16).toUpperCase();
+        // Encrypt with 3DES key block encryption (or fallback to HMAC if DESede unavailable)
+        try {
+            byte[] rawPinBlock = HexFormat.of().parseHex(xorResult.toString());
+            byte[] keyBytes = HexFormat.of().parseHex(keyHex.length() >= 48 ? keyHex.substring(0, 48) : keyHex);
+            byte[] key24 = new byte[24];
+            System.arraycopy(keyBytes, 0, key24, 0, Math.min(keyBytes.length, 24));
+            SecretKeySpec desKey = new SecretKeySpec(key24, "DESede");
+            Cipher cipher = Cipher.getInstance("DESede/ECB/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, desKey);
+            byte[] encrypted = cipher.doFinal(rawPinBlock);
+            return HexFormat.of().formatHex(encrypted).toUpperCase();
+        } catch (Exception e) {
+            return hmacSha256(keyHex, xorResult.toString()).substring(0, 16).toUpperCase();
+        }
     }
 
     private String deriveIpek(String bdkHex, String ksn) {

@@ -25,6 +25,9 @@ class LoanOriginationEngineTest extends PostgresTestBase {
     @Autowired
     private LoanProductService productService;
 
+    @Autowired
+    private com.elepay.ledger.Ledger ledger;
+
     @Test
     @DisplayName("End-to-end loan origination, schedule generation, and disbursement into borrower account")
     void testOriginateAndDisburse() {
@@ -60,5 +63,7 @@ class LoanOriginationEngineTest extends PostgresTestBase {
         assertThat(result.principalPesewas()).isEqualTo(500_000L);
         assertThat(result.disbursementJournalTxId()).isNotNull();
         assertThat(result.installmentCount()).isGreaterThan(0);
+        assertThat(ledger.balance(com.elepay.ledger.Ledger.code("customer", merchantId, "available", com.elepay.ledger.Ledger.GHS)))
+                .isEqualTo(500_000L);
     }
 }
