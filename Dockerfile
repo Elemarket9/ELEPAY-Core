@@ -11,7 +11,7 @@ ARG VITE_OIDC_CLIENT_ID=""
 ENV VITE_OIDC_ISSUER=$VITE_OIDC_ISSUER VITE_OIDC_CLIENT_ID=$VITE_OIDC_CLIENT_ID
 RUN npm run build
 
-FROM maven:3.9-eclipse-temurin-17 AS build
+FROM maven:3.9-eclipse-temurin-25 AS build
 WORKDIR /src
 COPY pom.xml ./
 RUN mvn -B -q dependency:go-offline || true
@@ -19,7 +19,7 @@ COPY src ./src
 COPY --from=web /web/dist ./src/main/resources/static
 RUN mvn -B -q -DskipTests package && cp target/elepay-core-*.jar /app.jar
 
-FROM eclipse-temurin:17-jre
+FROM eclipse-temurin:25-jre
 RUN groupadd --system elepay && useradd --system --gid elepay --uid 10001 --no-create-home elepay
 WORKDIR /app
 COPY --from=build /app.jar /app/elepay.jar
