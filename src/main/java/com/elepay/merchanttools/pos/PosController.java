@@ -371,6 +371,9 @@ public class PosController {
     private void verifyOrderInputs(UUID merchant, UUID branch, UUID terminal, UUID cashier, UUID customer,
             List<PosOrderService.OrderItemInput> items) {
         access.branch(merchant, branch);
+        UUID permittedBranch = access.operatingBranch(merchant);
+        if (permittedBranch != null && !permittedBranch.equals(branch))
+            throw ApiException.forbidden("POS transaction belongs to another branch");
         if (terminal != null) {
             access.belongs(merchant, TERMINAL, terminal);
             var device = terminalService.getTerminal(terminal).orElseThrow();
@@ -387,6 +390,9 @@ public class PosController {
         access.operate(ORDER, id);
         var order = orderService.getOrder(id).orElseThrow(() -> ApiException.notFound("Order not found"));
         access.branch(order.merchantId(), order.branchId());
+        UUID permittedBranch = access.operatingBranch(order.merchantId());
+        if (permittedBranch != null && !permittedBranch.equals(order.branchId()))
+            throw ApiException.forbidden("POS order belongs to another branch");
         if (order.terminalId() != null) access.belongs(order.merchantId(), TERMINAL, order.terminalId());
         if (order.cashierId() != null) access.belongs(order.merchantId(), CASHIER, order.cashierId());
         orderService.listOrderItems(id).forEach(item -> {
