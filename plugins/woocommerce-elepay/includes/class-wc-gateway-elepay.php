@@ -219,16 +219,23 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
             $api = $this->get_api();
             $existing = $order->get_meta('_elepay_checkout_reference');
             if ($existing) {
-                if ($this->verify_paid_checkout($order, (string) $existing)) {
+                $status = $api->get_checkout_status((string) $existing);
+                if ((int) $order->get_meta('_elepay_checkout_amount') !== $total
+                        || (int) $status['subtotal'] !== $total) {
+                    throw new Exception('Original order amount and existing checkout do not match.');
+                }
+                if ($status['status'] === 'paid') {
                     $order->payment_complete($existing);
                     return array('result' => 'success', 'redirect' => $this->get_return_url($order));
                 }
-                $pay_url = (string) $order->get_meta('_elepay_checkout_pay_url');
-                if (filter_var($pay_url, FILTER_VALIDATE_URL)
-                        && parse_url($pay_url, PHP_URL_SCHEME) === 'https') {
-                    return array('result' => 'success', 'redirect' => $pay_url);
+                if (in_array($status['status'], array('open', 'processing'), true)) {
+                    $pay_url = (string) $order->get_meta('_elepay_checkout_pay_url');
+                    if (filter_var($pay_url, FILTER_VALIDATE_URL)
+                            && parse_url($pay_url, PHP_URL_SCHEME) === 'https') {
+                        return array('result' => 'success', 'redirect' => $pay_url);
+                    }
                 }
-                throw new Exception('Existing checkout needs reconciliation before retry.');
+                throw new Exception('Existing checkout cannot be retried automatically; reconcile its status.');
             }
 
             $key = (string) $order->get_meta('_elepay_checkout_idempotency_key');
@@ -277,6 +284,8 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
             $api = $this->get_api();
             $checkout = $api->get_checkout_details($checkout_ref);
             if (($checkout['status'] ?? null) !== 'paid'
+                    || !isset($checkout['subtotal']) || !is_numeric($checkout['subtotal'])
+                    || (int) $checkout['subtotal'] !== (int) $order->get_meta('_elepay_checkout_amount')
                     || !isset($checkout['lines']) || !is_array($checkout['lines'])
                     || count($checkout['lines']) !== 1) {
                 throw new Exception('Allocation mapping is ambiguous or checkout is unpaid; use the ELEPAY merchant portal.');
@@ -293,6 +302,9 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
             $reason = trim((string) $reason);
             if ($reason === '') {
                 $reason = 'WooCommerce merchant refund';
+            }
+            if (strlen($reason) > 500) {
+                throw new Exception('Refund reason exceeds the supported maximum.');
             }
             $key = (string) $order->get_meta('_elepay_refund_pending_key');
             if ($key !== '') {
@@ -339,13 +351,13 @@ class WC_Gateway_Elepay extends WC_Payment_Gateway {
             return;
         }
         $event = json_decode($raw_body, true);
-        if (!is_array($event) || !isset($event['event'], $event['data'])
+        if (!is_array($event) || !isset($event['type'], $event['data'])
                 || !is_array($event['data'])) {
             status_header(400);
             wp_send_json_error(array('message' => 'Invalid payment event.'));
             return;
         }
-        $type = $event['event'];
+        $type = $event['type'];
         $data = $event['data'];
         if (in_array($type, array('checkout.paid', 'payment.success', 'payment.failed'), true)) {
             $reference = $data['reference'] ?? null;
