@@ -1,6 +1,7 @@
 package com.elepay.identity;
 
 import com.elepay.common.ApiException;
+import com.elepay.security.DualControl;
 import java.util.*;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,10 +21,12 @@ import org.springframework.web.bind.annotation.*;
 public class KillSwitchController {
     private final KillSwitchService killSwitchService;
     private final ApiKeys apiKeys;
+    private final DualControl dualControl;
 
-    public KillSwitchController(KillSwitchService killSwitchService, ApiKeys apiKeys) {
+    public KillSwitchController(KillSwitchService killSwitchService, ApiKeys apiKeys, DualControl dualControl) {
         this.killSwitchService = killSwitchService;
         this.apiKeys = apiKeys;
+        this.dualControl = dualControl;
     }
 
     public record GlobalKillSwitchRequest(
@@ -84,13 +87,16 @@ public class KillSwitchController {
                 : (freeze ? "Emergency global payout freeze" : "Global payout unfreeze");
 
         if (!freeze) {
-            // Unfreezing requires Maker-Checker dual control (proposed_by != approved_by) when proposedBy is supplied
-            String proposer = request != null ? request.proposedBy() : null;
-            String approver = (request != null && request.approvedBy() != null) ? request.approvedBy() : actor.subject();
-            if (proposer != null && proposer.equals(approver)) {
+            actor.requireOpsAdmin();
+            String freezer = killSwitchService.globalFrozenBy();
+            if (dualControl.enforced()) {
+                dualControl.hold("KILL_SWITCH_CHANGE", "kill_switch", "global", null,
+                        Map.of("target", "global", "frozen", false), reason, actor);
+            }
+            if (freezer != null && freezer.equals(actor.subject())) {
                 throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
                         "maker_checker_self_approval",
-                        "Dual control violation: Maker (" + proposer + ") cannot unfreeze global kill switch alone");
+                        "Dual control violation: the operator who froze payouts cannot unfreeze them");
             }
         }
 
@@ -113,6 +119,19 @@ public class KillSwitchController {
         String reason = (request != null && request.reason() != null)
                 ? request.reason()
                 : (freeze ? "Merchant emergency payout freeze" : "Merchant payout unfreeze");
+        if (!freeze) {
+            actor.requireOpsAdmin();
+            if (dualControl.enforced()) {
+                dualControl.hold("MERCHANT_UNFREEZE", "merchant", merchantId.toString(), merchantId,
+                        Map.of("merchantId", merchantId.toString(), "frozen", false), reason, actor);
+            }
+            String freezer = killSwitchService.merchantFrozenBy(merchantId);
+            if (freezer != null && freezer.equals(actor.subject())) {
+                throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                        "maker_checker_self_approval",
+                        "Dual control violation: the operator who froze this merchant cannot unfreeze it");
+            }
+        }
         killSwitchService.setMerchantFrozen(merchantId, freeze, reason, actor.subject());
         return Map.of(
                 "merchantId", merchantId,
@@ -133,6 +152,11 @@ public class KillSwitchController {
         String reason = (request != null && request.reason() != null)
                 ? request.reason()
                 : (enabled ? "Module enabled" : "Module disabled by kill switch");
+        if (enabled && dualControl.enforced()) {
+            actor.requireOpsAdmin();
+            dualControl.hold("MODULE_ENABLE", "module", moduleKey, null,
+                    Map.of("target", "module", "module", moduleKey, "frozen", false), reason, actor);
+        }
         killSwitchService.setModuleEnabled(moduleKey, enabled, reason, actor.subject());
         return Map.of(
                 "module", moduleKey,

@@ -35,7 +35,11 @@ public class MakerCheckerService {
             "FEE_SCHEDULE_CHANGE",
             "DESTINATION_OPS_VERIFY",
             "KILL_SWITCH_CHANGE",
-            "VELOCITY_CEILING_CHANGE"
+            "VELOCITY_CEILING_CHANGE",
+            "PHONE_CHANGE",
+            "CUSTODIAN_CONFIG",
+            "MODULE_ENABLE",
+            "MERCHANT_UNFREEZE"
     );
 
     private final JdbcClient db;
@@ -43,6 +47,7 @@ public class MakerCheckerService {
     private final OpsQueue ops;
     private final ObjectMapper json;
     private final KillSwitchService killSwitchService;
+    private final java.util.List<ApprovedActionHandler> handlers;
     private final AdminAnomalyDetector anomalyDetector;
 
     @Autowired
@@ -51,13 +56,15 @@ public class MakerCheckerService {
             Audit audit,
             OpsQueue ops,
             ObjectMapper json,
-            @Autowired(required = false) KillSwitchService killSwitchService
+            @Autowired(required = false) KillSwitchService killSwitchService,
+            @Autowired(required = false) java.util.List<ApprovedActionHandler> handlers
     ) {
         this.db = db;
         this.audit = audit;
         this.ops = ops;
         this.json = json;
         this.killSwitchService = killSwitchService;
+        this.handlers = handlers == null ? java.util.List.of() : handlers;
         this.anomalyDetector = new AdminAnomalyDetector(db);
     }
 
@@ -182,15 +189,25 @@ public class MakerCheckerService {
                 .param("id", proposalId)
                 .update();
 
-        // Execute bound action if KILL_SWITCH_CHANGE
-        if ("KILL_SWITCH_CHANGE".equals(existing.actionType()) && killSwitchService != null) {
-            Object target = existing.payload().get("target");
-            Object frozenObj = existing.payload().get("frozen");
+        Proposal approved = getProposal(proposalId);
+        if ("KILL_SWITCH_CHANGE".equals(approved.actionType()) && killSwitchService != null) {
+            Object target = approved.payload().get("target");
+            Object frozenObj = approved.payload().get("frozen");
             boolean frozen = frozenObj instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(frozenObj));
             if ("global".equalsIgnoreCase(String.valueOf(target))) {
-                killSwitchService.setGlobalFrozen(frozen, existing.reason(), approverSubject);
+                killSwitchService.setGlobalFrozen(frozen, approved.reason(), approverSubject);
+            } else if ("merchant".equalsIgnoreCase(String.valueOf(target)) && approved.merchantId() != null) {
+                killSwitchService.setMerchantFrozen(approved.merchantId(), frozen, approved.reason(), approverSubject);
+            } else if ("module".equalsIgnoreCase(String.valueOf(target))) {
+                killSwitchService.setModuleEnabled(String.valueOf(approved.payload().get("module")), !frozen,
+                        approved.reason(), approverSubject);
             }
         }
+        for (ApprovedActionHandler handler : handlers) {
+            if (handler.supports(approved.actionType())) handler.execute(approved);
+        }
+        db.sql("UPDATE maker_checker_proposal SET executed_at = now() WHERE id = :id AND executed_at IS NULL")
+                .param("id", proposalId).update();
 
         if (audit != null) {
             audit.record(approverSubject, "maker_checker.approved",

@@ -462,14 +462,10 @@ public class GhipssInstantPayRail implements PaymentRail {
             throw new InvalidCallbackException("GhIPSS webhook secret is not configured");
         }
 
-        String receivedSig = headers.getOrDefault("x-ghipss-signature", headers.get("X-GhIPSS-Signature"));
-        if (receivedSig == null || receivedSig.isBlank()) {
-            throw new InvalidCallbackException("Missing x-ghipss-signature header");
-        }
-
-        String expectedSig = computeHmac(secret, body);
-        if (!MessageDigest.isEqual(expectedSig.getBytes(StandardCharsets.UTF_8), receivedSig.getBytes(StandardCharsets.UTF_8))) {
-            throw new InvalidCallbackException("Invalid GhIPSS callback signature");
+        try {
+            com.elepay.common.CallbackAuthenticity.verify(secret, headers, body, "x-ghipss-signature");
+        } catch (IllegalArgumentException e) {
+            throw new InvalidCallbackException(e.getMessage());
         }
 
         try {

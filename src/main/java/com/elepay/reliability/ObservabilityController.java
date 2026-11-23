@@ -1,5 +1,6 @@
 package com.elepay.reliability;
 
+import com.elepay.identity.Actor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -20,6 +21,7 @@ public class ObservabilityController {
 
     @GetMapping("/financial")
     public Map<String, Object> financialMetrics() {
+        Actor.current().requireOps();
         return observability.getFinancialMetricsSummary();
     }
 }

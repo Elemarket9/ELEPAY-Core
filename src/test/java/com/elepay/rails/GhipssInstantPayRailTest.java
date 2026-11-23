@@ -198,14 +198,18 @@ class GhipssInstantPayRailTest {
         );
 
         String body = "{\"event\":\"payout.success\",\"data\":{\"reference\":\"GIP-REF-77\",\"status\":\"00\",\"amount\":10000,\"currency\":\"GHS\"}}";
-        String validSig = GhipssInstantPayRail.computeHmac("ghipss-webhook-secret", body);
+        String timestamp = String.valueOf(java.time.Instant.now().getEpochSecond());
+        String nonce = "gip-nonce-1";
+        String validSig = GhipssInstantPayRail.computeHmac("ghipss-webhook-secret", timestamp + "." + nonce + "." + body);
 
-        PaymentRail.Callback callback = rail.verifyCallback(Map.of("x-ghipss-signature", validSig), body);
+        PaymentRail.Callback callback = rail.verifyCallback(Map.of(
+                "x-ghipss-signature", validSig, "x-callback-timestamp", timestamp, "x-callback-nonce", nonce), body);
         assertThat(callback.result().status()).isEqualTo(PaymentRail.Status.SUCCEEDED);
         assertThat(callback.result().amount()).isEqualTo(10000L);
         assertThat(callback.reference()).isEqualTo("GIP-REF-77");
 
-        assertThatThrownBy(() -> rail.verifyCallback(Map.of("x-ghipss-signature", "wrong_signature"), body))
+        assertThatThrownBy(() -> rail.verifyCallback(Map.of(
+                "x-ghipss-signature", "wrong_signature", "x-callback-timestamp", timestamp, "x-callback-nonce", "gip-nonce-2"), body))
                 .isInstanceOf(PaymentRail.InvalidCallbackException.class)
                 .hasMessageContaining("Invalid GhIPSS callback signature");
     }

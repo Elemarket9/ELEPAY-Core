@@ -177,17 +177,9 @@ public class Ledger {
                 found.forEach(a -> byCode.put(a.code(), a));
                 return byCode;
             } catch (org.springframework.dao.PessimisticLockingFailureException e) {
-                if (attempt == maxAttempts) {
-                    throw ApiException.conflict("lock_contention", "Failed to acquire ordered row locks after " + maxAttempts + " attempts: " + e.getMessage());
-                }
-                try {
-                    Thread.sleep(25L * attempt);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw ApiException.conflict("lock_contention", "Lock acquisition interrupted: " + ie.getMessage());
-                }
+                throw ApiException.conflict("lock_contention", "Could not lock the ledger accounts. Retry the request.");
             } catch (org.springframework.dao.ConcurrencyFailureException e) {
-                throw ApiException.conflict("concurrency_failure", "Concurrency failure during ordered row lock acquisition: " + e.getMessage());
+                throw ApiException.conflict("concurrency_failure", "The ledger is busy. Retry the request.");
             }
         }
         throw ApiException.conflict("lock_contention", "Failed to acquire row locks due to concurrent contention");

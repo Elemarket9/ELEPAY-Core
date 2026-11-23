@@ -74,7 +74,7 @@ public class PosController {
     @PostMapping("/cashiers/register")
     public PosCashierService.Cashier registerCashier(@RequestBody RegisterCashierRequest req) {
         access.manage(req.merchantId());
-        return cashierService.registerCashier(req.merchantId(), req.name(), req.pin(), req.badgeNumber());
+        return cashierService.registerCashier(req.merchantId(), req.name(), req.pin(), req.badgeNumber()).withoutSecret();
     }
 
     public record AuthenticateCashierRequest(UUID merchantId, String badgeNumber, String pin) {}

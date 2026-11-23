@@ -43,8 +43,12 @@ class UssdIT extends PostgresTestBase {
 
     JsonNode step(String session, String type, String input) {
         String body = json.writeValueAsString(Map.of("sessionId", session, "msisdn", phone, "type", type, "input", input));
+        String timestamp = String.valueOf(java.time.Instant.now().getEpochSecond());
+        String nonce = UUID.randomUUID().toString();
         return api.http.post().uri("/v1/ussd/generic").header("Content-Type", "application/json")
-                .header("X-Ussd-Signature", UssdGateways.sign("test-ussd-secret", body)).body(body)
+                .header("X-Ussd-Timestamp", timestamp)
+                .header("X-Ussd-Nonce", nonce)
+                .header("X-Ussd-Signature", UssdGateways.sign("test-ussd-secret", timestamp, nonce, body)).body(body)
                 .retrieve().body(JsonNode.class);
     }
 

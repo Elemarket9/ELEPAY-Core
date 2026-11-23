@@ -51,7 +51,7 @@ public class WalletChannel {
 
     public enum PinCheck { OK, WRONG, LOCKED, NOT_SET }
 
-    record PinRequest(@Pattern(regexp = "[0-9]{4,6}") String pin) {}
+    record PinRequest(@Pattern(regexp = "[0-9]{4,6}") String pin, @Pattern(regexp = "[0-9]{4,6}") String currentPin) {}
 
     /** Sets or changes the USSD PIN from a signed-in web or app session. */
     @PutMapping("/v1/wallet/ussd-pin")
@@ -65,7 +65,16 @@ public class WalletChannel {
         }
         Actor actor = Actor.current();
         UUID customer = wallets.customer(actor);
-        db.sql("UPDATE customer SET ussd_pin_hash = :h, ussd_pin_failures = 0, ussd_locked_until = NULL WHERE id = :id")
+        var existing = db.sql("SELECT ussd_pin_hash, ussd_pin_hard_locked FROM customer WHERE id = :id")
+                .param("id", customer)
+                .query((rs, i) -> new Object[]{rs.getString(1), rs.getBoolean(2)}).single();
+        if (Boolean.TRUE.equals(existing[1])) {
+            throw ApiException.forbidden("The USSD PIN is locked. Contact support to reset it.");
+        }
+        if (existing[0] != null && (request.currentPin() == null || !encoder.matches(request.currentPin(), (String) existing[0]))) {
+            throw ApiException.forbidden("Enter the current PIN to change it");
+        }
+        db.sql("UPDATE customer SET ussd_pin_hash = :h, ussd_pin_failures = 0, ussd_pin_total_failures = 0, ussd_locked_until = NULL WHERE id = :id")
                 .param("h", encoder.encode(request.pin())).param("id", customer).update();
         audit.record(actor.subject(), "customer.ussd_pin_set", "customer:" + customer, Map.of());
         return Map.of("status", "set");
@@ -142,13 +151,15 @@ public class WalletChannel {
                         rs.getString(3), rs.getBoolean(4))).optional();
     }
 
-    /** Checks a PIN; three consecutive failures lock the channel for 30 minutes. */
+    /** Checks a PIN. Three failures lock the channel; ten failures require a support reset. */
     @Transactional
     public PinCheck checkPin(UUID customer, String pin) {
-        var row = db.sql("SELECT ussd_pin_hash, ussd_locked_until FROM customer WHERE id = :id FOR UPDATE")
-                .param("id", customer).query((rs, i) -> new Object[]{rs.getString(1), rs.getObject(2, OffsetDateTime.class)})
+        var row = db.sql("""
+                SELECT ussd_pin_hash, ussd_locked_until, ussd_pin_hard_locked FROM customer WHERE id = :id FOR UPDATE""")
+                .param("id", customer).query((rs, i) -> new Object[]{rs.getString(1), rs.getObject(2, OffsetDateTime.class), rs.getBoolean(3)})
                 .single();
         if (row[0] == null) return PinCheck.NOT_SET;
+        if (Boolean.TRUE.equals(row[2])) return PinCheck.LOCKED;
         if (row[1] != null && ((OffsetDateTime) row[1]).isAfter(OffsetDateTime.now())) return PinCheck.LOCKED;
         if (pin != null && pin.matches("[0-9]{4,6}") && encoder.matches(pin, (String) row[0])) {
             db.sql("UPDATE customer SET ussd_pin_failures = 0, ussd_locked_until = NULL WHERE id = :id").param("id", customer).update();
@@ -156,14 +167,16 @@ public class WalletChannel {
         }
         int failures = db.sql("""
                 UPDATE customer SET ussd_pin_failures = ussd_pin_failures + 1,
-                       ussd_locked_until = CASE WHEN ussd_pin_failures + 1 >= :max THEN now() + interval '30 minutes' END
+                       ussd_pin_total_failures = ussd_pin_total_failures + 1,
+                       ussd_pin_hard_locked = ussd_pin_total_failures + 1 >= 10,
+                       ussd_locked_until = CASE
+                           WHEN ussd_pin_total_failures + 1 >= 10 THEN now() + interval '100 years'
+                           WHEN ussd_pin_failures + 1 >= :max THEN now() + interval '30 minutes'
+                       END
                 WHERE id = :id RETURNING ussd_pin_failures""")
                 .param("max", MAX_PIN_FAILURES).param("id", customer).query(Integer.class).single();
         audit.record("ussd", "customer.ussd_pin_failed", "customer:" + customer, Map.of("failures", failures));
-        if (failures >= MAX_PIN_FAILURES) {
-            db.sql("UPDATE customer SET ussd_pin_failures = 0 WHERE id = :id").param("id", customer).update();
-            return PinCheck.LOCKED;
-        }
+        if (failures >= MAX_PIN_FAILURES) return PinCheck.LOCKED;
         return PinCheck.WRONG;
     }
 

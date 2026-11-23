@@ -122,6 +122,8 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
   const [label, setLabel] = useState("");
   const [env, setEnv] = useState<"live" | "test">("live");
   const [scopes, setScopes] = useState<string[]>(["view", "collect", "refund"]);
+  const [keyType, setKeyType] = useState<"publishable" | "secret" | "payout">("secret");
+  const [allowedIps, setAllowedIps] = useState("");
 
   const load = () => {
     const q = envFilter === "all" ? "" : `?environment=${envFilter}`;
@@ -134,8 +136,9 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
 
   async function createKey() {
     try {
+      const ips = allowedIps.split(",").map((s) => s.trim()).filter(Boolean);
       const res = await api<{ apiKey: string }>(`/v1/developer/merchants/${merchantId}/keys`, {
-        body: { label: label || "Default Key", environment: env, scopes },
+        body: { label: label || "Default Key", environment: env, scopes, keyType, allowedIps: ips },
       });
       setNewKeyPlaintext(res.apiKey);
       setShowModal(false);
@@ -257,6 +260,18 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
             <label>Key Label / Application Name
               <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. WooCommerce Store Main" />
             </label>
+            <label>Key type
+              <select value={keyType} onChange={(e) => setKeyType(e.target.value as "publishable" | "secret" | "payout")}>
+                <option value="publishable">Publishable (checkout only)</option>
+                <option value="secret">Secret (view, collect, refund)</option>
+                <option value="payout">Payout (withdrawals, IP allowlist required)</option>
+              </select>
+            </label>
+            {keyType === "payout" && (
+              <label>Allowed IPs
+                <input value={allowedIps} onChange={(e) => setAllowedIps(e.target.value)} placeholder="203.0.113.10/32" />
+              </label>
+            )}
             <fieldset>
               <legend>Permissions / Scopes</legend>
               {["view", "collect", "refund", "withdraw", "payouts"].map((sc) => (

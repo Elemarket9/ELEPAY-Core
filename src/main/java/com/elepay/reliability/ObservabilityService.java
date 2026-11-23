@@ -79,14 +79,12 @@ public class ObservabilityService {
         if (db == null) return true;
         try {
             Long driftSum = db.sql("""
-                    SELECT COALESCE(SUM(ABS(sum_debit - sum_credit)), 0)
+                    SELECT COALESCE(SUM(ABS(net)), 0)
                     FROM (
-                        SELECT journal_entry_id,
-                               COALESCE(SUM(amount) FILTER (WHERE direction = 'DEBIT'), 0) AS sum_debit,
-                               COALESCE(SUM(amount) FILTER (WHERE direction = 'CREDIT'), 0) AS sum_credit
-                        FROM journal_posting
-                        GROUP BY journal_entry_id
-                        HAVING SUM(amount) FILTER (WHERE direction = 'DEBIT') <> SUM(amount) FILTER (WHERE direction = 'CREDIT')
+                        SELECT transaction_id, SUM(amount) AS net
+                        FROM journal_entry
+                        GROUP BY transaction_id
+                        HAVING SUM(amount) <> 0
                     ) unbalanced
                     """).query(Long.class).optional().orElse(0L);
 
@@ -101,8 +99,8 @@ public class ObservabilityService {
                 return false;
             }
         } catch (Exception e) {
-            // Table may not be initialized in isolated tests
-            return true;
+            ledgerHealthStatus.set(0);
+            return false;
         }
     }
 

@@ -166,5 +166,26 @@ public class TransferLimits {
         }
     }
 
+    /** Tier maximum balance applies to every credit, including top-ups. */
+    @Transactional(propagation = Propagation.REQUIRED)
+    public void checkCredit(UUID customer, long amount) {
+        if (amount <= 0) throw ApiException.badRequest("invalid_amount", "Amount must be positive");
+        record CustomerStatus(int kycTier) {}
+        CustomerStatus status = db.sql("SELECT kyc_tier FROM customer WHERE id = :id FOR UPDATE")
+                .param("id", customer)
+                .query((rs, i) -> new CustomerStatus(rs.getInt(1)))
+                .optional().orElseThrow(() -> ApiException.conflict("wallet_unavailable", "The wallet is unavailable"));
+        TierLimit tier = TierLimit.forTier(status.kycTier());
+        if (amount > tier.maxBalance()) {
+            throw ApiException.conflict("tier_balance_limit",
+                    "Amount exceeds the maximum balance for KYC tier " + status.kycTier());
+        }
+        long balance = ledger.balance(CustomerDirectory.available(customer));
+        if (Math.addExact(balance, amount) > tier.maxBalance()) {
+            throw ApiException.conflict("tier_balance_limit",
+                    "The credit would exceed the maximum balance for KYC tier " + status.kycTier());
+        }
+    }
+
     private record Usage(BigDecimal daily, BigDecimal monthly, long recent) {}
 }

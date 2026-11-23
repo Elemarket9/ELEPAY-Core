@@ -41,8 +41,14 @@ class PlatformApiIT extends PostgresTestBase {
     }
 
     String key(UUID merchant, String owner, String... scopes) {
-        return api.call("POST", "/v1/merchants/" + merchant + "/api-keys", owner, null,
-                Map.of("label", "server", "scopes", List.of(scopes))).body().get("secret").asString();
+        java.util.List<String> scopeList = List.of(scopes);
+        boolean payout = scopeList.contains("withdraw") || scopeList.contains("payouts");
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("label", "server");
+        body.put("scopes", scopeList);
+        body.put("keyType", payout ? "payout" : "secret");
+        if (payout) body.put("allowedIps", List.of("127.0.0.1/32"));
+        return api.call("POST", "/v1/merchants/" + merchant + "/api-keys", owner, null, body).body().get("secret").asString();
     }
 
     TestApi.Response withKey(String method, String path, String key, String idem, Object body) {

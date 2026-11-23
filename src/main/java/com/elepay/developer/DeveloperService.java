@@ -124,12 +124,13 @@ public class DeveloperService {
     @Transactional
     public ApiKeyCreated rotateApiKey(UUID merchantId, UUID oldKeyId, String label, String rotatedBy) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
-        var old = apiKeys.activeKey(merchantId, oldKeyId)
+        var old = apiKeys.rotationSource(merchantId, oldKeyId)
                 .orElseThrow(() -> ApiException.notFound("Active API key not found to rotate"));
 
         revokeApiKey(merchantId, oldKeyId, rotatedBy);
-        String newLabel = (label != null && !label.isBlank()) ? label : "Rotated key";
-        ApiKeyCreated created = createApiKey(merchantId, newLabel, old.getKey(), old.getValue(), rotatedBy);
+        String newLabel = (label != null && !label.isBlank()) ? label : (old.label() == null ? "Rotated key" : old.label());
+        ApiKeyCreated created = createApiKey(merchantId, newLabel, old.environment(), old.scopes(),
+                old.keyType(), old.allowedIps(), rotatedBy);
         audit.record(rotatedBy, "developer.api_key_rotated", "merchant:" + merchantId,
                 Map.of("oldKeyId", oldKeyId.toString(), "newKeyId", created.id().toString()));
         return created;

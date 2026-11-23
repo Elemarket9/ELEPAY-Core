@@ -401,14 +401,10 @@ public class TelecelCashProductionRail implements PaymentRail {
             throw new InvalidCallbackException("Telecel Cash webhook secret is not configured");
         }
 
-        String receivedSig = headers.getOrDefault("x-telecel-signature", headers.get("X-Telecel-Signature"));
-        if (receivedSig == null || receivedSig.isBlank()) {
-            throw new InvalidCallbackException("Missing x-telecel-signature header");
-        }
-
-        String expectedSig = computeHmac(secret, body);
-        if (!MessageDigest.isEqual(expectedSig.getBytes(StandardCharsets.UTF_8), receivedSig.getBytes(StandardCharsets.UTF_8))) {
-            throw new InvalidCallbackException("Invalid Telecel Cash callback signature");
+        try {
+            com.elepay.common.CallbackAuthenticity.verify(secret, headers, body, "x-telecel-signature");
+        } catch (IllegalArgumentException e) {
+            throw new InvalidCallbackException(e.getMessage());
         }
 
         try {

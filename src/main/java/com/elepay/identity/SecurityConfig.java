@@ -10,7 +10,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import javax.crypto.spec.SecretKeySpec;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
@@ -34,9 +34,21 @@ import org.springframework.web.filter.OncePerRequestFilter;
 class SecurityConfig {
 
     @Bean
+    org.springframework.security.web.firewall.HttpFirewall httpFirewall() {
+        var firewall = new org.springframework.security.web.firewall.StrictHttpFirewall();
+        firewall.setAllowUrlEncodedPercent(false);
+        firewall.setAllowUrlEncodedSlash(false);
+        firewall.setAllowBackSlash(false);
+        firewall.setAllowSemicolon(false);
+        firewall.setAllowUrlEncodedPeriod(false);
+        return firewall;
+    }
+
+    @Bean
     SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys, RequestSigningFilter requestSigningFilter,
                             RateLimitFilter rateLimitFilter, Stage1KillSwitchFilter stage1KillSwitchFilter,
-                            @org.springframework.beans.factory.annotation.Value("${management.server.port:0}") int managementPort)
+                            @org.springframework.beans.factory.annotation.Value("${management.server.port:0}") int managementPort,
+                            @Value("${elepay.security.trusted-proxies:}") String trustedProxies)
             throws Exception {
         http.csrf(csrf -> csrf.disable())
                 .cors(cors -> {})
@@ -61,8 +73,11 @@ class SecurityConfig {
                         .requestMatchers("/sandbox/**").permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/health", "/actuator/info").permitAll()
                         // Metrics are served only on the internal management port (prod: 9090), never publicly.
-                        .requestMatchers(request -> request.getRequestURI().startsWith("/actuator/")
-                                && managementPort > 0 && request.getLocalPort() == managementPort).permitAll()
+                        .requestMatchers(request -> {
+                            String path = RequestPaths.normalized(request);
+                            return path != null && path.startsWith("/actuator/")
+                                    && managementPort > 0 && request.getLocalPort() == managementPort;
+                        }).permitAll()
                         .requestMatchers("/actuator/**").hasAnyRole("ops", "ops_admin")
                         .requestMatchers("/v1/public/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/v3/api-docs", "/v3/api-docs/**").permitAll()
@@ -77,7 +92,7 @@ class SecurityConfig {
                 .addFilterBefore(stage1KillSwitchFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterBefore(rateLimitFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterBefore(requestSigningFilter, BearerTokenAuthenticationFilter.class)
-                .addFilterBefore(new ApiKeyFilter(apiKeys), BearerTokenAuthenticationFilter.class);
+                .addFilterBefore(new ApiKeyFilter(apiKeys, trustedProxies), BearerTokenAuthenticationFilter.class);
         return http.build();
     }
 
@@ -98,9 +113,11 @@ class SecurityConfig {
 
     static final class ApiKeyFilter extends OncePerRequestFilter {
         private final ApiKeys keys;
+        private final String trustedProxies;
 
-        ApiKeyFilter(ApiKeys keys) {
+        ApiKeyFilter(ApiKeys keys, String trustedProxies) {
             this.keys = keys;
+            this.trustedProxies = trustedProxies;
         }
 
         @Override
@@ -118,7 +135,14 @@ class SecurityConfig {
                 ApiKeyAuthentication auth = authOpt.get();
 
                 // Gate 1: Enforce IP Allowlist for payout_live_* keys (and any key with configured allowed_ips)
-                String callerIp = resolveCallerIp(request);
+                String pathForGates = RequestPaths.normalized(request);
+                if (pathForGates == null) {
+                    response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"invalid_path\",\"message\":\"The request path is not allowed\"}");
+                    return;
+                }
+                String callerIp = ClientIpResolver.resolve(request, trustedProxies);
                 if (!keys.isIpAllowed(auth, callerIp)) {
                     response.setStatus(HttpServletResponse.SC_FORBIDDEN);
                     response.setContentType("application/json");
@@ -129,7 +153,7 @@ class SecurityConfig {
                 // Gate 1: pk_live_* (publishable key) can ONLY create payment intents / checkouts
                 if ("publishable".equalsIgnoreCase(auth.keyType())) {
                     String method = request.getMethod();
-                    String path = request.getRequestURI();
+                    String path = pathForGates;
                     boolean allowedForPublishable = "POST".equalsIgnoreCase(method)
                             && (path.matches("^/v1/merchants/[^/]+/checkouts$")
                                 || path.equals("/v1/checkouts")
@@ -142,10 +166,10 @@ class SecurityConfig {
                     }
                 }
 
-                // Gate 1: sk_live_* (secret key) can create + read + refund, CANNOT initiate payouts or withdrawals alone
-                if ("secret".equalsIgnoreCase(auth.keyType())) {
+                // Gate 1: sk_live_* and legacy ek_* keys cannot initiate payouts or withdrawals.
+                if ("secret".equalsIgnoreCase(auth.keyType()) || "legacy".equalsIgnoreCase(auth.keyType())) {
                     String method = request.getMethod();
-                    String path = request.getRequestURI();
+                    String path = pathForGates;
                     boolean isPayoutMutation = ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method))
                             && (path.matches("^/v1/merchants/[^/]+/withdrawals(?:/.*)?$")
                                 || path.matches("^/v1/merchants/[^/]+/payout-batches(?:/.*)?$")
@@ -163,16 +187,5 @@ class SecurityConfig {
             chain.doFilter(request, response);
         }
 
-        private static String resolveCallerIp(HttpServletRequest request) {
-            String remoteAddr = request.getRemoteAddr();
-            boolean loopback = "127.0.0.1".equals(remoteAddr) || "::1".equals(remoteAddr) || "0:0:0:0:0:0:0:1".equals(remoteAddr);
-            if (loopback) {
-                String xff = request.getHeader("X-Forwarded-For");
-                if (xff != null && !xff.isBlank()) {
-                    return xff.split(",")[0].trim();
-                }
-            }
-            return remoteAddr;
-        }
     }
 }
