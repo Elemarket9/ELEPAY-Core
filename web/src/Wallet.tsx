@@ -86,9 +86,9 @@ export function Wallet() {
               <td>
                 <button
                   className="small secondary"
-                  onClick={() => downloadSingleReceipt(o)}
+                  onClick={() => downloadTransactionSummary(o)}
                 >
-                  Receipt
+                  Transaction summary
                 </button>
               </td>
             </tr>
@@ -286,7 +286,7 @@ function ExportStatements({ operations }: { operations: Operation[] }) {
   );
 }
 
-function downloadSingleReceipt(o: Operation) {
+function downloadTransactionSummary(o: Operation) {
   const content = `ELEPAY TRANSACTION SUMMARY — UNVERIFIED COPY
 --------------------------------------
 Reference: ${o.reference}
@@ -303,7 +303,7 @@ Verify payment completion using the transaction reference and authoritative back
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.setAttribute("download", `receipt_${o.reference}.txt`);
+  link.setAttribute("download", `transaction_summary_${o.reference}.txt`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
