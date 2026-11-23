@@ -12,7 +12,6 @@
     <java.version>25</java.version>
     <spring-modulith.version>2.2.0</spring-modulith.version>
     <bouncycastle.version>1.87</bouncycastle.version>
-    <opentelemetry.version>1.68.0</opentelemetry.version>
   </properties>
   <dependencyManagement>
     <dependencies>
@@ -20,14 +19,6 @@
         <groupId>org.springframework.modulith</groupId>
         <artifactId>spring-modulith-bom</artifactId>
         <version>${spring-modulith.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
-      <!-- Align the Java OpenTelemetry API, SDK and transitive modules to one verified release. -->
-      <dependency>
-        <groupId>io.opentelemetry</groupId>
-        <artifactId>opentelemetry-bom</artifactId>
-        <version>${opentelemetry.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -48,8 +39,6 @@
     <dependency><groupId>org.springframework.modulith</groupId><artifactId>spring-modulith-starter-core</artifactId></dependency>
     <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-redis</artifactId></dependency>
-    <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-api</artifactId></dependency>
-    <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk</artifactId></dependency>
     <!-- Post-quantum signatures (FIPS 204 ML-DSA) and Ed25519 for hybrid integrity checkpoints. -->
     <dependency><groupId>org.bouncycastle</groupId><artifactId>bcprov-jdk18on</artifactId><version>${bouncycastle.version}</version></dependency>
     <dependency><groupId>org.springdoc</groupId><artifactId>springdoc-openapi-starter-webmvc-api</artifactId><version>3.2.0</version></dependency>
@@ -140,11 +129,8 @@
             <artifactId>dependency-check-maven</artifactId>
             <version>13.0.0</version>
             <configuration>
-              <!-- A medium-or-higher TRUE finding is a blocker; do not hide an entire CPE family. -->
+              <!-- Fail on CVSS >= 5; investigate any findings rather than suppressing them. -->
               <failBuildOnCVSS>5</failBuildOnCVSS>
-              <suppressionFiles>
-                <suppressionFile>${project.basedir}/security/owasp-suppressions.xml</suppressionFile>
-              </suppressionFiles>
               <nvdDatafeedUrl>https://dependency-check.github.io/DependencyCheck_Builder/nvd_cache/</nvdDatafeedUrl>
               <ossIndexAnalyzerEnabled>false</ossIndexAnalyzerEnabled>
               <formats><format>HTML</format><format>SARIF</format></formats>

@@ -46,6 +46,8 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
+      - name: Assert OWASP scan has no local suppressions or noop telemetry
+        run: python3 -m unittest discover -s scripts -p 'test_security_suppressions.py' -v
       - name: Dependency vulnerability scan (OWASP Dependency-Check, fails on CVSS >= 5)
         run: mvn -B -Psecurity-scan -DskipTests verify
       - name: npm audit (web, high and critical)

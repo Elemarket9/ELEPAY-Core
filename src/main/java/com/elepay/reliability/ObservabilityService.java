@@ -4,9 +4,8 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
-import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.Tracer;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -18,7 +17,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 /**
- * OpenTelemetry Distributed Tracing & Micrometer Prometheus Financial Metrics (Domain 15).
+ * Micrometer Observations & Prometheus Financial Metrics (Domain 15).
  * Tracks financial throughput, p99 latency, and ledger balance zero-sum health.
  */
 @Service
@@ -26,7 +25,7 @@ public class ObservabilityService {
     private final MeterRegistry registry;
     private final JdbcClient db;
     private final com.elepay.ledger.Ledger ledger;
-    private final Tracer tracer;
+    private final ObservationRegistry observationRegistry;
 
     private final AtomicLong ledgerDrift = new AtomicLong(0);
     private final AtomicLong ledgerHealthStatus = new AtomicLong(1); // 1 = healthy, 0 = drift
@@ -36,19 +35,19 @@ public class ObservabilityService {
     private final Map<String, Counter> counters = new ConcurrentHashMap<>();
 
     public ObservabilityService(MeterRegistry registry, JdbcClient db) {
-        this(registry, db, null);
+        this(registry, db, null, ObservationRegistry.NOOP);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public ObservabilityService(MeterRegistry registry, JdbcClient db,
                                 @org.springframework.beans.factory.annotation.Autowired(required = false)
-                                com.elepay.ledger.Ledger ledger) {
+                                com.elepay.ledger.Ledger ledger,
+                                ObservationRegistry observationRegistry) {
         this.registry = registry;
         this.db = db;
         this.ledger = ledger;
-
-        // OpenTelemetry Tracer
-        this.tracer = OpenTelemetry.noop().getTracer("com.elepay.core", "0.1.0");
+        this.observationRegistry = java.util.Objects.requireNonNull(observationRegistry,
+                "Micrometer ObservationRegistry is required");
 
         // Register Gauges
         registry.gauge("elepay.ledger.drift.minor_units", ledgerDrift);
@@ -122,19 +121,22 @@ public class ObservabilityService {
         );
     }
 
-    public Tracer getTracer() {
-        return tracer;
-    }
-
+    /**
+     * Record an operation using Spring's configured Micrometer observation handlers.
+     * This replaces the previous OpenTelemetry.noop() tracer, which recorded nothing.
+     * The inSpan name is retained for callers using the existing internal API.
+     */
     public <T> T inSpan(String spanName, Supplier<T> action) {
-        Span span = tracer.spanBuilder(spanName).startSpan();
-        try {
-            return action.get();
-        } catch (Exception e) {
-            span.recordException(e);
-            throw e;
+        Observation observation = Observation.start(spanName, observationRegistry);
+        try (Observation.Scope ignored = observation.openScope()) {
+            try {
+                return action.get();
+            } catch (RuntimeException | Error failure) {
+                observation.error(failure);
+                throw failure;
+            }
         } finally {
-            span.end();
+            observation.stop();
         }
     }
 }

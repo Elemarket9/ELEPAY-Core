@@ -1,34 +1,29 @@
 #!/usr/bin/env python3
-"""Guard against an OWASP exception that accidentally hides other CVEs or releases."""
+"""Security policy regression checks: no hidden dependency-scan exceptions."""
 import pathlib
-import re
 import unittest
-import xml.etree.ElementTree as ET
 
-FILE = pathlib.Path(__file__).resolve().parents[1] / "security" / "owasp-suppressions.xml"
-NS = {"dc": "https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.4.xsd"}
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+POM = ROOT / "pom.xml"
+OWASP_SUPPRESSIONS = ROOT / "security" / "owasp-suppressions.xml"
+OBSERVABILITY = ROOT / "src/main/java/com/elepay/reliability/ObservabilityService.java"
 
 
-class OpenTelemetryFalsePositiveScopeTest(unittest.TestCase):
-    def test_suppression_remains_versioned_js_cve_only(self):
-        doc = ET.parse(FILE)
-        rules = doc.findall("dc:suppress", NS)
-        self.assertEqual(len(rules), 1)
-        rule = rules[0]
-        self.assertEqual(rule.findtext("dc:cve", namespaces=NS), "CVE-2026-54285")
-        expression = rule.find("dc:packageUrl", NS)
-        self.assertIsNotNone(expression)
-        self.assertEqual(expression.attrib.get("regex"), "true")
-        regex = re.compile(expression.text)
-        for artifact in ["opentelemetry-api", "opentelemetry-sdk",
-                         "opentelemetry-common", "opentelemetry-sdk-trace"]:
-            self.assertIsNotNone(regex.fullmatch(
-                "pkg:maven/io.opentelemetry/" + artifact + "@1.68.0"))
-        for other in ["pkg:npm/%40opentelemetry/core@2.7.0",
-                      "pkg:maven/io.opentelemetry/opentelemetry-api@1.69.0",
-                      "pkg:maven/com.other/opentelemetry-api@1.68.0",
-                      "pkg:maven/io.opentelemetry/opentelemetry-api@1.67.0"]:
-            self.assertIsNone(regex.fullmatch(other))
+class UnsuppressedDependencyAuditTest(unittest.TestCase):
+    def test_no_local_owasp_suppressions(self):
+        self.assertFalse(OWASP_SUPPRESSIONS.exists(),
+                         "Delete local CVE exception lists; remediate or verify findings")
+        content = POM.read_text()
+        self.assertNotIn("<suppressionFiles>", content)
+        self.assertNotIn("<suppressionFile>", content)
+        self.assertIn("<failBuildOnCVSS>5</failBuildOnCVSS>", content)
+
+    def test_remove_unused_opentelemetry_and_noop_spans(self):
+        pom = POM.read_text()
+        self.assertNotIn("<groupId>io.opentelemetry</groupId>", pom)
+        service = OBSERVABILITY.read_text()
+        self.assertNotIn("OpenTelemetry.noop().getTracer(", service)
+        self.assertIn("Observation.start(spanName, observationRegistry)", service)
 
 
 if __name__ == "__main__":
