@@ -62,6 +62,30 @@ public class ProductCatalogService {
             boolean trackInventory
     ) {}
 
+    /** One sellable item with its stock across all warehouses, for the inventory screen and the POS register. */
+    public record CatalogRow(
+            UUID variantId, UUID productId, String productName, UUID categoryId, String categoryName,
+            String sku, String barcode, String variantName, long costPricePesewas, long retailPricePesewas,
+            boolean trackInventory, java.math.BigDecimal onHand, java.math.BigDecimal reorderPoint
+    ) {}
+
+    public List<CatalogRow> listCatalog(UUID merchantId) {
+        return db.sql("""
+            SELECT v.id AS variant_id, p.id AS product_id, p.name AS product_name, p.category_id,
+                   c.name AS category_name, v.sku, v.barcode, v.variant_name, v.cost_price_pesewas,
+                   v.retail_price_pesewas, v.track_inventory,
+                   COALESCE(SUM(s.quantity_on_hand - s.quantity_reserved), 0) AS on_hand,
+                   COALESCE(MIN(s.reorder_point), 0) AS reorder_point
+            FROM inventory_variant v
+            JOIN inventory_product p ON p.id = v.product_id
+            LEFT JOIN inventory_category c ON c.id = p.category_id
+            LEFT JOIN inventory_stock s ON s.variant_id = v.id
+            WHERE v.merchant_id = :m AND p.is_active
+            GROUP BY v.id, p.id, c.name
+            ORDER BY p.name, v.variant_name
+            """).param("m", merchantId).query(CatalogRow.class).list();
+    }
+
     @Transactional
     public Category createCategory(UUID merchantId, String name) {
         UUID id = UUID.randomUUID();

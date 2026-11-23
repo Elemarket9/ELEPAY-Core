@@ -264,8 +264,9 @@ public class PayrollManagementService {
      */
     @Transactional
     public void submitPayrollRun(UUID merchantId, UUID runId) {
-        db.sql("UPDATE payroll_run SET status = 'SUBMITTED' WHERE id = ? AND merchant_id = ? AND status = 'DRAFT'")
-                .params(runId, merchantId).update();
+        if (db.sql("UPDATE payroll_run SET status = 'SUBMITTED' WHERE id = ? AND merchant_id = ? AND status = 'DRAFT'")
+                .params(runId, merchantId).update() != 1)
+            throw new IllegalStateException("Only a draft payroll can be submitted for approval");
     }
 
     /**
@@ -273,18 +274,24 @@ public class PayrollManagementService {
      */
     @Transactional
     public void approvePayrollRun(UUID merchantId, UUID runId, String approvedBy) {
-        db.sql("UPDATE payroll_run SET status = 'APPROVED', approved_by = ? WHERE id = ? AND merchant_id = ? AND status = 'SUBMITTED'")
-                .params(approvedBy, runId, merchantId).update();
+        if (db.sql("UPDATE payroll_run SET status = 'APPROVED', approved_by = ? WHERE id = ? AND merchant_id = ? AND status = 'SUBMITTED'")
+                .params(approvedBy, runId, merchantId).update() != 1)
+            throw new IllegalStateException("Only a submitted payroll can be approved");
     }
 
     /**
-     * Executes an approved payroll run:
-     * - Generates payout references for each employee's payslip
-     * - Updates payslip payment statuses to PAID
-     * - Posts salary expense, SSNIT liability, and PAYE withholding liability to Merchant GL.
+     * Hands an approved payroll run to a real payout batch (see recordPayoutSubmission) and posts salary
+     * expense, SSNIT and PAYE liabilities, and net wages owed to the merchant GL.
      */
     @Transactional
-    public PayrollRunSummary executePayrollRun(UUID merchantId, UUID runId) {
+    /**
+     * Records that an approved payroll was handed to ELEPAY Payouts as a real payout batch. Nothing here moves
+     * money: the payslips become SUBMITTED with the batch reference, and net wages are booked as owed (Accrued
+     * Wages) until the payout settles. Payment outcomes are tracked on the payout batch, not invented here.
+     */
+    public PayrollRunSummary recordPayoutSubmission(UUID merchantId, UUID runId, String payoutBatchReference) {
+        if (payoutBatchReference == null || !payoutBatchReference.matches("[A-Za-z0-9_.:-]{3,64}"))
+            throw new IllegalArgumentException("A real payout batch reference is required");
         var run = db.sql("""
             SELECT id, merchant_id, period_month, period_year, total_gross_pesewas, total_employee_ssnit_pesewas,
                    total_employer_ssnit_pesewas, total_tier3_pesewas, total_paye_tax_pesewas, total_net_pay_pesewas,
@@ -310,30 +317,30 @@ public class PayrollManagementService {
         )).single();
 
         if (!"APPROVED".equals(run.status())) {
-            throw new IllegalStateException("Payroll run must be APPROVED before execution (current: " + run.status() + ")");
+            throw new IllegalStateException("Payroll run must be APPROVED before submitting it to payouts (current: " + run.status() + ")");
         }
 
         OffsetDateTime now = OffsetDateTime.now();
-        db.sql("UPDATE payroll_run SET status = 'EXECUTED', executed_at = ? WHERE id = ?")
+        int moved = db.sql("UPDATE payroll_run SET status = 'PAYMENT_SUBMITTED', executed_at = ? WHERE id = ? AND status = 'APPROVED'")
                 .params(now, runId).update();
+        if (moved != 1) throw new IllegalStateException("Payroll run was already submitted");
 
-        // Update all payslips with unique payout reference and mark as PAID
         db.sql("""
             UPDATE payroll_payslip
-            SET payment_status = 'PAID',
-                payout_reference = 'PAYOUT-PR-' || substr(md5(random()::text), 1, 12)
+            SET payment_status = 'SUBMITTED',
+                payout_reference = ?
             WHERE payroll_run_id = ?
-        """).param(runId).update();
+        """).params(payoutBatchReference, runId).update();
 
         // Post to General Ledger:
         // Debit: Salaries & Wages Expense (6010) -> totalGross
         // Debit: Employer SSNIT Tier 1 Expense (6020) -> totalEmployerSSNIT
-        // Credit: Bank Account - Operating (1020) -> totalNetPay
+        // Credit: Accrued Wages & Salaries (2050) -> totalNetPay (owed until the payout batch settles)
         // Credit: SSNIT Contributions Payable (2030) -> (totalEmployeeSSNIT + totalEmployerSSNIT + totalTier3)
         // Credit: GRA PAYE Tax Withholding Payable (2040) -> totalPayeTax
         var wageExp = glService.getAccountByCode(merchantId, "6010");
         var ssnitExp = glService.getAccountByCode(merchantId, "6020");
-        var bankAcc = glService.getAccountByCode(merchantId, "1020");
+        var bankAcc = glService.getAccountByCode(merchantId, "2050");
         var ssnitPayable = glService.getAccountByCode(merchantId, "2030");
         var payePayable = glService.getAccountByCode(merchantId, "2040");
 
@@ -343,7 +350,7 @@ public class PayrollManagementService {
             if (ssnitExp.isPresent() && run.totalEmployerSsnitPesewas() > 0) {
                 lines.add(new MerchantGeneralLedgerService.JournalLineCommand(ssnitExp.get().id(), run.totalEmployerSsnitPesewas(), 0L, "Employer SSNIT 13.5%"));
             }
-            lines.add(new MerchantGeneralLedgerService.JournalLineCommand(bankAcc.get().id(), 0L, run.totalNetPayPesewas(), "Net Wages Disbursed"));
+            lines.add(new MerchantGeneralLedgerService.JournalLineCommand(bankAcc.get().id(), 0L, run.totalNetPayPesewas(), "Net wages owed (payout batch " + payoutBatchReference + ")"));
 
             long totalSsnitObligation = run.totalEmployeeSsnitPesewas() + run.totalEmployerSsnitPesewas() + run.totalTier3Pesewas();
             if (ssnitPayable.isPresent() && totalSsnitObligation > 0) {
@@ -369,7 +376,7 @@ public class PayrollManagementService {
         return new PayrollRunSummary(run.id(), run.merchantId(), run.periodMonth(), run.periodYear(),
                 run.totalGrossPesewas(), run.totalEmployeeSsnitPesewas(), run.totalEmployerSsnitPesewas(),
                 run.totalTier3Pesewas(), run.totalPayeTaxPesewas(), run.totalNetPayPesewas(),
-                "EXECUTED", run.initiatedBy(), run.approvedBy(), now, updatedPayslips);
+                "PAYMENT_SUBMITTED", run.initiatedBy(), run.approvedBy(), now, updatedPayslips);
     }
 
     public List<PayslipItem> listPayslipsForRun(UUID runId) {
@@ -402,5 +409,17 @@ public class PayrollManagementService {
                 rs.getString("payment_status"),
                 rs.getString("payout_reference")
         )).list();
+    }
+
+    public record PayrollRunRow(UUID id, int periodMonth, int periodYear, long totalGrossPesewas,
+                                long totalPayeTaxPesewas, long totalNetPayPesewas, String status,
+                                String initiatedBy, String approvedBy, OffsetDateTime executedAt) {}
+
+    public List<PayrollRunRow> listRuns(UUID merchantId) {
+        return db.sql("""
+            SELECT id, period_month, period_year, total_gross_pesewas, total_paye_tax_pesewas, total_net_pay_pesewas,
+                   status, initiated_by, approved_by, executed_at
+            FROM payroll_run WHERE merchant_id = ? ORDER BY period_year DESC, period_month DESC
+            """).param(merchantId).query(PayrollRunRow.class).list();
     }
 }

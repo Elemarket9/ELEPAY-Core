@@ -25,8 +25,12 @@ NON_FINTECH_SOURCE = re.compile(
     r"\b(?:sendMoneyAbroad|crossBorderPayout|internationalPayout)\b"
 )
 WEB_FALSE_SUCCESS = re.compile(
-    r"(?:Authenticity Hash:|All Systems Green|Recharge successful!|Bill payment completed!|"
+    r"(?:Authenticity Hash:|All Systems Green|Payroll successfully executed|Store Credit issued|Recharge successful!|Bill payment completed!|"
     r"Virtual Visa Card issued successfully!|Restructuring file dispatched to credit risk committee\.)"
+)
+# Payment references must come from real payouts, never be invented in code.
+INVENTED_PAYOUT_REF = re.compile(
+    r"(?:payout_reference\s*=\s*'[^']*'\s*\|\||\"PAYOUT-[A-Z]+-\"\s*\+|'PAYOUT-[A-Z]+-'\s*\|\|)"
 )
 UNSAFE_SECRET_DEFAULT = re.compile(
     r"\$\{[^}\n]*(?:password|secret|api[-_.]?key|token)[^}:\n]*:[^}\n]+\}",
@@ -53,6 +57,8 @@ def audit() -> list[str]:
         for line_num, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if REMOVED_TYPES.search(line) or NON_FINTECH_SOURCE.search(line):
                 failures.append(f"{rel}:{line_num}: deleted module or international payout reference")
+            if INVENTED_PAYOUT_REF.search(line):
+                failures.append(f"{rel}:{line_num}: invented payout reference (use a real payout)")
             if UNSAFE_SECRET_DEFAULT.search(line):
                 failures.append(f"{rel}:{line_num}: production credential has a non-empty default")
             if re.search(r"\b(?:class|record)\s+Simulated\w+", line):

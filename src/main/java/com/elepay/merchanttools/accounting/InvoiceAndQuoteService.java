@@ -175,7 +175,7 @@ public class InvoiceAndQuoteService {
             (id, merchant_id, invoice_number, quote_id, customer_id, customer_name, customer_email,
              customer_phone, customer_tin, issue_date, due_date, currency, subtotal_pesewas, tax_pesewas,
              discount_pesewas, total_pesewas, paid_amount_pesewas, status, payment_link_token, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'SENT', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'ISSUED', ?, ?)
         """).params(invoiceId, cmd.merchantId(), cmd.invoiceNumber(), cmd.quoteId(), cmd.customerId(),
                 cmd.customerName(), cmd.customerEmail(), cmd.customerPhone(), cmd.customerTin(),
                 cmd.issueDate(), cmd.dueDate(), currency, subtotal, totalTax, totalDiscount,
@@ -235,10 +235,11 @@ public class InvoiceAndQuoteService {
             ));
         }
 
-        String paymentUrl = "https://pay.elepay.com/invoice/" + paymentLinkToken;
+        // No payment page exists for invoices yet; never show a link that does not work.
+        String paymentUrl = null;
         return new InvoiceSummary(invoiceId, cmd.merchantId(), cmd.invoiceNumber(), cmd.customerName(),
                 cmd.issueDate(), cmd.dueDate(), currency, subtotal, totalTax, totalDiscount,
-                grandTotal, 0L, "SENT", paymentUrl, null);
+                grandTotal, 0L, "ISSUED", paymentUrl, null);
     }
 
     /**
@@ -319,7 +320,7 @@ public class InvoiceAndQuoteService {
                 rs.getLong("total_pesewas"),
                 rs.getLong("paid_amount_pesewas"),
                 rs.getString("status"),
-                "https://pay.elepay.com/invoice/" + rs.getString("payment_link_token"),
+                null,
                 rs.getString("gra_sdc_receipt_number")
         )).single();
 
@@ -403,5 +404,38 @@ public class InvoiceAndQuoteService {
 
         return new CreditNoteSummary(creditNoteId, merchantId, creditNoteNumber, invoiceId,
                 creditAmountPesewas, reason, "ISSUED");
+    }
+
+    public List<InvoiceSummary> listInvoices(UUID merchantId) {
+        return db.sql("""
+            SELECT id, merchant_id, invoice_number, customer_name, issue_date, due_date, currency, subtotal_pesewas,
+                   tax_pesewas, discount_pesewas, total_pesewas, paid_amount_pesewas, status,
+                   NULL AS payment_link_url, gra_sdc_receipt_number
+            FROM merchant_invoice WHERE merchant_id = ? ORDER BY issue_date DESC, invoice_number DESC
+            """).param(merchantId).query(InvoiceSummary.class).list();
+    }
+
+    public List<QuoteSummary> listQuotes(UUID merchantId) {
+        return db.sql("""
+            SELECT id, merchant_id, quote_number, customer_name, issue_date, expiry_date, total_pesewas, status,
+                   converted_invoice_id
+            FROM merchant_quote WHERE merchant_id = ? ORDER BY issue_date DESC, quote_number DESC
+            """).param(merchantId).query(QuoteSummary.class).list();
+    }
+
+    /** Next document number per merchant and type, e.g. INV-0001 or QTE-0001. */
+    public String nextNumber(UUID merchantId, String prefix) {
+        boolean invoice = "INV".equals(prefix);
+        String table = invoice ? "merchant_invoice" : "merchant_quote";
+        String column = invoice ? "invoice_number" : "quote_number";
+        long count = db.sql("SELECT count(*) FROM " + table + " WHERE merchant_id = ?").param(merchantId)
+                .query(Long.class).single();
+        String candidate;
+        do {
+            count++;
+            candidate = String.format("%s-%04d", invoice ? "INV" : "QTE", count);
+        } while (db.sql("SELECT count(*) FROM " + table + " WHERE merchant_id = ? AND " + column + " = ?")
+                .params(merchantId, candidate).query(Long.class).single() > 0);
+        return candidate;
     }
 }

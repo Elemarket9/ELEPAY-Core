@@ -90,6 +90,28 @@ public class InventoryController {
         );
     }
 
+    @GetMapping("/categories/merchant/{merchantId}")
+    public List<ProductCatalogService.Category> listCategories(@PathVariable UUID merchantId) {
+        access.view(merchantId);
+        return catalogService.listCategories(merchantId);
+    }
+
+    /** Everything the merchant sells with current stock. Cashiers can read it to ring up sales. */
+    @GetMapping("/catalog/merchant/{merchantId}")
+    public List<ProductCatalogService.CatalogRow> listCatalog(@PathVariable UUID merchantId) {
+        access.view(merchantId);
+        return catalogService.listCatalog(merchantId);
+    }
+
+    public record ReorderPointRequest(UUID warehouseId, UUID variantId, BigDecimal reorderPoint) {}
+
+    @PostMapping("/stock/reorder-point")
+    public StockService.Stock setReorderPoint(@RequestBody ReorderPointRequest req) {
+        UUID merchant = access.manage(WAREHOUSE, req.warehouseId());
+        access.belongs(merchant, VARIANT, req.variantId());
+        return stockService.setReorderPoint(req.warehouseId(), req.variantId(), req.reorderPoint());
+    }
+
     // Fast Scanner Lookups (Barcode & SKU)
     @GetMapping("/scan/barcode")
     public ResponseEntity<ProductCatalogService.VariantDetail> scanBarcode(
