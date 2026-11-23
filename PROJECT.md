@@ -218,4 +218,27 @@ Expanding ELEPAY into enterprise-grade embedded finance and multi-merchant comme
 
 Gate 4 Status: **PASS** (Certified Clean, Zero Ledger Drift, V43-V44 Applied)
 
+### Phase D — Operational Resilience, Credit & Lending, Automated Financial Controls
+| Milestone | Name | Scope | Capabilities | Status |
+|---|---|---|---|---|
+| D1 | Ledger-Backed Lending | `com.elepay.lending` | Amortization schedules (French/German/Bullet), loan origination, BOG prudential staging & IFRS 9 ECL | DONE (commits 5c2fc13, 9ab4297, c405079, all tests pass) |
+| D2 | Financial Controls & Audit | `com.elepay.ledger`, `com.elepay.fees` | Immutable balance snapshots, SHA-256 hash-chained audit trails, multi-tier fee schedules | DONE (commits 5c2fc13, 9ab4297, c405079, all tests pass) |
+| D3 | Defensive Cybersecurity & Vault | `com.elepay.cards`, `com.elepay.identity` | AES-GCM envelope encryption, ML-DSA-65 quantum resistant keys, zero plaintext CVV | DONE (all tests pass) |
 
+### Phase E — Financial Infrastructure, e-Levy, POS & ISO 20022
+| Milestone | Name | Scope | Capabilities | Status |
+|---|---|---|---|---|
+| E1 | GRA e-Levy Compliance | `com.elepay.compliance` | 100 GHS daily cumulative exemption threshold, statutory clearance codes, V45 migration | DONE (commits 5c2fc13, 9ab4297, c405079, all tests pass) |
+| E2 | ISO 20022 Financial Messaging | `com.elepay.rails.iso20022` | pain.001, pacs.008, camt.053 message factory, XML schema validation, audit logging | DONE (commits 5c2fc13, 9ab4297, c405079, all tests pass) |
+| E3 | POS Fleet & DUKPT Key Management | `com.elepay.merchanttools.pos` | ANSI X9.24 DUKPT key management, offline transaction caching, ISO 9564 PIN blocks | DONE (commits 5c2fc13, 9ab4297, c405079, all tests pass) |
+
+Gate 5 Status: **PASS** (Certified Clean, Zero Ledger Drift, V45 Applied)
+
+### Phase F — Treasury FX Revaluation, Rolling Reserves & Chargebacks
+| Milestone | Name | Scope | Capabilities | Status |
+|---|---|---|---|---|
+| F1 | Treasury FX Mark-to-Market Revaluation | `com.elepay.fx` | Daily MtM against Bank of Ghana benchmark rates, unrealized FX gain/loss, balanced equity postings | DONE (commit: 5c2fc13, V46 migration, tests pass) |
+| F2 | Rolling Reserve Scheduling & Impairment | `com.elepay.settlement` | 500-1500 bps haircut tranches, 90-180d maturation release, catastrophic impairment | DONE (commit: 5c2fc13, V46 migration, tests pass) |
+| F3 | Dispute & Chargeback Settlement | `com.elepay.settlement` | State machine, defensive escrow holds, admin fees, cryptographic evidence linkage, win/loss clearing | DONE (commit: 5c2fc13, V46 migration, tests pass) |
+
+Gate 6 Status: **PASS** (Certified Clean, Zero Ledger Drift, V46 Applied, 491/491 Tests Pass)
