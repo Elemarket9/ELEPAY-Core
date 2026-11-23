@@ -13,7 +13,7 @@ export function parseAllowedPrinter(address, allowlist) {
     || octets[0] === 192 && octets[1] === 168;
   if (!privateIp || !allowlist.includes(host))
     throw new Error("PRINTER_NOT_ALLOWED: choose an allowed private LAN address");
-  if (location.username || location.password || location.pathname !== "/" || location.search || location.hash)
+  if (location.username || location.password || (location.pathname !== "/" && location.pathname !== "") || location.search || location.hash)
     throw new Error("Invalid printer address");
   const port = location.port ? Number(location.port) : 9100;
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid printer port");
