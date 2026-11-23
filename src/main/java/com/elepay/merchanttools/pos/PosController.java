@@ -26,6 +26,7 @@ public class PosController {
     private final PosOfflineSyncService syncService;
     private final DeviceEvents deviceEvents;
     private final PosTerminalAcceptanceService cardPresent;
+    private final PosPaymentCodeService paymentCodes;
 
     public PosController(
             MerchantToolAccess access,
@@ -38,7 +39,8 @@ public class PosController {
             PosReceiptService receiptService,
             PosOfflineSyncService syncService,
             DeviceEvents deviceEvents,
-            PosTerminalAcceptanceService cardPresent
+            PosTerminalAcceptanceService cardPresent,
+            PosPaymentCodeService paymentCodes
     ) {
         this.access = access;
         this.idempotency = idempotency;
@@ -51,6 +53,7 @@ public class PosController {
         this.syncService = syncService;
         this.deviceEvents = deviceEvents;
         this.cardPresent = cardPresent;
+        this.paymentCodes = paymentCodes;
     }
 
     // Terminal endpoints
@@ -254,6 +257,27 @@ public class PosController {
             throw ApiException.conflict("checkout_not_open", "Payment code is no longer active");
         return new PaymentCode(checkout.reference(), "ELEPAY-PAY:" + checkout.reference(),
                 checkout.payUrl(), checkout.amount(), "PENDING");
+    }
+
+    public record ScanPaymentCodeRequest(String barcodeValue) {}
+
+    /**
+     * Cashier/scanner may resolve a merchant-presented Code128 reference to an existing
+     * pending checkout; it cannot mark an order paid without the payment rail.
+     */
+    @PostMapping("/payment-codes/resolve")
+    public PaymentCode resolvePaymentCode(@RequestBody ScanPaymentCodeRequest req) {
+        String value = req.barcodeValue();
+        if (value == null || !value.startsWith("ELEPAY-PAY:") || value.length() > 160)
+            throw ApiException.badRequest("payment_barcode_invalid", "Scan a valid ELEPAY payment barcode");
+        String reference = value.substring("ELEPAY-PAY:".length());
+        if (reference.isBlank()) throw ApiException.badRequest("payment_barcode_invalid", "Payment barcode has no reference");
+        UUID orderId = paymentCodes.orderForReference(reference);
+        var order = verifyOrder(orderId);
+        var checkout = orderService.startDigital(order.id(), com.elepay.identity.Actor.current().subject());
+        if (!"open".equals(checkout.status()) || !reference.equals(checkout.reference()))
+            throw ApiException.conflict("checkout_not_open", "Payment barcode is no longer active");
+        return new PaymentCode(reference, value, checkout.payUrl(), checkout.amount(), "PENDING");
     }
 
     public record TerminalPaymentRequest(UUID terminalId, PosTerminalAcceptanceService.Mode mode) {}

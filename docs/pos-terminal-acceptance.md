@@ -44,9 +44,13 @@ offline implementation and endurance tests.
 2. Provision terminal credentials and merchant IDs outside source code.
 3. Implement signed terminal webhooks, terminal-pending recovery, void/refund, and
    an idempotent acquirer-to-checkout reconciliation with ledger evidence.
-4. Add a real CODE128 renderer if one-dimensional payment barcodes are required.
+4. Code 128 B rendering is now available in the browser; confirm it on actual scanner/printer hardware.
 5. Verify real NFC tap, chip, 2D barcode and cash sales on physical hardware.
 6. For Tap to Phone on Android, use a validated PCI MPoC solution, not browser Web NFC.
 
 The backend never fabricates an authorization or reports a card tap as successful
 when no certified payment route is connected.
+
+A merchant scanner can resolve an issued `ELEPAY-PAY:` reference through
+`POST /v1/pos/payment-codes/resolve`. This operation verifies ownership,
+returns the pending hosted checkout, and **never captures or settles payment**.

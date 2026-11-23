@@ -135,3 +135,6 @@ td.num, .lines .num { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 599px) { .pos-items { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (min-width: 600px) and (max-width: 1199px) { .pos-items { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (min-width: 1200px) { .pos-items { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+
+.payment-code-panel { background: #fff; color: #111; border: 1px solid #9aa; border-radius: 8px; padding: 12px; margin: 12px 0; }
+.payment-barcode { display: block; width: 100%; max-width: 960px; height: auto; min-height: 90px; margin: 12px auto; }

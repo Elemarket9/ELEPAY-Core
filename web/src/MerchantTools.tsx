@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
+import { Code128Barcode } from "./Barcode128";
 import { api, ApiError, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
 
@@ -398,7 +399,12 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
             <p>Customer pays <strong>{formatMoney(digital.amount)}</strong> with MoMo or card:</p>
             {qr && <img src={qr} alt="Payment QR code" width={220} height={220} />}
             {digital.payUrl && <p className="small mono">{digital.payUrl}</p>}
-            {paymentCode && <p>2D payment barcode reference: <strong className="mono">{paymentCode.barcodeValue}</strong></p>}
+            {paymentCode && <div className="payment-code-panel">
+              <strong>Scannable Code 128 payment reference</strong>
+              <Code128Barcode value={paymentCode.barcodeValue} />
+              <p className="mono small">{paymentCode.barcodeValue}</p>
+              <p className="muted small">Scanning only opens checkout. Payment requires verified MoMo/card confirmation.</p>
+            </div>}
             <button onClick={() => void checkDigital()} disabled={busy}>Check payment</button>
             <button className="secondary" onClick={() => void cancelDigital()} disabled={busy}>Cancel payment</button>
           </div>
