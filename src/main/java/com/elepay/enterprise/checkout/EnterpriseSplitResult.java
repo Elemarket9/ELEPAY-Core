@@ -25,6 +25,10 @@ public record EnterpriseSplitResult(
         deliveryAllocations = List.copyOf(deliveryAllocations);
     }
 
+    public long totalOrderPesewas() {
+        return totalPesewas;
+    }
+
     /**
      * Validates that total money is strictly conserved across all allocations.
      * sum(netPayables) + sum(commissions) + sum(platformFees) + sum(reserves) == totalPesewas

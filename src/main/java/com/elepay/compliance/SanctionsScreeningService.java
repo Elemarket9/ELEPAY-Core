@@ -11,11 +11,14 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import org.springframework.stereotype.Service;
+
 /**
  * Fuzzy sanctions screening engine (Algorithm 042).
  * Combines exact normalized matching, Jaro-Winkler string distance, and Soundex phonetic encoding
  * against international (UN, OFAC) and domestic (FIC Ghana) sanctions lists with versioning and analyst review.
  */
+@Service
 public class SanctionsScreeningService {
 
     public enum MatchType {

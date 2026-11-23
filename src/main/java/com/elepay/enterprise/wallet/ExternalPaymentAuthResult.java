@@ -16,6 +16,10 @@ public record ExternalPaymentAuthResult(
         boolean success,
         String errorMessage
 ) {
+    public boolean isSuccessful() {
+        return success;
+    }
+
     public static ExternalPaymentAuthResult success(
             String authorizationId,
             String transactionReference,

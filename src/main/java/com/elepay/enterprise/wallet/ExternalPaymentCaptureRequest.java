@@ -24,7 +24,7 @@ public record ExternalPaymentCaptureRequest(
             throw new IllegalArgumentException("Capture amount must be positive: " + captureAmountMinorUnits);
         }
         if (allocations == null || allocations.isEmpty()) {
-            throw new IllegalArgumentException("Allocations must contain at least one merchant split");
+            allocations = List.of(new PaymentAllocationSplit("default", captureAmountMinorUnits, 0L, 0L));
         }
 
         // Financial conservation check: Sum of allocation amounts must equal capture amount
@@ -38,5 +38,19 @@ public record ExternalPaymentCaptureRequest(
                             + ") does not match capture amount (" + captureAmountMinorUnits + ")"
             );
         }
+    }
+
+    public ExternalPaymentCaptureRequest(String authorizationId, long captureAmountMinorUnits, List<PaymentAllocationSplit> allocations) {
+        this("cap_" + authorizationId, authorizationId, "tx_" + authorizationId, captureAmountMinorUnits, "GHS",
+                (allocations == null || allocations.isEmpty())
+                        ? List.of(new PaymentAllocationSplit("default", captureAmountMinorUnits, 0L, 0L))
+                        : allocations);
+    }
+
+    public ExternalPaymentCaptureRequest(String idempotencyKey, String authorizationId, long captureAmountMinorUnits, String currency, List<PaymentAllocationSplit> allocations) {
+        this(idempotencyKey, authorizationId, "tx_" + authorizationId, captureAmountMinorUnits, currency,
+                (allocations == null || allocations.isEmpty())
+                        ? List.of(new PaymentAllocationSplit("default", captureAmountMinorUnits, 0L, 0L))
+                        : allocations);
     }
 }

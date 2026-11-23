@@ -15,6 +15,14 @@ public record ExternalBalanceQueryResult(
         boolean success,
         String errorMessage
 ) {
+    public long availableBalance() {
+        return availableBalanceMinorUnits;
+    }
+
+    public long availableMinorUnits() {
+        return availableBalanceMinorUnits;
+    }
+
     public static ExternalBalanceQueryResult success(
             String partnerId,
             String externalCustomerId,

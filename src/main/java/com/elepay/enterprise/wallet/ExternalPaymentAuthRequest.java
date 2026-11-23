@@ -30,5 +30,37 @@ public record ExternalPaymentAuthRequest(
         if (metadata == null) {
             metadata = Map.of();
         }
+        if (operatingMode == null) {
+            operatingMode = WalletOperatingMode.MODE_A_ENTERPRISE_OWNED;
+        }
+    }
+
+    public ExternalPaymentAuthRequest(
+            String idempotencyKey,
+            String partnerId,
+            String transactionReference,
+            String externalCustomerId,
+            long amountMinorUnits,
+            String currency,
+            String cryptographicAuthorization
+    ) {
+        this(idempotencyKey, partnerId, WalletOperatingMode.MODE_A_ENTERPRISE_OWNED,
+                transactionReference, externalCustomerId, amountMinorUnits, currency,
+                cryptographicAuthorization, Map.of());
+    }
+
+    public ExternalPaymentAuthRequest(
+            String idempotencyKey,
+            String transactionReference,
+            String externalCustomerId,
+            long amountMinorUnits,
+            String currency,
+            String partnerId,
+            String token,
+            String cryptographicAuthorization
+    ) {
+        this(idempotencyKey, partnerId, WalletOperatingMode.MODE_A_ENTERPRISE_OWNED,
+                transactionReference, externalCustomerId, amountMinorUnits, currency,
+                cryptographicAuthorization, Map.of());
     }
 }

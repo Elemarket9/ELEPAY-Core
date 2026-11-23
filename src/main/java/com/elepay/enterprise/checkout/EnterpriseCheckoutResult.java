@@ -27,4 +27,8 @@ public record EnterpriseCheckoutResult(
     public EnterpriseCheckoutResult {
         journalLegs = List.copyOf(journalLegs);
     }
+
+    public UUID ledgerTransactionId() {
+        return journalTxId;
+    }
 }

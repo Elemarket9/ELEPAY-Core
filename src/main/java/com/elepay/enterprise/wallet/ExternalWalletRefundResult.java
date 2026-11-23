@@ -17,6 +17,10 @@ public record ExternalWalletRefundResult(
         boolean success,
         String errorMessage
 ) {
+    public boolean isSuccessful() {
+        return success;
+    }
+
     public static ExternalWalletRefundResult success(
             String refundId,
             String originalCaptureId,

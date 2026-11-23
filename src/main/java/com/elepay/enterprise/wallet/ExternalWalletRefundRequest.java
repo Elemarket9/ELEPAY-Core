@@ -29,6 +29,12 @@ public record ExternalWalletRefundRequest(
         if (currency == null || currency.isBlank()) {
             throw new IllegalArgumentException("Currency is required");
         }
+        if (partnerId == null || partnerId.isBlank()) {
+            partnerId = "partner_jumiapay_gh";
+        }
+        if (transactionReference == null || transactionReference.isBlank()) {
+            transactionReference = "TX-REF-" + idempotencyKey;
+        }
         if (items != null && !items.isEmpty()) {
             long itemsTotal = 0;
             for (RefundAllocationItem item : items) {
@@ -40,5 +46,18 @@ public record ExternalWalletRefundRequest(
                 );
             }
         }
+    }
+
+    public ExternalWalletRefundRequest(
+            String idempotencyKey,
+            String originalCaptureId,
+            String externalCustomerId,
+            long refundAmountMinorUnits,
+            String currency,
+            String refundReason,
+            List<RefundAllocationItem> items
+    ) {
+        this(idempotencyKey, "partner_jumiapay_gh", originalCaptureId, "TX-REF-" + idempotencyKey,
+                externalCustomerId, refundAmountMinorUnits, currency, refundReason, items);
     }
 }
