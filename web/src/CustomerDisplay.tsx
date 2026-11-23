@@ -16,6 +16,7 @@ export function CustomerDisplay() {
       if (event.data?.kind !== "sale" || !Array.isArray(event.data.items)) return;
       setSale(event.data); setStale(false);
     };
+    stream.postMessage({ kind: "request-current" });
     const interval = window.setInterval(() => setStale((prev) => prev ||
       (!!sale && Date.now() - sale.updatedAt > 30000)), 5000);
     return () => { clearInterval(interval); stream.close(); };

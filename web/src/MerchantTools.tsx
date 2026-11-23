@@ -317,8 +317,15 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         order?.paidPesewas ?? 0,
       orderStatus: activeOffline ? "LOCAL_UNRECONCILED" : order?.status ?? "OPEN",
       updatedAt: Date.now() };
-    channel.postMessage(update);
-    return () => channel.close();
+    const post = () => channel.postMessage({ ...update, updatedAt: Date.now() });
+    // The secondary screen might be opened after the cashier last touched the cart.
+    // Respond to an explicit request and periodically refresh status; never broadcast PII.
+    channel.onmessage = (event) => {
+      if (event.data?.kind === "request-current") post();
+    };
+    post();
+    const heartbeat = window.setInterval(post, 5000);
+    return () => { clearInterval(heartbeat); channel.close(); };
   }, [merchant.id, merchant.tradingName, cart, activeOffline, order, total]);
 
   const add = (row: CatalogRow) => setCart((c) => c.some((x) => x.row.variantId === row.variantId)
