@@ -78,7 +78,7 @@ public class MtnProductionRail implements PaymentRail {
             @Value("${elepay.rails.mtn.disbursement-key:}") String disbursementKey,
             @Value("${elepay.rails.mtn.disbursement-subscription:}") String disbursementSubscription) {
         this(json, health,
-                (baseUrl == null || baseUrl.isBlank()) ? URI.create("https://proxy.momoapi.mtn.com") : productionBase(baseUrl),
+                (baseUrl == null || baseUrl.isBlank()) ? null : productionBase(baseUrl),
                 new Credentials(collectionUser, collectionKey, collectionSubscription),
                 new Credentials(disbursementUser, disbursementKey, disbursementSubscription),
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
@@ -98,7 +98,7 @@ public class MtnProductionRail implements PaymentRail {
 
     public static URI productionBase(String url) {
         if (url == null || url.isBlank()) {
-            return URI.create("https://proxy.momoapi.mtn.com");
+            throw new IllegalStateException("RAIL_NOT_CONFIGURED: explicit production API origin required for MTN");
         }
         URI u = URI.create(url);
         if (!"https".equalsIgnoreCase(u.getScheme()) || u.getHost() == null
@@ -118,7 +118,7 @@ public class MtnProductionRail implements PaymentRail {
 
     public boolean isConfigured(String direction) {
         Credentials c = credentials(direction);
-        return c != null && c.isValid();
+        return base != null && c != null && c.isValid();
     }
 
     @Override public String name() { return "mtn"; }
@@ -144,7 +144,7 @@ public class MtnProductionRail implements PaymentRail {
         if (!supports("charge", request.channel(), request.network()))
             return new Result(Status.FAILED, null, request.amount(), request.currency(), null, null, "Unsupported destination");
         if (!isConfigured("charge"))
-            return Result.unavailable("MTN Mobile Money collection credentials not configured");
+            return Result.unavailable("RAIL_NOT_CONFIGURED: MTN Mobile Money collection credentials not configured");
         return submit("charge", request.reference(), request.amount(), request.currency(), request.msisdn());
     }
 
@@ -152,7 +152,7 @@ public class MtnProductionRail implements PaymentRail {
         if (!supports("payout", request.type(), request.network()))
             return new Result(Status.FAILED, null, request.amount(), request.currency(), null, null, "Unsupported destination");
         if (!isConfigured("payout"))
-            return Result.unavailable("MTN Mobile Money disbursement credentials not configured");
+            return Result.unavailable("RAIL_NOT_CONFIGURED: MTN Mobile Money disbursement credentials not configured");
         return submit("payout", request.reference(), request.amount(), request.currency(), request.accountNumber());
     }
 
