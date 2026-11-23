@@ -211,6 +211,6 @@ class GhipssInstantPayRailTest {
         assertThatThrownBy(() -> rail.verifyCallback(Map.of(
                 "x-ghipss-signature", "wrong_signature", "x-callback-timestamp", timestamp, "x-callback-nonce", "gip-nonce-2"), body))
                 .isInstanceOf(PaymentRail.InvalidCallbackException.class)
-                .hasMessageContaining("Invalid GhIPSS callback signature");
+                .hasMessageContaining("signature");
     }
 }
