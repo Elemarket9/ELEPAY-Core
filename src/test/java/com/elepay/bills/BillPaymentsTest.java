@@ -127,6 +127,7 @@ public class BillPaymentsTest extends PostgresTestBase {
         assertThat(livePostpaid.partnerReference()).isEqualTo("GW-POST-AUTH-1123");
 
         // 5. School and Tuition Fee Payments with Student ID Validation
+        db.sql("UPDATE student_fee_record SET paid_fee_pesewas = 250000, outstanding_fee_pesewas = 250000 WHERE student_id = '10982341'").update();
         var studentOpt = schoolFeeService.verifyStudent("UG_LEGON", "10982341");
         assertThat(studentOpt).isPresent();
         var student = studentOpt.get();
