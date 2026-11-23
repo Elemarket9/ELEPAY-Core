@@ -187,7 +187,7 @@ public class BalanceSnapshots {
         Sig sigMeta = db.sql("SELECT signature_version, signature_key_id FROM ledger_account_snapshot WHERE id = :id")
                 .param("id", snapshotId).query((rs, i) -> new Sig(rs.getInt(1), rs.getString(2))).single();
         Long cutoff = db.sql("SELECT entry_seq_cutoff FROM ledger_account_snapshot WHERE id = :id")
-                .param("id", snapshotId).query((rs, i) -> (Long) rs.getObject(1)).single();
+                .param("id", snapshotId).query((rs, i) -> (Long) rs.getObject(1)).optional().orElse(null);
         boolean sigMatch;
         if (sigMeta.version() == 3) {
             sigMatch = cutoff != null && keys.verifyMac(sigMeta.keyId(), canonicalV3(row.id(), row.accountId(),

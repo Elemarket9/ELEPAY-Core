@@ -209,3 +209,13 @@ Expanding ELEPAY into enterprise-grade embedded finance and multi-merchant comme
 | E4 | Enterprise Refunds & Withdrawals | `com.elepay.enterprise.refund`, `com.elepay.enterprise.payout` | Item-level refunds via JumiaPay connector, MoMo/bank refunds, wallet withdrawals to MTN MoMo with BoG limits | DONE (commit: 5299c38, V41 migration, 25/25 tests pass) |
 | E5 | Enterprise Settlement, Treasury & Connectors | `com.elepay.enterprise.settlement`, `com.elepay.enterprise.connectors` | Conditional release, missing delivery confirmations, safeguarded funds, SFTP/mTLS connector, 10-way recon | DONE (V42 migration, Jumia 17-step scenario verified, 53/53 tests pass) |
 
+### Phase C — Domestic Banking & Direct MoMo Rails, Fraud Intelligence & 10-Way Daily Clearing
+| Milestone | Name | Scope | Capabilities | Status |
+|---|---|---|---|---|
+| C1 | Direct Payment Rails | `com.elepay.rails` | MTN MoMo, Telecel Cash, AT Money, GhIPSS Instant Pay, dynamic GhQR, session logging | DONE (V43/V44 migrations, commits 7ea7cfc & 33fddaa, 28/28 tests pass) |
+| C2 | Real-Time Risk & Fraud Intelligence | `com.elepay.risk` | Multi-window velocity (1M-7D), Haversine geo-velocity, mule graph detection, promo abuse cycles | DONE (commits 7ea7cfc & 33fddaa, all tests pass) |
+| C3 | 10-Way Daily Clearing & Recon | `com.elepay.reconciliation` | SWIFT MT940 statement parser, 10-way multi-leg clearing, suspense ledger, maker-checker resolution | DONE (commits 7ea7cfc & 33fddaa, 50/50 tests pass) |
+
+Gate 4 Status: **PASS** (Certified Clean, Zero Ledger Drift, V43-V44 Applied)
+
+

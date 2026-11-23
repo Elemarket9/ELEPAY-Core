@@ -151,8 +151,9 @@ public class ElevyCalculationEngine {
             taxablePortion = amount;
         }
 
-        // Calculate 1.0% levy on taxable portion
-        long levyPesewas = Math.round((taxablePortion * ELEVY_RATE_BPS) / 10000.0);
+        // Calculate 1.0% levy on taxable portion using pure integer arithmetic
+        long rawProduct = taxablePortion * ELEVY_RATE_BPS;
+        long levyPesewas = (rawProduct / 10000L) + ((rawProduct % 10000L >= 5000L) ? 1L : 0L);
 
         // Update accumulator
         db.sql("""

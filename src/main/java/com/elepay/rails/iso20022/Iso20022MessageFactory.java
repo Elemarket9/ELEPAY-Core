@@ -99,6 +99,12 @@ public class Iso20022MessageFactory {
             throw ApiException.badRequest("empty_transfers", "pain.001 requires at least one transfer instruction");
         }
 
+        for (var tx : transfers) {
+            if (tx.amountPesewas() <= 0) {
+                throw ApiException.badRequest("invalid_amount", "Transfer amount must be positive");
+            }
+        }
+
         String msgId = "PAIN001-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
         OffsetDateTime now = OffsetDateTime.now();
         int nbOfTxs = transfers.size();
@@ -114,7 +120,7 @@ public class Iso20022MessageFactory {
         xml.append("      <CreDtTm>").append(now.format(ISO_DT)).append("</CreDtTm>\n");
         xml.append("      <NbOfTxs>").append(nbOfTxs).append("</NbOfTxs>\n");
         xml.append("      <CtrlSum>").append(ctrlSumMajor.toPlainString()).append("</CtrlSum>\n");
-        xml.append("      <InitgPty><Id><OrgId><AnyBIC>").append(initiatingPartyBic).append("</AnyBIC></OrgId></Id></InitgPty>\n");
+        xml.append("      <InitgPty><Id><OrgId><AnyBIC>").append(escapeXml(initiatingPartyBic)).append("</AnyBIC></OrgId></Id></InitgPty>\n");
         xml.append("    </GrpHdr>\n");
 
         for (var tx : transfers) {
@@ -126,7 +132,7 @@ public class Iso20022MessageFactory {
             xml.append("      <DbtrAcct><Id><Othr><Id>").append(escapeXml(tx.debtorAccount())).append("</Id></Othr></Id></DbtrAcct>\n");
             xml.append("      <CdtTrfTxInf>\n");
             xml.append("        <PmtId><EndToEndId>").append(escapeXml(tx.endToEndId())).append("</EndToEndId></PmtId>\n");
-            xml.append("        <Amt><InstdAmt Ccy=\"").append(tx.currency()).append("\">").append(amtMajor.toPlainString()).append("</InstdAmt></Amt>\n");
+            xml.append("        <Amt><InstdAmt Ccy=\"").append(escapeXml(tx.currency())).append("\">").append(amtMajor.toPlainString()).append("</InstdAmt></Amt>\n");
             xml.append("        <CdtrAgt><FinInstnId><BICFI>").append(escapeXml(tx.creditorBic())).append("</BICFI></FinInstnId></CdtrAgt>\n");
             xml.append("        <Cdtr><Nm>").append(escapeXml(tx.creditorName())).append("</Nm></Cdtr>\n");
             xml.append("        <CdtrAcct><Id><Othr><Id>").append(escapeXml(tx.creditorAccount())).append("</Id></Othr></Id></CdtrAcct>\n");

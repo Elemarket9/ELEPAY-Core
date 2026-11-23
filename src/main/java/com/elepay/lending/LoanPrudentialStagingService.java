@@ -20,10 +20,12 @@ public class LoanPrudentialStagingService {
 
     public enum PrudentialStage {
         STAGE_1_PERFORMING("PERFORMING", 0, 30, 100),            // 1.00% provision
-        STAGE_2_OLEM("WATCH", 31, 60, 500),                      // 5.00% provision
-        STAGE_3_SUBSTANDARD("SUBSTANDARD", 61, 90, 2000),         // 20.00% provision
-        STAGE_3_DOUBTFUL("DOUBTFUL", 91, 180, 5000),             // 50.00% provision
-        STAGE_3_LOSS("LOSS", 181, Integer.MAX_VALUE, 10000);     // 100.00% provision
+        STAGE_2_UNDERPERFORMING("UNDERPERFORMING", 31, 90, 2000), // 20.00% provision
+        STAGE_3_NON_PERFORMING("NON_PERFORMING", 91, Integer.MAX_VALUE, 5000), // 50.00% provision
+        STAGE_2_OLEM("WATCH", 31, 60, 500),
+        STAGE_3_SUBSTANDARD("SUBSTANDARD", 61, 90, 2000),
+        STAGE_3_DOUBTFUL("DOUBTFUL", 91, 180, 5000),
+        STAGE_3_LOSS("LOSS", 181, Integer.MAX_VALUE, 10000);
 
         private final String code;
         private final int minDpd;
@@ -44,10 +46,8 @@ public class LoanPrudentialStagingService {
 
         public static PrudentialStage fromDpd(int dpd) {
             if (dpd <= 30) return STAGE_1_PERFORMING;
-            if (dpd <= 60) return STAGE_2_OLEM;
-            if (dpd <= 90) return STAGE_3_SUBSTANDARD;
-            if (dpd <= 180) return STAGE_3_DOUBTFUL;
-            return STAGE_3_LOSS;
+            if (dpd <= 90) return STAGE_2_UNDERPERFORMING;
+            return STAGE_3_NON_PERFORMING;
         }
     }
 
@@ -133,7 +133,7 @@ public class LoanPrudentialStagingService {
             totalImpairment += impairment;
 
             if (stage == PrudentialStage.STAGE_1_PERFORMING) s1Count++;
-            else if (stage == PrudentialStage.STAGE_2_OLEM) s2Count++;
+            else if (stage == PrudentialStage.STAGE_2_UNDERPERFORMING || stage == PrudentialStage.STAGE_2_OLEM) s2Count++;
             else s3Count++;
 
             // Update contract delinquency state & DPD
@@ -159,7 +159,7 @@ public class LoanPrudentialStagingService {
 
             var posting = Ledger.Posting.of(
                     "lending_ecl",
-                    "ECL-RUN-" + date,
+                    "ECL-RUN-" + date + "-" + UUID.randomUUID().toString().substring(0, 8),
                     "PORTFOLIO_IMPAIRMENT",
                     List.of(
                             Ledger.Leg.debit(IMPAIRMENT_EXPENSE, totalImpairment),
