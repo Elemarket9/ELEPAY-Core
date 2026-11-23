@@ -249,6 +249,38 @@
         },
         "type" : "object"
       },
+      "BalanceSheetReport" : {
+        "properties" : {
+          "asOfDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "isBalanced" : {
+            "type" : "boolean"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "netIncomePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalAssetsPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalEquityPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalLiabilitiesPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "Balances" : {
         "properties" : {
           "available" : {
@@ -461,6 +493,55 @@
             "type" : "string"
           },
           "name" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CatalogRow" : {
+        "properties" : {
+          "barcode" : {
+            "type" : "string"
+          },
+          "categoryId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "categoryName" : {
+            "type" : "string"
+          },
+          "costPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "onHand" : {
+            "type" : "number"
+          },
+          "productId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "productName" : {
+            "type" : "string"
+          },
+          "reorderPoint" : {
+            "type" : "number"
+          },
+          "retailPricePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "trackInventory" : {
+            "type" : "boolean"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "variantName" : {
             "type" : "string"
           }
         },
@@ -728,6 +809,15 @@
         "required" : [ "confirmationId" ],
         "type" : "object"
       },
+      "ConvertRequest" : {
+        "properties" : {
+          "dueDate" : {
+            "format" : "date",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Corridor" : {
         "properties" : {
           "active" : {
@@ -943,6 +1033,27 @@
           "payerPhone" : {
             "maxLength" : 40,
             "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateCustomerRequest" : {
+        "properties" : {
+          "address" : {
+            "type" : "string"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "fullName" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "phone" : {
             "type" : "string"
           }
         },
@@ -1464,6 +1575,88 @@
         },
         "type" : "object"
       },
+      "CustomerProfile" : {
+        "properties" : {
+          "customerCode" : {
+            "type" : "string"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "fullName" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "loyaltyTier" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "phone" : {
+            "type" : "string"
+          },
+          "rfmSegment" : {
+            "type" : "string"
+          },
+          "totalSpendPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "transactionCount" : {
+            "format" : "int32",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "CustomerRow" : {
+        "properties" : {
+          "customerCode" : {
+            "type" : "string"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "fullName" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "lastPurchaseAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "loyaltyTier" : {
+            "type" : "string"
+          },
+          "phone" : {
+            "type" : "string"
+          },
+          "pointsBalance" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "rfmSegment" : {
+            "type" : "string"
+          },
+          "totalSpendPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "transactionCount" : {
+            "format" : "int32",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "Decoded" : {
         "properties" : {
           "additionalData" : {
@@ -1759,6 +1952,44 @@
         },
         "type" : "object"
       },
+      "DocumentRequest" : {
+        "properties" : {
+          "customerEmail" : {
+            "type" : "string"
+          },
+          "customerName" : {
+            "type" : "string"
+          },
+          "customerPhone" : {
+            "type" : "string"
+          },
+          "customerTin" : {
+            "type" : "string"
+          },
+          "dueDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "issueDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/Line"
+            },
+            "type" : "array"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "notes" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "DualReconItem" : {
         "properties" : {
           "destDiscrepancy" : {
@@ -1911,6 +2142,121 @@
             "type" : "string"
           },
           "source" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "EmployeeRecord" : {
+        "properties" : {
+          "allowancesPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "bankAccountNumber" : {
+            "type" : "string"
+          },
+          "bankCode" : {
+            "type" : "string"
+          },
+          "baseSalaryPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "employeeCode" : {
+            "type" : "string"
+          },
+          "employmentType" : {
+            "type" : "string"
+          },
+          "fullName" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "isActive" : {
+            "type" : "boolean"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "momoNetwork" : {
+            "type" : "string"
+          },
+          "momoNumber" : {
+            "type" : "string"
+          },
+          "nationalId" : {
+            "type" : "string"
+          },
+          "phone" : {
+            "type" : "string"
+          },
+          "reliefsPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "ssnitNumber" : {
+            "type" : "string"
+          },
+          "tier3VoluntaryRateBps" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "tin" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "EmployeeRequest" : {
+        "properties" : {
+          "allowancesPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "bankAccountNumber" : {
+            "type" : "string"
+          },
+          "bankCode" : {
+            "type" : "string"
+          },
+          "baseSalaryPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "employmentType" : {
+            "type" : "string"
+          },
+          "fullName" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "momoNetwork" : {
+            "type" : "string"
+          },
+          "momoNumber" : {
+            "type" : "string"
+          },
+          "phone" : {
+            "type" : "string"
+          },
+          "ssnitNumber" : {
+            "type" : "string"
+          },
+          "tin" : {
             "type" : "string"
           }
         },
@@ -2451,6 +2797,65 @@
             "type" : "object"
           },
           "unbalancedTransactions" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "InvoiceSummary" : {
+        "properties" : {
+          "currency" : {
+            "type" : "string"
+          },
+          "customerName" : {
+            "type" : "string"
+          },
+          "discountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "dueDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "graSdcReceiptNumber" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "invoiceNumber" : {
+            "type" : "string"
+          },
+          "issueDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "paidAmountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "paymentLinkUrl" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "subtotalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "taxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalPesewas" : {
             "format" : "int64",
             "type" : "integer"
           }
@@ -3759,6 +4164,19 @@
         },
         "type" : "object"
       },
+      "PaymentRequest" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "method" : {
+            "enum" : [ "CASH", "BANK", "MOMO" ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "PaymentResult" : {
         "properties" : {
           "attemptId" : {
@@ -3858,6 +4276,188 @@
         },
         "type" : "object"
       },
+      "PayoutSubmission" : {
+        "properties" : {
+          "payoutBatchReference" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PayrollRunRow" : {
+        "properties" : {
+          "approvedBy" : {
+            "type" : "string"
+          },
+          "executedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "initiatedBy" : {
+            "type" : "string"
+          },
+          "periodMonth" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "periodYear" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "totalGrossPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalNetPayPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalPayeTaxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "PayrollRunSummary" : {
+        "properties" : {
+          "approvedBy" : {
+            "type" : "string"
+          },
+          "executedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "initiatedBy" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "payslips" : {
+            "items" : {
+              "$ref" : "#/components/schemas/PayslipItem"
+            },
+            "type" : "array"
+          },
+          "periodMonth" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "periodYear" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "totalEmployeeSsnitPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalEmployerSsnitPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalGrossPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalNetPayPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalPayeTaxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalTier3Pesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "PayslipItem" : {
+        "properties" : {
+          "allowancesPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "baseSalaryPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "destinationAccount" : {
+            "type" : "string"
+          },
+          "employeeId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "employeeName" : {
+            "type" : "string"
+          },
+          "grossPayPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "netPayPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "payeTaxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "paymentMethod" : {
+            "type" : "string"
+          },
+          "paymentStatus" : {
+            "type" : "string"
+          },
+          "payoutReference" : {
+            "type" : "string"
+          },
+          "payrollRunId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "ssnitTier1EmployerPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "ssnitTier2Pesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "ssnitTier3VoluntaryPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "taxableIncomePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "PhoneChange" : {
         "properties" : {
           "phone" : {
@@ -3915,6 +4515,31 @@
             "type" : "integer"
           },
           "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "PointTransactionResult" : {
+        "properties" : {
+          "currentTier" : {
+            "enum" : [ "BRONZE", "SILVER", "GOLD", "PLATINUM" ],
+            "type" : "string"
+          },
+          "monetaryEquivalentPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "newPointsBalance" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "pointsDelta" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "transactionId" : {
             "format" : "uuid",
             "type" : "string"
           }
@@ -4304,6 +4929,43 @@
         },
         "type" : "object"
       },
+      "ProfitAndLossReport" : {
+        "properties" : {
+          "fromDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "grossProfitPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "netProfitPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "toDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "totalCogsPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalOperatingExpensePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalRevenuePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "Proposal" : {
         "properties" : {
           "actionType" : {
@@ -4494,6 +5156,15 @@
         },
         "type" : "object"
       },
+      "PurchaseRequest" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "QrDecodeRequest" : {
         "properties" : {
           "payload" : {
@@ -4504,6 +5175,44 @@
           },
           "qrPayload" : {
             "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "QuoteSummary" : {
+        "properties" : {
+          "convertedInvoiceId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "customerName" : {
+            "type" : "string"
+          },
+          "expiryDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "issueDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "quoteNumber" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "totalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
           }
         },
         "type" : "object"
@@ -4785,6 +5494,15 @@
         "required" : [ "lines", "period" ],
         "type" : "object"
       },
+      "RedeemRequest" : {
+        "properties" : {
+          "points" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "Refund" : {
         "properties" : {
           "amount" : {
@@ -4953,6 +5671,22 @@
             "type" : "string"
           },
           "region" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "ReorderPointRequest" : {
+        "properties" : {
+          "reorderPoint" : {
+            "type" : "number"
+          },
+          "variantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "warehouseId" : {
+            "format" : "uuid",
             "type" : "string"
           }
         },
@@ -5264,6 +5998,23 @@
           }
         },
         "required" : [ "mode" ],
+        "type" : "object"
+      },
+      "RunRequest" : {
+        "properties" : {
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "month" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "year" : {
+            "format" : "int32",
+            "type" : "integer"
+          }
+        },
         "type" : "object"
       },
       "SdkSnippet" : {
@@ -6047,6 +6798,63 @@
         },
         "type" : "object"
       },
+      "TrialBalanceLine" : {
+        "properties" : {
+          "accountCode" : {
+            "type" : "string"
+          },
+          "accountName" : {
+            "type" : "string"
+          },
+          "category" : {
+            "enum" : [ "ASSET", "LIABILITY", "EQUITY", "REVENUE", "COGS", "EXPENSE" ],
+            "type" : "string"
+          },
+          "creditBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "debitBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "normalBalance" : {
+            "enum" : [ "DEBIT", "CREDIT" ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "TrialBalanceReport" : {
+        "properties" : {
+          "asOfDate" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "isBalanced" : {
+            "type" : "boolean"
+          },
+          "lines" : {
+            "items" : {
+              "$ref" : "#/components/schemas/TrialBalanceLine"
+            },
+            "type" : "array"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "totalCreditPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalDebitPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
       "TrustAccountConfig" : {
         "properties" : {
           "accountCode" : {
@@ -6502,6 +7310,119 @@
   },
   "openapi" : "3.1.0",
   "paths" : {
+    "/v1/accounting/merchant/{merchantId}/balance-sheet" : {
+      "get" : {
+        "operationId" : "balanceSheet",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "asOf",
+          "required" : false,
+          "schema" : {
+            "format" : "date",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/BalanceSheetReport"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "accounting-controller" ]
+      }
+    },
+    "/v1/accounting/merchant/{merchantId}/profit-and-loss" : {
+      "get" : {
+        "operationId" : "profitAndLoss",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "from",
+          "required" : false,
+          "schema" : {
+            "format" : "date",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "to",
+          "required" : false,
+          "schema" : {
+            "format" : "date",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ProfitAndLossReport"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "accounting-controller" ]
+      }
+    },
+    "/v1/accounting/merchant/{merchantId}/trial-balance" : {
+      "get" : {
+        "operationId" : "trialBalance",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "asOf",
+          "required" : false,
+          "schema" : {
+            "format" : "date",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TrialBalanceReport"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "accounting-controller" ]
+      }
+    },
     "/v1/checkouts/{reference}/pay/wallet" : {
       "post" : {
         "operationId" : "payWithWallet",
@@ -6607,6 +7528,34 @@
         "tags" : [ "emtech-complaint-api" ]
       }
     },
+    "/v1/customers" : {
+      "post" : {
+        "operationId" : "create_1",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateCustomerRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/CustomerProfile"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "customer-controller" ]
+      }
+    },
     "/v1/customers/mandates" : {
       "get" : {
         "operationId" : "listCustomerMandates",
@@ -6687,6 +7636,110 @@
           }
         },
         "tags" : [ "mandate-service" ]
+      }
+    },
+    "/v1/customers/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "list_4",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/CustomerRow"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "customer-controller" ]
+      }
+    },
+    "/v1/customers/{customerId}/purchases" : {
+      "post" : {
+        "operationId" : "recordPurchase",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "customerId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PurchaseRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PointTransactionResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "customer-controller" ]
+      }
+    },
+    "/v1/customers/{customerId}/redeem" : {
+      "post" : {
+        "operationId" : "redeem",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "customerId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RedeemRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PointTransactionResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "customer-controller" ]
       }
     },
     "/v1/developer/merchants/{merchantId}/certifications" : {
@@ -7532,6 +8585,36 @@
         "tags" : [ "inventory-controller" ]
       }
     },
+    "/v1/inventory/catalog/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listCatalog",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/CatalogRow"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
     "/v1/inventory/categories" : {
       "post" : {
         "operationId" : "createCategory",
@@ -7551,6 +8634,36 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/Category"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/inventory/categories/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listCategories",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/Category"
+                  },
+                  "type" : "array"
                 }
               }
             },
@@ -7808,6 +8921,34 @@
         "tags" : [ "inventory-controller" ]
       }
     },
+    "/v1/inventory/stock/reorder-point" : {
+      "post" : {
+        "operationId" : "setReorderPoint",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ReorderPointRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Stock"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "inventory-controller" ]
+      }
+    },
     "/v1/inventory/suppliers" : {
       "post" : {
         "operationId" : "createSupplier",
@@ -8014,6 +9155,195 @@
           }
         },
         "tags" : [ "inventory-controller" ]
+      }
+    },
+    "/v1/invoicing/invoices" : {
+      "post" : {
+        "operationId" : "createInvoice",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/DocumentRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/InvoiceSummary"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "invoice-controller" ]
+      }
+    },
+    "/v1/invoicing/invoices/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listInvoices",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/InvoiceSummary"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "invoice-controller" ]
+      }
+    },
+    "/v1/invoicing/invoices/{invoiceId}/payments" : {
+      "post" : {
+        "operationId" : "recordPayment",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "invoiceId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PaymentRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/InvoiceSummary"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "invoice-controller" ]
+      }
+    },
+    "/v1/invoicing/quotes" : {
+      "post" : {
+        "operationId" : "createQuote",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/DocumentRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/QuoteSummary"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "invoice-controller" ]
+      }
+    },
+    "/v1/invoicing/quotes/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "listQuotes",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/QuoteSummary"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "invoice-controller" ]
+      }
+    },
+    "/v1/invoicing/quotes/{quoteId}/convert" : {
+      "post" : {
+        "operationId" : "convert",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "quoteId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ConvertRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/InvoiceSummary"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "invoice-controller" ]
       }
     },
     "/v1/merchants" : {
@@ -11305,7 +12635,7 @@
     },
     "/v1/ops/maker-checker/proposals/{id}/approve" : {
       "post" : {
-        "operationId" : "approve",
+        "operationId" : "approve_1",
         "parameters" : [ {
           "in" : "path",
           "name" : "id",
@@ -11758,7 +13088,7 @@
     },
     "/v1/ops/reconciliation/runs" : {
       "get" : {
-        "operationId" : "runs",
+        "operationId" : "runs_1",
         "responses" : {
           "200" : {
             "content" : {
@@ -11940,6 +13270,229 @@
           }
         },
         "tags" : [ "reconciliation-service" ]
+      }
+    },
+    "/v1/payroll/employees" : {
+      "post" : {
+        "operationId" : "addEmployee",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/EmployeeRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/EmployeeRecord"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payroll-controller" ]
+      }
+    },
+    "/v1/payroll/employees/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "employees",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/EmployeeRecord"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payroll-controller" ]
+      }
+    },
+    "/v1/payroll/runs" : {
+      "post" : {
+        "operationId" : "createRun",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PayrollRunSummary"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payroll-controller" ]
+      }
+    },
+    "/v1/payroll/runs/merchant/{merchantId}" : {
+      "get" : {
+        "operationId" : "runs",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/PayrollRunRow"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payroll-controller" ]
+      }
+    },
+    "/v1/payroll/runs/{runId}/approve" : {
+      "post" : {
+        "operationId" : "approve",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "runId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payroll-controller" ]
+      }
+    },
+    "/v1/payroll/runs/{runId}/payout" : {
+      "post" : {
+        "operationId" : "recordPayout",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "runId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PayoutSubmission"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PayrollRunSummary"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payroll-controller" ]
+      }
+    },
+    "/v1/payroll/runs/{runId}/payslips" : {
+      "get" : {
+        "operationId" : "payslips",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "runId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/PayslipItem"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payroll-controller" ]
+      }
+    },
+    "/v1/payroll/runs/{runId}/submit" : {
+      "post" : {
+        "operationId" : "submit",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "runId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "payroll-controller" ]
       }
     },
     "/v1/pos/carts/held/{cartId}/recall" : {
