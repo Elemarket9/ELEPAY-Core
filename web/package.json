@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
-    "test": "vitest run"
+    "test": "vitest run && node --test ../scripts/lan-edge.test.mjs"
   },
   "dependencies": {
     "oidc-client-ts": "^3.1.0",

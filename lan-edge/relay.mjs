@@ -1,5 +1,6 @@
 import https from "node:https";
 import fs from "node:fs";
+import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
@@ -25,7 +26,7 @@ export class LanOrderJournal {
     this.listeners = new Set();
     this.sequence = 0;
     this.lastHash = "GENESIS";
-    fs.mkdirSync(fileURLToPath(new URL(".", "file://" + (filename.startsWith("/") ? "" : "/") + filename)), { recursive: true });
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
     if (!fs.existsSync(filename)) fs.writeFileSync(filename, "", { flag: "wx", mode: 0o600 });
     const raw = fs.readFileSync(filename, "utf8");
     if (raw && !raw.endsWith("\n"))
@@ -43,7 +44,7 @@ export class LanOrderJournal {
   }
 
   append(kind, data) {
-    const body = { seq: this.sequence + 1, previous: this.lastHash, kind, data };
+    const body = { seq: this.sequence + 1, previous: this.lastHash, kind, data, at: new Date().toISOString() };
     const event = { ...body, digest: hash(JSON.stringify(body)) };
     const fd = fs.openSync(this.filename, "a", 0o600);
     try { fs.writeSync(fd, JSON.stringify(event) + "\n"); fs.fsyncSync(fd); }
@@ -57,7 +58,7 @@ export class LanOrderJournal {
     if (event.kind === "ORDER") {
       this.rows.set(event.data.offlineTxId, {
         payload: event.data, digest: hash(JSON.stringify(event.data)), status: "NEW",
-        actions: {}, serverOrderId: null, createdAt: new Date().toISOString(),
+        actions: {}, serverOrderId: null, createdAt: event.at,
       });
     } else if (event.kind === "ADVANCE") {
       const row = this.rows.get(event.data.id);
