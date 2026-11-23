@@ -143,7 +143,7 @@ public class InvoiceAndQuoteService {
     }
 
     /**
-     * Creates a customer invoice, generates an embedded payment link, signs with GRA e-VAT, and posts to GL.
+     * Creates a customer invoice, generates an embedded payment link, and posts to GL. No GRA API is connected.
      */
     @Transactional
     public InvoiceSummary createInvoice(CreateInvoiceCommand cmd) {

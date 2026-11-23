@@ -10,14 +10,14 @@ ELEPAY is a Ghana-first, full-service fintech with its own customer wallets, mer
 | --- | --- |
 | Individuals | An ELEPAY wallet for receiving, keeping, sending and spending funds, with top-ups and withdrawals through supported channels. Customers can also pay a merchant directly using supported MoMo or card methods. |
 | Independent merchants | Payment links, QR codes, merchant codes and checkout integrations. A merchant dashboard shows sales, fees, refunds, pending funds, available balances and withdrawals. Branch and cashier permissions limit who can collect, refund or withdraw. |
-| Marketplaces | A single checkout across multiple merchants, per-seller accounting, delivery allocations, order-level and item-level refund support, settlement reports and developer APIs. ELEMARKET and ELESEND are intended early integrations. |
+| Marketplaces | A single checkout across multiple merchants, per-seller accounting, delivery allocations, order-level and item-level refund support, settlement reports and developer APIs. All integrations are provider-neutral and use platform-supplied order and allocation references. |
 | Operations teams | Tools to review onboarding, investigate disputed payments, manage limits and fees, reconcile provider statements, and audit sensitive actions. |
 
 ## Platform payouts and banking
 
-ELEPAY should support earnings payouts for ride-hailing and delivery platforms such as Bolt and Yango, and creator platforms such as X and TikTok. These are target integrations. Each platform connection requires a supported payout interface and has its own countries, currencies and eligible destinations.
+ELEPAY may support domestic Ghana earnings payouts for approved external platforms through a provider-neutral payout interface. Each integration requires verified payout rights and an authorized domestic recipient.
 
-Support two payout flows. Platforms that integrate directly can send single or batch payouts to recipients. Drivers and creators can also receive earnings through an eligible bank account or other payout destination that their platform supports and that ELEPAY can connect to. Track an incoming payout using a confirmed provider or bank reference before making the funds available.
+Support two payout flows. Platforms that integrate directly can send single or batch payouts to recipients. Authorized recipients can receive Ghana domestic payouts through an eligible bank or MoMo account that ELEPAY can connect to. Track an incoming payout using a confirmed provider or bank reference before making the funds available.
 
 Support Ghanaian bank accounts for verified payout destinations, bank-to-wallet funding where supported, wallet-to-bank withdrawals, and merchant settlements. Use bank or payment-provider adapters so ELEPAY can add institutions without changing the ledger. Treat foreign-currency earnings as a separate flow with explicit currency, conversion rate, fees and settlement amounts wherever the provider supports conversion.
 
@@ -31,7 +31,7 @@ ELEPAY may accept foreign-issued payment cards and collect payments in supported
 
 ## Payment processing and network connections
 
-ELEPAY operates customer and merchant accounts, checkout and payment APIs, payment processing, wallets, the authoritative ledger, refunds, disputes, payout instructions, reconciliation and settlement reporting. ELEPAY processes internal wallet transfers and wallet-funded merchant payments on its own ledger. Its multi-merchant checkout allocates one payment across sellers, delivery partners and fees, with traceable settlement and refunds for each allocation. Connect through the interfaces available to ELEPAY for banks, mobile-money operators, card acquiring partners or processors, and international remittance partners.
+ELEPAY operates customer and merchant accounts, checkout and payment APIs, payment processing, wallets, the authoritative ledger, refunds, disputes, payout instructions, reconciliation and settlement reporting. ELEPAY processes internal wallet transfers and wallet-funded merchant payments on its own ledger. Its multi-merchant checkout allocates one payment across sellers, delivery partners and fees, with traceable settlement and refunds for each allocation. Connect through the interfaces available to ELEPAY for banks, mobile-money operators, card acquiring partners or processors, and FX conversion partners for domestic merchant settlement.
 
 Implementation should prioritize the bank, mobile-money and acquiring connections ELEPAY can obtain. Paystack and Hubtel are outside the required processing path. Keep network adapters independent so a new connection can be added without moving merchant balances or changing checkout rules.
 
@@ -41,7 +41,7 @@ Platforms can integrate ELEPAY into their own order lifecycle. An authenticated 
 
 Provide signed webhooks for payment, refund, payout and settlement events. Use stable event IDs, retry delivery and expose a status API so integrations can recover missed events. Require idempotency keys for financial requests and scope credentials to authorized merchants and actions. Keep authorization of customer funds explicit. For recurring or off-session payments, require a valid customer mandate supported by the payment method.
 
-An ELEMARKET order can create one ELEPAY payment order covering several sellers and ELESEND delivery. ELEPAY confirms the payment and reports each allocation. The marketplace uses that confirmation to release the order for fulfillment and can later refund one seller's item through the API.
+A marketplace can create one ELEPAY payment order covering several sellers and separately contracted financial allocations. ELEPAY confirms the payment and reports each allocation. The marketplace uses that confirmation to release the order for fulfillment and can later refund one seller's item through the API.
 
 ### Withdrawal requests through the API
 
@@ -69,7 +69,7 @@ Merchant proceeds can move through pending, available and paid-out states. Walle
 
 ## Domestic transfer and withdrawal pricing
 
-Starter has no monthly subscription. The Business subscription is GH₵200 per month. Both plans carry zero ELEPAY fees for internal wallet transfers, domestic transfers to bank or MoMo, and withdrawals to verified accounts. Merchant checkout fees and international transfer and FX pricing are governed by their own rules.
+Starter has no monthly subscription. The Business subscription is GH₵200 per month. Both plans carry zero ELEPAY fees for internal wallet transfers, domestic transfers to bank or MoMo, and withdrawals to verified accounts. Merchant checkout and FX conversion pricing are governed by their own rules.
 
 ## Access and affordability
 
@@ -86,3 +86,7 @@ The product uses scoped roles, merchant isolation and audited operations. Spring
 The repository contains a sandbox for simulated wallet funding, multi-recipient checkout, partial refunds, withdrawals and payment intent confirmation or cancellation. It records terminal payment events in a PostgreSQL outbox. The Java build and full PostgreSQL smoke run were still unverified at the time of this specification.
 
 The live product still requires merchant onboarding and authorization, provider integrations, provider and bank reconciliation, settlement operations, outbox delivery, customer checkout, merchant and admin dashboards, mobile apps, and partner-supported USSD. A staged live pilot requires verified financial and operational controls.
+
+## Verified integration boundaries (as of November 23, 2026)
+
+**Live bank, MoMo, card networks: NOT YET CONNECTED. Local testing uses sandbox/test fixtures only.** ELEPAY must not originate international recipient payouts or remittances, issue government submission confirmations without verifiable real agency acknowledgment, or charge Ghana's repealed E-Levy. Retail inventory, warehouse, purchasing, marketing, CRM, gift cards, and restaurant operations are outside ELEPAY's scope. Platform-supplied receipt or order references are financial evidence, not authority for ELEPAY to manage fulfillment.
