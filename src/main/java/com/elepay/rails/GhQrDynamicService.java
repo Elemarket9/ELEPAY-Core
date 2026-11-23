@@ -129,14 +129,14 @@ public class GhQrDynamicService {
             return new QrValidationResult(false, null, null, null, null, "Payload too short");
         }
 
-        int crcIndex = rawPayload.lastIndexOf(EmvcoQr.TAG_CRC);
-        if (crcIndex < 0 || crcIndex + 8 != rawPayload.length()) {
+        if (!rawPayload.regionMatches(true, rawPayload.length() - 8, "6304", 0, 4)) {
             return new QrValidationResult(false, null, null, null, null, "Malformed CRC-16 block");
         }
 
-        String dataWithoutCrcVal = rawPayload.substring(0, crcIndex + 4);
+        int crcIndex = rawPayload.length() - 8;
+        String dataWithoutCrcVal = rawPayload.substring(0, rawPayload.length() - 4);
         String expectedCrc = EmvcoQr.calculateCrc(dataWithoutCrcVal);
-        String actualCrc = rawPayload.substring(crcIndex + 4);
+        String actualCrc = rawPayload.substring(rawPayload.length() - 4);
 
         if (!expectedCrc.equalsIgnoreCase(actualCrc)) {
             return new QrValidationResult(false, null, null, null, null, "Invalid CRC-16 checksum");

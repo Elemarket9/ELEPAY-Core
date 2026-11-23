@@ -174,14 +174,18 @@ public class ReconSuspenseService {
 
         OffsetDateTime now = OffsetDateTime.now();
 
-        // If target adjustment account provided, clear suspense in Ledger
-        if (targetAdjustmentAccount != null && !targetAdjustmentAccount.isBlank()) {
-            ledger.openSystem(targetAdjustmentAccount, "clearing", record.currency(), true);
-            long absVariance = Math.abs(record.variancePesewas());
+        // Always clear suspense balance in Double-Entry Ledger to prevent un-cleared ledger drift
+        String targetAccount = (targetAdjustmentAccount != null && !targetAdjustmentAccount.isBlank())
+                ? targetAdjustmentAccount
+                : "system:clearing:recon_resolution:" + record.currency();
 
+        ledger.openSystem(targetAccount, "clearing", record.currency(), true);
+        long absVariance = Math.abs(record.variancePesewas());
+
+        if (absVariance > 0) {
             var legs = (record.variancePesewas() > 0)
-                    ? List.of(Ledger.Leg.debit(targetAdjustmentAccount, absVariance), Ledger.Leg.credit(record.suspenseAccountCode(), absVariance))
-                    : List.of(Ledger.Leg.debit(record.suspenseAccountCode(), absVariance), Ledger.Leg.credit(targetAdjustmentAccount, absVariance));
+                    ? List.of(Ledger.Leg.debit(targetAccount, absVariance), Ledger.Leg.credit(record.suspenseAccountCode(), absVariance))
+                    : List.of(Ledger.Leg.debit(record.suspenseAccountCode(), absVariance), Ledger.Leg.credit(targetAccount, absVariance));
 
             ledger.post(Ledger.Posting.of(
                     "recon_resolution",

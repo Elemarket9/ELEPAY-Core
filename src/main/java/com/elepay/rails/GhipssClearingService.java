@@ -129,6 +129,19 @@ public class GhipssClearingService {
         String sessionId = "GIP-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
         String stan = generateStan();
         String rrn = generateRrn();
+
+        // Enforce deduplication: ensure RRN and STAN pair is unique
+        int retries = 0;
+        while (retries < 5 && db.sql("SELECT COUNT(*) FROM ghipss_clearing_record WHERE rrn = :rrn AND stan = :stan")
+                .param("rrn", rrn)
+                .param("stan", stan)
+                .query(Long.class)
+                .single() > 0) {
+            stan = generateStan();
+            rrn = generateRrn();
+            retries++;
+        }
+
         String clearingCycle = determineCurrentClearingCycle();
         String mti = (isoMessageType != null && !isoMessageType.isBlank()) ? isoMessageType : "pacs.008";
         String curr = (currency != null && !currency.isBlank()) ? currency : "GHS";

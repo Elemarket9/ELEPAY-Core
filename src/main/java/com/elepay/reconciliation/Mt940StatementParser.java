@@ -140,7 +140,6 @@ public class Mt940StatementParser {
                     statementLines.add(currentLine);
                 } else {
                     // Fallback lenient parser for simpler lines
-                    lineCounter++;
                     LocalDate valDate = LocalDate.now();
                     currentLine = new StatementLine(
                             lineCounter, valDate, valDate, "C", 0L, "MSC", null, "LINE-" + lineCounter, val
@@ -273,7 +272,7 @@ public class Mt940StatementParser {
     private long parseAmountPesewas(String amtStr) {
         if (amtStr == null) return 0L;
         String normalized = amtStr.replace(',', '.').trim();
-        return new BigDecimal(normalized).multiply(BigDecimal.valueOf(100)).longValueExact();
+        return new java.math.BigDecimal(normalized).multiply(java.math.BigDecimal.valueOf(100)).setScale(0, java.math.RoundingMode.HALF_UP).longValue();
     }
 
     private String calculateSha256(String input) {

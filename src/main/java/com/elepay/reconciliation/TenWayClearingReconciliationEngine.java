@@ -90,43 +90,60 @@ public class TenWayClearingReconciliationEngine {
         long totalVariance = 0L;
 
         for (var line : statementLines) {
-            String searchRef = (line.bankRef != null && !line.bankRef.isBlank()) ? line.bankRef : line.custRef;
-            if (searchRef == null) searchRef = "";
+            String rawRef = (line.bankRef != null && !line.bankRef.isBlank()) ? line.bankRef : line.custRef;
+            String searchRef = (rawRef != null) ? rawRef.trim() : "";
 
-            // 1. Search for corresponding Direct Carrier Session
-            var carrierOpt = db.sql("""
-                SELECT id, amount_pesewas FROM direct_carrier_session
-                WHERE reference_id = :ref OR external_transaction_id = :ref
-                ORDER BY created_at DESC LIMIT 1
-            """)
-                    .param("ref", searchRef)
-                    .query((rs, rowNum) -> new Object() {
-                        UUID id = rs.getObject("id", UUID.class);
-                        long amount = rs.getLong("amount_pesewas");
-                    })
-                    .optional();
+            // 1. Search for corresponding Direct Carrier Session (guard against blank search)
+            UUID railSessionId = null;
+            Long railAmount = null;
 
-            // 2. Search for corresponding Double-Entry Ledger Transaction
-            var ledgerOpt = db.sql("""
-                SELECT jt.id, jt.idempotency_key, COALESCE(ABS(je.amount), 0) AS leg_amount
-                FROM journal_transaction jt
-                LEFT JOIN journal_entry je ON je.transaction_id = jt.id AND je.amount > 0
-                WHERE jt.idempotency_key = :ref OR jt.idempotency_key LIKE :refPattern OR jt.description LIKE :descPattern
-                ORDER BY jt.posted_at DESC LIMIT 1
-            """)
-                    .param("ref", searchRef)
-                    .param("refPattern", "%" + searchRef + "%")
-                    .param("descPattern", "%" + searchRef + "%")
-                    .query((rs, rowNum) -> new Object() {
-                        UUID id = rs.getObject("id", UUID.class);
-                        long amount = rs.getLong("leg_amount");
-                    })
-                    .optional();
+            if (!searchRef.isBlank()) {
+                var carrierOpt = db.sql("""
+                    SELECT id, amount_pesewas FROM direct_carrier_session
+                    WHERE reference_id = :ref OR external_transaction_id = :ref
+                    ORDER BY created_at DESC LIMIT 1
+                """)
+                        .param("ref", searchRef)
+                        .query((rs, rowNum) -> new Object() {
+                            UUID id = rs.getObject("id", UUID.class);
+                            long amount = rs.getLong("amount_pesewas");
+                        })
+                        .optional();
 
-            UUID railSessionId = carrierOpt.map(c -> c.id).orElse(null);
-            Long railAmount = carrierOpt.map(c -> c.amount).orElse(null);
-            UUID ledgerTxId = ledgerOpt.map(l -> l.id).orElse(null);
-            Long ledgerAmount = ledgerOpt.map(l -> l.amount).orElse(null);
+                if (carrierOpt.isPresent()) {
+                    railSessionId = carrierOpt.get().id;
+                    railAmount = carrierOpt.get().amount;
+                }
+            }
+
+            // 2. Search for corresponding Double-Entry Ledger Transaction (aggregate all positive legs)
+            UUID ledgerTxId = null;
+            Long ledgerAmount = null;
+
+            if (!searchRef.isBlank()) {
+                var ledgerOpt = db.sql("""
+                    SELECT jt.id, jt.idempotency_key, COALESCE(SUM(je.amount), 0) AS total_amount
+                    FROM journal_transaction jt
+                    JOIN journal_entry je ON je.transaction_id = jt.id AND je.amount > 0
+                    WHERE jt.idempotency_key = :ref OR jt.idempotency_key LIKE :refPattern OR jt.description LIKE :descPattern
+                    GROUP BY jt.id, jt.idempotency_key, jt.posted_at
+                    ORDER BY jt.posted_at DESC LIMIT 1
+                """)
+                        .param("ref", searchRef)
+                        .param("refPattern", "%" + searchRef + "%")
+                        .param("descPattern", "%" + searchRef + "%")
+                        .query((rs, rowNum) -> new Object() {
+                            UUID id = rs.getObject("id", UUID.class);
+                            long amount = rs.getLong("total_amount");
+                        })
+                        .optional();
+
+                if (ledgerOpt.isPresent()) {
+                    ledgerTxId = ledgerOpt.get().id;
+                    ledgerAmount = ledgerOpt.get().amount;
+                }
+            }
+
             Long bankAmount = line.amount;
 
             MatchType matchType;

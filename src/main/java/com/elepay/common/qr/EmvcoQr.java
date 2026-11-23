@@ -81,7 +81,7 @@ public final class EmvcoQr {
             }
             int valStart = index + 4;
             int valEnd = valStart + len;
-            if (valEnd > raw.length()) {
+            if (len < 0 || valEnd > raw.length()) {
                 break;
             }
             String value = raw.substring(valStart, valEnd);

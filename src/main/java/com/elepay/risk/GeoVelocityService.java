@@ -94,7 +94,8 @@ public class GeoVelocityService {
                 ))
                 .optional();
 
-        // Record current location
+        // Record current location to risk_geo_locations
+        UUID locationId = UUID.randomUUID();
         db.sql("""
             INSERT INTO risk_geo_locations (
                 id, actor_id, reference_id, latitude, longitude,
@@ -104,7 +105,7 @@ public class GeoVelocityService {
                 :acc, :city, :country, :ip, :isVpn, :now
             )
         """)
-                .param("id", UUID.randomUUID())
+                .param("id", locationId)
                 .param("actorId", actorId)
                 .param("refId", referenceId)
                 .param("lat", currentLocation.latitude())
@@ -114,6 +115,27 @@ public class GeoVelocityService {
                 .param("country", currentLocation.country())
                 .param("ip", currentLocation.ipAddress())
                 .param("isVpn", currentLocation.isVpn())
+                .param("now", now)
+                .update();
+
+        // Also record to V43 geo_velocity_checkpoint for unified state
+        String countryCode = currentLocation.country() != null && currentLocation.country().length() <= 2
+                ? currentLocation.country()
+                : "GH";
+        db.sql("""
+            INSERT INTO geo_velocity_checkpoint (
+                id, entity_id, latitude, longitude, ip_address, city, country_code, recorded_at, created_at
+            ) VALUES (
+                :id, :entityId, :lat, :lon, :ip, :city, :country, :now, now()
+            )
+        """)
+                .param("id", UUID.randomUUID())
+                .param("entityId", actorId.toString())
+                .param("lat", currentLocation.latitude())
+                .param("lon", currentLocation.longitude())
+                .param("ip", currentLocation.ipAddress())
+                .param("city", currentLocation.city())
+                .param("country", countryCode)
                 .param("now", now)
                 .update();
 
