@@ -3,6 +3,7 @@ package com.elepay.checkout;
 import com.elepay.common.ApiException;
 import com.elepay.common.Idempotency;
 import com.elepay.merchant.MerchantAccess;
+import com.elepay.operations.EmtechCapture;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -18,13 +19,15 @@ public class CheckoutChannel {
     private final MerchantAccess merchants;
     private final Idempotency idempotency;
     private final TransactionTemplate tx;
+    private final EmtechCapture regulatory;
 
     CheckoutChannel(CheckoutService checkouts, MerchantAccess merchants, Idempotency idempotency,
-                    PlatformTransactionManager tm) {
+                    PlatformTransactionManager tm, EmtechCapture regulatory) {
         this.checkouts = checkouts;
         this.merchants = merchants;
         this.idempotency = idempotency;
         this.tx = new TransactionTemplate(tm);
+        this.regulatory = regulatory;
     }
 
     public record Payment(String reference, String merchant, long subtotal, long fee, long total, String status) {}
@@ -46,6 +49,9 @@ public class CheckoutChannel {
                     var c = checkouts.create(merchant.id(), null, null,
                             List.of(new CheckoutService.AllocationRequest(merchant.id(), "sale", amount, "USSD payment")),
                             "USSD payment", 15, channelSubject);
+                    checkouts.noteChannel(c.reference(), "MOBILE_USSD");
+                    // The USSD gateway address is not the customer's location.
+                    regulatory.rememberCheckout(c.id(), null);
                     var paid = checkouts.payWithWallet(c.reference(), customer);
                     return new Payment(c.reference(), merchant.tradingName(), paid.subtotal(), paid.fee(), paid.total(), paid.status());
                 }));

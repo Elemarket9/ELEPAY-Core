@@ -1,6 +1,7 @@
 package com.elepay.merchanttools.pos;
 
 import com.elepay.common.ApiException;
+import com.elepay.emtech.DeviceEvents;
 import com.elepay.common.Idempotency;
 import com.elepay.merchanttools.MerchantToolAccess;
 import static com.elepay.merchanttools.MerchantToolAccess.Resource.*;
@@ -22,6 +23,7 @@ public class PosController {
     private final PosSplitBillService splitBillService;
     private final PosReceiptService receiptService;
     private final PosOfflineSyncService syncService;
+    private final DeviceEvents deviceEvents;
 
     public PosController(
             MerchantToolAccess access,
@@ -31,7 +33,8 @@ public class PosController {
             PosOrderService orderService,
             PosSplitBillService splitBillService,
             PosReceiptService receiptService,
-            PosOfflineSyncService syncService
+            PosOfflineSyncService syncService,
+            DeviceEvents deviceEvents
     ) {
         this.access = access;
         this.idempotency = idempotency;
@@ -41,16 +44,40 @@ public class PosController {
         this.splitBillService = splitBillService;
         this.receiptService = receiptService;
         this.syncService = syncService;
+        this.deviceEvents = deviceEvents;
     }
 
     // Terminal endpoints
-    public record RegisterTerminalRequest(UUID merchantId, UUID branchId, String serialNumber, String model) {}
+    public record RegisterTerminalRequest(UUID merchantId, UUID branchId, String serialNumber, String model,
+                                          String city, String region, String country, String address, String location,
+                                          String latitude, String longitude, String connectionType, String manufacturer,
+                                          Integer manufactureYear, String deviceName, String deviceDescription) {}
 
     @PostMapping("/terminals/register")
     public PosTerminalService.PosTerminal registerTerminal(@RequestBody RegisterTerminalRequest req) {
         access.manage(req.merchantId());
         access.branch(req.merchantId(), req.branchId());
-        return terminalService.registerTerminal(req.merchantId(), req.branchId(), req.serialNumber(), req.model());
+        return terminalService.registerTerminal(req.merchantId(), req.branchId(), req.serialNumber(), req.model(),
+                new PosTerminalService.RegulatoryProfile(req.city(), req.region(), req.country(), req.address(),
+                        req.location(), req.latitude(), req.longitude(), req.connectionType(), req.manufacturer(),
+                        req.manufactureYear(), req.deviceName(), req.deviceDescription()));
+    }
+
+    public record DeviceEventRequest(String health, String status, String description) {}
+
+    @PostMapping("/terminals/{terminalId}/events")
+    public DeviceEvents.Event terminalEvent(@PathVariable UUID terminalId, @RequestBody DeviceEventRequest req) {
+        access.manage(com.elepay.merchanttools.MerchantToolAccess.Resource.TERMINAL, terminalId);
+        var terminal = terminalService.getTerminal(terminalId).orElseThrow(() -> ApiException.notFound("Terminal not found"));
+        return deviceEvents.record(terminalId, null, terminal.id().toString(), req.health(), req.status(),
+                req.description(), null);
+    }
+
+    @PutMapping("/terminals/{terminalId}/regulatory")
+    public PosTerminalService.PosTerminal saveRegulatory(@PathVariable UUID terminalId,
+                                                         @RequestBody PosTerminalService.RegulatoryProfile profile) {
+        access.manage(com.elepay.merchanttools.MerchantToolAccess.Resource.TERMINAL, terminalId);
+        return terminalService.saveRegulatory(terminalId, profile);
     }
 
     public record PairTerminalRequest(String serialNumber, String pairingCode, String hardwareFingerprint) {}

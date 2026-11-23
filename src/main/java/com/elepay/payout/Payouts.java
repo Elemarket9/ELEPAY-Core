@@ -6,6 +6,7 @@ import com.elepay.common.OpsQueue;
 import com.elepay.common.References;
 import com.elepay.ledger.Ledger;
 import com.elepay.ledger.Ledger.Leg;
+import com.elepay.operations.EmtechCapture;
 import com.elepay.outbox.Outbox;
 import com.elepay.rails.NameVerifications;
 import com.elepay.rails.RailEvents;
@@ -45,12 +46,15 @@ public class Payouts {
     private final PayoutVelocityService velocityService;
 
     private final org.springframework.context.ApplicationEventPublisher events;
+    private final EmtechCapture regulatory;
 
     Payouts(JdbcClient db, Ledger ledger, RailTransactions rails, NameVerifications verifications, Outbox outbox,
             Audit audit, OpsQueue ops, ObjectMapper json, org.springframework.context.ApplicationEventPublisher events,
+            EmtechCapture regulatory,
             @org.springframework.beans.factory.annotation.Autowired(required = false) com.elepay.identity.KillSwitchService killSwitchService,
             @org.springframework.beans.factory.annotation.Autowired(required = false) PayoutVelocityService velocityService) {
         this.events = events;
+        this.regulatory = regulatory;
         this.db = db;
         this.ledger = ledger;
         this.rails = rails;
@@ -292,6 +296,7 @@ public class Payouts {
         db.sql("UPDATE payout SET status = 'succeeded', completion_tx = :tx, completed_at = now() WHERE id = :id")
                 .param("tx", posted.transactionId()).param("id", p.id()).update();
         publish(p, "payout.succeeded", null);
+        regulatory.payout(p.id());
     }
 
     @EventListener
@@ -305,6 +310,7 @@ public class Payouts {
         db.sql("UPDATE payout SET status = 'failed', completion_tx = :tx, completed_at = now(), failure_reason = :r WHERE id = :id")
                 .param("tx", posted.transactionId()).param("r", event.reason()).param("id", p.id()).update();
         publish(p, "payout.failed", event.reason());
+        regulatory.payout(p.id());
     }
 
     @EventListener
@@ -323,6 +329,7 @@ public class Payouts {
         ops.raise("payout_returned", "medium", "payout:" + p.reference(), Map.of("amount", p.amount(),
                 "reason", String.valueOf(event.reason()), "note", "Funds are back in the owner's available balance"));
         publish(p, "payout.returned", event.reason());
+        regulatory.payout(p.id());
     }
 
     private void publish(Locked p, String type, String reason) {

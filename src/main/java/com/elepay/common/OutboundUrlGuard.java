@@ -34,7 +34,8 @@ public class OutboundUrlGuard {
             "openapi.at.com.gh",
             "gip.ghipss.com",
             "api.ghipss.com",
-            "switch.ghipss.com"
+            "switch.ghipss.com",
+            "api.emtech.com"
     );
 
     private final boolean allowHttp;
@@ -51,7 +52,7 @@ public class OutboundUrlGuard {
             @Value("${elepay.outbound.allow-http:false}") boolean allowHttp,
             @Value("${elepay.outbound.allow-private-hosts:false}") boolean allowPrivateHosts,
             @Value("${elepay.outbound.strict-allowlist-enabled:false}") boolean strictAllowlistEnabled,
-            @Value("${elepay.outbound.allowed-hosts:custodian.gcb.com.gh,custodian.ecobank.com.gh,custodian.stanbic.com.gh,proxy.momoapi.mtn.com,momoapi.momo.africa,api.telecelcash.com.gh,openapi.telecel.com.gh,api.airteltigomoney.com.gh,openapi.at.com.gh,gip.ghipss.com,api.ghipss.com,switch.ghipss.com}") Set<String> allowedHosts
+            @Value("${elepay.outbound.allowed-hosts:custodian.gcb.com.gh,custodian.ecobank.com.gh,custodian.stanbic.com.gh,proxy.momoapi.mtn.com,momoapi.momo.africa,api.telecelcash.com.gh,openapi.telecel.com.gh,api.airteltigomoney.com.gh,openapi.at.com.gh,gip.ghipss.com,api.ghipss.com,switch.ghipss.com,api.emtech.com}") Set<String> allowedHosts
     ) {
         this.allowHttp = allowHttp;
         this.allowPrivateHosts = allowPrivateHosts;

@@ -5,6 +5,7 @@ import com.elepay.common.Audit;
 import com.elepay.common.Idempotency;
 import com.elepay.common.References;
 import com.elepay.identity.Actor;
+import com.elepay.operations.EmtechCapture;
 import com.elepay.ledger.Ledger;
 import com.elepay.outbox.Outbox;
 import jakarta.validation.Valid;
@@ -18,6 +19,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -32,19 +34,27 @@ public class Wallets {
     private final Audit audit;
     private final TransferLimits limits;
     private final Outbox outbox;
+    private final EmtechCapture regulatory;
 
-    Wallets(JdbcClient db, Ledger ledger, Idempotency idempotency, Audit audit, TransferLimits limits, Outbox outbox) {
+    Wallets(JdbcClient db, Ledger ledger, Idempotency idempotency, Audit audit, TransferLimits limits, Outbox outbox,
+            EmtechCapture regulatory) {
         this.db = db;
         this.ledger = ledger;
         this.idempotency = idempotency;
         this.audit = audit;
         this.limits = limits;
         this.outbox = outbox;
+        this.regulatory = regulatory;
     }
 
     public record Enrollment(@NotBlank @Size(max = 255) String subject,
                              @NotBlank @Size(max = 40) String phone,
                              @NotBlank @Size(max = 150) String displayName) {}
+
+    public record Locality(@NotBlank @Size(max = 80) String city,
+                           @Size(max = 10) String region,
+                           @NotBlank @jakarta.validation.constraints.Pattern(regexp = "[A-Z]{2}") String country,
+                           @NotBlank @jakarta.validation.constraints.Pattern(regexp = "PROFILE|GHANA_CARD") String source) {}
     public record Wallet(UUID customerId, List<Ledger.Account> accounts) {}
     public record Transfer(@NotNull UUID recipient, @Positive long amount, UUID confirmationId) {
         public Transfer(UUID recipient, long amount) {
@@ -93,13 +103,44 @@ public class Wallets {
         return ledger.statement(available(id), fromVal, toVal);
     }
 
+    @PutMapping("/wallet/locality")
+    @Transactional
+    public Map<String, String> saveLocality(@Valid @RequestBody Locality request) {
+        UUID id = customer(Actor.current());
+        db.sql("""
+                UPDATE customer SET city = :city, region = :region, country = :country, locality_source = :source
+                WHERE id = :id""")
+                .param("city", request.city()).param("region", request.region()).param("country", request.country())
+                .param("source", request.source()).param("id", id).update();
+        return Map.of("status", "saved");
+    }
+
+    public record MnoLocality(@NotBlank @Size(max = 80) String city, @Size(max = 10) String region) {}
+
+    /** Telco-provided coarse city. This is not a handset GPS reading. */
+    @PutMapping("/ops/customers/{id}/mno-locality")
+    @Transactional
+    public Map<String, String> saveMnoLocality(@PathVariable UUID id, @Valid @RequestBody MnoLocality request) {
+        Actor.current().requireOps();
+        int updated = db.sql("UPDATE customer SET mno_city = :city, mno_region = :region WHERE id = :id")
+                .param("city", request.city()).param("region", request.region()).param("id", id).update();
+        if (updated == 0) throw ApiException.notFound("Customer not found");
+        return Map.of("status", "saved");
+    }
+
     @PostMapping("/wallet/transfers")
     @Transactional
-    public Receipt transfer(@RequestHeader("Idempotency-Key") String key, @Valid @RequestBody Transfer request) {
+    public Receipt transfer(@RequestHeader("Idempotency-Key") String key,
+                            @RequestHeader(value = "X-Elepay-Channel", required = false) String channel,
+                            HttpServletRequest http,
+                            @Valid @RequestBody Transfer request) {
         UUID sender = customer(Actor.current());
         String scope = "wallet-transfer:" + sender;
+        String payChannel = "MOBILE_USSD".equals(channel) ? "MOBILE_USSD" : "MOBILE_APP".equals(channel) ? "MOBILE_APP" : "WEB";
+        String coarseIp = "MOBILE_USSD".equals(payChannel) ? null : http.getRemoteAddr();
         return idempotency.execute(scope, key, request, Receipt.class,
-                () -> send(sender, scope, key, request.recipient(), request.amount(), request.confirmationId()));
+                () -> send(sender, scope, key, request.recipient(), request.amount(), request.confirmationId(),
+                        payChannel, coarseIp));
     }
 
     /** Posts a wallet-to-wallet transfer; callers own idempotency and authorization. */
@@ -109,6 +150,11 @@ public class Wallets {
 
     /** Full 12-step hardened transfer posting. */
     public Receipt send(UUID sender, String scope, String key, UUID recipient, long amount, UUID confirmationId) {
+        return send(sender, scope, key, recipient, amount, confirmationId, null, null);
+    }
+
+    public Receipt send(UUID sender, String scope, String key, UUID recipient, long amount, UUID confirmationId,
+                        String channel, String ephemeralIp) {
         if (sender.equals(recipient)) throw ApiException.badRequest("same_wallet", "Choose a different wallet");
         // Lock both customer rows in id order (Algorithm 002)
         List<UUID> active = db.sql("""
@@ -184,6 +230,16 @@ public class Wallets {
                 "currency", Ledger.GHS,
                 "transactionId", transaction.toString()
         ), List.of());
+        String payChannel = channel == null ? "WEB" : channel;
+        var origin = regulatory.customerOrigin(sender, payChannel, ephemeralIp);
+        db.sql("""
+                UPDATE wallet_operation
+                SET channel = :channel, origin_city = :city, origin_region = :region,
+                    origin_country = :country, origin_source = :source
+                WHERE id = :id""")
+                .param("channel", payChannel).param("city", origin.city()).param("region", origin.region())
+                .param("country", origin.country()).param("source", origin.source()).param("id", outgoing).update();
+        regulatory.walletTransfer(outgoing, null);
 
         long senderBalance = ledger.balance(available(sender));
         long recipientBalance = ledger.balance(available(recipient));
