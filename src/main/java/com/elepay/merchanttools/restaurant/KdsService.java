@@ -395,6 +395,46 @@ public class KdsService {
         return new BumpResult(view(ticketId), true, null);
     }
 
+    /**
+     * Undo the last expo bump only within five minutes. A cancelled ticket cannot
+     * be restored. An action ID prevents duplicated recalls on flaky connections.
+     */
+    @Transactional
+    public BumpResult recallTicket(UUID ticketId, String from, String actionId) {
+        if (!"READY".equals(from) && !"SERVED".equals(from))
+            throw ApiException.badRequest("recall_stage_invalid", "Only ready or served tickets can be recalled");
+        if (actionId == null || actionId.isBlank())
+            throw ApiException.badRequest("action_id_required", "A unique kitchen action is required");
+        KdsTicket previous = getTicket(ticketId).orElseThrow(() -> ApiException.notFound("Ticket not found"));
+        if (!recordAction(previous.merchantId(), actionId, ticketId, "RECALL"))
+            return new BumpResult(view(ticketId), false, "ALREADY_APPLIED");
+        String target = "SERVED".equals(from) ? "READY" : "PREPARING";
+        int moved = db.sql("""
+                UPDATE restaurant_kds_ticket
+                SET status = :target, served_at = NULL,
+                    ready_at = CASE WHEN :before = 'READY' THEN NULL ELSE ready_at END
+                WHERE id = :id AND status = :before
+                  AND (CASE WHEN status = 'SERVED' THEN served_at ELSE ready_at END)
+                      BETWEEN now() - INTERVAL '5 minutes' AND now()
+                """).param("target", target).param("id", ticketId).param("before", from).update();
+        if (moved == 0) {
+            forgetAction(previous.merchantId(), actionId);
+            return new BumpResult(view(ticketId), false, "RECALL_WINDOW_EXPIRED_OR_CHANGED");
+        }
+        db.sql("""
+                UPDATE restaurant_kds_item SET item_status = :target
+                WHERE ticket_id = :id AND item_status = :before
+                """).param("target", target).param("id", ticketId).param("before", from).update();
+        db.sql("""
+                INSERT INTO restaurant_kds_recall_event
+                    (id, merchant_id, ticket_id, action_id, from_status, to_status, created_at)
+                VALUES (:id, :merchant, :ticket, :action, :before, :target, now())
+                """).param("id", UUID.randomUUID()).param("merchant", previous.merchantId())
+                .param("ticket", ticketId).param("action", actionId)
+                .param("before", from).param("target", target).update();
+        return new BumpResult(view(ticketId), true, null);
+    }
+
     // Course firing: fire a specific course (e.g. fire APPETIZER or fire MAIN)
     @Transactional
     public void fireCourse(UUID orderId, Course course) {

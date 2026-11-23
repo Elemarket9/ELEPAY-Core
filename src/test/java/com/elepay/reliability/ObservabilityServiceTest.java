@@ -2,6 +2,9 @@ package com.elepay.reliability;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -10,6 +13,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -39,6 +43,67 @@ class ObservabilityServiceTest {
         assertThat(summary).containsKey("ledgerHealthy");
         assertThat(summary).containsKey("p99LatencyMsTarget");
         assertThat((Double) summary.get("throughputTotal")).isEqualTo(3.0);
+    }
+
+    @Test
+    @DisplayName("Financial observations reach the registered Micrometer handler instead of a noop tracer")
+    void financialObservationIsRecorded() {
+        ObservationRegistry observations = ObservationRegistry.create();
+        AtomicInteger started = new AtomicInteger();
+        AtomicInteger stopped = new AtomicInteger();
+        observations.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return true;
+            }
+
+            @Override
+            public void onStart(Observation.Context context) {
+                started.incrementAndGet();
+            }
+
+            @Override
+            public void onStop(Observation.Context context) {
+                stopped.incrementAndGet();
+            }
+        });
+
+        ObservabilityService service = new ObservabilityService(registry, null, null, observations);
+        assertThat(service.inSpan("elepay.ledger.post", () -> "posted")).isEqualTo("posted");
+        assertThat(started).hasValue(1);
+        assertThat(stopped).hasValue(1);
+    }
+
+    @Test
+    @DisplayName("Financial observation records failures and closes its scope")
+    void financialObservationRecordsFailure() {
+        ObservationRegistry observations = ObservationRegistry.create();
+        AtomicInteger errors = new AtomicInteger();
+        AtomicInteger stopped = new AtomicInteger();
+        observations.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return true;
+            }
+
+            @Override
+            public void onError(Observation.Context context) {
+                errors.incrementAndGet();
+            }
+
+            @Override
+            public void onStop(Observation.Context context) {
+                stopped.incrementAndGet();
+            }
+        });
+
+        ObservabilityService service = new ObservabilityService(registry, null, null, observations);
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.inSpan("elepay.transfer.failed", () -> {
+                    throw new IllegalStateException("rejected");
+                }))).isInstanceOf(IllegalStateException.class);
+        assertThat(errors).hasValue(1);
+        assertThat(stopped).hasValue(1);
     }
 
     @Test

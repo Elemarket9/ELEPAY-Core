@@ -8,6 +8,10 @@ const MerchantDashboard = lazy(() => import("./Merchant").then((m) => ({ default
 const OpsConsole = lazy(() => import("./Ops").then((m) => ({ default: m.OpsConsole })));
 const Wallet = lazy(() => import("./Wallet").then((m) => ({ default: m.Wallet })));
 const Kitchen = lazy(() => import("./Kitchen").then((m) => ({ default: m.Kitchen })));
+const CustomerDisplay = lazy(() => import("./CustomerDisplay").then((m) => ({ default: m.CustomerDisplay })));
+const TableQrOrder = lazy(() => import("./TableQrOrder").then((m) => ({ default: m.TableQrOrder })));
+const DigitalReceipt = lazy(() => import("./DigitalReceipt").then((m) => ({ default: m.DigitalReceipt })));
+const LanKitchen = lazy(() => import("./LanKitchen").then((m) => ({ default: m.LanKitchen })));
 const DeveloperPortal = lazy(() => import("./Developer").then((m) => ({ default: m.DeveloperPortal })));
 import "./styles.css";
 
@@ -52,11 +56,14 @@ function App() {
   if (path === "/app/callback" && !callbackDone) return <p>Signing in…</p>;
 
   let m: RegExpMatchArray | null;
+  if ((m = path.match(/^\/receipt\/([0-9a-fA-F]{64})$/))) return <Suspense fallback={<p>Loading receipt…</p>}><DigitalReceipt token={m[1]} /></Suspense>;
+  if ((m = path.match(/^\/restaurant\/table\/([0-9a-fA-F]{64})$/))) return <Suspense fallback={<p>Loading table menu…</p>}><TableQrOrder token={m[1]} /></Suspense>;
   if ((m = path.match(/^\/pay\/l\/([\w-]+)$/))) return <StartFromLink slug={m[1]} />;
   if ((m = path.match(/^\/pay\/m\/(\d{6})$/))) return <StartFromLink code={m[1]} />;
   if ((m = path.match(/^\/pay\/([\w-]+)$/))) return <Checkout reference={m[1]} />;
 
   // Kitchen screens run full-screen on tablets, without the site header.
+  if (path.startsWith("/kitchen/lan")) return <Suspense fallback={null}><LanKitchen /></Suspense>;
   if (path.startsWith("/kitchen")) return <Suspense fallback={null}><Kitchen /></Suspense>;
 
   const header = (
@@ -66,6 +73,7 @@ function App() {
         <button className="link" onClick={() => void signOut().then(() => window.location.assign("/"))}>Sign out</button></nav>
     </header>
   );
+  if (path === "/merchant/customer-display") return <SignedIn><CustomerDisplay /></SignedIn>;
   if (path.startsWith("/merchant")) return <>{header}<SignedIn><MerchantDashboard /></SignedIn></>;
   if (path.startsWith("/developer")) return <>{header}<SignedIn><DeveloperPortal /></SignedIn></>;
   if (path.startsWith("/ops")) return <>{header}<SignedIn roles={["ops"]}><OpsConsole /></SignedIn></>;

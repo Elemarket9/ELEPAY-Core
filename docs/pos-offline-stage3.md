@@ -27,3 +27,6 @@
 - A conflicting total is flagged and not silently repriced.
 - A table conflict is not silently assigned elsewhere; preserve the local draft for staff review.
 - Payment state in the server overrides any local presentation status.
+
+## Enabling a local edge through content security policy
+Configure `elepay.security.pos-lan-origin` with the exact HTTPS origin of the local edge (for example a trusted local hostname with its port). The browser CSP rejects all other cross-origin connections. The edge also requires `ELEPAY_EDGE_ORIGIN` equal to the merchant application's exact HTTPS origin, a distinct 32+ character secret and a trusted certificate. The bearer token never goes in URLs. The authenticated `/v1/pos/sync` endpoint accepts only cash offline orders after merchant and branch validation; terminal pairing and fake 3DS remain disabled.

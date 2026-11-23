@@ -1,6 +1,12 @@
 package com.elepay.merchanttools.pos;
 
 import java.time.LocalDate;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.util.HexFormat;
+import org.springframework.beans.factory.annotation.Value;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -13,6 +19,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class PosReceiptService {
+    private static final SecureRandom TOKEN_RANDOM = new SecureRandom();
+    @Value("${elepay.pos.receipt-link-ttl-days:30}")
+    private int receiptTtlDays = 30;
     private final JdbcClient db;
     private final PosOrderService orderService;
     private final com.elepay.merchant.MerchantAccess merchants;
@@ -54,9 +63,13 @@ public class PosReceiptService {
 
         String receiptNumber = generateReceiptNumber();
         UUID receiptId = UUID.randomUUID();
-        // There is no public receipt page yet, so the receipt carries no link rather than a link that does not work.
-        String digitalReceiptUrl = null;
-        String qrPayload = "ELEPAY:RECEIPT:" + receiptNumber + ":AMT:" + order.totalPesewas();
+        if (receiptTtlDays < 1 || receiptTtlDays > 365)
+            throw new IllegalStateException("Receipt link expiry must be 1 to 365 days");
+        byte[] random = new byte[32];
+        TOKEN_RANDOM.nextBytes(random);
+        String token = HexFormat.of().formatHex(random);
+        String digitalReceiptUrl = "/receipt/" + token;
+        String qrPayload = digitalReceiptUrl;
         String shopName = merchants.find(order.merchantId()).map(com.elepay.merchant.MerchantAccess.Merchant::tradingName)
                 .orElse("Receipt").toUpperCase();
         if (shopName.length() > 40) shopName = shopName.substring(0, 40);
@@ -128,6 +141,12 @@ public class PosReceiptService {
             .param("escposText", escposText)
             .update();
 
+        db.sql("""
+                INSERT INTO pos_receipt_public_token
+                    (receipt_id, token_hash, expires_at, revoked, created_at)
+                VALUES (:receipt, :hash, now() + (:ttl * interval '1 day'), false, now())
+                """).param("receipt", receiptId).param("hash", receiptTokenHash(token))
+                .param("ttl", receiptTtlDays).update();
         return getReceipt(receiptId).orElseThrow();
     }
 
@@ -152,6 +171,15 @@ public class PosReceiptService {
             .param("orderId", orderId)
             .query(PosReceipt.class)
             .optional();
+    }
+
+    static String receiptTokenHash(String token) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(token.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
     }
 
     private static String formatMinorUnits(long pesewas) {

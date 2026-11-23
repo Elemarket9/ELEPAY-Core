@@ -49,6 +49,23 @@ public class CustomerController {
                 req.fullName().strip(), req.phone().replaceAll("[\\s-]", ""), blank(req.email()), blank(req.address()));
     }
 
+    public record LoyaltyRulesRequest(int pointsPer1000Pesewas,
+                                      long pesewasPerRedeemedPoint, boolean enabled) {}
+
+    @GetMapping("/loyalty/merchant/{merchantId}/rules")
+    public LoyaltyProgramService.Rules loyaltyRules(@PathVariable UUID merchantId) {
+        access.view(merchantId);
+        return loyalty.rules(merchantId);
+    }
+
+    @PostMapping("/loyalty/merchant/{merchantId}/rules")
+    public LoyaltyProgramService.Rules updateLoyaltyRules(@PathVariable UUID merchantId,
+                                                         @RequestBody LoyaltyRulesRequest request) {
+        access.manage(merchantId);
+        return loyalty.updateRules(merchantId, request.pointsPer1000Pesewas(),
+                request.pesewasPerRedeemedPoint(), request.enabled());
+    }
+
     public record PurchaseRequest(long amountPesewas) {}
 
     /** Records a purchase the customer made, earning loyalty points and updating their spend. */

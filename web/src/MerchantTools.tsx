@@ -182,7 +182,7 @@ export function InventoryAndStock({ merchantId }: { merchantId: string }) {
 
 interface PosOrder { id: string; orderNumber: string; totalPesewas: number; paidPesewas: number; changePesewas: number; status: string }
 interface DigitalCheckout { id: string; reference: string; amount: number; status: string; payUrl: string | null }
-interface PosReceipt { receiptNumber: string; escposFormattedText: string }
+interface PosReceipt { receiptNumber: string; escposFormattedText: string; digitalReceiptUrl: string | null }
 interface PaymentTerminal { id: string; model: string; serialNumber: string; branchId: string | null }
 interface DiningTableOption { id: string; tableNumber: string; status: string; currentOrderId: string | null }
 interface SplitQuoteLine { label: string; amountPesewas: number }
@@ -304,6 +304,29 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
 
   useEffect(() => { try { localStorage.setItem(TAX_KEY(merchant.id), taxPercent); } catch { /* ignore */ } }, [taxPercent, merchant.id]);
   useEffect(() => { if (digital?.payUrl) void QRCode.toDataURL(digital.payUrl, { margin: 1, width: 220 }).then(setQr); else setQr(null); }, [digital]);
+  // A privacy-limited local customer mirror; no customer details, credentials or card data.
+  useEffect(() => {
+    const channel = new BroadcastChannel("elepay-pos-display:" + merchant.id);
+    const products = activeOffline?.items.map((i) => ({ label: i.itemName, quantity: i.quantity,
+      totalPesewas: i.unitPricePesewas * i.quantity })) ?? cart.map((c) => ({
+      label: itemLabel(c.row), quantity: c.qty, totalPesewas: c.row.retailPricePesewas * c.qty,
+    }));
+    const update = { kind: "sale", merchantName: merchant.tradingName, items: products,
+      totalPesewas: activeOffline?.totalPesewas ?? order?.totalPesewas ?? total,
+      amountPaidPesewas: activeOffline?.payments.reduce((s, p) => s + p.amountPesewas, 0) ??
+        order?.paidPesewas ?? 0,
+      orderStatus: activeOffline ? "LOCAL_UNRECONCILED" : order?.status ?? "OPEN",
+      updatedAt: Date.now() };
+    const post = () => channel.postMessage({ ...update, updatedAt: Date.now() });
+    // The secondary screen might be opened after the cashier last touched the cart.
+    // Respond to an explicit request and periodically refresh status; never broadcast PII.
+    channel.onmessage = (event) => {
+      if (event.data?.kind === "request-current") post();
+    };
+    post();
+    const heartbeat = window.setInterval(post, 5000);
+    return () => { clearInterval(heartbeat); channel.close(); };
+  }, [merchant.id, merchant.tradingName, cart, activeOffline, order, total]);
 
   const add = (row: CatalogRow) => setCart((c) => c.some((x) => x.row.variantId === row.variantId)
     ? c.map((x) => x.row.variantId === row.variantId ? { ...x, qty: x.qty + 1 } : x) : [...c, { row, qty: 1 }]);
@@ -531,6 +554,14 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         <p>Order {receipt.order.orderNumber} · {formatMoney(receipt.order.totalPesewas)}
           {receipt.order.changePesewas > 0 && <> · <strong>Change {formatMoney(receipt.order.changePesewas)}</strong></>}</p>
         <pre className="receipt">{receipt.receipt.escposFormattedText}</pre>
+        {receipt.receipt.digitalReceiptUrl && <div className="flex-row">
+          <a href={receipt.receipt.digitalReceiptUrl} target="_blank" rel="noopener noreferrer">Open digital receipt</a>
+          <button className="secondary" onClick={() => {
+            const url = location.origin + receipt.receipt.digitalReceiptUrl;
+            if (navigator.share) void navigator.share({ url, title: "ELEPAY receipt" }).catch(() => {});
+            else void navigator.clipboard?.writeText(url).catch(() => {});
+          }}>Share via WhatsApp / SMS / email or copy</button>
+        </div>}
         {tableNotice && <p className="notice ok">{tableNotice}</p>}
         {error && <p className="error">{error}</p>}
         {orderType === "DINE_IN" && tableId && <button disabled={busy} onClick={() => void closeCompletedTable()}>
@@ -548,6 +579,9 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     <div className="pos-layout">
       <div>
         <h3>Products</h3>
+        <button className="secondary" onClick={() => window.open(
+          "/merchant/customer-display?merchantId=" + encodeURIComponent(merchant.id),
+          "elepay-customer-display", "noopener,noreferrer")}>Open second-screen customer display</button>
         <p role="status" className={networkOnline ? "notice" : "notice warning"}>
           {offlineMode ? "OFFLINE MODE — cash collected locally; electronic payments unavailable" : "Network available (cloud status not guaranteed)"}
         </p>

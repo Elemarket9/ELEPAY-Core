@@ -744,25 +744,6 @@
         },
         "type": "object"
       },
-      "CheckpointCheck": {
-        "properties": {
-          "chainMatches": {
-            "type": "boolean"
-          },
-          "id": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "lastEntryId": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "signatureValid": {
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
       "CloseShiftRequest": {
         "properties": {
           "closingBalancePesewas": {
@@ -1684,6 +1665,22 @@
         },
         "type": "object"
       },
+      "CustomerRequest": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "serverOrderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "CustomerRow": {
         "properties": {
           "customerCode": {
@@ -1988,6 +1985,21 @@
           },
           "status": {
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Dish": {
+        "properties": {
+          "grossPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
           }
         },
         "type": "object"
@@ -2958,34 +2970,15 @@
       },
       "Item": {
         "properties": {
-          "createdAt": {
-            "format": "date-time",
+          "amountPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
             "type": "string"
           },
-          "details": {
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "resolution": {
-            "type": "string"
-          },
-          "resolvedBy": {
-            "type": "string"
-          },
-          "severity": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "subject": {
-            "type": "string"
+          "quantity": {
+            "type": "number"
           }
         },
         "type": "object"
@@ -3537,6 +3530,23 @@
         },
         "type": "object"
       },
+      "LowStock": {
+        "properties": {
+          "available": {
+            "type": "number"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "reorderPoint": {
+            "type": "number"
+          },
+          "sku": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "LowStockAlert": {
         "properties": {
           "productName": {
@@ -3567,6 +3577,22 @@
           },
           "warehouseName": {
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LoyaltyRulesRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "pesewasPerRedeemedPoint": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pointsPer1000Pesewas": {
+            "format": "int32",
+            "type": "integer"
           }
         },
         "type": "object"
@@ -3685,6 +3711,25 @@
             "type": "string"
           },
           "subject": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MenuItem": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "pricePesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "variantId": {
+            "format": "uuid",
             "type": "string"
           }
         },
@@ -4657,6 +4702,40 @@
         },
         "type": "object"
       },
+      "PendingRequest": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "type": "array"
+          },
+          "tableId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "tableNumber": {
+            "type": "string"
+          },
+          "totalPesewas": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "PhoneChange": {
         "properties": {
           "phone": {
@@ -5602,6 +5681,17 @@
         },
         "type": "object"
       },
+      "RecallRequest": {
+        "properties": {
+          "actionId": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Receipt": {
         "properties": {
           "amount": {
@@ -5621,6 +5711,50 @@
           "transactionId": {
             "format": "uuid",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ReceiptView": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "discountPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "type": "array"
+          },
+          "merchantName": {
+            "type": "string"
+          },
+          "orderNumber": {
+            "type": "string"
+          },
+          "receiptNumber": {
+            "type": "string"
+          },
+          "subtotalPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "taxPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "tipPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalPesewas": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "type": "object"
@@ -5942,24 +6076,71 @@
       },
       "Report": {
         "properties": {
-          "chainHead": {
-            "type": "string"
+          "averagePrepMinutes": {
+            "format": "double",
+            "type": "number"
           },
-          "checkpoints": {
+          "bestDishes": {
             "items": {
-              "$ref": "#/components/schemas/CheckpointCheck"
+              "$ref": "#/components/schemas/Dish"
             },
             "type": "array"
           },
-          "entriesVerified": {
+          "branchId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/Branch"
+            },
+            "type": "array"
+          },
+          "discountPesewas": {
             "format": "int64",
             "type": "integer"
           },
-          "failure": {
+          "from": {
+            "format": "date",
             "type": "string"
           },
-          "valid": {
-            "type": "boolean"
+          "grossPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "leastSoldDishes": {
+            "items": {
+              "$ref": "#/components/schemas/Dish"
+            },
+            "type": "array"
+          },
+          "openOrders": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "paidOrders": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "staff": {
+            "items": {
+              "$ref": "#/components/schemas/Staff"
+            },
+            "type": "array"
+          },
+          "stockAlerts": {
+            "items": {
+              "$ref": "#/components/schemas/LowStock"
+            },
+            "type": "array"
+          },
+          "through": {
+            "format": "date",
+            "type": "string"
+          },
+          "tipsPesewas": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "type": "object"
@@ -6145,6 +6326,21 @@
         },
         "type": "object"
       },
+      "RotatedQr": {
+        "properties": {
+          "relativeUrl": {
+            "type": "string"
+          },
+          "tableId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "tableNumber": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "RouteRequest": {
         "properties": {
           "categoryId": {
@@ -6231,6 +6427,26 @@
         "required": [
           "mode"
         ],
+        "type": "object"
+      },
+      "Rules": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "merchantId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "pesewasPerRedeemedPoint": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pointsPer1000Pesewas": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
         "type": "object"
       },
       "RunRequest": {
@@ -6385,6 +6601,22 @@
         },
         "type": "object"
       },
+      "Selection": {
+        "properties": {
+          "notes": {
+            "type": "string"
+          },
+          "quantity": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "variantId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Seller": {
         "properties": {
           "kind": {
@@ -6507,6 +6739,22 @@
           "terminalId": {
             "format": "uuid",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Staff": {
+        "properties": {
+          "grossPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "orders": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "type": "object"
@@ -6734,6 +6982,20 @@
         },
         "type": "object"
       },
+      "SubmitRequest": {
+        "properties": {
+          "clientKey": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Selection"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "Supplier": {
         "properties": {
           "address": {
@@ -6878,6 +7140,31 @@
           "destinationCurrency",
           "sourceCurrency"
         ],
+        "type": "object"
+      },
+      "TableOffer": {
+        "properties": {
+          "menu": {
+            "items": {
+              "$ref": "#/components/schemas/MenuItem"
+            },
+            "type": "array"
+          },
+          "merchantId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "merchantName": {
+            "type": "string"
+          },
+          "tableId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "tableNumber": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "TenderPaymentRequest": {
@@ -7953,6 +8240,76 @@
               "*/*": {
                 "schema": {
                   "$ref": "#/components/schemas/CustomerProfile"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "customer-controller"
+        ]
+      }
+    },
+    "/v1/customers/loyalty/merchant/{merchantId}/rules": {
+      "get": {
+        "operationId": "loyaltyRules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchantId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rules"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "customer-controller"
+        ]
+      },
+      "post": {
+        "operationId": "updateLoyaltyRules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchantId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoyaltyRulesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rules"
                 }
               }
             },
@@ -10508,7 +10865,7 @@
     },
     "/v1/merchants/{id}/marketplaces/{marketplace}/accept": {
       "post": {
-        "operationId": "accept",
+        "operationId": "accept_1",
         "parameters": [
           {
             "in": "path",
@@ -13464,7 +13821,7 @@
     },
     "/v1/ops/kill-switch/status": {
       "get": {
-        "operationId": "status_3",
+        "operationId": "status_4",
         "responses": {
           "200": {
             "content": {
@@ -13484,7 +13841,7 @@
     },
     "/v1/ops/kill-switches": {
       "get": {
-        "operationId": "status_2",
+        "operationId": "status_3",
         "responses": {
           "200": {
             "content": {
@@ -13686,7 +14043,7 @@
     },
     "/v1/ops/maker-checker/proposals/{id}/reject": {
       "post": {
-        "operationId": "reject",
+        "operationId": "reject_1",
         "parameters": [
           {
             "in": "path",
@@ -14581,7 +14938,7 @@
     },
     "/v1/payroll/runs/{runId}/submit": {
       "post": {
-        "operationId": "submit",
+        "operationId": "submit_1",
         "parameters": [
           {
             "in": "path",
@@ -15738,7 +16095,7 @@
     },
     "/v1/public/checkouts/{reference}/status": {
       "get": {
-        "operationId": "status_1",
+        "operationId": "status_2",
         "parameters": [
           {
             "in": "path",
@@ -15973,6 +16330,36 @@
         ]
       }
     },
+    "/v1/public/pos/receipts/{token}": {
+      "get": {
+        "operationId": "receipt_1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptView"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "public-pos-receipt-controller"
+        ]
+      }
+    },
     "/v1/public/qr/decode": {
       "post": {
         "operationId": "decodeQr",
@@ -15999,6 +16386,107 @@
         },
         "tags": [
           "public-checkouts"
+        ]
+      }
+    },
+    "/v1/public/restaurant/table-qr/requests/{requestId}/status": {
+      "get": {
+        "operationId": "status_1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequest"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "public-restaurant-qr-controller"
+        ]
+      }
+    },
+    "/v1/public/restaurant/table-qr/{token}": {
+      "get": {
+        "operationId": "menu",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableOffer"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "public-restaurant-qr-controller"
+        ]
+      }
+    },
+    "/v1/public/restaurant/table-qr/{token}/orders": {
+      "post": {
+        "operationId": "submit",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequest"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "public-restaurant-qr-controller"
         ]
       }
     },
@@ -16286,6 +16774,122 @@
         },
         "tags": [
           "restaurant-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/insights/{merchantId}": {
+      "get": {
+        "operationId": "report",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchantId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branchId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "through",
+            "required": false,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "restaurant-insights-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/insights/{merchantId}/csv": {
+      "get": {
+        "operationId": "exportCsv",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchantId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branchId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "through",
+            "required": false,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "restaurant-insights-controller"
         ]
       }
     },
@@ -16878,6 +17482,47 @@
         ]
       }
     },
+    "/v1/restaurant/kds/tickets/{ticketId}/recall": {
+      "post": {
+        "operationId": "recallTicket",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ticketId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/BumpResult"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "restaurant-controller"
+        ]
+      }
+    },
     "/v1/restaurant/kds/tickets/{ticketId}/reprint": {
       "post": {
         "operationId": "reprint",
@@ -17185,6 +17830,157 @@
         },
         "tags": [
           "restaurant-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/table-qr/merchant/{merchantId}/requests": {
+      "get": {
+        "operationId": "pending",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchantId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PendingRequest"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "restaurant-table-qr-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/table-qr/requests/{requestId}/accept": {
+      "post": {
+        "operationId": "accept",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequest"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "restaurant-table-qr-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/table-qr/requests/{requestId}/reject": {
+      "post": {
+        "operationId": "reject",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequest"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "restaurant-table-qr-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/table-qr/tables/{tableId}/disable": {
+      "post": {
+        "operationId": "disable",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tableId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "restaurant-table-qr-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/table-qr/tables/{tableId}/rotate": {
+      "post": {
+        "operationId": "rotate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tableId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotatedQr"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "restaurant-table-qr-controller"
         ]
       }
     },

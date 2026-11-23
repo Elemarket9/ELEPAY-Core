@@ -41,6 +41,9 @@ public class PosCommerceTest extends PostgresTestBase {
     private PosOfflineSyncService syncService;
 
     @Autowired
+    private PublicPosReceiptService publicReceipts;
+
+    @Autowired
     private PosTerminalAcceptanceService terminalAcceptance;
 
     @Autowired
@@ -216,7 +219,10 @@ public class PosCommerceTest extends PostgresTestBase {
         // 4. Generate Printed & Digital Receipt
         var receipt = receiptService.generateReceipt(order.id());
         assertThat(receipt.receiptNumber()).startsWith("REC-");
-        assertThat(receipt.digitalReceiptUrl()).as("no invented receipt page").isNull();
+        assertThat(receipt.digitalReceiptUrl()).startsWith("/receipt/");
+        var publicView = publicReceipts.find(receipt.digitalReceiptUrl().substring("/receipt/".length()));
+        assertThat(publicView.orderNumber()).isEqualTo(order.orderNumber());
+        assertThat(publicView.items()).hasSize(1);
         assertThat(receipt.escposFormattedText()).contains("POS MART").doesNotContain("ELEPAY COMMERCE");
         assertThat(receipt.escposFormattedText()).contains("TOTAL DUE:");
         assertThat(receipt.escposFormattedText()).contains("CHANGE GIVEN:");

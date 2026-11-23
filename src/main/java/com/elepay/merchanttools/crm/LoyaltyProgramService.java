@@ -18,6 +18,38 @@ public class LoyaltyProgramService {
 
     private final JdbcClient db;
 
+    public record Rules(UUID merchantId, int pointsPer1000Pesewas,
+                        long pesewasPerRedeemedPoint, boolean enabled) {}
+
+    /** A missing row retains historical program behavior for existing merchants. */
+    public Rules rules(UUID merchantId) {
+        return db.sql("""
+                SELECT merchant_id, points_per_1000_pesewas, pesewas_per_redeemed_point, enabled
+                FROM crm_loyalty_rules WHERE merchant_id = :merchant
+                """).param("merchant", merchantId)
+                .query(Rules.class).optional()
+                .orElse(new Rules(merchantId, BASE_POINTS_PER_1000_PESEWAS,
+                        PESEWAS_PER_REDEEMED_POINT, true));
+    }
+
+    @Transactional
+    public Rules updateRules(UUID merchantId, int pointsPer1000, long pesewasPerPoint, boolean enabled) {
+        if (pointsPer1000 < 0 || pointsPer1000 > 1000 || pesewasPerPoint < 0 || pesewasPerPoint > 100000)
+            throw com.elepay.common.ApiException.badRequest("loyalty_rules_invalid",
+                    "Loyalty earning and redemption rates outside allowed bounds");
+        db.sql("""
+                INSERT INTO crm_loyalty_rules (merchant_id, points_per_1000_pesewas,
+                    pesewas_per_redeemed_point, enabled, updated_at)
+                VALUES (:merchant, :points, :value, :enabled, now())
+                ON CONFLICT (merchant_id) DO UPDATE SET
+                    points_per_1000_pesewas = excluded.points_per_1000_pesewas,
+                    pesewas_per_redeemed_point = excluded.pesewas_per_redeemed_point,
+                    enabled = excluded.enabled, updated_at = now()
+                """).param("merchant", merchantId).param("points", pointsPer1000)
+                .param("value", pesewasPerPoint).param("enabled", enabled).update();
+        return rules(merchantId);
+    }
+
     public LoyaltyProgramService(JdbcClient db) {
         this.db = db;
     }
@@ -127,11 +159,14 @@ public class LoyaltyProgramService {
                 LoyaltyTier.valueOf(rs.getString("current_tier"))
         )).single();
 
-        long basePoints = spendAmountPesewas / 1000;
-        long earnedPoints = (basePoints * current.currentTier().getMultiplierBps()) / 100;
-        if (earnedPoints <= 0) {
-            earnedPoints = 1; // minimum 1 point on transaction
-        }
+        Rules plan = rules(merchantId);
+        if (!plan.enabled())
+            throw com.elepay.common.ApiException.conflict("loyalty_disabled", "Loyalty is disabled for this merchant");
+        if (spendAmountPesewas <= 0)
+            throw com.elepay.common.ApiException.badRequest("loyalty_purchase_invalid", "Purchase must be positive");
+        long basePoints = Math.multiplyExact(spendAmountPesewas / 1000, plan.pointsPer1000Pesewas());
+        long earnedPoints = Math.multiplyExact(basePoints, current.currentTier().getMultiplierBps()) / 100;
+        if (earnedPoints <= 0 && plan.pointsPer1000Pesewas() > 0) earnedPoints = 1;
 
         long newBalance = current.pointsBalance() + earnedPoints;
         long newLifetimeEarned = current.lifetimePointsEarned() + earnedPoints;
@@ -159,7 +194,7 @@ public class LoyaltyProgramService {
         db.sql("UPDATE crm_customer SET loyalty_tier = ? WHERE id = ?")
                 .params(newTier.name(), customerId).update();
 
-        return new PointTransactionResult(ledgerId, earnedPoints, newBalance, newTier, earnedPoints * PESEWAS_PER_REDEEMED_POINT);
+        return new PointTransactionResult(ledgerId, earnedPoints, newBalance, newTier, Math.multiplyExact(earnedPoints, plan.pesewasPerRedeemedPoint()));
     }
 
     /**
@@ -168,9 +203,11 @@ public class LoyaltyProgramService {
     @Transactional
     public PointTransactionResult redeemPoints(UUID merchantId, UUID customerId, long pointsToRedeem,
                                                String referenceType, UUID referenceId) {
-        if (pointsToRedeem <= 0) {
+        if (pointsToRedeem <= 0)
             throw new IllegalArgumentException("Points to redeem must be greater than zero");
-        }
+        Rules plan = rules(merchantId);
+        if (!plan.enabled())
+            throw com.elepay.common.ApiException.conflict("loyalty_disabled", "Loyalty is disabled for this merchant");
 
         LoyaltyAccountSummary account = getOrCreateAccount(merchantId, customerId);
 
@@ -213,7 +250,7 @@ public class LoyaltyProgramService {
                 "Redeemed " + pointsToRedeem + " points for discount")
         .update();
 
-        long discountPesewas = pointsToRedeem * PESEWAS_PER_REDEEMED_POINT;
+        long discountPesewas = Math.multiplyExact(pointsToRedeem, plan.pesewasPerRedeemedPoint());
         return new PointTransactionResult(ledgerId, -pointsToRedeem, newBalance, current.currentTier(), discountPesewas);
     }
 }
