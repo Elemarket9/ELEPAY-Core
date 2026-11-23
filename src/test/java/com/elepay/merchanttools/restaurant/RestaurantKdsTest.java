@@ -119,6 +119,13 @@ public class RestaurantKdsTest extends PostgresTestBase {
         assertThat(tickets.get(0).tableNumber()).isEqualTo("T-28");
         assertThat(kdsService.listTicketItems(tickets.get(0).id())).hasSize(1);
         assertThat(tableService.getTable(table.id()).orElseThrow().currentOrderId()).isEqualTo(order.id());
+        long cursor = kdsService.sync(merchantId, 0, null).cursor();
+        var paid = posOrderService.addTenderPayment(order.id(), com.elepay.merchanttools.pos.TenderType.CASH, 3500L, null);
+        assertThat(paid.status()).isEqualTo("PAID");
+        var updated = kdsService.sync(merchantId, cursor, null);
+        assertThat(updated.tickets().stream()
+                .filter(v -> v.ticket().orderId().equals(order.id()))
+                .map(v -> v.ticket().paymentStatus())).contains("PAID");
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
                 posOrderService.createOrder(merchantId, null, null, null, null, food, 0L, 0L, 0L, "DINE_IN", table.id()))
                 .isInstanceOf(com.elepay.common.ApiException.class);

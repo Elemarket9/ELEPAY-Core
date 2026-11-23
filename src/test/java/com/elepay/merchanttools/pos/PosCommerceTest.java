@@ -43,6 +43,9 @@ public class PosCommerceTest extends PostgresTestBase {
     private PosTerminalAcceptanceService terminalAcceptance;
 
     @Autowired
+    private PosPaymentCodeService paymentCodes;
+
+    @Autowired
     private WarehouseService warehouseService;
 
     @Autowired
@@ -136,6 +139,21 @@ public class PosCommerceTest extends PostgresTestBase {
         assertThat(orderService.getOrder(order.id()).orElseThrow().status()).isEqualTo("PENDING");
         assertThat(db.sql("SELECT count(*) FROM pos_checkout_link WHERE order_id = :id")
                 .param("id", order.id()).query(Long.class).single()).isZero();
+    }
+
+    @Test
+    @DisplayName("Payment barcode resolves to an actual checkout, never an invented approval")
+    void barcodeResolvesExistingCheckout() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Jollof", BigDecimal.ONE,
+                        2700L, 0L, 0L, "[]", null, null, null)),
+                0L, 0L, 0L, "RETAIL");
+        var pending = orderService.startDigital(order.id(), "barcode-test");
+        assertThat(paymentCodes.orderForReference(pending.reference())).isEqualTo(order.id());
+        assertThat(orderService.getOrder(order.id()).orElseThrow().status()).isEqualTo("PENDING");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                paymentCodes.orderForReference("not-a-real-reference"))
+                .isInstanceOf(com.elepay.common.ApiException.class);
     }
 
     @Test
