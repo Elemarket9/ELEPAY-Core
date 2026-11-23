@@ -106,9 +106,9 @@ public class RestaurantController {
     @PostMapping("/tables/{tableId}/move")
     public RestaurantTableService.RestaurantTable moveTable(@PathVariable UUID tableId,
             @RequestParam UUID destinationId) {
+        UUID merchantId = access.manage(TABLE, tableId);
         // Until floor plans have explicit branch ownership, merchant-wide operators
         // alone may transfer tables; prevent cross-branch cashier table moves.
-        UUID merchantId = access.manage(TABLE, tableId);
         access.belongs(merchantId, TABLE, destinationId);
         var table = tableService.getTable(tableId).orElseThrow(() -> com.elepay.common.ApiException.notFound("Table not found"));
         if (table.currentOrderId() == null)

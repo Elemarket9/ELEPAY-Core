@@ -90,6 +90,11 @@ public class PosOfflineSyncService {
 
     @Transactional
     public SyncResult syncOfflineOrder(OfflineOrderPayload payload) {
+        return syncOfflineOrder(payload, null);
+    }
+
+    @Transactional
+    public SyncResult syncOfflineOrder(OfflineOrderPayload payload, String actorSubject) {
         validate(payload);
         long expected = calculateTotal(payload);
         String hash = fingerprint(payload);
@@ -135,7 +140,7 @@ public class PosOfflineSyncService {
         PosOrderService.PosOrder order = orderService.createOrder(
                 payload.merchantId(), payload.branchId(), payload.terminalId(), payload.cashierId(),
                 payload.customerId(), payload.items(), payload.discountPesewas(),
-                payload.taxPesewas(), payload.tipPesewas(), channel, payload.tableId());
+                payload.taxPesewas(), payload.tipPesewas(), channel, payload.tableId(), actorSubject);
         if (payload.payments() != null) {
             for (OfflinePayment p : payload.payments()) {
                 orderService.addTenderPayment(order.id(), TenderType.CASH, p.amountPesewas(),

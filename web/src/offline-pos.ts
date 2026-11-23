@@ -156,7 +156,8 @@ export const offlineDb: OfflineStore = {
   list: (merchantId) => withStore<OfflineOrder[]>(ORDER_STORE, "readonly", (s, done) => {
     const r = s.index("merchantId").getAll(merchantId);
     r.onsuccess = () => done(r.result as OfflineOrder[]);
-    r.onerror = () => { throw r.error; };
+    // A failed getAll aborts the transaction; withStore will reject through tx.onerror.
+    r.onerror = () => {};
   }),
 };
 
