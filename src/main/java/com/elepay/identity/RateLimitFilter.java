@@ -192,7 +192,11 @@ class RateLimitFilter extends OncePerRequestFilter {
     /** Signed, deduplicated inbound callbacks that must not be rate limited (see {@link SecurityConfig}). */
     private static boolean isSignedCallback(String method, String path) {
         if (!"POST".equals(method)) return false;
-        return (path.startsWith("/v1/rails/") && path.contains("/callbacks/"))
+        // Match the SecurityConfig permitAll pattern "/v1/rails/*/callbacks/**", which covers both the
+        // bare ".../callbacks" form and ".../callbacks/<provider-suffix>". The earlier check only matched
+        // "/callbacks/" (with a trailing segment), so a bare ".../callbacks" wrongly fell through to the
+        // coarse per-IP ceiling and got throttled.
+        return (path.startsWith("/v1/rails/") && (path.endsWith("/callbacks") || path.contains("/callbacks/")))
                 || (path.startsWith("/v1/fx/partners/") && (path.endsWith("/callbacks") || path.endsWith("/inbound")));
     }
 
