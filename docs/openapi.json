@@ -6176,6 +6176,14 @@
         },
         "type": "object"
       },
+      "ScanPaymentCodeRequest": {
+        "properties": {
+          "barcodeValue": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "SdkSnippet": {
         "properties": {
           "action": {
@@ -15057,6 +15065,36 @@
               "*/*": {
                 "schema": {
                   "$ref": "#/components/schemas/TerminalSession"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "pos-controller"
+        ]
+      }
+    },
+    "/v1/pos/payment-codes/resolve": {
+      "post": {
+        "operationId": "resolvePaymentCode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanPaymentCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentCode"
                 }
               }
             },
