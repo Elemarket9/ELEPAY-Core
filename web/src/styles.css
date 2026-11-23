@@ -138,3 +138,8 @@ td.num, .lines .num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .payment-code-panel { background: #fff; color: #111; border: 1px solid #9aa; border-radius: 8px; padding: 12px; margin: 12px 0; }
 .payment-barcode { display: block; width: 100%; max-width: 960px; height: auto; min-height: 90px; margin: 12px auto; }
+
+/* Stage 2 restaurant shift controls: accessible on phone, tablet and full-size till. */
+.pos-transfer, .pos-bill-split { border: 1px solid var(--border, #aaa); border-radius: 8px; padding: .75rem; margin: .75rem 0; }
+.pos-transfer button, .pos-bill-split button, .pos-qty { min-width: 80px; min-height: 80px; }
+@media print { .pos-layout, .pos-transfer, .pos-bill-split, button, nav, header { display: none !important; } .receipt { display: block !important; color: black; background: white; white-space: pre-wrap; } }

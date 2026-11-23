@@ -54,3 +54,19 @@ when no certified payment route is connected.
 A merchant scanner can resolve an issued `ELEPAY-PAY:` reference through
 `POST /v1/pos/payment-codes/resolve`. This operation verifies ownership,
 returns the pending hosted checkout, and **never captures or settles payment**.
+
+## Stage 2 restaurant operations
+
+- Dine-in service: create order and KDS ticket atomically, transfer the open order
+  to an available table, update the KDS table label within the same transaction,
+  then close after the order is PAID and all kitchen tickets are SERVED.
+- Source tables are left DIRTY after transfer, and closed tables are DIRTY pending cleaning.
+- Equal, by-item, by-seat and by-amount split previews use integer pesewas.
+  Order discounts, taxes and tips are proportionally distributed with deterministic
+  remainder handling so all portions sum exactly to the actual bill.
+- Multiple cash tenders may pay part of a bill. The remaining outstanding balance
+  is still processed by the existing verified digital checkout when applicable.
+- Receipt generation is idempotent per order; the browser offers print-on-demand.
+  Real Bluetooth/USB/ESC-POS hardware integrations still need device testing.
+- Splits are **quotes on one original order**, not independently settled child bills.
+  Separate customer-specific settlement records remain a future feature.
