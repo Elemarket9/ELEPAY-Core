@@ -45,6 +45,17 @@
         },
         "type": "object"
       },
+      "AddRoundRequest": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OrderItemInput"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "AdvanceRequest": {
         "properties": {
           "actionId": {
@@ -125,6 +136,27 @@
             "maxLength": 200,
             "minLength": 0,
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AmountSplitResult": {
+        "properties": {
+          "firstPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "remainingPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalPesewas": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "type": "object"
@@ -3004,6 +3036,41 @@
         ],
         "type": "object"
       },
+      "ItemSplitPortion": {
+        "properties": {
+          "amountPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "orderItemId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ItemSplitResult": {
+        "properties": {
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "portions": {
+            "items": {
+              "$ref": "#/components/schemas/ItemSplitPortion"
+            },
+            "type": "array"
+          },
+          "totalPesewas": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "KdsItem": {
         "properties": {
           "course": {
@@ -3821,11 +3888,18 @@
           "offlineTxId": {
             "type": "string"
           },
+          "orderType": {
+            "type": "string"
+          },
           "payments": {
             "items": {
               "$ref": "#/components/schemas/OfflinePayment"
             },
             "type": "array"
+          },
+          "tableId": {
+            "format": "uuid",
+            "type": "string"
           },
           "taxPesewas": {
             "format": "int64",
@@ -6200,6 +6274,10 @@
       },
       "SeatBill": {
         "properties": {
+          "allocatedDiscountPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
           "allocatedTaxPesewas": {
             "format": "int64",
             "type": "integer"
@@ -6242,6 +6320,10 @@
             "type": "integer"
           },
           "subtotalPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalDuePesewas": {
             "format": "int64",
             "type": "integer"
           }
@@ -14816,6 +14898,55 @@
         ]
       }
     },
+    "/v1/pos/orders/{orderId}/items": {
+      "post": {
+        "operationId": "addRound",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddRoundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PosOrder"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "pos-controller"
+        ]
+      }
+    },
     "/v1/pos/orders/{orderId}/payment-code": {
       "post": {
         "operationId": "paymentCode",
@@ -14956,6 +15087,46 @@
         ]
       }
     },
+    "/v1/pos/orders/{orderId}/split/amount": {
+      "post": {
+        "operationId": "splitBillByAmount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "firstPesewas",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/AmountSplitResult"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "pos-controller"
+        ]
+      }
+    },
     "/v1/pos/orders/{orderId}/split/even": {
       "post": {
         "operationId": "splitBillEven",
@@ -14985,6 +15156,37 @@
               "*/*": {
                 "schema": {
                   "$ref": "#/components/schemas/EvenSplitResult"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "pos-controller"
+        ]
+      }
+    },
+    "/v1/pos/orders/{orderId}/split/items": {
+      "post": {
+        "operationId": "splitBillByItem",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemSplitResult"
                 }
               }
             },
@@ -17039,6 +17241,77 @@
                     "$ref": "#/components/schemas/RestaurantTable"
                   },
                   "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "restaurant-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/tables/{tableId}/close": {
+      "post": {
+        "operationId": "closeTable",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tableId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestaurantTable"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "restaurant-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/tables/{tableId}/move": {
+      "post": {
+        "operationId": "moveTable",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tableId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "destinationId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestaurantTable"
                 }
               }
             },
