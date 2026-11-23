@@ -22,6 +22,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 /**
  * End-to-End Jumia 17-Step Flagship Reference Scenario Automated Verification Suite.
  *
+ * <p><strong>Isolated test integration.</strong> The customer wallet is an in-memory test double
+ * ({@link InMemoryModeAWalletSimulator}); this is not a JumiaPay partnership or live connection.
+ *
  * <p>Executes the complete 17-step embedded finance lifecycle:
  * <ol>
  *   <li>Step 1: Enterprise onboarding & API credential issue.</li>
@@ -63,14 +66,25 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
     @Autowired
     private EnterpriseTreasuryService treasuryService;
 
-    @Autowired
+    /** Isolated test connector: wraps an in-memory wallet double, never the production adapter. */
     private JumiaPayConnectorAdapter jumiaPayConnector;
+
+    private InMemoryModeAWalletSimulator walletSimulator;
 
     @Autowired
     private EnterpriseTokenService tokenService;
 
     @Autowired
     private Ledger ledger;
+
+    @Autowired
+    private HmacWebhookVerifier webhookVerifier;
+
+    @Autowired
+    private ConnectorWebhookSigner webhookSigner;
+
+    @Autowired
+    private SftpReconHandler reconHandler;
 
     private Enterprise enterprise;
     private UUID deliveryPartnerId;
@@ -80,6 +94,8 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
 
     @BeforeEach
     void setup() {
+        walletSimulator = new InMemoryModeAWalletSimulator(tokenService, webhookVerifier);
+        jumiaPayConnector = new JumiaPayConnectorAdapter(walletSimulator, webhookSigner, reconHandler);
         deliveryPartnerId = UUID.randomUUID();
         externalCustomerId = "jumia_cust_kofi_mensah";
         orderReference = "JUMIA-GH-ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
@@ -164,7 +180,7 @@ class Jumia17StepReferenceScenarioTest extends PostgresTestBase {
 
         // Seed customer's external wallet balance on JumiaPay: GH₵ 2,500.00 (250,000 pesewas)
         long initialCustomerWalletPesewas = 250_000L;
-        jumiaPayConnector.seedCustomerBalance(externalCustomerId, initialCustomerWalletPesewas);
+        walletSimulator.seedCustomerBalance(externalCustomerId, initialCustomerWalletPesewas);
 
         var balanceCheck = jumiaPayConnector.queryWalletBalance(
                 new ExternalBalanceQueryRequest("partner_jumiapay_gh", externalCustomerId, "GHS")

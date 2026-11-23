@@ -1,8 +1,10 @@
 package com.elepay.enterprise.settlement;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.elepay.PostgresTestBase;
+import com.elepay.common.ApiException;
 import com.elepay.enterprise.accounts.EnterpriseManagedAccountService;
 import com.elepay.enterprise.checkout.CalculatedMerchantAllocation;
 import com.elepay.enterprise.treasury.EnterpriseTreasuryService;
@@ -170,5 +172,91 @@ class EnterpriseSettlementTest extends PostgresTestBase {
         assertThat(result.shortfallDetected()).isTrue();
         assertThat(result.status()).isEqualTo("SHORTFALL_HOLD");
         assertThat(result.totalItemsReleased()).isZero();
+    }
+    @Test
+    @DisplayName("Escrow re-registration is idempotent and never overwrites escrowed amounts")
+    void escrowReRegistrationDoesNotOverwriteAmounts() {
+        String orderRef = "ORD-REREG-" + UUID.randomUUID().toString().substring(0, 8);
+        var original = List.of(new CalculatedMerchantAllocation(0, m1, "M1", "GENERAL", "item-r", 30_000L, 3_000L, 0L, 0L, 27_000L, true));
+        UUID firstId = escrowService.registerOrderItems(enterpriseId, orderRef, original, "GHS", null).get(0).id();
+
+        // Identical replay returns the same record
+        assertThat(escrowService.registerOrderItems(enterpriseId, orderRef, original, "GHS", null).get(0).id()).isEqualTo(firstId);
+
+        // A replay with an inflated net payable is rejected and the stored amount is unchanged
+        var inflated = List.of(new CalculatedMerchantAllocation(0, m1, "M1", "GENERAL", "item-r", 30_000L, 0L, 0L, 0L, 30_000L, true));
+        assertThatThrownBy(() -> escrowService.registerOrderItems(enterpriseId, orderRef, inflated, "GHS", null))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("different values");
+        assertThat(escrowService.findEscrowRecord(enterpriseId, orderRef, "item-r").orElseThrow().netPayablePesewas())
+                .isEqualTo(27_000L);
+    }
+
+    @Test
+    @DisplayName("Released escrow cannot be released again or cancelled in place")
+    void releasedEscrowIsTerminal() {
+        String orderRef = "ORD-TERM-" + UUID.randomUUID().toString().substring(0, 8);
+        var alloc = List.of(new CalculatedMerchantAllocation(0, m1, "M1", "GENERAL", "item-t", 10_000L, 1_000L, 0L, 0L, 9_000L, true));
+        escrowService.registerOrderItems(enterpriseId, orderRef, alloc, "GHS", null);
+        escrowService.confirmDelivery(enterpriseId, orderRef, "item-t", "Marketplace instruction");
+        seedPending(m1, 9_000L);
+
+        SettlementReleaseResult first = settlementEngine.releaseEligibleSettlements(enterpriseId, "GHS");
+        assertThat(first.totalNetReleasedPesewas()).isEqualTo(9_000L);
+        UUID escrowId = escrowService.findEscrowRecord(enterpriseId, orderRef, "item-t").orElseThrow().id();
+
+        assertThatThrownBy(() -> escrowService.markReleased(escrowId, first.ledgerTransactionId()))
+                .isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> escrowService.rejectItem(enterpriseId, orderRef, "item-t", "late cancel"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("refund engine");
+        assertThat(settlementEngine.releaseEligibleSettlements(enterpriseId, "GHS").totalNetReleasedPesewas()).isZero();
+        assertThat(ledger.balance(Ledger.code("merchant", m1, "available", "GHS"))).isEqualTo(9_000L);
+    }
+
+    @Test
+    @DisplayName("Concurrent settlement workers release each escrow item exactly once")
+    void concurrentSettlementWorkersReleaseOnce() throws Exception {
+        String orderRef = "ORD-CONC-" + UUID.randomUUID().toString().substring(0, 8);
+        var alloc = new java.util.ArrayList<CalculatedMerchantAllocation>();
+        for (int i = 0; i < 20; i++) {
+            alloc.add(new CalculatedMerchantAllocation(i, m2, "M2", "GENERAL", "item-c" + i, 1_000L, 100L, 0L, 0L, 900L, true));
+        }
+        escrowService.registerOrderItems(enterpriseId, orderRef, alloc, "GHS", null);
+        for (int i = 0; i < 20; i++) {
+            escrowService.confirmDelivery(enterpriseId, orderRef, "item-c" + i, "Marketplace instruction");
+        }
+        seedPending(m2, 18_000L);
+
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            var start = new java.util.concurrent.CountDownLatch(1);
+            var futures = new java.util.ArrayList<java.util.concurrent.Future<Long>>();
+            for (int w = 0; w < 4; w++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        return settlementEngine.releaseEligibleSettlements(enterpriseId, "GHS").totalNetReleasedPesewas();
+                    } catch (ApiException e) {
+                        return 0L; // a losing worker may be refused; it must not release anything
+                    }
+                }));
+            }
+            start.countDown();
+            long released = 0;
+            for (var f : futures) released += f.get(60, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(released).isEqualTo(18_000L);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(ledger.balance(Ledger.code("merchant", m2, "available", "GHS"))).isEqualTo(18_000L);
+        assertThat(ledger.balance(Ledger.code("merchant", m2, "pending", "GHS"))).isZero();
+    }
+
+    private void seedPending(UUID merchant, long amount) {
+        ledger.open("merchant", merchant, "pending", "GHS");
+        ledger.post(Ledger.Posting.of("test", "SEED-" + UUID.randomUUID(), "seed", List.of(
+                Ledger.Leg.debit("system:clearing:test:GHS", amount),
+                Ledger.Leg.credit(Ledger.code("merchant", merchant, "pending", "GHS"), amount))));
     }
 }

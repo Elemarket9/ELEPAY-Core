@@ -15,6 +15,11 @@ public record WalletCapabilities(
         boolean supportsHmacWebhooks,
         boolean supportsBatchSettlement
 ) {
+    /** No verified capabilities: used by disabled adapters awaiting an authorized partner contract. */
+    public static WalletCapabilities none() {
+        return new WalletCapabilities(false, false, false, false, false, false, false, false, false, false);
+    }
+
     public static WalletCapabilities modeADefaults() {
         return new WalletCapabilities(
                 true,  // external balances managed by partner

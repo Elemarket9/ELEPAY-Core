@@ -61,11 +61,7 @@ public class DeliveryEscrowService {
                         :gross, :net, :comm,
                         :cur, 'PENDING', 'HELD', :holdTxId
                     )
-                    ON CONFLICT (enterprise_id, order_reference, item_reference) DO UPDATE
-                    SET gross_amount_pesewas = EXCLUDED.gross_amount_pesewas,
-                        net_payable_pesewas = EXCLUDED.net_payable_pesewas,
-                        commission_pesewas = EXCLUDED.commission_pesewas,
-                        updated_at = now()
+                    ON CONFLICT (enterprise_id, order_reference, item_reference) DO NOTHING
                     """)
                     .param("id", id)
                     .param("enterpriseId", enterpriseId)
@@ -79,8 +75,19 @@ public class DeliveryEscrowService {
                     .param("holdTxId", holdTxId)
                     .update();
 
-            records.add(findEscrowRecord(enterpriseId, orderReference, itemRef)
-                    .orElseThrow(() -> ApiException.internal("escrow_save_error", "Failed to retrieve saved escrow record")));
+            DeliveryEscrowRecord saved = findEscrowRecord(enterpriseId, orderReference, itemRef)
+                    .orElseThrow(() -> ApiException.internal("escrow_save_error", "Failed to retrieve saved escrow record"));
+            // A repeated registration is idempotent only if it is identical. Escrowed amounts are never
+            // overwritten in place: a changed amount must go through an authorized adjustment or refund.
+            if (!saved.merchantId().equals(alloc.merchantId())
+                    || saved.grossAmountPesewas() != alloc.grossAmountPesewas()
+                    || saved.netPayablePesewas() != alloc.netPayablePesewas()
+                    || saved.commissionPesewas() != alloc.marketplaceCommissionPesewas()
+                    || !saved.currency().trim().equals(cur)) {
+                throw ApiException.conflict("escrow_registration_conflict",
+                        "Escrow item already registered with different values: " + orderReference + "/" + itemRef);
+            }
+            records.add(saved);
         }
 
         return records;
@@ -101,10 +108,11 @@ public class DeliveryEscrowService {
         db.sql("""
                 UPDATE enterprise_delivery_escrow
                 SET delivery_status = 'DELIVERED',
-                    delivered_at = now(),
+                    delivered_at = COALESCE(delivered_at, now()),
                     notes = :notes,
                     updated_at = now()
                 WHERE enterprise_id = :enterpriseId AND order_reference = :orderRef AND item_reference = :itemRef
+                  AND escrow_status = 'HELD'
                 """)
                 .param("notes", "Delivery confirmed by: " + confirmedBy)
                 .param("enterpriseId", enterpriseId)
@@ -121,21 +129,25 @@ public class DeliveryEscrowService {
      */
     @Transactional
     public DeliveryEscrowRecord reportMissingDelivery(UUID enterpriseId, String orderReference, String itemReference, String reason) {
-        var existing = findEscrowRecord(enterpriseId, orderReference, itemReference)
+        findEscrowRecord(enterpriseId, orderReference, itemReference)
                 .orElseThrow(() -> ApiException.notFound("Escrow item not found for order: " + orderReference));
 
-        db.sql("""
+        int updated = db.sql("""
                 UPDATE enterprise_delivery_escrow
                 SET delivery_status = 'MISSING_CONFIRMATION',
                     notes = :notes,
                     updated_at = now()
                 WHERE enterprise_id = :enterpriseId AND order_reference = :orderRef AND item_reference = :itemRef
+                  AND escrow_status = 'HELD'
                 """)
                 .param("notes", "Missing delivery reported: " + reason)
                 .param("enterpriseId", enterpriseId)
                 .param("orderRef", orderReference)
                 .param("itemRef", itemReference)
                 .update();
+        if (updated == 0) {
+            throw ApiException.conflict("invalid_state", "Escrow item is no longer held: " + orderReference + "/" + itemReference);
+        }
 
         return findEscrowRecord(enterpriseId, orderReference, itemReference).orElseThrow();
     }
@@ -146,42 +158,55 @@ public class DeliveryEscrowService {
      */
     @Transactional
     public DeliveryEscrowRecord rejectItem(UUID enterpriseId, String orderReference, String itemReference, String reason) {
-        var existing = findEscrowRecord(enterpriseId, orderReference, itemReference)
+        findEscrowRecord(enterpriseId, orderReference, itemReference)
                 .orElseThrow(() -> ApiException.notFound("Escrow item not found for order: " + orderReference));
 
-        db.sql("""
+        // Only a still-held item can be cancelled here. A released item has already reached the merchant's
+        // available balance and must be reversed through the refund engine (merchant reversal / receivable).
+        int updated = db.sql("""
                 UPDATE enterprise_delivery_escrow
                 SET delivery_status = 'REJECTED',
                     escrow_status = 'REFUNDED',
                     notes = :notes,
                     updated_at = now()
                 WHERE enterprise_id = :enterpriseId AND order_reference = :orderRef AND item_reference = :itemRef
+                  AND escrow_status = 'HELD'
                 """)
                 .param("notes", "Rejected/Cancelled: " + reason)
                 .param("enterpriseId", enterpriseId)
                 .param("orderRef", orderReference)
                 .param("itemRef", itemReference)
                 .update();
+        if (updated == 0) {
+            throw ApiException.conflict("invalid_state",
+                    "Escrow item is no longer held; use the refund engine for released items: " + orderReference + "/" + itemReference);
+        }
 
         return findEscrowRecord(enterpriseId, orderReference, itemReference).orElseThrow();
     }
 
     /**
-     * Updates an escrow item's status to RELEASED upon settlement release.
+     * Moves a held escrow item to RELEASED. Fails if the item is not HELD (already released, refunded or
+     * disputed), or was explicitly flagged as missing delivery confirmation, so the caller's release posting
+     * rolls back instead of paying the same item twice.
      */
     @Transactional
     public void markReleased(UUID escrowId, UUID ledgerReleaseTxId) {
-        db.sql("""
+        int updated = db.sql("""
                 UPDATE enterprise_delivery_escrow
                 SET escrow_status = 'RELEASED',
                     released_at = now(),
                     ledger_release_tx_id = :txId,
                     updated_at = now()
-                WHERE id = :id
+                WHERE id = :id AND escrow_status = 'HELD'
+                  AND delivery_status NOT IN ('MISSING_CONFIRMATION', 'REJECTED', 'CANCELLED', 'DISPUTED')
                 """)
                 .param("txId", ledgerReleaseTxId)
                 .param("id", escrowId)
                 .update();
+        if (updated != 1) {
+            throw ApiException.conflict("escrow_not_releasable", "Escrow item is not in a releasable state: " + escrowId);
+        }
     }
 
     public Optional<DeliveryEscrowRecord> findEscrowRecord(UUID enterpriseId, String orderReference, String itemReference) {

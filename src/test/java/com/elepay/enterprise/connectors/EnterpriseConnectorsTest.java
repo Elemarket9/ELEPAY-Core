@@ -22,8 +22,10 @@ import org.springframework.beans.factory.annotation.Autowired;
  */
 class EnterpriseConnectorsTest extends PostgresTestBase {
 
-    @Autowired
+    /** Isolated test connector: wraps an in-memory wallet double, never the production adapter. */
     private JumiaPayConnectorAdapter jumiaPayConnector;
+
+    private InMemoryModeAWalletSimulator walletSimulator;
 
     @Autowired
     private ConnectorWebhookSigner webhookSigner;
@@ -31,11 +33,22 @@ class EnterpriseConnectorsTest extends PostgresTestBase {
     @Autowired
     private SftpReconHandler reconHandler;
 
+    @Autowired
+    private EnterpriseTokenService tokenService;
+
+    @Autowired
+    private HmacWebhookVerifier webhookVerifier;
+
+    @Autowired
+    private JumiaPayConnectorAdapter productionJumiaPayConnector;
+
     private String testSecret;
 
     @BeforeEach
     void setUp() {
         testSecret = "jumia_webhook_secret_key_2026_gh";
+        walletSimulator = new InMemoryModeAWalletSimulator(tokenService, webhookVerifier);
+        jumiaPayConnector = new JumiaPayConnectorAdapter(walletSimulator, webhookSigner, reconHandler);
     }
 
     @Test
@@ -156,7 +169,7 @@ class EnterpriseConnectorsTest extends PostgresTestBase {
 
         // Seed customer balance and test query
         String customerId = "jumia_cust_test_01";
-        jumiaPayConnector.seedCustomerBalance(customerId, 200_000L); // GH₵ 2,000.00
+        walletSimulator.seedCustomerBalance(customerId, 200_000L); // GH₵ 2,000.00
 
         var balanceQuery = jumiaPayConnector.queryWalletBalance(new ExternalBalanceQueryRequest(
                 "partner_jumia", customerId, "GHS"
@@ -165,6 +178,25 @@ class EnterpriseConnectorsTest extends PostgresTestBase {
     }
 
     /** Mutable clock for deterministic testing of timeouts. */
+    @Test
+    @DisplayName("Production JumiaPay adapter is disabled: fails closed and never fabricates a result")
+    void productionJumiaPayAdapterFailsClosed() {
+        ExternalWalletConnector wallet = productionJumiaPayConnector.getWalletAdapter();
+        assertThat(wallet).isInstanceOf(JumiaPayContractAdapter.class);
+        assertThat(((JumiaPayContractAdapter) wallet).isEnabled()).isFalse();
+        assertThat(wallet.getCapabilities()).isEqualTo(WalletCapabilities.none());
+
+        var auth = new ExternalPaymentAuthRequest("idem-disabled-1", "partner_any",
+                WalletOperatingMode.MODE_A_ENTERPRISE_OWNED, "TX-DISABLED-1", "cust-1",
+                10_000L, "GHS", "sig", java.util.Map.of());
+        assertThatThrownBy(() -> productionJumiaPayConnector.authorizePayment(auth))
+                .isInstanceOf(EnterpriseWalletException.class)
+                .satisfies(e -> assertThat(((EnterpriseWalletException) e).getErrorCode())
+                        .isEqualTo(EnterpriseWalletException.ErrorCode.CONNECTOR_UNAVAILABLE));
+        assertThatThrownBy(() -> wallet.queryPaymentStatus("TX-DISABLED-1"))
+                .isInstanceOf(EnterpriseWalletException.class);
+    }
+
     private static class MutableClock extends Clock {
         private Instant current;
         private final ZoneId zone = ZoneId.of("UTC");

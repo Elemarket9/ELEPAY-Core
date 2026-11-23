@@ -314,9 +314,19 @@ public class EnterpriseRefundService {
         // 6. External Wallet Connector Call (e.g. JumiaPay Mode A refundToWallet)
         String connectorRefundId = null;
         if (request.destination() == RefundDestination.EXTERNAL_WALLET && walletEngine != null && request.externalCaptureId() != null) {
-            String connectorId = request.destinationDetails().getOrDefault("connectorId", "jumiapay-gh-v1");
+            // The enterprise must name its wallet connector explicitly; no partner is assumed by default.
+            String connectorId = request.destinationDetails() == null ? null : request.destinationDetails().get("connectorId");
+            if (connectorId == null || connectorId.isBlank()) {
+                throw ApiException.badRequest("connector_required",
+                        "destinationDetails.connectorId is required for an external wallet refund");
+            }
             Optional<ExternalWalletConnector> connectorOpt = walletEngine.getConnector(connectorId);
-            if (connectorOpt.isPresent()) {
+            if (connectorOpt.isEmpty()) {
+                // Fail closed: rolls back the refund posting rather than recording an unconfirmed wallet credit.
+                throw ApiException.badRequest("connector_not_registered",
+                        "No external wallet connector registered with id: " + connectorId);
+            }
+            {
                 ExternalWalletConnector connector = connectorOpt.get();
                 List<RefundAllocationItem> connectorItems = new ArrayList<>();
                 for (CalculatedItemRefund cItem : calculatedItems) {

@@ -4,11 +4,17 @@ import com.elepay.enterprise.wallet.*;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * Concrete production-ready Universal Enterprise Connector Adapter for JumiaPay Ghana.
- * Bridges external wallet Mode A operations with enterprise resilience features:
+ * Universal Enterprise Connector Adapter for JumiaPay Ghana.
+ *
+ * <p>In production this wraps the disabled {@link JumiaPayContractAdapter}: every wallet call fails
+ * closed until an authorized JumiaPay API contract is implemented. It is not a live connection.
+ * Tests may wrap an isolated test double through the package-visible constructor.
+ *
+ * <p>Wraps external wallet Mode A operations with enterprise resilience features:
  * - REST API client capabilities
  * - HMAC-SHA256 signed webhook generation and verification
  * - SFTP/file-based batch reconciliation
@@ -22,14 +28,24 @@ public class JumiaPayConnectorAdapter implements EnterpriseConnector {
     public static final String CONNECTOR_TYPE = "JUMIAPAY";
     public static final long DEFAULT_RATE_LIMIT_RPM = 600L; // 600 req/min
 
-    private final JumiaPayContractAdapter walletAdapter;
+    private final ExternalWalletConnector walletAdapter;
     private final ConnectorWebhookSigner webhookSigner;
     private final SftpReconHandler reconHandler;
     private final CircuitBreaker circuitBreaker;
     private final RateLimiter rateLimiter;
 
+    @Autowired
     public JumiaPayConnectorAdapter(
             JumiaPayContractAdapter walletAdapter,
+            ConnectorWebhookSigner webhookSigner,
+            SftpReconHandler reconHandler
+    ) {
+        this((ExternalWalletConnector) walletAdapter, webhookSigner, reconHandler);
+    }
+
+    /** Wraps an arbitrary wallet connector; used by isolated tests. */
+    public JumiaPayConnectorAdapter(
+            ExternalWalletConnector walletAdapter,
             ConnectorWebhookSigner webhookSigner,
             SftpReconHandler reconHandler
     ) {
@@ -84,12 +100,8 @@ public class JumiaPayConnectorAdapter implements EnterpriseConnector {
     // Wallet Delegation Methods
     // =========================================================================
 
-    public JumiaPayContractAdapter getWalletAdapter() {
+    public ExternalWalletConnector getWalletAdapter() {
         return walletAdapter;
-    }
-
-    public void seedCustomerBalance(String externalCustomerId, long balanceMinorUnits) {
-        walletAdapter.seedCustomerBalance(externalCustomerId, balanceMinorUnits);
     }
 
     public PartnerAuthResult authenticatePartner(PartnerAuthRequest request) {

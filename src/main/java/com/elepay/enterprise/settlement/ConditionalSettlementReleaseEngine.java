@@ -158,9 +158,11 @@ public class ConditionalSettlementReleaseEngine {
                        currency, delivery_status, escrow_status, delivered_at, released_at,
                        ledger_hold_tx_id, ledger_release_tx_id, notes, created_at, updated_at
                 FROM enterprise_delivery_escrow
-                WHERE enterprise_id = :enterpriseId AND escrow_status = 'HELD'
-                ORDER BY created_at ASC
+                WHERE enterprise_id = :enterpriseId AND escrow_status = 'HELD' AND currency = :cur
+                ORDER BY created_at ASC, id ASC
+                FOR UPDATE SKIP LOCKED
                 """)
+                .param("cur", cur)
                 .param("enterpriseId", enterpriseId)
                 .query(this::mapEscrowRecord)
                 .list();
@@ -176,6 +178,10 @@ public class ConditionalSettlementReleaseEngine {
                     // Retain in escrow! Missing delivery confirmation does NOT prove delivery!
                     heldItems.add(rec);
                 }
+            } else if (rec.deliveryStatus() == DeliveryStatus.MISSING_CONFIRMATION
+                    || rec.deliveryStatus() == DeliveryStatus.DISPUTED) {
+                // Even without a delivery condition, an item the enterprise explicitly flagged stays held.
+                heldItems.add(rec);
             } else {
                 eligibleItems.add(rec);
             }

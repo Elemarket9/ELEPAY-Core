@@ -25,7 +25,7 @@ class ExternalWalletConnectorTest {
 
     private EnterpriseTokenService tokenService;
     private HmacWebhookVerifier webhookVerifier;
-    private JumiaPayContractAdapter jumiaPayAdapter;
+    private InMemoryModeAWalletSimulator jumiaPayAdapter;
     private WhiteLabelWalletConnector whiteLabelConnector;
     private ExternalSettlementConnector settlementConnector;
     private ExternalWalletEngine walletEngine;
@@ -41,7 +41,7 @@ class ExternalWalletConnectorTest {
         webhookVerifier = new HmacWebhookVerifier();
         webhookVerifier.clearNonceCacheForTesting();
 
-        jumiaPayAdapter = new JumiaPayContractAdapter(tokenService, webhookVerifier);
+        jumiaPayAdapter = new InMemoryModeAWalletSimulator(tokenService, webhookVerifier);
         whiteLabelConnector = new WhiteLabelWalletConnector(tokenService, webhookVerifier);
         settlementConnector = new ExternalSettlementConnector(tokenService, webhookVerifier);
 

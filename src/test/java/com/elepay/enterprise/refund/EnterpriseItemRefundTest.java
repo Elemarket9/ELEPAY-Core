@@ -45,7 +45,7 @@ class EnterpriseItemRefundTest {
     private EnterpriseRefundLiabilityTracker liabilityTracker;
     private EnterpriseCheckoutService checkoutService;
     private ExternalWalletEngine walletEngine;
-    private JumiaPayContractAdapter jumiaPayAdapter;
+    private InMemoryModeAWalletSimulator jumiaPayAdapter;
     private EnterpriseRefundService refundService;
 
     private UUID enterpriseId;
@@ -68,7 +68,7 @@ class EnterpriseItemRefundTest {
 
         EnterpriseTokenService tokenService = new EnterpriseTokenService();
         HmacWebhookVerifier webhookVerifier = new HmacWebhookVerifier();
-        jumiaPayAdapter = new JumiaPayContractAdapter(tokenService, webhookVerifier);
+        jumiaPayAdapter = new InMemoryModeAWalletSimulator(tokenService, webhookVerifier);
 
         walletEngine = new ExternalWalletEngine(
                 List.of(jumiaPayAdapter),
@@ -517,5 +517,25 @@ class EnterpriseItemRefundTest {
         long finalCumulative = refundService.resolveCumulativeRefunded(enterpriseId, orderRef);
         assertThat(finalCumulative).isEqualTo(refundPerThread);
         assertThat(finalCumulative).isLessThanOrEqualTo(originalGross);
+    }
+    @Test
+    @DisplayName("External wallet refund fails closed when the connector is missing or not named")
+    void externalWalletRefundRequiresRegisteredConnector() {
+        String orderRef = "ORD-NO-CONNECTOR-1";
+        refundService.registerOrderGross(enterpriseId, orderRef, 50_000L);
+        var items = List.of(EnterpriseRefundItemSpecification.of("ITEM-X", merchantIds.get(0), 10_000L, 1000, "Refund"));
+
+        var unknown = new EnterpriseItemRefundRequest("idem_no_conn_1", enterpriseId, orderRef, "cap_1", "cust_x",
+                RefundDestination.EXTERNAL_WALLET, Map.of("connectorId", "unregistered-wallet"), "GHS", "r",
+                items, null, Map.of());
+        assertThatThrownBy(() -> refundService.processRefund(unknown))
+                .isInstanceOf(com.elepay.common.ApiException.class)
+                .hasMessageContaining("unregistered-wallet");
+
+        var unnamed = new EnterpriseItemRefundRequest("idem_no_conn_2", enterpriseId, orderRef, "cap_1", "cust_x",
+                RefundDestination.EXTERNAL_WALLET, Map.of(), "GHS", "r", items, null, Map.of());
+        assertThatThrownBy(() -> refundService.processRefund(unnamed))
+                .isInstanceOf(com.elepay.common.ApiException.class)
+                .hasMessageContaining("connectorId");
     }
 }
