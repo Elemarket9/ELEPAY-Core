@@ -106,10 +106,10 @@ jobs:
           path: target/bom.json
           if-no-files-found: error
 
-      - name: Verify production artifact contains no test payment implementations
+      - name: Verify production artifact contains no test or simulated implementations
         run: |
           jar tf target/elepay-core-0.1.0-SNAPSHOT.jar > jar-contents.txt
-          if grep -E 'BOOT-INF/classes/(application-(dev|sandbox|test)\.properties|com/elepay/.*(Simulated|SandboxLedger|DevTokens|PaymentIntents|ThreeDSecureService|CardIssuingService|CardAuthorizationEngine|CompanyExpenseCardService|AgentCashInService|AgentCashOutService|AgentFloatService|AgentPortalService|AirtimeDataPurchaseEngine|UtilityPaymentService|SchoolFeePaymentService|ScheduledBillPaymentService|FaceMatchingLivenessService))' jar-contents.txt; then
+          if grep -E 'BOOT-INF/classes/(application-(dev|sandbox|test)\.properties|com/elepay/.*(Simulated|Fake|Mock|Stub|Dummy|Demo|Sandbox|DevTokens|PaymentIntents|ThreeDSecureService|CardIssuingService|CardAuthorizationEngine|CompanyExpenseCardService|AgentCashInService|AgentCashOutService|AgentFloatService|AgentPortalService|AirtimeDataPurchaseEngine|UtilityPaymentService|SchoolFeePaymentService|ScheduledBillPaymentService|FaceMatchingLivenessService))' jar-contents.txt; then
             echo 'Test-only implementations are present in production artifact'; exit 1
           fi
 
@@ -124,7 +124,7 @@ jobs:
           # Production keeps the 24h destination cooling-off default.
           ELEPAY_SECURITY_DESTINATION_COOLING_OFF_HOURS: '0'
         run: |
-          mvn -B -Dspring-boot.run.profiles=sandbox,dev -Dspring-boot.run.main-class=com.elepay.SandboxApplication spring-boot:test-run > sandbox.log 2>&1 &
+          mvn -B -Dspring-boot.run.profiles=sandbox,dev -Dspring-boot.run.main-class=com.elepay.ElepayApplication spring-boot:test-run > sandbox.log 2>&1 &
           pid=$!
           trap 'cat sandbox.log; kill "$pid" 2>/dev/null || true' EXIT
           for attempt in {1..60}; do
