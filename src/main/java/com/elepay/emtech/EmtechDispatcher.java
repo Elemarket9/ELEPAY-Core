@@ -1,5 +1,6 @@
 package com.elepay.emtech;
 
+import com.elepay.common.ApiException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -32,7 +33,8 @@ public class EmtechDispatcher {
         this.complaints = new EmtechComplaintMapper(json);
     }
 
-    @Scheduled(fixedDelayString = "${elepay.emtech.poll-ms:5000}")
+    @Scheduled(fixedDelayString = "${elepay.emtech.poll-ms:5000}",
+            initialDelayString = "${elepay.emtech.poll-initial-delay-ms:15000}")
     void poll() {
         if (settings.enabled()) dispatchAvailable(50);
     }
@@ -60,7 +62,13 @@ public class EmtechDispatcher {
             outbox.markRejected(row.id(), row.attempts() + 1, 0, "mapping", e.getMessage());
             return false;
         }
-        EmtechClient.SendResult result = client.submit(row.resource(), payload);
+        EmtechClient.SendResult result;
+        try {
+            result = client.submit(row.resource(), payload);
+        } catch (ApiException | IllegalStateException e) {
+            releaseClaim(row, e);
+            return false;
+        }
         int attempts = row.attempts() + 1;
         switch (result.outcome()) {
             case SUBMITTED -> {
@@ -80,6 +88,53 @@ public class EmtechDispatcher {
             }
         }
         return false;
+    }
+
+    /**
+     * A guard refusal or a token failure must not leave the row claimed until the lease expires.
+     * A blocked address or a token 4xx will not succeed on the next poll, so those are dead-lettered.
+     * DNS and token 5xx are retried with backoff.
+     */
+    private void releaseClaim(EmtechOutbox.Row row, RuntimeException failure) {
+        int attempts = row.attempts() + 1;
+        String message = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
+        boolean permanent = permanentFailure(failure);
+        if (permanent) {
+            outbox.markRejected(row.id(), attempts, 0, failure instanceof ApiException api ? api.code() : "token", message);
+            log.warn("Emtech submission {} dead-lettered: {}", row.id(), message);
+            return;
+        }
+        long delay = settings.retryBaseMs() <= 0 ? 0 : Math.min(30_000, settings.retryBaseMs() * (1L << Math.min(attempts, 8)));
+        outbox.markRetry(row.id(), attempts, 0, "retry", message, delay, settings.maxAttempts());
+        log.warn("Emtech submission {} released for retry: {}", row.id(), message);
+    }
+
+    static boolean permanentFailure(RuntimeException failure) {
+        String message = failure.getMessage() == null ? "" : failure.getMessage();
+        if (failure instanceof ApiException) {
+            return message.contains("blocked address range")
+                    || message.contains("must use https")
+                    || message.contains("not valid")
+                    || message.contains("port 443")
+                    || message.contains("public host")
+                    || message.contains("not allowlisted")
+                    || message.contains("credentials");
+        }
+        if (message.contains("HTTP ")) {
+            int status = httpStatus(message);
+            return status >= 400 && status < 500 && status != 429;
+        }
+        return false;
+    }
+
+    private static int httpStatus(String message) {
+        int at = message.indexOf("HTTP ");
+        if (at < 0) return 0;
+        int start = at + 5;
+        int end = start;
+        while (end < message.length() && Character.isDigit(message.charAt(end))) end++;
+        if (end == start) return 0;
+        return Integer.parseInt(message.substring(start, end));
     }
 
     private JsonNode map(EmtechOutbox.Row row) {

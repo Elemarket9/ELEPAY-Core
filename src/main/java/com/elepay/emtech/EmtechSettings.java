@@ -18,6 +18,7 @@ public class EmtechSettings {
     private long retryBaseMs = 500;
     private int maxAttempts = 8;
     private long pollMs = 5000;
+    private long pollInitialDelayMs = 15000;
     private String emoneyAccountType = "";
     private String platformCity = "Accra";
     private String platformRegion = "GH-AA";
@@ -46,6 +47,8 @@ public class EmtechSettings {
     public void setMaxAttempts(int maxAttempts) { this.maxAttempts = maxAttempts; }
     public long pollMs() { return pollMs; }
     public void setPollMs(long pollMs) { this.pollMs = pollMs; }
+    public long pollInitialDelayMs() { return pollInitialDelayMs; }
+    public void setPollInitialDelayMs(long pollInitialDelayMs) { this.pollInitialDelayMs = pollInitialDelayMs; }
     public String emoneyAccountType() { return emoneyAccountType == null ? "" : emoneyAccountType.trim(); }
     public void setEmoneyAccountType(String emoneyAccountType) { this.emoneyAccountType = emoneyAccountType; }
     public String platformCity() { return platformCity; }
