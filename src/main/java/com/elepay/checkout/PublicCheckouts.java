@@ -5,6 +5,7 @@ import com.elepay.common.Idempotency;
 import com.elepay.common.References;
 import com.elepay.common.qr.EmvcoQr;
 import com.elepay.merchant.MerchantAccess;
+import com.elepay.operations.EmtechCapture;
 import com.elepay.rails.RailTransactions;
 import com.elepay.wallet.CustomerDirectory;
 import jakarta.validation.Valid;
@@ -16,6 +17,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -42,9 +44,11 @@ class PublicCheckouts {
     private final ConcurrentHashMap<String, AtomicInteger> payAttempts = new ConcurrentHashMap<>();
     private final String publicBaseUrl;
     private final com.elepay.identity.KillSwitchService killSwitchService;
+    private final EmtechCapture regulatory;
 
     PublicCheckouts(CheckoutService checkouts, MerchantAccess merchants, RailTransactions rails,
                     CustomerDirectory customers, Idempotency idempotency, JdbcClient db, PlatformTransactionManager tm,
+                    EmtechCapture regulatory,
                     @Value("${elepay.public-base-url}") String publicBaseUrl,
                     @org.springframework.beans.factory.annotation.Autowired(required = false) com.elepay.identity.KillSwitchService killSwitchService) {
         this.checkouts = checkouts;
@@ -56,6 +60,7 @@ class PublicCheckouts {
         this.tx = new TransactionTemplate(tm);
         this.publicBaseUrl = publicBaseUrl;
         this.killSwitchService = killSwitchService;
+        this.regulatory = regulatory;
     }
 
     record PublicLine(String merchant, String kind, String description, long amount) {}
@@ -103,8 +108,9 @@ class PublicCheckouts {
     @PostMapping("/v1/public/checkouts/{reference}/pay")
     public CheckoutService.PaymentResult payWithRail(@PathVariable String reference,
                                                      @RequestHeader("Idempotency-Key") String key,
+                                                     @RequestHeader(value = "X-Elepay-Channel", required = false) String channel,
                                                      @Valid @RequestBody RailPay request,
-                                                     jakarta.servlet.http.HttpServletRequest httpRequest) {
+                                                     HttpServletRequest httpRequest) {
         String msisdn = null;
         if (request.method().equals("momo")) {
             msisdn = References.msisdn(request.phone());
@@ -119,9 +125,15 @@ class PublicCheckouts {
                     "checkout_rate_limited", "Too many payment attempts for this checkout");
         }
         String caller = httpRequest.getRemoteAddr() == null ? "unknown" : httpRequest.getRemoteAddr();
+        String payChannel = payChannel(channel);
+        String coarseIp = "unknown".equals(caller) ? null : caller;
         var started = tx.execute(s -> idempotency.execute("checkout-pay:" + reference + ":" + caller, key, request,
-                CheckoutService.PaymentResult.class, () -> checkouts.startRailPayment(reference, request.method(), phone,
-                        request.network(), request.email(), publicBaseUrl + "/pay/" + reference)));
+                CheckoutService.PaymentResult.class, () -> {
+                    checkouts.noteChannel(reference, payChannel);
+                    regulatory.rememberCheckout(checkouts.load(reference, false).id(), coarseIp);
+                    return checkouts.startRailPayment(reference, request.method(), phone,
+                        request.network(), request.email(), publicBaseUrl + "/pay/" + reference);
+                }));
         if (started != null && started.attemptId() != null) {
             UUID railTx = checkouts.railTxOf(started.attemptId());
             if (railTx != null) rails.submit(railTx); // no-op unless still 'created'
@@ -131,10 +143,23 @@ class PublicCheckouts {
 
     @PostMapping("/v1/checkouts/{reference}/pay/wallet")
     public CheckoutService.PaymentResult payWithWallet(@PathVariable String reference,
-                                                       @RequestHeader("Idempotency-Key") String key) {
+                                                       @RequestHeader("Idempotency-Key") String key,
+                                                       @RequestHeader(value = "X-Elepay-Channel", required = false) String channel,
+                                                       HttpServletRequest http) {
         UUID customer = customers.currentCustomer();
+        String payChannel = payChannel(channel);
+        String coarseIp = http.getRemoteAddr();
         return tx.execute(s -> idempotency.execute("checkout-wallet:" + customer, key, Map.of("reference", reference),
-                CheckoutService.PaymentResult.class, () -> checkouts.payWithWallet(reference, customer)));
+                CheckoutService.PaymentResult.class, () -> {
+                    checkouts.noteChannel(reference, payChannel);
+                    regulatory.rememberCheckout(checkouts.load(reference, false).id(), coarseIp);
+                    return checkouts.payWithWallet(reference, customer);
+                }));
+    }
+
+    /** App clients send MOBILE_APP. Anything else on this HTTP API is the web channel, not a GPS fix. */
+    private static String payChannel(String header) {
+        return "MOBILE_APP".equals(header) ? "MOBILE_APP" : "WEB";
     }
 
     // ---- links and merchant codes -----------------------------------------------------------

@@ -1,0 +1,801 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Payment Service APIs",
+    "description": "Data capture and reporting of payments in fiat or virtual currencies",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.emtech.com/integration",
+      "description": "Test Server"
+    }
+  ],
+  "security": [
+    {
+      "x-sandbox-app-auth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Transactions",
+      "description": "Regulatory Compliance API for Transactions"
+    },
+    {
+      "name": "Device Hardware",
+      "description": "Regulatory Compliance API for Device Hardware"
+    },
+    {
+      "name": "Device Hardware Events",
+      "description": "Regulatory Compliance API for Device Hardware Events"
+    }
+  ],
+  "paths": {
+    "/compliance/payment-service/v2/devices": {
+      "post": {
+        "tags": [
+          "Device Hardware"
+        ],
+        "summary": "Add device hardware",
+        "operationId": "addDeviceV2",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/deviceV2"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Operation"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Unexpected error"
+          }
+        }
+      }
+    },
+    "/compliance/payment-service/v2/transactions": {
+      "post": {
+        "tags": [
+          "Transactions"
+        ],
+        "summary": "Add transactions",
+        "operationId": "addCryptoPSPTransactionsV2",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/cryptoPSPTransactionV2"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Unexpected error"
+          }
+        }
+      }
+    },
+    "/compliance/payment-service/v1/device-events": {
+      "post": {
+        "tags": [
+          "Device Hardware Events"
+        ],
+        "summary": "Add device hardware event",
+        "operationId": "addDeviceEvents",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/deviceEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Operation"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Unexpected error"
+          }
+        }
+      }
+    },
+    "/compliance/payment-service/v1/consumer-complaints": {
+      "post": {
+        "tags": [
+          "Consumer Complaints"
+        ],
+        "summary": "Submit Consumer Complaints",
+        "operationId": "submitComplaints",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/consumerComplaints"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Operation"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Unexpected error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "deviceV2": {
+        "required": [
+          "deviceCity",
+          "deviceConnectionType",
+          "deviceCountry",
+          "deviceId",
+          "deviceInserviceDate",
+          "deviceLatitude",
+          "deviceLongitude",
+          "deviceRegion",
+          "deviceType"
+        ],
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "A JSON object for recording any additional related data",
+            "default": null
+          },
+          "deviceId": {
+            "pattern": "[\\w-]+",
+            "type": "string",
+            "description": "Unique Device Identifier for the physical device data endpoint (This is the same as what is used for TransactionDeviceID in Transactions Endpoint and Devices Endpoint for ATM, KIOSK, POS device types)",
+            "example": "ABC123",
+            "default": null
+          },
+          "deviceCity": {
+            "type": "string",
+            "description": "City Name of the Device Location",
+            "example": "Accra",
+            "default": null
+          },
+          "deviceName": {
+            "type": "string",
+            "description": "Descriptive Name of Physical Device",
+            "example": "ABCD",
+            "default": null
+          },
+          "deviceType": {
+            "type": "string",
+            "description": "Type of physical device (eg ATM)",
+            "enum": [
+              "ATM",
+              "KIOSK",
+              "POS",
+              "OTHER"
+            ],
+            "default": null
+          },
+          "deviceRegion": {
+            "type": "string",
+            "description": "ISO-3166-2 Region Code of the State/Region associated with the DeviceCity",
+            "example": "GH-AA",
+            "default": null
+          },
+          "deviceAddress": {
+            "type": "string",
+            "description": "Text Address of Location Device is Deployed To",
+            "example": "123 Anywhere Lane",
+            "default": null
+          },
+          "deviceCountry": {
+            "type": "string",
+            "description": "ISO-3166-1 Country Code associated with the DeviceCity",
+            "example": "GH",
+            "default": null
+          },
+          "deviceModelId": {
+            "type": "string",
+            "description": "Model ID of the Device",
+            "example": "1071ix",
+            "default": null
+          },
+          "deviceLatitude": {
+            "type": "string",
+            "description": "Geospatial Latitude of Device Location",
+            "example": "5.5708352",
+            "default": null
+          },
+          "deviceLocation": {
+            "type": "string",
+            "description": "Descriptive Location of device",
+            "example": "SW Corner of Building",
+            "default": null
+          },
+          "deviceLongitude": {
+            "type": "string",
+            "description": "Geospatial Longitude of Device Location",
+            "example": "-0.187989",
+            "default": null
+          },
+          "deviceDescription": {
+            "type": "string",
+            "description": "Descriptive Details of Physical Device",
+            "example": "ABCD",
+            "default": null
+          },
+          "deviceManufacturer": {
+            "type": "string",
+            "description": "Manufacturer of Device",
+            "example": "Diebold",
+            "default": null
+          },
+          "deviceInserviceDate": {
+            "type": "string",
+            "description": "ISO8601 Z Time value of the device first deployment",
+            "format": "date-time",
+            "example": "2021-12-01T13:20:12Z",
+            "default": null
+          },
+          "deviceConnectionType": {
+            "type": "string",
+            "description": "Type of connection used to complete transactions from this device (eg WIRELESS_PHONE)",
+            "enum": [
+              "NETWORK",
+              "WIRED_PHONE",
+              "WIRELESS_PHONE"
+            ],
+            "default": null
+          },
+          "deviceManufactureYear": {
+            "maxLength": 4,
+            "type": "integer",
+            "description": "Year of Manufacture of the device as YYYY",
+            "format": "int32",
+            "example": 2021,
+            "default": null
+          }
+        },
+        "default": null
+      },
+      "deviceEvent": {
+        "required": [
+          "deviceHealth",
+          "deviceId",
+          "deviceStatus",
+          "deviceStatusDatetime"
+        ],
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "A JSON object for recording any additional related data",
+            "default": null
+          },
+          "deviceId": {
+            "pattern": "[\\w-]+",
+            "type": "string",
+            "description": "Unique Device Identifier for the physical device data endpoint (This is the same as what is used for TransactionDeviceID in Transactions Endpoint and Devices Endpoint for ATM, KIOSK, POS device types)",
+            "example": "ABC123",
+            "default": null
+          },
+          "deviceHealth": {
+            "type": "string",
+            "description": "Operational Status of the Device",
+            "enum": [
+              "OPERATIONAL",
+              "FAILED",
+              "IMPAIRED"
+            ],
+            "default": null
+          },
+          "deviceStatus": {
+            "type": "string",
+            "description": "Status Type that reflects the changed status of the Device",
+            "example": "ONLINE",
+            "enum": [
+              "HARDWARE_FAILURE",
+              "SOFTWARE_FAILURE",
+              "NETWORK_FAILURE",
+              "CASH_EMPTY",
+              "MAINTENANCE",
+              "ONLINE",
+              "OTHER"
+            ],
+            "default": null
+          },
+          "deviceStatusDatetime": {
+            "type": "string",
+            "description": "ISO8601 Z Time datetime value of the event that occurred",
+            "format": "datetime",
+            "example": "2021-12-01T13:20:12Z",
+            "default": null
+          },
+          "deviceStatusDescription": {
+            "type": "string",
+            "description": "Description of the Status Event",
+            "example": "ABCD",
+            "default": null
+          }
+        },
+        "default": null
+      },
+      "consumerComplaints": {
+        "required": [
+          "complaintId",
+          "complaintStatus",
+          "complaintStatusDatetime",
+          "complaintType",
+          "userId"
+        ],
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "A JSON object for recording any additional related data",
+            "default": null
+          },
+          "userId": {
+            "type": "string",
+            "description": "A unique identifier for the customer associated with the complaint",
+            "example": "125632",
+            "default": null
+          },
+          "complaintId": {
+            "type": "string",
+            "description": "A unique identifier for the customer service case associated with the complaint. Should be consistent across all status transitions.",
+            "example": "125632",
+            "default": null
+          },
+          "complaintType": {
+            "type": "string",
+            "description": "Type of complaint reported",
+            "example": "FRAUD",
+            "enum": [
+              "FRAUD",
+              "DISPUTE",
+              "SERVICE_ERROR",
+              "SYSTEM_DOWNTIME",
+              "MISCONDUCT OTHER"
+            ],
+            "default": null
+          },
+          "complaintStatus": {
+            "type": "string",
+            "description": "Status Type that reflects the changed status of the complaint",
+            "example": "OPENED",
+            "enum": [
+              "OPENED",
+              "CLOSED",
+              "REOPENED",
+              "PENDING_RESOLUTION",
+              "RESOLVED"
+            ],
+            "default": null
+          },
+          "resolutionDescription": {
+            "type": "string",
+            "description": "Additional relevant information relating the resolution/closure of the complaint case",
+            "example": "I still have pending case",
+            "default": null
+          },
+          "complaintStatusDatetime": {
+            "type": "string",
+            "description": "Datetime the current status change on the complaint (eg \"2021-12-01T00:00:00Z\")",
+            "format": "datetime",
+            "example": "2021-12-01T13:20:12Z",
+            "default": null
+          },
+          "complaintTypeDescription": {
+            "type": "string",
+            "description": "Additional relevant information related to ComplaintType",
+            "example": "I suspected a fraud action",
+            "default": null
+          }
+        },
+        "default": null
+      },
+      "cryptoPSPTransactionV2": {
+        "required": [
+          "destinationAccountCity",
+          "destinationAccountCountry",
+          "destinationAccountId",
+          "destinationAccountType",
+          "destinationAmount",
+          "destinationCurrency",
+          "destinationCurrencyType",
+          "originAccountCity",
+          "originAccountCountry",
+          "originAccountID",
+          "originAccountType",
+          "originAmount",
+          "originCurrency",
+          "originCurrencyType",
+          "originUserId",
+          "originUserKYCLevel",
+          "originUserKYCService",
+          "originUserKYCStatus",
+          "originUserKYCType",
+          "transactionChannel",
+          "transactionDatetime",
+          "transactionDeviceId",
+          "transactionFeeAmount",
+          "transactionFeeCurrency",
+          "transactionFeeCurrencyType",
+          "transactionId",
+          "transactionStatus",
+          "transactionType"
+        ],
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "A JSON object for recording any additional related data",
+            "default": null
+          },
+          "originAmount": {
+            "type": "number",
+            "description": "Value of the amount provided by the sending account/wallet before any conversions or fees are calculated.",
+            "example": 40.123456789,
+            "default": null
+          },
+          "originUserId": {
+            "pattern": "[\\w-]+",
+            "type": "string",
+            "description": "Unique identifier for the user originating the transaction",
+            "example": "abCd-Efgh-1234_xYz",
+            "default": null
+          },
+          "transactionId": {
+            "pattern": "[\\w-]+",
+            "type": "string",
+            "description": "Unique reference for the transaction being performed",
+            "example": "abCd-Efgh-5432_xYz",
+            "default": null
+          },
+          "originCurrency": {
+            "type": "string",
+            "description": "ISO4217 Currency code or Virtual Currency Identifier (eg \"GHS\")",
+            "example": "GHS",
+            "default": null
+          },
+          "originAccountID": {
+            "pattern": "[\\w-]+",
+            "type": "string",
+            "description": "Unique identifier for the account, or wallet originating the transaction",
+            "example": "abCd-Efgh-5678_xYz",
+            "default": null
+          },
+          "transactionType": {
+            "type": "string",
+            "description": "Type of transaction performed",
+            "example": "PAYMENT",
+            "enum": [
+              "DEPOSIT",
+              "WITHDRAWAL",
+              "EXCHANGE",
+              "PAYMENT",
+              "OTHER"
+            ],
+            "default": null
+          },
+          "destinationAmount": {
+            "type": "number",
+            "description": "Value of the amount provided by the receiving account/wallet before any conversions or fees are calculated.",
+            "example": 39.1,
+            "default": null
+          },
+          "originAccountCity": {
+            "type": "string",
+            "description": "City Name of the Origin AccountID Location",
+            "example": "Accra",
+            "default": null
+          },
+          "originAccountType": {
+            "type": "string",
+            "description": "Type of account originating the transaction",
+            "example": "BANK",
+            "enum": [
+              "CASH",
+              "CREDIT",
+              "BANK",
+              "MOBILE_MONEY",
+              "AIRTIME",
+              "CRYPTOCURRENCY"
+            ],
+            "default": null
+          },
+          "originUserKYCType": {
+            "type": "string",
+            "description": "Type of KYC Check performed on the OriginUser.\\\nHUMAN_VERIFIED = In person ID verification.\\\nNATIONAL_ID_TEXT = Lookup of provided National ID value (â€œBVNâ€, â€œTaxIDâ€, etc.) in database.\\\nNATIONAL_ID_IMAGE = Image analysis of a scanned National ID Document.\\\nMOBILE_PHONE = â€œSelfieâ€ scan Image analysis comparison to ID card.\n",
+            "example": "MOBILE_PHOTO",
+            "enum": [
+              "HUMAN_VERIFIED",
+              "NATIONAL_ID_TEXT",
+              "NATIONAL_ID_IMAGE",
+              "MOBILE_PHOTO",
+              "OTHER"
+            ],
+            "default": null
+          },
+          "transactionReason": {
+            "type": "string",
+            "description": "Details for the provider transaction status",
+            "example": "Some reason when TransactionStatus is FAILED, REJECT, SUSPECT or OTHER",
+            "default": null
+          },
+          "transactionStatus": {
+            "type": "string",
+            "description": "Status response for transaction from provider.\\\nSUCCESS = Transaction Completed Successfully.\\\nFAILED = Transaction Failed (eg Communications Failure).\\\nREJECT = Transaction Rejected (eg Non-sufficient funds).\\\nSUSPECT = Transaction Rejected for suspicious activity.\\\nOTHER = Any other status (provide details in reason).\n",
+            "example": "SUCCESS",
+            "enum": [
+              "SUCCESS",
+              "FAILED",
+              "REJECT",
+              "SUSPECT",
+              "OTHER"
+            ],
+            "default": null
+          },
+          "originCurrencyType": {
+            "type": "string",
+            "description": "Type of currency sent by OriginAccount (eg \"FIAT\")",
+            "example": "FIAT",
+            "enum": [
+              "FIAT",
+              "CREDIT",
+              "VIRTUAL"
+            ],
+            "default": null
+          },
+          "originUserKYCLevel": {
+            "type": "string",
+            "description": "Level of KYC Validation performed on OriginUser",
+            "example": "MEDIUM",
+            "enum": [
+              "MINIMUM",
+              "MEDIUM",
+              "ENHANCED",
+              "OTHER"
+            ],
+            "default": null
+          },
+          "transactionChannel": {
+            "type": "string",
+            "description": "Method of performing transaction",
+            "example": "KIOSK",
+            "enum": [
+              "WEB",
+              "MOBILE_APP",
+              "MOBILE_USSD",
+              "ATM",
+              "KIOSK",
+              "POS",
+              "OTHER"
+            ],
+            "default": null
+          },
+          "destinationCurrency": {
+            "type": "string",
+            "description": "ISO4217 Currency code or Virtual Currency  Identifier (eg \"BTC\" or \"Airtime\")",
+            "example": "GHS",
+            "default": null
+          },
+          "originAccountRegion": {
+            "type": "string",
+            "description": "ISO-3166-2 Region Code of the State/Region associated with the OriginAccountCity",
+            "example": "GH-AA",
+            "default": null
+          },
+          "originUserKYCReason": {
+            "type": "string",
+            "description": "Details about the why the KYC Check on the OriginUser was UNVERIFIED or NOTCHECKED",
+            "example": "Some reason when OriginUserKYCStatus is UNVERIFIED or NOTCHECKED",
+            "default": null
+          },
+          "originUserKYCStatus": {
+            "type": "string",
+            "description": "Status of KYC checks on Account",
+            "example": "VERIFIED",
+            "enum": [
+              "VERIFIED",
+              "UNVERIFIED",
+              "NOTCHECKED"
+            ],
+            "default": null
+          },
+          "transactionClientIp": {
+            "type": "string",
+            "description": "IPv4 or IPv6 value of the transaction (for use in Web, Mobile App channels)",
+            "example": "192.0.2.1",
+            "default": null
+          },
+          "transactionDatetime": {
+            "type": "string",
+            "description": "ISO8601 Ztime timestamp of transaction",
+            "format": "datetime",
+            "example": "2021-12-01T13:20:12Z",
+            "default": null
+          },
+          "transactionDeviceId": {
+            "pattern": "[\\w-]+",
+            "type": "string",
+            "description": "Unique Device Identifier where the transaction is performed, in the case of Kiosk/ATM/POS it should be the identifier used for the physical device data endpoint.",
+            "example": "abCd-Efgh-2468_xYz",
+            "default": null
+          },
+          "transactionLatitude": {
+            "type": "string",
+            "description": "Geospacial Latitude of Device Location",
+            "example": "5.5708352",
+            "default": null
+          },
+          "destinationAccountId": {
+            "pattern": "[\\w-]+",
+            "type": "string",
+            "description": "Unique identifier for the user, account, or wallet receiving the transaction",
+            "example": "abCd-Efgh-9876_xYz",
+            "default": null
+          },
+          "gatewayTransactionId": {
+            "pattern": "[\\w-]+",
+            "type": "string",
+            "description": "Unique identifier of transaction attempt provided by gateway service completing the transaction",
+            "example": "abcd-Efgh_123-456-xyZ",
+            "default": null
+          },
+          "originAccountCountry": {
+            "type": "string",
+            "description": "ISO-3166-1 Country Code associated with the OriginAccountCity",
+            "example": "GH",
+            "default": null
+          },
+          "originUserKYCService": {
+            "type": "string",
+            "description": "KYC Service used for OriginUser KYC Check (Company/Service name that performed KYC Check)",
+            "example": "ABC Company",
+            "default": null
+          },
+          "transactionFeeAmount": {
+            "type": "number",
+            "description": "Value of the total of all fees applied to the transaction.",
+            "example": 1.023456789,
+            "default": null
+          },
+          "transactionLongitude": {
+            "type": "string",
+            "description": "Geospacial Longitude of Device Location",
+            "example": "-0.187989",
+            "default": null
+          },
+          "originAccountProvider": {
+            "type": "string",
+            "description": "Provider of the Origin Account described by the OriginAccountType such as a Bank Name or Mobile Money provider",
+            "default": null
+          },
+          "destinationAccountCity": {
+            "type": "string",
+            "description": "City Name of the DestinationAccountId Location",
+            "example": "Accra",
+            "default": null
+          },
+          "destinationAccountType": {
+            "type": "string",
+            "description": "Type of account receiving the transaction",
+            "example": "BANK",
+            "enum": [
+              "CASH",
+              "CREDIT",
+              "BANK",
+              "MOBILE_MONEY",
+              "AIRTIME",
+              "CRYPTOCURRENCY"
+            ],
+            "default": null
+          },
+          "transactionFeeCurrency": {
+            "type": "string",
+            "description": "ISO4217 Currency code or Virtual Currency Identifier (eg \"GHS\")",
+            "example": "GHS",
+            "default": null
+          },
+          "destinationCurrencyType": {
+            "type": "string",
+            "description": "Type of currency received by DestinationAccount",
+            "example": "FIAT",
+            "enum": [
+              "FIAT",
+              "CREDIT",
+              "VIRTUAL"
+            ],
+            "default": null
+          },
+          "destinationAccountRegion": {
+            "type": "string",
+            "description": "ISO-3166-2 Region Code of the State/Region associated with the DestinationAccountCity",
+            "example": "GH-AA",
+            "default": null
+          },
+          "gatewayTransactionReason": {
+            "type": "string",
+            "description": "Details for the gateway service transaction status",
+            "default": null
+          },
+          "gatewayTransactionStatus": {
+            "type": "string",
+            "description": "Status response of external gateway service for the transaction",
+            "default": null
+          },
+          "originUserKYCTypeDetails": {
+            "type": "string",
+            "description": "Specific form of identification used for KYC Check of OriginUser (eg â€œPassportâ€, â€œDriverâ€™s Licenseâ€, â€œTaxIDâ€, â€œBVNâ€, etc)",
+            "example": "Passport",
+            "default": null
+          },
+          "destinationAccountCountry": {
+            "type": "string",
+            "description": "ISO-3166-1 Country Code associated with the DestinationAccountCity",
+            "example": "GH",
+            "default": null
+          },
+          "destinationAccountProvider": {
+            "type": "string",
+            "description": "Provider of the Destination Account described by the DestinationAccountType such as a Bank Name or Mobile Money provider",
+            "default": null
+          },
+          "gatewayTransactionProvider": {
+            "type": "string",
+            "description": "Name of external gateway service completing the transaction",
+            "default": null
+          },
+          "transactionFeeCurrencyType": {
+            "type": "string",
+            "description": "Type of currency transaction fees were assessed in",
+            "example": "FIAT",
+            "enum": [
+              "FIAT",
+              "VIRTUAL"
+            ],
+            "default": null
+          }
+        },
+        "default": null
+      }
+    },
+    "securitySchemes": {
+      "x-sandbox-app-auth": {
+        "type": "http",
+        "description": "JWT based authentication is required to access these APIs.\n## How to create access token\n\nGet access token using client Id and client Secret provided on the App details page.\n\n    Request:\n\n     URL: https://api.emtech.com/integration/v1/auth/token\n     Type: POST\n     Body:\n     {\n     \"clientId\": \"{App client Id}\",\n     \"clientSecret\": \"{App client secret}\"\n     }\n\n    Response:\n\n     {\n     \"accessToken\": \"{Access token}\",\n     \"expiryMS\": {Time in milliseconds}\n     }\n## How to pass access token in each API\nAdd this bearer token in x-sandbox-app-auth header. E.g Bearer {Access token}\n",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  }
+}
