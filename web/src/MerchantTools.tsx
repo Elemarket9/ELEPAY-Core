@@ -304,6 +304,22 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
 
   useEffect(() => { try { localStorage.setItem(TAX_KEY(merchant.id), taxPercent); } catch { /* ignore */ } }, [taxPercent, merchant.id]);
   useEffect(() => { if (digital?.payUrl) void QRCode.toDataURL(digital.payUrl, { margin: 1, width: 220 }).then(setQr); else setQr(null); }, [digital]);
+  // A privacy-limited local customer mirror; no customer details, credentials or card data.
+  useEffect(() => {
+    const channel = new BroadcastChannel("elepay-pos-display:" + merchant.id);
+    const products = activeOffline?.items.map((i) => ({ label: i.itemName, quantity: i.quantity,
+      totalPesewas: i.unitPricePesewas * i.quantity })) ?? cart.map((c) => ({
+      label: itemLabel(c.row), quantity: c.qty, totalPesewas: c.row.retailPricePesewas * c.qty,
+    }));
+    const update = { kind: "sale", merchantName: merchant.tradingName, items: products,
+      totalPesewas: activeOffline?.totalPesewas ?? order?.totalPesewas ?? total,
+      amountPaidPesewas: activeOffline?.payments.reduce((s, p) => s + p.amountPesewas, 0) ??
+        order?.paidPesewas ?? 0,
+      orderStatus: activeOffline ? "LOCAL_UNRECONCILED" : order?.status ?? "OPEN",
+      updatedAt: Date.now() };
+    channel.postMessage(update);
+    return () => channel.close();
+  }, [merchant.id, merchant.tradingName, cart, activeOffline, order, total]);
 
   const add = (row: CatalogRow) => setCart((c) => c.some((x) => x.row.variantId === row.variantId)
     ? c.map((x) => x.row.variantId === row.variantId ? { ...x, qty: x.qty + 1 } : x) : [...c, { row, qty: 1 }]);
@@ -548,6 +564,9 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     <div className="pos-layout">
       <div>
         <h3>Products</h3>
+        <button className="secondary" onClick={() => window.open(
+          "/merchant/customer-display?merchantId=" + encodeURIComponent(merchant.id),
+          "elepay-customer-display", "noopener,noreferrer")}>Open second-screen customer display</button>
         <p role="status" className={networkOnline ? "notice" : "notice warning"}>
           {offlineMode ? "OFFLINE MODE — cash collected locally; electronic payments unavailable" : "Network available (cloud status not guaranteed)"}
         </p>

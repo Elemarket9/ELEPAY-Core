@@ -8,6 +8,7 @@ const MerchantDashboard = lazy(() => import("./Merchant").then((m) => ({ default
 const OpsConsole = lazy(() => import("./Ops").then((m) => ({ default: m.OpsConsole })));
 const Wallet = lazy(() => import("./Wallet").then((m) => ({ default: m.Wallet })));
 const Kitchen = lazy(() => import("./Kitchen").then((m) => ({ default: m.Kitchen })));
+const CustomerDisplay = lazy(() => import("./CustomerDisplay").then((m) => ({ default: m.CustomerDisplay })));
 const LanKitchen = lazy(() => import("./LanKitchen").then((m) => ({ default: m.LanKitchen })));
 const DeveloperPortal = lazy(() => import("./Developer").then((m) => ({ default: m.DeveloperPortal })));
 import "./styles.css";
@@ -68,6 +69,7 @@ function App() {
         <button className="link" onClick={() => void signOut().then(() => window.location.assign("/"))}>Sign out</button></nav>
     </header>
   );
+  if (path === "/merchant/customer-display") return <SignedIn><CustomerDisplay /></SignedIn>;
   if (path.startsWith("/merchant")) return <>{header}<SignedIn><MerchantDashboard /></SignedIn></>;
   if (path.startsWith("/developer")) return <>{header}<SignedIn><DeveloperPortal /></SignedIn></>;
   if (path.startsWith("/ops")) return <>{header}<SignedIn roles={["ops"]}><OpsConsole /></SignedIn></>;
