@@ -1,0 +1,17 @@
+[Unit]
+Description=ELEPAY encrypted PostgreSQL backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=elepay-backup
+Group=elepay-backup
+EnvironmentFile=/etc/elepay/pos-backup.env
+ExecStart=/opt/elepay/scripts/pos-backup.sh
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/backups/elepay
