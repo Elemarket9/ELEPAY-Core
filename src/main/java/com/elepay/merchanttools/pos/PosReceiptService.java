@@ -41,8 +41,14 @@ public class PosReceiptService {
 
     @Transactional
     public PosReceipt generateReceipt(UUID orderId) {
+        db.sql("SELECT id FROM pos_order WHERE id = :id FOR UPDATE").param("id", orderId)
+                .query(UUID.class).optional()
+                .orElseThrow(() -> com.elepay.common.ApiException.notFound("Order not found"));
         PosOrderService.PosOrder order = orderService.getOrder(orderId).orElseThrow();
         if (!"PAID".equals(order.status())) throw com.elepay.common.ApiException.conflict("order_unpaid", "Payment is not complete");
+        // A printed receipt can be requested repeatedly or from two tills; only one record is issued.
+        Optional<PosReceipt> existing = findByOrderId(orderId);
+        if (existing.isPresent()) return existing.get();
         List<PosOrderService.PosOrderItem> items = orderService.listOrderItems(orderId);
         List<PosOrderService.TenderPayment> payments = orderService.listTenderPayments(orderId);
 
@@ -141,7 +147,7 @@ public class PosReceiptService {
             SELECT id, receipt_number, order_id, digital_receipt_url,
                    qr_payload, escpos_formatted_text, created_at
             FROM pos_receipt WHERE order_id = :orderId
-            LIMIT 1
+            ORDER BY created_at ASC, id ASC LIMIT 1
             """)
             .param("orderId", orderId)
             .query(PosReceipt.class)

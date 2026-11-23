@@ -222,6 +222,39 @@ public class PosCommerceTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Repeated receipt creation issues exactly one paid receipt")
+    void receiptCreationIsIdempotent() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Tea", BigDecimal.ONE,
+                        750L, 0L, 0L, "[]", null, null, null)), 0L, 0L, 0L, "STANDARD");
+        orderService.addTenderPayment(order.id(), TenderType.CASH, 750L, null);
+        var first = receiptService.generateReceipt(order.id());
+        var second = receiptService.generateReceipt(order.id());
+        assertThat(second.id()).isEqualTo(first.id());
+        assertThat(db.sql("SELECT count(*) FROM pos_receipt WHERE order_id = :o")
+                .param("o", order.id()).query(Long.class).single()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("Item and amount split previews preserve total including order discount")
+    void itemAndAmountSplitConservePesewas() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(
+                    new PosOrderService.OrderItemInput(null, "Fish", BigDecimal.ONE, 1001L, 0L, 0L, "[]", 1, null, null),
+                    new PosOrderService.OrderItemInput(null, "Rice", BigDecimal.ONE, 999L, 0L, 0L, "[]", 2, null, null)),
+                101L, 2L, 3L, "STANDARD");
+        assertThat(splitBillService.splitBillByItem(order.id()).portions().stream()
+                .mapToLong(PosSplitBillService.ItemSplitPortion::amountPesewas).sum())
+                .isEqualTo(order.totalPesewas());
+        var byAmount = splitBillService.splitBillByAmount(order.id(), 500L);
+        assertThat(byAmount.firstPesewas() + byAmount.remainingPesewas())
+                .isEqualTo(order.totalPesewas());
+        assertThat(splitBillService.splitBillBySeats(order.id()).seatGroups().stream()
+                .mapToLong(PosSplitBillService.SeatSplitGroup::totalDuePesewas).sum())
+                .isEqualTo(order.totalPesewas());
+    }
+
+    @Test
     @DisplayName("Domain 1: Bill splitting (even splits with integer remainder & seat splits)")
     void testBillSplitting() {
         String sn3 = "SN-TERM-" + UUID.randomUUID().toString().substring(0, 8);

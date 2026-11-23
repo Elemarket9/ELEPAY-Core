@@ -313,6 +313,19 @@ public class PosController {
         return splitBillService.splitBillBySeats(orderId);
     }
 
+    @PostMapping("/orders/{orderId}/split/items")
+    public PosSplitBillService.ItemSplitResult splitBillByItem(@PathVariable UUID orderId) {
+        verifyOrder(orderId);
+        return splitBillService.splitBillByItem(orderId);
+    }
+
+    @PostMapping("/orders/{orderId}/split/amount")
+    public PosSplitBillService.AmountSplitResult splitBillByAmount(@PathVariable UUID orderId,
+            @RequestParam long firstPesewas) {
+        verifyOrder(orderId);
+        return splitBillService.splitBillByAmount(orderId, firstPesewas);
+    }
+
     // Receipts
     @PostMapping("/orders/{orderId}/receipt")
     public PosReceiptService.PosReceipt generateReceipt(@PathVariable UUID orderId) {

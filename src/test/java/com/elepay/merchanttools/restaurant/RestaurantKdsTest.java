@@ -132,6 +132,55 @@ public class RestaurantKdsTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("Moving an occupied order relabels its kitchen ticket; close requires served and paid")
+    void transferThenCloseWithServiceAndPayment() {
+        var plan = tableService.createFloorPlan(merchantId, "Hall", "{}");
+        var from = tableService.createTable(merchantId, plan.id(), "A-1", 4);
+        var to = tableService.createTable(merchantId, plan.id(), "A-2", 4);
+        var other = tableService.createTable(merchantId, plan.id(), "A-3", 4);
+        var inputs = List.of(new PosOrderService.OrderItemInput(null, "Fried Yam", BigDecimal.ONE,
+                2000L, 0L, 0L, "[]", 1, "MAIN", null));
+        var order = posOrderService.createOrder(merchantId, null, null, null, null,
+                inputs, 0L, 0L, 0L, "DINE_IN", from.id());
+        var ticket = kdsService.getActiveTickets(merchantId).stream()
+                .filter(t -> t.orderId().equals(order.id())).findFirst().orElseThrow();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> tableService.closeServedAndPaid(from.id()))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+        tableService.moveOrder(from.id(), to.id());
+        assertThat(tableService.getTable(from.id()).orElseThrow().status()).isEqualTo("DIRTY");
+        assertThat(tableService.getTable(to.id()).orElseThrow().currentOrderId()).isEqualTo(order.id());
+        assertThat(kdsService.getTicket(ticket.id()).orElseThrow().tableNumber()).isEqualTo("A-2");
+        var otherOrder = posOrderService.createOrder(merchantId, null, null, null, null,
+                inputs, 0L, 0L, 0L, "DINE_IN", other.id());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> tableService.moveOrder(to.id(), other.id()))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+        assertThat(tableService.getTable(to.id()).orElseThrow().currentOrderId()).isEqualTo(order.id());
+        posOrderService.addTenderPayment(order.id(), com.elepay.merchanttools.pos.TenderType.CASH, 2000L, null);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> tableService.closeServedAndPaid(to.id()))
+                .isInstanceOf(com.elepay.common.ApiException.class);
+        kdsService.bumpTicket(ticket.id());
+        kdsService.bumpTicket(ticket.id());
+        kdsService.bumpTicket(ticket.id());
+        assertThat(tableService.closeServedAndPaid(to.id()).status()).isEqualTo("DIRTY");
+        assertThat(tableService.getTable(to.id()).orElseThrow().currentOrderId()).isNull();
+    }
+
+    @Test
+    @DisplayName("Seat shares preserve discounts, taxes and tips to the pesewa")
+    void seatSharesPreserveTotalWithRounding() {
+        var order = posOrderService.createOrder(merchantId, null, null, null, null,
+            List.of(
+                new PosOrderService.OrderItemInput(null, "A", BigDecimal.ONE, 1001L, 0L, 0L, "[]", 1, "MAIN", null),
+                new PosOrderService.OrderItemInput(null, "B", BigDecimal.ONE, 1000L, 0L, 0L, "[]", 2, "MAIN", null)),
+                101L, 3L, 9L, "RESTAURANT");
+        var split = splitBillService.splitBySeat(order.id());
+        assertThat(split.seatBills().stream().mapToLong(RestaurantSplitBillService.SeatBill::totalDuePesewas).sum())
+                .isEqualTo(order.totalPesewas());
+        assertThat(split.seatBills().stream().mapToLong(RestaurantSplitBillService.SeatBill::allocatedDiscountPesewas).sum())
+                .isEqualTo(101L);
+    }
+
+    @Test
     @DisplayName("Domain 4: Modifiers and options for customized dishes")
     void testItemModifiers() {
         var group = modifierService.createModifierGroup(merchantId, "Meat Choice", 1, 1, true);

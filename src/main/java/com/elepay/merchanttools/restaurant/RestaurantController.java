@@ -76,7 +76,7 @@ public class RestaurantController {
 
     @PostMapping("/tables/{tableId}/status")
     public RestaurantTableService.RestaurantTable updateTableStatus(@PathVariable UUID tableId, @RequestParam TableStatus status) {
-        access.operate(TABLE, tableId);
+        access.manage(TABLE, tableId);
         return tableService.updateTableStatus(tableId, status);
     }
 
@@ -89,8 +89,27 @@ public class RestaurantController {
 
     @PostMapping("/tables/{tableId}/vacate")
     public RestaurantTableService.RestaurantTable vacateTable(@PathVariable UUID tableId, @RequestParam(defaultValue = "true") boolean markDirty) {
-        access.operate(TABLE, tableId);
+        access.manage(TABLE, tableId);
         return tableService.vacateTable(tableId, markDirty);
+    }
+
+    /** Staff can transfer a whole order to an available table; financial split is separate. */
+    @PostMapping("/tables/{tableId}/move")
+    public RestaurantTableService.RestaurantTable moveTable(@PathVariable UUID tableId,
+            @RequestParam UUID destinationId) {
+        UUID merchantId = access.operate(TABLE, tableId);
+        access.belongs(merchantId, TABLE, destinationId);
+        var table = tableService.getTable(tableId).orElseThrow(() -> com.elepay.common.ApiException.notFound("Table not found"));
+        if (table.currentOrderId() == null)
+            throw com.elepay.common.ApiException.conflict("source_table_empty", "Table has no open order");
+        access.belongs(merchantId, ORDER, table.currentOrderId());
+        return tableService.moveOrder(tableId, destinationId);
+    }
+
+    @PostMapping("/tables/{tableId}/close")
+    public RestaurantTableService.RestaurantTable closeTable(@PathVariable UUID tableId) {
+        access.operate(TABLE, tableId);
+        return tableService.closeServedAndPaid(tableId);
     }
 
     // Modifier endpoints

@@ -1,6 +1,7 @@
 package com.elepay.merchanttools.restaurant;
 
 import com.elepay.merchanttools.pos.PosOrderService;
+import com.elepay.common.ProportionalAllocation;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -19,6 +20,7 @@ public class RestaurantSplitBillService {
     public record SeatBill(
             int seatNumber,
             long itemsTotalPesewas,
+            long allocatedDiscountPesewas,
             long allocatedTaxPesewas,
             long allocatedTipPesewas,
             long totalDuePesewas,
@@ -36,31 +38,25 @@ public class RestaurantSplitBillService {
         List<PosOrderService.PosOrderItem> items = orderService.listOrderItems(orderId);
 
         Map<Integer, List<PosOrderService.PosOrderItem>> seatMap = new HashMap<>();
-        long grandItemsTotal = 0;
 
         for (PosOrderService.PosOrderItem item : items) {
             int seat = item.seatNumber() != null ? item.seatNumber() : 1;
             seatMap.computeIfAbsent(seat, k -> new ArrayList<>()).add(item);
-            grandItemsTotal += item.totalPesewas();
         }
 
+        List<Integer> seats = seatMap.keySet().stream().sorted().toList();
+        List<Long> weights = seats.stream()
+                .map(seat -> seatMap.get(seat).stream().mapToLong(PosOrderService.PosOrderItem::totalPesewas).sum())
+                .toList();
+        List<Long> discounts = ProportionalAllocation.allocate(order.discountPesewas(), weights);
+        List<Long> taxes = ProportionalAllocation.allocate(order.taxPesewas(), weights);
+        List<Long> tips = ProportionalAllocation.allocate(order.tipPesewas(), weights);
         List<SeatBill> bills = new ArrayList<>();
-        if (grandItemsTotal == 0) {
-            grandItemsTotal = 1; // avoid division by zero
-        }
-
-        for (Map.Entry<Integer, List<PosOrderService.PosOrderItem>> entry : seatMap.entrySet()) {
-            long seatItemTotal = 0;
-            for (PosOrderService.PosOrderItem it : entry.getValue()) {
-                seatItemTotal += it.totalPesewas();
-            }
-
-            double ratio = (double) seatItemTotal / grandItemsTotal;
-            long seatTax = Math.round(order.taxPesewas() * ratio);
-            long seatTip = Math.round(order.tipPesewas() * ratio);
-            long seatTotal = seatItemTotal + seatTax + seatTip;
-
-            bills.add(new SeatBill(entry.getKey(), seatItemTotal, seatTax, seatTip, seatTotal, entry.getValue()));
+        for (int i = 0; i < seats.size(); i++) {
+            long due = Math.addExact(Math.addExact(Math.subtractExact(weights.get(i), discounts.get(i)),
+                    taxes.get(i)), tips.get(i));
+            bills.add(new SeatBill(seats.get(i), weights.get(i), discounts.get(i), taxes.get(i),
+                    tips.get(i), due, seatMap.get(seats.get(i))));
         }
 
         return new RestaurantSplitResult(orderId, order.totalPesewas(), bills);
