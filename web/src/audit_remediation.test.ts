@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "./api";
 import { formatSplitReceipt, safeRedirectUrl } from "./Checkout";
 import { formatDualControlOutcome } from "./Ops";
-import { sanitizeCsvCell, transactionStatusClass } from "./Wallet";
+import { sanitizeCsvCell, transactionStatusClass, decodePendingTransfer, confirmationExpired, statementWindow, searchWalletHistory } from "./Wallet";
 import { safeReturnPath } from "./auth";
 
 describe("Audit Remediation Tests", () => {
@@ -118,6 +118,32 @@ describe("Audit Remediation Tests", () => {
     expect(transactionStatusClass("succeeded")).toBe("active");
     expect(transactionStatusClass("failed")).toBe("failed");
     expect(transactionStatusClass("unknown")).toBe("pending");
+  });
+
+  it("preserves the exact transfer recovery key and amount", () => {
+    const p = { key: "idem-123", confirmationId: "11111111-1111-1111-1111-111111111111", amount: 5000 };
+    expect(decodePendingTransfer(JSON.stringify(p))).toEqual(p);
+    expect(decodePendingTransfer(null)).toBeNull();
+    expect(() => decodePendingTransfer(JSON.stringify({...p, amount: -5}))).toThrow();
+    expect(() => decodePendingTransfer("{")).toThrow();
+  });
+  it("rejects expired or malformed confirmation timestamps", () => {
+    const now = Date.parse("2026-11-24T12:00:00Z");
+    expect(confirmationExpired("2026-11-24T12:00:01Z", now)).toBe(false);
+    expect(confirmationExpired("2026-11-24T12:00:00Z", now)).toBe(true);
+    expect(confirmationExpired("invalid", now)).toBe(true);
+  });
+  it("uses an inclusive Ghana calendar range of at most 31 days", () => {
+    expect(statementWindow("2026-11-01", "2026-11-30")).toEqual({from:"2026-11-01T00:00:00.000Z",to:"2026-12-01T00:00:00.000Z"});
+    expect(statementWindow("2026-10-01", "2026-11-01")).toBeNull();
+    expect(statementWindow("2026-02-30", "2026-03-01")).toBeNull();
+  });
+  it("filters history by text and status without changing the underlying records", () => {
+    const rows = [{reference:"TOP-1",kind:"topup",amount:100,status:"completed",counterparty:"Ama",createdAt:"2026-11-24"},{reference:"PAY-2",kind:"payout",amount:200,status:"returned",counterparty:null,createdAt:"2026-11-24"}];
+    expect(searchWalletHistory(rows,"ama","active")).toEqual([rows[0]]);
+    expect(searchWalletHistory(rows,"","failed")).toEqual([rows[1]]);
+    expect(rows).toHaveLength(2);
+    expect(sanitizeCsvCell("  =1+1")).toContain("'  =1+1");
   });
 
   describe("Ops.tsx dual-control proposal handling", () => {
