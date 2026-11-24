@@ -10,9 +10,16 @@ import {
   normalizeNfcTapResult,
   normalizeTenderResult,
   parseHeldCartPayload,
+  decodePosTender,
+  decodeSavedPosOrder,
+  exactBarcodeMatch,
+  remainingPosBalance,
+  isPaidPosOrder,
 } from "./posHelpers";
 
 describe("POS & Terminal Helpers", () => {
+  it("requires a fully paid POS order, not merely an approved rail status",()=>{const o={id:"id",orderNumber:"1",totalPesewas:1000,paidPesewas:1000,changePesewas:0,status:"PAID"};expect(isPaidPosOrder(o)).toBe(true);expect(isPaidPosOrder({...o,status:"SUCCEEDED"})).toBe(false);expect(isPaidPosOrder({...o,paidPesewas:999})).toBe(false);expect(remainingPosBalance({...o,paidPesewas:300})).toBe(700);});
+  it("keeps exact tender recovery and rejects ambiguous barcode matches",()=>{const a={orderId:"11111111-1111-1111-1111-111111111111",key:"original",tenderType:"MOMO",amountPesewas:500,phone:"233241234567",network:"mtn",checkoutRef:null};expect(decodePosTender(JSON.stringify(a))).toEqual(a);expect(()=>decodePosTender(JSON.stringify({...a,amountPesewas:0}))).toThrow();expect(exactBarcodeMatch([{barcode:"0012",sku:"A"}],"0012")).toEqual({barcode:"0012",sku:"A"});expect(exactBarcodeMatch([{barcode:"0012",sku:"A"},{barcode:"0012",sku:"B"}],"0012")).toBeNull();expect(()=>decodeSavedPosOrder(JSON.stringify({key:"x",payload:{merchantId:"other",items:[]},orderId:null}),"mine")).toThrow();});
   it("detects Stage 1 FEATURE_NOT_ENABLED ApiError", () => {
     expect(isFeatureNotEnabled(new ApiError(404, "FEATURE_NOT_ENABLED", "This module is disabled in Stage 1"))).toBe(true);
     expect(isFeatureNotEnabled(new ApiError(404, "not_found", "Not found"))).toBe(false);

@@ -1,574 +1,148 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { api, ApiError, newKey } from "../api";
+import { api, newKey } from "../api";
 import { formatMoney, normalizeGhanaPhone, parseMoney } from "../money";
-import {
-  isFeatureNotEnabled,
-  isTerminalStatusFailed,
-  isTerminalStatusPaid,
-  MOMO_NETWORKS,
-  MomoNetwork,
-  NfcTapResult,
-  NormalizedNfcTapResult,
-  normalizeNfcTapResult,
-  normalizeTenderResult,
-  PosOrder,
-  TenderInitiation,
-  TenderMode,
-} from "./posHelpers";
+import { safeRedirectUrl } from "../Checkout";
+import { decodePosTender, isFeatureNotEnabled, isPaidPosOrder, MOMO_NETWORKS, MomoNetwork, normalizeTenderResult, PosOrder, PosTenderRecovery, TenderInitiation, TenderMode, remainingPosBalance } from "./posHelpers";
 
-interface PosTenderPanelProps {
+interface Props {
   merchantId: string;
   terminalId: string | null;
   totalPesewas: number;
+  order: PosOrder | null;
   ensureOrder: () => Promise<PosOrder>;
   onOrderPaid: (order: PosOrder) => Promise<void>;
   onModuleDisabled: () => void;
   onClearCart?: () => void;
   hasOrder: boolean;
 }
+const timeout = () => AbortSignal.timeout(20000);
 
-interface DigitalCheckoutFallback {
-  id: string;
-  reference: string;
-  amount: number;
-  status: string;
-  payUrl: string | null;
-}
-
-export function PosTenderPanel({
-  merchantId,
-  terminalId,
-  totalPesewas,
-  ensureOrder,
-  onOrderPaid,
-  onModuleDisabled,
-  onClearCart,
-  hasOrder,
-}: PosTenderPanelProps) {
+export function PosTenderPanel({ merchantId, terminalId, totalPesewas, order, ensureOrder, onOrderPaid, onModuleDisabled, onClearCart, hasOrder }: Props) {
   const [mode, setMode] = useState<TenderMode>("CASH");
   const [cashInput, setCashInput] = useState("");
-  const [momoPhone, setMomoPhone] = useState("");
-  const [momoNetwork, setMomoNetwork] = useState<MomoNetwork>("mtn");
-  const [nfcKsn, setNfcKsn] = useState("");
-  const [nfcEmvTlvHex, setNfcEmvTlvHex] = useState("");
-  const [nfcMaskedPan, setNfcMaskedPan] = useState("");
-  const [activeOrder, setActiveOrder] = useState<PosOrder | null>(null);
-  const [pendingRef, setPendingRef] = useState<string | null>(null);
-  const [checkoutRef, setCheckoutRef] = useState<string | null>(null);
-  const [pollStatus, setPollStatus] = useState<string | null>(null);
-  const [qrPayload, setQrPayload] = useState<string | null>(null);
-  const [qrReference, setQrReference] = useState<string | null>(null);
-  const [qrImage, setQrImage] = useState<string | null>(null);
-  const [cardPayUrl, setCardPayUrl] = useState<string | null>(null);
-  const [nfcResult, setNfcResult] = useState<NormalizedNfcTapResult | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const completingRef = useRef(false);
-
-  const stopPolling = useCallback(() => {
-    if (pollTimerRef.current !== null) {
-      clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
+  const [phone, setPhone] = useState("");
+  const [network, setNetwork] = useState<MomoNetwork>("mtn");
+  const storageKey = "elepay.pos.tender." + merchantId;
+  const [recovery,setRecovery] = useState<{attempt:PosTenderRecovery|null;blocked:boolean}>(()=>{try{return {attempt:decodePosTender(sessionStorage.getItem(storageKey)),blocked:false};}catch{return {attempt:null,blocked:true};}});
+  const [error,setError] = useState<string|null>(null);
+  const [status,setStatus] = useState<string|null>(null);
+  const [busy,setBusy] = useState(false);
+  const [qr,setQr] = useState<string|null>(null);
+  const lock=useRef(false);
+  const current=useRef(recovery.attempt);
+  const alive=useRef(true);
+  const callbacks=useRef({onOrderPaid,onModuleDisabled});
+  callbacks.current={onOrderPaid,onModuleDisabled};
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
+  const save=useCallback((a:PosTenderRecovery)=>{
+    sessionStorage.setItem(storageKey,JSON.stringify(a));current.current=a;
+    if(alive.current)setRecovery({attempt:a,blocked:false});
+  },[storageKey]);
+  const clear=useCallback(()=>{
+    sessionStorage.removeItem(storageKey);current.current=null;
+    if(alive.current)setRecovery({attempt:null,blocked:false});
+  },[storageKey]);
+  const finish=useCallback(async (ord:PosOrder)=>{
+    if(!isPaidPosOrder(ord))throw new Error("Order is not fully paid. No receipt was issued.");
+    // Parent persists the order until receipt generation succeeds.
+    clear();
+    await callbacks.current.onOrderPaid(ord);
+  },[clear]);
+  const verify=useCallback(async (a:PosTenderRecovery, allowConfirm:boolean)=>{
+    const ord=await api<PosOrder>("/v1/pos/orders/"+a.orderId,{signal:timeout()});
+    if(ord.id!==a.orderId)throw new Error("Order identity mismatch");
+    if(isPaidPosOrder(ord)){await finish(ord);return;}
+    if(!a.checkoutRef){if(alive.current)setStatus(ord.status+" · no checkout reference yet");return;}
+    const st=await api<{reference:string;status:string;railStatus:string|null;message?:string;redirectUrl?:string}>(`/v1/public/checkouts/${encodeURIComponent(a.checkoutRef)}/status`,{anonymous:true,signal:timeout()});
+    if(st.reference!==a.checkoutRef)throw new Error("Payment reference mismatch");
+    if(alive.current)setStatus(st.status+(st.railStatus?" / "+st.railStatus:""));
+    if(st.status==="paid"&&allowConfirm){
+      const updated=await api<PosOrder>(`/v1/pos/orders/${a.orderId}/digital-checkout/confirm`,{method:"POST",signal:timeout()});
+      if(updated.id!==a.orderId)throw new Error("Order identity mismatch");
+      if(isPaidPosOrder(updated)){await finish(updated);return;}
+      throw new Error("Payment received but POS order is not fully paid. Check the order before accepting another tender.");
     }
-  }, []);
+  },[finish]);
+  const check=useCallback(async()=>{
+    const a=current.current;if(!a||lock.current)return;
+    lock.current=true;if(alive.current)setBusy(true);
+    try{await verify(a,true);if(alive.current)setError(null);}
+    catch(e){if(isFeatureNotEnabled(e))callbacks.current.onModuleDisabled();else if(alive.current)setError(e instanceof Error?e.message:"Status not verified. Do not accept another payment.");}
+    finally{lock.current=false;if(alive.current)setBusy(false);}
+  },[verify]);
+  useEffect(()=>{
+    if(!recovery.attempt)return;
+    const timer=setInterval(()=>{if(document.visibilityState==="visible")void check();},5000);
+    const resume=()=>{if(document.visibilityState==="visible")void check();};
+    window.addEventListener("online",resume);document.addEventListener("visibilitychange",resume);
+    return()=>{clearInterval(timer);window.removeEventListener("online",resume);document.removeEventListener("visibilitychange",resume);};
+  },[recovery.attempt,check]);
+  useEffect(()=>{
+    let active=true;setQr(null);
+    const payload=recovery.attempt?.qrPayload;
+    if(payload)void QRCode.toDataURL(payload,{margin:2,width:220}).then(v=>{if(active)setQr(v);}).catch(()=>{if(active)setError("Could not render the provider QR. Check status before retrying.");});
+    return()=>{active=false;};
+  },[recovery.attempt?.qrPayload]);
 
-  useEffect(() => () => stopPolling(), [stopPolling]);
-
-  useEffect(() => {
-    if (!qrPayload) {
-      setQrImage(null);
-      return;
-    }
-    void QRCode.toDataURL(qrPayload, { margin: 1, width: 220 })
-      .then(setQrImage)
-      .catch(() => setQrImage(null));
-  }, [qrPayload]);
-
-  const completeDigitalOrder = useCallback(async (orderObj: PosOrder, usedFallbackCheckout: boolean) => {
-    if (completingRef.current) return;
-    completingRef.current = true;
-    stopPolling();
-    try {
-      let paidOrder = orderObj;
-      if (usedFallbackCheckout) {
-        paidOrder = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}/digital-checkout/confirm`, { method: "POST" });
-      } else {
-        const refreshed = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}`);
-        if (refreshed.status === "PAID") {
-          paidOrder = refreshed;
-        } else {
-          paidOrder = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}/digital-checkout/confirm`, { method: "POST" }).catch(() => refreshed);
-        }
+  async function execute(retry?:PosTenderRecovery){
+    if(lock.current||recovery.blocked||(!retry&&current.current))return;
+    lock.current=true;setBusy(true);setError(null);
+    try{
+      if(retry&&retry.checkoutRef){await verify(retry,true);return;}
+      const ord=retry?await api<PosOrder>("/v1/pos/orders/"+retry.orderId,{signal:timeout()}):await ensureOrder();
+      if(retry&&ord.id!==retry.orderId)throw new Error("Order identity mismatch");
+      if(isPaidPosOrder(ord)){await finish(ord);return;}
+      const remaining=remainingPosBalance(ord);
+      if(!retry&&remaining!==totalPesewas)throw new Error("The server total changed. Review the updated outstanding amount before confirming again.");
+      const tender=retry?.tenderType??(mode==="NFC_CARD"?"CARD":mode);
+      const cash=parseMoney(cashInput);
+      const normalized=normalizeGhanaPhone(phone);
+      if(!retry&&tender==="CASH"&&(cash===null||cash<remaining||!Number.isSafeInteger(cash)))throw new Error("Enter actual cash received of at least "+formatMoney(remaining));
+      if(!retry&&tender==="MOMO"&&!normalized)throw new Error("Enter a valid Ghana mobile money number.");
+      if(!retry&&remaining<=0)throw new Error("No payable balance.");
+      const a:PosTenderRecovery=retry??{orderId:ord.id,key:newKey(),tenderType:tender,amountPesewas:tender==="CASH"?cash!:remaining,...(tender==="MOMO"?{phone:normalized!,network}:{}),checkoutRef:null};
+      if(retry&&tender!=="CASH"&&remaining!==a.amountPesewas)throw new Error("Original amount differs from outstanding balance. Contact support.");
+      save(a);
+      if(a.tenderType==="CASH"){
+        const paid=await api<PosOrder>(`/v1/pos/orders/${a.orderId}/payments`,{idempotencyKey:a.key,body:{tenderType:"CASH",amountPesewas:a.amountPesewas,reference:null},signal:timeout()});
+        if(paid.id!==a.orderId)throw new Error("Order identity mismatch");
+        if(!isPaidPosOrder(paid))throw new Error("Cash response is not fully paid. Verify the original order.");
+        await finish(paid);return;
       }
-      setPendingRef(null);
-      setCheckoutRef(null);
-      setPollStatus(null);
-      setQrPayload(null);
-      setQrReference(null);
-      setCardPayUrl(null);
-      await onOrderPaid(paidOrder);
-    } catch (err) {
-      if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
-      setError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      completingRef.current = false;
-    }
-  }, [onModuleDisabled, onOrderPaid, stopPolling]);
-
-  const startPolling = useCallback((orderObj: PosOrder, refToPoll: string, usedFallbackCheckout: boolean) => {
-    stopPolling();
-    setPollStatus("PENDING");
-    pollTimerRef.current = setInterval(() => {
-      void (async () => {
-        try {
-          const st = await api<{ status: string; message?: string | null }>(
-            `/v1/public/checkouts/${refToPoll}/status`,
-            { anonymous: true },
-          );
-          setPollStatus(st.status);
-          if (isTerminalStatusPaid(st.status)) {
-            await completeDigitalOrder(orderObj, usedFallbackCheckout);
-          } else if (isTerminalStatusFailed(st.status)) {
-            stopPolling();
-            setError(st.message || `Payment ${st.status.toLowerCase()}.`);
-          }
-        } catch {
-          // Also check POS order directly in case tender settled server-side
-          try {
-            const ord = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}`);
-            if (isTerminalStatusPaid(ord.status)) {
-              await completeDigitalOrder(orderObj, false);
-            }
-          } catch {
-            // Transient poll error: keep polling until cancelled or settled
-          }
-        }
-      })();
-    }, 3000);
-  }, [completeDigitalOrder, stopPolling]);
-
-  async function payCash() {
-    setError(null);
-    const cash = parseMoney(cashInput);
-    if (cash === null || cash <= 0) {
-      setError("Enter the cash received, like 50.00");
-      return;
-    }
-    if (cash < totalPesewas) {
-      setError(`Cash received is less than ${formatMoney(totalPesewas)}`);
-      return;
-    }
-    setBusy(true);
-    try {
-      const ord = await ensureOrder();
-      setActiveOrder(ord);
-      const paid = await api<PosOrder>(`/v1/pos/orders/${ord.id}/payments`, {
-        body: { tenderType: "CASH", amountPesewas: cash, reference: null },
-        idempotencyKey: newKey(),
-      });
-      if (paid.status !== "PAID") {
-        setError("The sale is not fully paid yet.");
-        return;
-      }
-      await onOrderPaid(paid);
-    } catch (err) {
-      if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
-      setError(`Sale not recorded: ${err instanceof ApiError ? err.message : String(err)}`);
-    } finally {
-      setBusy(false);
-    }
+      const res=await api<TenderInitiation>(`/v1/pos/orders/${a.orderId}/tenders`,{idempotencyKey:a.key,body:{tenderType:a.tenderType,amountPesewas:a.amountPesewas,...(a.tenderType==="MOMO"?{phone:a.phone,network:a.network}:{})},signal:timeout()});
+      if(!res||res.orderId!==a.orderId||res.amountPesewas!==a.amountPesewas)throw new Error("Tender response does not match the approved order.");
+      const n=normalizeTenderResult(res);
+      if(!n.checkoutRef)throw new Error("Checkout reference unavailable; recover the original tender.");
+      const updated={...a,checkoutRef:n.checkoutRef,qrPayload:a.tenderType==="GHQR"?n.qrPayload??undefined:undefined,payUrl:safeRedirectUrl(n.payUrl)??undefined};
+      save(updated);setStatus(n.paymentStatus??"Awaiting confirmation");await verify(updated,true);
+    }catch(e){
+      if(isFeatureNotEnabled(e)){onModuleDisabled();return;}
+      setError((current.current?"Original payment requires verification. Do not start another tender. ":"")+(e instanceof Error?e.message:"Request failed."));
+    }finally{lock.current=false;setBusy(false);}
   }
 
-  async function startMomoPush() {
-    setError(null);
-    const msisdn = normalizeGhanaPhone(momoPhone);
-    if (!msisdn) {
-      setError("Enter a valid Ghana MoMo number, e.g. 024 123 4567");
-      return;
-    }
-    setBusy(true);
-    try {
-      const ord = await ensureOrder();
-      setActiveOrder(ord);
-      let usedFallback = false;
-      let ref: string | null = null;
-      try {
-        const res = await api<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
-          body: {
-            tenderType: "MOMO",
-            network: momoNetwork,
-            phone: msisdn,
-            amountPesewas: ord.totalPesewas,
-          },
-          idempotencyKey: newKey(),
-        });
-        const normalized = normalizeTenderResult(res);
-        ref = normalized.checkoutRef;
-        if (isTerminalStatusPaid(normalized.paymentStatus) || isTerminalStatusPaid(normalized.orderStatus)) {
-          await completeDigitalOrder(normalized.order ?? ord, false);
-          return;
-        }
-        if (isTerminalStatusFailed(normalized.paymentStatus)) {
-          throw new Error(normalized.prompt ?? `MoMo payment ${normalized.paymentStatus?.toLowerCase()}.`);
-        }
-      } catch (tenderErr) {
-        if (isFeatureNotEnabled(tenderErr)) { onModuleDisabled(); return; }
-        if (tenderErr instanceof ApiError && tenderErr.status === 404) {
-          usedFallback = true;
-          const dc = await api<DigitalCheckoutFallback>(`/v1/pos/orders/${ord.id}/digital-checkout`, { method: "POST" });
-          ref = dc.reference;
-          await api(`/v1/public/checkouts/${dc.reference}/pay`, {
-            method: "POST",
-            anonymous: true,
-            idempotencyKey: newKey(),
-            body: { method: "momo", phone: msisdn, network: momoNetwork },
-          });
-        } else {
-          throw tenderErr;
-        }
-      }
-      if (!ref) throw new Error("No payment reference returned by server.");
-      setPendingRef(ref);
-      setCheckoutRef(ref);
-      startPolling(ord, ref, usedFallback);
-    } catch (err) {
-      if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
-      setError(`MoMo push failed: ${err instanceof ApiError ? err.message : String(err)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function startGhQr() {
-    setError(null);
-    setBusy(true);
-    try {
-      const ord = await ensureOrder();
-      setActiveOrder(ord);
-      let usedFallback = false;
-      let ref: string | null = null;
-      let emvPayload: string | null = null;
-      let resolvedQrRef: string | null = null;
-      try {
-        const res = await api<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
-          body: {
-            tenderType: "GHQR",
-            amountPesewas: ord.totalPesewas,
-          },
-          idempotencyKey: newKey(),
-        });
-        const normalized = normalizeTenderResult(res);
-        ref = normalized.checkoutRef;
-        emvPayload = normalized.qrPayload ?? normalized.payUrl ?? null;
-        resolvedQrRef = normalized.qrReference;
-        if (isTerminalStatusPaid(normalized.paymentStatus) || isTerminalStatusPaid(normalized.orderStatus)) {
-          await completeDigitalOrder(normalized.order ?? ord, false);
-          return;
-        }
-      } catch (tenderErr) {
-        if (isFeatureNotEnabled(tenderErr)) { onModuleDisabled(); return; }
-        if (tenderErr instanceof ApiError && tenderErr.status === 404) {
-          usedFallback = true;
-          const dc = await api<DigitalCheckoutFallback>(`/v1/pos/orders/${ord.id}/digital-checkout`, { method: "POST" });
-          ref = dc.reference;
-          const qrRes = await api<{ payload: string }>(`/v1/merchants/${merchantId}/qr?link=${encodeURIComponent(dc.reference)}`)
-            .catch(() => ({ payload: dc.payUrl ?? dc.reference }));
-          emvPayload = qrRes.payload;
-        } else {
-          throw tenderErr;
-        }
-      }
-      if (!ref) throw new Error("No GhQR reference returned.");
-      setPendingRef(ref);
-      setCheckoutRef(ref);
-      setQrReference(resolvedQrRef);
-      setQrPayload(emvPayload ?? ref);
-      startPolling(ord, ref, usedFallback);
-    } catch (err) {
-      if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
-      setError(`GhQR failed: ${err instanceof ApiError ? err.message : String(err)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function startCardCheckout() {
-    setError(null);
-    setNfcResult(null);
-    setBusy(true);
-    try {
-      const ord = await ensureOrder();
-      setActiveOrder(ord);
-      const res = await api<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
-        body: {
-          tenderType: "CARD",
-          amountPesewas: ord.totalPesewas,
-        },
-        idempotencyKey: newKey(),
-      });
-      const normalized = normalizeTenderResult(res);
-      if (isTerminalStatusPaid(normalized.paymentStatus) || isTerminalStatusPaid(normalized.orderStatus)) {
-        await completeDigitalOrder(normalized.order ?? ord, false);
-        return;
-      }
-      if (isTerminalStatusFailed(normalized.paymentStatus)) {
-        throw new Error(normalized.prompt ?? `Card payment ${normalized.paymentStatus?.toLowerCase()}.`);
-      }
-      if (!normalized.checkoutRef) {
-        throw new Error("No card checkout reference returned by server.");
-      }
-      setPendingRef(normalized.checkoutRef);
-      setCheckoutRef(normalized.checkoutRef);
-      setCardPayUrl(normalized.payUrl);
-      startPolling(ord, normalized.checkoutRef, false);
-    } catch (err) {
-      if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
-      setError(`Card checkout failed: ${err instanceof ApiError ? err.message : String(err)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function initiateNfcTap() {
-    setError(null);
-    setNfcResult(null);
-    if (!terminalId) {
-      setError("Select or pair an active POS terminal before initiating an NFC tap.");
-      return;
-    }
-    const ksn = nfcKsn.trim();
-    const emvTlvHex = nfcEmvTlvHex.trim();
-    if (!ksn || !emvTlvHex) {
-      setError("Enter both KSN and redacted EMV TLV hex from the NFC reader, or use Card Checkout below.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const ord = await ensureOrder();
-      setActiveOrder(ord);
-
-      const res = await api<NfcTapResult>(`/v1/pos/orders/${ord.id}/nfc-tap`, {
-        body: {
-          terminalId,
-          ksn,
-          emvTlvHex,
-          maskedPan: nfcMaskedPan.trim() || null,
-          amountPesewas: ord.totalPesewas,
-          currency: "GHS",
-        },
-        idempotencyKey: newKey(),
-      });
-      const normalized = normalizeNfcTapResult(res);
-      setNfcResult(normalized);
-      if (isTerminalStatusPaid(normalized.status) || isTerminalStatusPaid(normalized.order?.status)) {
-        await onOrderPaid(normalized.order ?? (await api<PosOrder>(`/v1/pos/orders/${ord.id}`)));
-      } else if (normalized.checkoutRef && !isTerminalStatusFailed(normalized.status)) {
-        setPendingRef(normalized.checkoutRef);
-        setCheckoutRef(normalized.checkoutRef);
-        setCardPayUrl(normalized.payUrl);
-        startPolling(ord, normalized.checkoutRef, false);
-      } else if (isTerminalStatusFailed(normalized.status)) {
-        setError(normalized.message ?? `NFC card authorization ${normalized.status.toLowerCase()}.`);
-      }
-    } catch (err) {
-      if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
-      setError(`NFC Tap-to-Pay error: ${err instanceof ApiError ? err.message : String(err)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function cancelPending() {
-    stopPolling();
-    if (activeOrder) {
-      await api(`/v1/pos/orders/${activeOrder.id}/digital-checkout/cancel`, { method: "POST" }).catch(() => {});
-    }
-    setPendingRef(null);
-    setCheckoutRef(null);
-    setPollStatus(null);
-    setQrPayload(null);
-    setQrReference(null);
-    setCardPayUrl(null);
-    setNfcResult(null);
-  }
-
-  return (
-    <div style={{ marginTop: "1rem" }}>
-      <div className="tabs" style={{ marginBottom: ".8rem" }}>
-        <button type="button" className={mode === "CASH" ? "active" : ""} onClick={() => { setMode("CASH"); setError(null); }}>Cash</button>
-        <button type="button" className={mode === "MOMO" ? "active" : ""} onClick={() => { setMode("MOMO"); setError(null); }}>MoMo Push</button>
-        <button type="button" className={mode === "GHQR" ? "active" : ""} onClick={() => { setMode("GHQR"); setError(null); }}>GhQR</button>
-        <button type="button" className={mode === "NFC_CARD" ? "active" : ""} onClick={() => { setMode("NFC_CARD"); setError(null); }}>Card / NFC Tap</button>
-      </div>
-
-      {error && <p className="error">{error}</p>}
-
-      {pendingRef ? (
-        <div className="notice">
-          <p>
-            Awaiting live rail confirmation · Ref <strong className="mono">{pendingRef}</strong>
-            {pollStatus && <> · Status: <strong>{pollStatus}</strong></>}
-          </p>
-          <p className="small muted">Auto-polling every 3 seconds…</p>
-          {qrImage && <img src={qrImage} alt="EMVCo GhQR code" width={220} height={220} style={{ display: "block", margin: ".5rem 0" }} />}
-          {qrReference && (
-            <p className="small mono">
-              GhQR Ref: {qrReference}
-            </p>
-          )}
-          {qrPayload && (
-            <p className="small mono" style={{ wordBreak: "break-all" }}>
-              EMVCo Payload: {qrPayload}
-            </p>
-          )}
-          {cardPayUrl && (
-            <p className="small">
-              <a href={cardPayUrl} target="_blank" rel="noreferrer">Open Card Checkout Link</a>
-            </p>
-          )}
-          <div className="flex-row">
-            {checkoutRef && activeOrder && (
-              <button type="button" onClick={() => void completeDigitalOrder(activeOrder, false)} disabled={busy}>
-                Verify Now
-              </button>
-            )}
-            <button type="button" className="secondary" onClick={() => void cancelPending()} disabled={busy}>
-              Cancel Payment
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          {mode === "CASH" && (
-            <div>
-              <label>
-                Cash received (GH₵)
-                <input
-                  inputMode="decimal"
-                  value={cashInput}
-                  onChange={(e) => setCashInput(e.target.value)}
-                  placeholder={(totalPesewas / 100).toFixed(2)}
-                />
-              </label>
-              <div className="flex-row" style={{ marginBottom: ".6rem", flexWrap: "wrap" }}>
-                <button type="button" className="secondary small" onClick={() => setCashInput((totalPesewas / 100).toFixed(2))}>
-                  Exact ({formatMoney(totalPesewas)})
-                </button>
-                {[1000, 2000, 5000, 10000].map((add) => (
-                  <button
-                    key={add}
-                    type="button"
-                    className="secondary small"
-                    onClick={() => setCashInput(((totalPesewas + add) / 100).toFixed(2))}
-                  >
-                    +{formatMoney(add)}
-                  </button>
-                ))}
-              </div>
-              <div className="flex-row">
-                <button type="button" onClick={() => void payCash()} disabled={busy}>
-                  {busy ? "Recording…" : `Charge Cash ${formatMoney(totalPesewas)}`}
-                </button>
-                {!hasOrder && onClearCart && (
-                  <button type="button" className="secondary" onClick={onClearCart}>Clear</button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {mode === "MOMO" && (
-            <div>
-              <div className="grid-2">
-                <label>
-                  Network
-                  <select value={momoNetwork} onChange={(e) => setMomoNetwork(e.target.value as MomoNetwork)}>
-                    {MOMO_NETWORKS.map((n) => (
-                      <option key={n.value} value={n.value}>{n.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Customer MoMo Phone
-                  <input
-                    inputMode="tel"
-                    value={momoPhone}
-                    onChange={(e) => setMomoPhone(e.target.value)}
-                    placeholder="024 123 4567"
-                  />
-                </label>
-              </div>
-              <button type="button" onClick={() => void startMomoPush()} disabled={busy}>
-                {busy ? "Sending Prompt…" : `Send MoMo Push (${formatMoney(totalPesewas)})`}
-              </button>
-            </div>
-          )}
-
-          {mode === "GHQR" && (
-            <div>
-              <p className="small muted">Generate a dynamic EMVCo GhQR code for the customer to scan with any Ghana bank or MoMo app.</p>
-              <button type="button" onClick={() => void startGhQr()} disabled={busy}>
-                {busy ? "Generating GhQR…" : `Display GhQR (${formatMoney(totalPesewas)})`}
-              </button>
-            </div>
-          )}
-
-          {mode === "NFC_CARD" && (
-            <div>
-              <p className="small muted">
-                Pay via online Card Checkout, or submit hardware DUKPT/EMV NFC tap data{terminalId ? ` (Terminal ${terminalId.slice(0, 8)})` : ""}.
-              </p>
-              <div style={{ marginBottom: ".8rem" }}>
-                <button type="button" onClick={() => void startCardCheckout()} disabled={busy}>
-                  {busy ? "Creating Card Checkout…" : `Charge Card via Checkout (${formatMoney(totalPesewas)})`}
-                </button>
-              </div>
-              <div className="grid-2">
-                <label>
-                  DUKPT KSN
-                  <input
-                    className="mono"
-                    value={nfcKsn}
-                    onChange={(e) => setNfcKsn(e.target.value)}
-                    placeholder="FFFF9876543210E00001"
-                  />
-                </label>
-                <label>
-                  Masked PAN (optional)
-                  <input
-                    className="mono"
-                    value={nfcMaskedPan}
-                    onChange={(e) => setNfcMaskedPan(e.target.value)}
-                    placeholder="411111******1111"
-                  />
-                </label>
-              </div>
-              <label>
-                Redacted EMV TLV Hex
-                <input
-                  className="mono"
-                  value={nfcEmvTlvHex}
-                  onChange={(e) => setNfcEmvTlvHex(e.target.value)}
-                  placeholder="9F02060000000010005F2A020936..."
-                />
-              </label>
-              <button type="button" className="secondary" onClick={() => void initiateNfcTap()} disabled={busy}>
-                {busy ? "Authorizing Tap…" : `Initiate NFC Tap-to-Pay (${formatMoney(totalPesewas)})`}
-              </button>
-              {nfcResult && (
-                <p className="notice" style={{ marginTop: ".6rem" }}>
-                  Backend Status: <strong>{nfcResult.status}</strong>
-                  {nfcResult.authCode && <> · Auth: <span className="mono">{nfcResult.authCode}</span></>}
-                  {nfcResult.cardScheme && <> · Scheme: {nfcResult.cardScheme}</>}
-                  {nfcResult.cvmMethod && <> · CVM: {nfcResult.cvmMethod}</>}
-                  {nfcResult.checkoutRef && <> · Ref: <span className="mono">{nfcResult.checkoutRef}</span></>}
-                </p>
-              )}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
+  const pending=recovery.attempt;
+  const received=parseMoney(cashInput);
+  return <section className="pos-tender" aria-busy={busy}>
+    <p className="eyebrow">PAYMENT</p><h3>Collect {formatMoney(totalPesewas)}</h3>
+    {error&&<p className="notice warn" role="alert">{error}</p>}
+    {recovery.blocked?<p className="notice warn">Saved recovery data is unavailable. Contact support before accepting another payment.</p>:pending?<div className="notice" role="status">
+      <h3>Original payment requires confirmation</h3><p>Order <span className="mono">{pending.orderId}</span> · {pending.tenderType} · {formatMoney(pending.amountPesewas)}</p>
+      {pending.checkoutRef&&<p className="mono">{pending.checkoutRef}</p>}{status&&<p>Status: {status}</p>}
+      <p>Do not collect cash or start another payment until this order is resolved. Status checks resume automatically while this screen is visible.</p>
+      {qr&&<img src={qr} alt="Provider-returned GhQR payment code" width={220} height={220}/>}
+      {pending.payUrl&&<p><a href={safeRedirectUrl(pending.payUrl)??undefined} target="_blank" rel="noreferrer">Open payment checkout</a></p>}
+      <button disabled={busy} onClick={()=>void check()}>Check order status</button>
+      {!pending.checkoutRef&&<button className="secondary" disabled={busy} onClick={()=>void execute(pending)}>Recover original request</button>}
+      <p className="small muted">If the provider reports failure, contact operations to resolve the linked checkout before starting another tender.</p>
+    </div>:order&&isPaidPosOrder(order)?<button disabled={busy} onClick={()=>void execute()}>Recover paid receipt</button>:<>
+      <div className="pos-tender-modes" aria-label="Tender type">{([["CASH","Cash"],["MOMO","MoMo"],["GHQR","GhQR"],["NFC_CARD","Card / NFC"]] as const).map(([v,label])=><button key={v} disabled={busy} aria-pressed={mode===v} className={mode===v?"":"secondary"} onClick={()=>{setMode(v);setError(null);}}>{label}</button>)}</div>
+      {mode==="CASH"&&<><label>Cash received (GH₵)<input inputMode="decimal" disabled={busy} value={cashInput} onChange={e=>setCashInput(e.target.value)}/></label><button className="secondary small" disabled={busy} onClick={()=>setCashInput((totalPesewas/100).toFixed(2))}>Exact cash</button><p>Change: <strong>{received!==null&&received>=totalPesewas?formatMoney(received-totalPesewas):"—"}</strong></p><button disabled={busy||!received||received<totalPesewas} onClick={()=>void execute()}>Confirm cash received</button></>}
+      {mode==="MOMO"&&<><label>Network<select disabled={busy} value={network} onChange={e=>setNetwork(e.target.value as MomoNetwork)}>{MOMO_NETWORKS.map(n=><option key={n.value} value={n.value}>{n.label}</option>)}</select></label><label>Customer phone<input type="tel" disabled={busy} value={phone} onChange={e=>setPhone(e.target.value)} placeholder="024 123 4567"/></label><p className="small muted">Customer approves on their phone. Never ask for their MoMo PIN.</p><button disabled={busy||!normalizeGhanaPhone(phone)} onClick={()=>void execute()}>Request MoMo payment</button></>}
+      {mode==="GHQR"&&<><p className="small muted">Request a dynamic provider QR. No generic link is presented as GhQR.</p><button disabled={busy} onClick={()=>void execute()}>Request GhQR payment</button></>}
+      {mode==="NFC_CARD"&&<><p className="small muted">Use the provider-hosted card approval flow. Contactless card capture requires an approved, provisioned terminal and native reader integration. {terminalId?"Terminal selected.":"No terminal selected."} The browser cannot collect raw EMV data or act as a certified reader.</p><button disabled={busy} onClick={()=>void execute()}>Open card payment</button></>}
+      {!hasOrder&&onClearCart&&<button className="secondary" disabled={busy} onClick={onClearCart}>Clear cart</button>}
+    </>}
+  </section>;
 }

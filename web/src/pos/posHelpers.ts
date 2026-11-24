@@ -1,4 +1,5 @@
 import { ApiError } from "../api";
+import { normalizeGhanaPhone } from "../money";
 
 export type OrderType = "RETAIL" | "DINE_IN" | "TAKEAWAY" | "DELIVERY";
 export type MomoNetwork = "mtn" | "telecel" | "airteltigo";
@@ -334,4 +335,34 @@ export function parseHeldCartPayload(json: string): HeldCartPayload | null {
   } catch {
     return null;
   }
+}
+
+export interface PosTenderRecovery {
+  orderId:string; key:string; tenderType:"CASH"|"MOMO"|"GHQR"|"CARD"; amountPesewas:number;
+  phone?:string; network?:MomoNetwork; checkoutRef:string|null; qrPayload?:string; payUrl?:string;
+}
+export function decodePosTender(raw:string|null):PosTenderRecovery|null {
+  if(raw===null)return null;
+  const a=JSON.parse(raw) as PosTenderRecovery;
+  if(!a||typeof a.orderId!=="string"||!/^[0-9a-f-]{36}$/i.test(a.orderId)||typeof a.key!=="string"||!a.key||a.key.length>200||!["CASH","MOMO","GHQR","CARD"].includes(a.tenderType)||!Number.isSafeInteger(a.amountPesewas)||a.amountPesewas<=0||(a.checkoutRef!==null&&(typeof a.checkoutRef!=="string"||!/^[\w-]+$/.test(a.checkoutRef))))throw new Error("Invalid saved tender");
+  if(a.tenderType==="MOMO"&&(typeof a.phone!=="string"||normalizeGhanaPhone(a.phone)!==a.phone||!MOMO_NETWORKS.some(n=>n.value===a.network)))throw new Error("Invalid saved MoMo request");
+  if(a.qrPayload!==undefined&&typeof a.qrPayload!=="string")throw new Error("Invalid QR data");
+  if(a.payUrl!==undefined&&typeof a.payUrl!=="string")throw new Error("Invalid payment URL");
+  return a;
+}
+export function remainingPosBalance(order:Pick<PosOrder,"totalPesewas"|"paidPesewas">):number {
+  if(!Number.isSafeInteger(order.totalPesewas)||!Number.isSafeInteger(order.paidPesewas)||order.totalPesewas<0||order.paidPesewas<0)throw new Error("Invalid order totals");
+  return Math.max(0,order.totalPesewas-order.paidPesewas);
+}
+export function isPaidPosOrder(order:PosOrder):boolean {
+  return order.status==="PAID"&&Number.isSafeInteger(order.totalPesewas)&&order.totalPesewas>0&&Number.isSafeInteger(order.paidPesewas)&&order.paidPesewas>=order.totalPesewas;
+}
+export function exactBarcodeMatch<T extends {barcode:string|null;sku:string}>(rows:T[],raw:string):T|null{
+  const code=raw.trim();if(!code)return null;const matches=rows.filter(r=>r.barcode===code||r.sku===code);return matches.length===1?matches[0]:null;
+}
+export type SavedPosOrder={key:string;payload:ReturnType<typeof buildPosOrderPayload>;orderId:string|null};
+export function decodeSavedPosOrder(raw:string|null,merchantId:string):SavedPosOrder|null {
+  if(raw===null)return null;const v=JSON.parse(raw) as SavedPosOrder;
+  if(!v||typeof v.key!=="string"||!v.key||v.key.length>200||!v.payload||v.payload.merchantId!==merchantId||!Array.isArray(v.payload.items)||!v.payload.items.length||v.payload.items.some(i=>!i||typeof i.variantId!=="string"||typeof i.itemName!=="string"||!Number.isSafeInteger(i.quantity)||i.quantity<=0||!Number.isSafeInteger(i.unitPricePesewas)||i.unitPricePesewas<0)||(v.orderId!==null&&(typeof v.orderId!=="string"||!/^[0-9a-f-]{36}$/i.test(v.orderId))))throw new Error("Invalid saved POS order");
+  return v;
 }
