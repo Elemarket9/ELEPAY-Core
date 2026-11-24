@@ -3734,6 +3734,10 @@
       },
       "NfcTapResult" : {
         "properties" : {
+          "attemptId": {
+            "format": "uuid",
+            "type": "string"
+          },
           "amountPesewas" : {
             "format" : "int64",
             "type" : "integer"
