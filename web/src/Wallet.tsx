@@ -68,6 +68,8 @@ export function Wallet() {
   const load = useCallback(async () => {
     const sequence = ++loadSequence.current;
     setError(null); setHistoryError(null); setLoading(true);
+    // A failed account refresh must not leave a previous receipt visible.
+    receiptSequence.current++; setReceiptBusy(false); setReceipt(null); setReceiptError(null);
     try {
       const w = await api<{ customerId: string; accounts: Account[] }>("/v1/wallet");
       if (sequence !== loadSequence.current) return;
@@ -265,8 +267,9 @@ function SendMoney({ customerId, onSent }: { customerId: string; onSent: () => v
         // Retain key and payload on uncertain outcomes; do not silently initiate a new transfer.
         // Expired or stale confirmation is a definitive response only after same-key lookup.
         if (e instanceof ApiError && ["confirmation_expired", "confirmation_stale"].includes(e.code) && e.status === 409) {
-          sessionStorage.removeItem(storageKey); setSaved({ pending: null, blocked: false });
-          resetVerification(); setMessage(e.message);
+          try { sessionStorage.removeItem(storageKey); }
+          catch { setMessage("The original request was rejected, but recovery storage could not be cleared. Contact support."); return; }
+          setSaved({ pending: null, blocked: false }); resetVerification(); setMessage(e.message);
         } else {
           setMessage("Transfer outcome is not confirmed. Check activity or retry the original request with the same key. " + (e instanceof Error ? e.message : ""));
         }
