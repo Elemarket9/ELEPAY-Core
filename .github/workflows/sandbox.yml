@@ -151,7 +151,7 @@ jobs:
     name: Multi-stage Container Build & Packaging
     needs: [web, backend-verify, security-scan]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -163,6 +163,23 @@ jobs:
           docker build -t elepay-core:ci-test .
           docker images elepay-core:ci-test
 
+      - name: Scan built runtime image with Grype
+        id: image-scan
+        uses: anchore/scan-action@11983a512817154c80a9db660c1a184be7513ed6 # v7.4.3
+        with:
+          image: elepay-core:ci-test
+          severity-cutoff: high
+          fail-build: true
+          only-fixed: false
+          output-format: json
+          output-file: elepay-image-vulnerabilities.json
+      - name: Upload image vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: image-vulnerability-report
+          path: elepay-image-vulnerabilities.json
+          if-no-files-found: warn
       - name: Validate Container Runs As Non-Root
         run: |
           USER_SPEC=$(docker inspect --format='{{.Config.User}}' elepay-core:ci-test)

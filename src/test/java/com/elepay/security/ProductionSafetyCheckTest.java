@@ -45,6 +45,14 @@ class ProductionSafetyCheckTest {
     }
 
     @Test
+    void productionDeclarationCannotBeBypassedByTestProfile() {
+        var env = safe();
+        env.setActiveProfiles("test");
+        assertThatThrownBy(() -> new ProductionSafetyCheck(env)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("must not run with the 'test' profile");
+    }
+
+    @Test
     void aProperlyConfiguredProductionStarts() {
         assertThat(ProductionSafetyCheck.problems(safe())).isEmpty();
         new ProductionSafetyCheck(safe());

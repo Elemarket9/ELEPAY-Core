@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Set;
-import org.springframework.context.annotation.Profile;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
@@ -14,7 +13,6 @@ import org.springframework.stereotype.Component;
  * outbound calls to private networks. Fail closed: a misconfigured production pod never serves traffic.
  */
 @Component
-@Profile("prod | (!test & !sandbox & !dev)")
 public class ProductionSafetyCheck {
     /** Secrets that have appeared in this repository and are therefore public. */
     static final Set<String> KNOWN_SECRETS = Set.of(
@@ -26,6 +24,12 @@ public class ProductionSafetyCheck {
             "ZGV2LW9ubHktaW50ZWdyaXR5LW1hYy1rZXktZm9yLWF1ZGl0LWNoYWluLTY0LWJ5dGVzLWxvbmctZGF0YSE=");
 
     public ProductionSafetyCheck(Environment env) {
+        // The production declaration itself activates this check, even if a
+        // misconfigured deployment enables a development profile.
+        String declared = env.getProperty("elepay.environment", "");
+        boolean production = "production".equalsIgnoreCase(declared) || "prod".equalsIgnoreCase(declared)
+                || env.matchesProfiles("prod | production");
+        if (!production && env.matchesProfiles("test | sandbox | dev")) return;
         List<String> problems = problems(env);
         if (!problems.isEmpty()) {
             throw new IllegalStateException("Unsafe production configuration:\n - " + String.join("\n - ", problems));
