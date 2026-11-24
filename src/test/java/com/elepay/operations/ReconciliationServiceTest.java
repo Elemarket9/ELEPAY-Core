@@ -39,14 +39,15 @@ class ReconciliationServiceTest extends PostgresTestBase {
         String s = UUID.randomUUID().toString().substring(0, 8);
         opsToken = api.token("ops-recon-" + s, "ops");
         makerToken = api.token("maker-recon-" + s, "ops");
-        checkerToken = api.token("checker-recon-" + s, "ops");
+        checkerToken = api.token("checker-recon-" + s, "ops_admin");
     }
 
     @Test
     @DisplayName("Algorithm 052: Fuzzy Statement Matching requires refMatch AND amountMatch AND timeMatch")
     void testFuzzyStatementMatchingBooleanLogic() {
         UUID txId = UUID.randomUUID();
-        String internalRef = "MTN-FUZZ-" + UUID.randomUUID().toString().substring(0, 8);
+        String s = UUID.randomUUID().toString().substring(0, 8);
+        String internalRef = "MTN-" + s + "-FUZZ";
 
         // Transaction in DB: amount 1,000,000 pesewas (10,000 GHS)
         db.sql("""
@@ -59,9 +60,9 @@ class ReconciliationServiceTest extends PostgresTestBase {
         // With the fix (refMatch && amountMatch && timeMatch), amount mismatch (> 200 pesewas difference) causes it to be UNMATCHED.
         var uploadRes = api.call("POST", "/v1/ops/reconciliation/statements", opsToken, null, Map.of(
                 "rail", "mtn",
-                "filename", "mtn_fuzzy_test.csv",
+                "filename", "mtn_fuzzy_test_" + s + ".csv",
                 "lines", List.of(
-                        Map.of("externalReference", internalRef.substring(0, 8),
+                        Map.of("externalReference", internalRef.substring(0, 12),
                                 "amountPesewas", 500, // Drastically different amount!
                                 "feePesewas", 5,
                                 "rawDescription", "MOMO PAYMENT MISMATCH AMOUNT")
@@ -77,7 +78,8 @@ class ReconciliationServiceTest extends PostgresTestBase {
     @DisplayName("Algorithm 052: Valid fuzzy match sets PROPOSED_MATCH and requires maker-checker approval")
     void testFuzzyMatchProposedStatusAndMakerCheckerApproval() {
         UUID txId = UUID.randomUUID();
-        String internalRef = "TEL-TRUNC-" + UUID.randomUUID().toString().substring(0, 8);
+        String s = UUID.randomUUID().toString().substring(0, 8);
+        String internalRef = "TEL-" + s + "-TRUNC";
 
         db.sql("""
                 INSERT INTO rail_transaction (id, rail, direction, reference, purpose, purpose_id, amount, status, created_at)
@@ -87,9 +89,9 @@ class ReconciliationServiceTest extends PostgresTestBase {
         // Statement line with truncated reference, matching amount within tolerance, and matching time
         var uploadRes = api.call("POST", "/v1/ops/reconciliation/statements", makerToken, null, Map.of(
                 "rail", "telecel",
-                "filename", "telecel_statement.csv",
+                "filename", "telecel_statement_" + s + ".csv",
                 "lines", List.of(
-                        Map.of("externalReference", internalRef.substring(0, 10),
+                        Map.of("externalReference", internalRef.substring(0, 12),
                                 "amountPesewas", 50050, // within 200 pesewas tolerance
                                 "feePesewas", 375,       // 0.75% of 50,000 = 375 pesewas
                                 "rawDescription", "TELECEL PAYMENT")
@@ -192,7 +194,7 @@ class ReconciliationServiceTest extends PostgresTestBase {
 
         // Checker approves clearing
         var approveRes = api.call("POST", "/v1/ops/suspense/" + suspenseId + "/approve", checkerToken, null, null);
-        assertThat(approveRes.status()).isEqualTo(200);
+        assertThat(approveRes.status()).as("approveRes body=%s", approveRes.body()).isEqualTo(200);
         assertThat(approveRes.body().get("status").asString()).isEqualTo("CLEARED");
 
         // Verify double-entry posting debited platform:suspense:usd (not platform:suspense:ghs or system:suspense:GHS)
@@ -206,5 +208,125 @@ class ReconciliationServiceTest extends PostgresTestBase {
                 .single();
 
         assertThat(debitLeg.get("code")).isEqualTo("platform:suspense:usd");
+    }
+
+    @Test
+    @DisplayName("Regression: Bulk mode (>100 lines) checks currency, commercial records, raises fee ops_item alerts, and runs fuzzy matching")
+    void testBulkReconciliationChecksCurrencyCommercialRecordsFeesAndFuzzy() {
+        String s = UUID.randomUUID().toString().substring(0, 8);
+        String overchargeRef = "MTN-BULK-OVER-" + s;
+        String usdMismatchRef = "MTN-BULK-USD-" + s;
+        String fuzzyTargetRef = "MTN-BULK-FUZZ-" + s;
+
+        db.sql("""
+                INSERT INTO rail_transaction (id, rail, direction, reference, purpose, purpose_id, amount, currency, status, created_at)
+                VALUES (:id1, 'mtn', 'charge', :r1, 'settlement', :p1, 200000, 'GHS', 'succeeded', now()),
+                       (:id2, 'mtn', 'charge', :r2, 'settlement', :p2, 50000, 'GHS', 'succeeded', now()),
+                       (:id3, 'mtn', 'charge', :r3, 'settlement', :p3, 10000, 'GHS', 'succeeded', now())""")
+                .param("id1", UUID.randomUUID()).param("r1", overchargeRef).param("p1", UUID.randomUUID())
+                .param("id2", UUID.randomUUID()).param("r2", usdMismatchRef).param("p2", UUID.randomUUID())
+                .param("id3", UUID.randomUUID()).param("r3", fuzzyTargetRef).param("p3", UUID.randomUUID())
+                .update();
+
+        List<Map<String, Object>> lines = new java.util.ArrayList<>();
+        // 1. Exact GHS match with overcharged fee (1500 > 1000 cap)
+        lines.add(Map.of("externalReference", overchargeRef, "amountPesewas", 200000, "currency", "GHS", "feePesewas", 1500));
+        // 2. Currency mismatch (USD line vs GHS rail_transaction) -> must be UNMATCHED
+        lines.add(Map.of("externalReference", usdMismatchRef, "amountPesewas", 50000, "currency", "USD", "feePesewas", 375));
+        // 3. Truncated ref -> must fuzzy match
+        lines.add(Map.of("externalReference", fuzzyTargetRef.substring(0, 15), "amountPesewas", 10000, "currency", "GHS", "feePesewas", 100));
+        // Pad to 105 lines
+        for (int i = 0; i < 102; i++) {
+            lines.add(Map.of("externalReference", "UNMATCHED-" + s + "-" + i, "amountPesewas", 1000, "currency", "GHS", "feePesewas", 10));
+        }
+
+        var res = api.call("POST", "/v1/ops/reconciliation/statements", opsToken, null, Map.of(
+                "rail", "mtn",
+                "filename", "bulk_regression_" + s + ".csv",
+                "lines", lines
+        ));
+        assertThat(res.status()).isEqualTo(200);
+        assertThat(res.body().get("matchedExact").asInt()).isEqualTo(1);
+        assertThat(res.body().get("matchedFuzzy").asInt()).isEqualTo(1);
+        assertThat(res.body().get("unmatched").asInt()).isEqualTo(103);
+        assertThat(res.body().get("feeDiscrepancies").asInt()).isEqualTo(1);
+
+        UUID uid = UUID.fromString(res.body().get("uploadId").asString());
+        UUID overLineId = db.sql("SELECT id FROM statement_line WHERE upload_id = :uid AND external_reference = :ref")
+                .param("uid", uid).param("ref", overchargeRef).query(UUID.class).single();
+        assertThat(ops.openCount("partner_fee_overcharge", "reconciliation:" + overLineId)).isEqualTo(1L);
+
+        String usdStatus = db.sql("SELECT match_status FROM statement_line WHERE upload_id = :uid AND external_reference = :ref")
+                .param("uid", uid).param("ref", usdMismatchRef).query(String.class).single();
+        assertThat(usdStatus).isEqualTo("UNMATCHED");
+    }
+
+    @Test
+    @DisplayName("Regression: approveClearing requires ops_admin and blocks non-allowlisted merchant available accounts")
+    void testApproveClearingRequiresOpsAdminAndAllowlist() {
+        UUID suspenseId = UUID.randomUUID();
+        db.sql("""
+                INSERT INTO suspense_item (id, source, amount_pesewas, currency, reason, status, created_at)
+                VALUES (:id, 'reconciliation:mtn', 25000, 'GHS', 'Test suspense', 'OPEN', now())""")
+                .param("id", suspenseId).update();
+
+        // Proposing a direct merchant available account must be rejected (403)
+        var badPropose = api.call("POST", "/v1/ops/suspense/propose", makerToken, null, Map.of(
+                "id", suspenseId.toString(),
+                "action", "CLEAR_TO_MERCHANT",
+                "targetAccount", "merchant:" + UUID.randomUUID() + ":available:GHS"
+        ));
+        assertThat(badPropose.status()).isEqualTo(403);
+
+        // Proposing a valid system account succeeds
+        String sysAcc = ledger.openSystem("system:clearing:mtn:GHS", "clearing", "GHS", true);
+        var okPropose = api.call("POST", "/v1/ops/suspense/propose", makerToken, null, Map.of(
+                "id", suspenseId.toString(),
+                "action", "CLEAR_TO_SYSTEM",
+                "targetAccount", sysAcc
+        ));
+        assertThat(okPropose.status()).isEqualTo(200);
+
+        // Plain ops user cannot approveClearing (403)
+        var opsApprove = api.call("POST", "/v1/ops/suspense/" + suspenseId + "/approve", opsToken, null, null);
+        assertThat(opsApprove.status()).isEqualTo(403);
+
+        // ops_admin user can approveClearing (200)
+        var adminApprove = api.call("POST", "/v1/ops/suspense/" + suspenseId + "/approve", checkerToken, null, null);
+        assertThat(adminApprove.status()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("Regression: Duplicate statement upload is rejected with 409 Conflict")
+    void testDuplicateStatementUploadRejected() {
+        String s = UUID.randomUUID().toString().substring(0, 8);
+        var payload = Map.of(
+                "rail", "mtn",
+                "filename", "dup_stmt_" + s + ".csv",
+                "lines", List.of(Map.of("externalReference", "DUP-" + s, "amountPesewas", 1000, "feePesewas", 10))
+        );
+        var first = api.call("POST", "/v1/ops/reconciliation/statements", opsToken, null, payload);
+        assertThat(first.status()).isEqualTo(200);
+
+        var second = api.call("POST", "/v1/ops/reconciliation/statements", opsToken, null, payload);
+        assertThat(second.status()).isEqualTo(409);
+    }
+
+    @Test
+    @DisplayName("Regression: GET /v1/ops/suspense enforces bounded limit capped at 500")
+    void testListSuspenseBoundedLimit() {
+        for (int i = 0; i < 3; i++) {
+            db.sql("""
+                    INSERT INTO suspense_item (id, source, amount_pesewas, currency, reason, status, created_at)
+                    VALUES (:id, 'reconciliation:mtn', 1000, 'GHS', 'Limit test', 'OPEN', now())""")
+                    .param("id", UUID.randomUUID()).update();
+        }
+        var limited = api.call("GET", "/v1/ops/suspense?limit=2", opsToken, null, null);
+        assertThat(limited.status()).isEqualTo(200);
+        assertThat(limited.body().size()).isEqualTo(2);
+
+        var capped = api.call("GET", "/v1/ops/suspense?limit=9999", opsToken, null, null);
+        assertThat(capped.status()).isEqualTo(200);
+        assertThat(capped.body().size()).isLessThanOrEqualTo(500);
     }
 }

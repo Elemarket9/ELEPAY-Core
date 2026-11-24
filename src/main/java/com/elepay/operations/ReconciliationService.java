@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.elepay.common.ApiException;
 import com.elepay.common.Audit;
+import com.elepay.common.Idempotency;
 import com.elepay.common.OpsQueue;
 import com.elepay.identity.Actor;
 import com.elepay.ledger.Ledger;
@@ -11,6 +12,8 @@ import com.elepay.ledger.Ledger.Leg;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,14 +39,27 @@ import java.util.*;
 @RequestMapping("/v1/ops")
 public class ReconciliationService {
 
+    private static final Logger log = LoggerFactory.getLogger(ReconciliationService.class);
+
     private final JdbcClient db;
     private final Ledger ledger;
     private final OpsQueue ops;
     private final Audit audit;
     private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    private final Idempotency idempotency;
 
     public ReconciliationService(JdbcClient db, Ledger ledger, OpsQueue ops, Audit audit) {
-        this(db, ledger, ops, audit, null);
+        this(db, ledger, ops, audit, null, null);
+    }
+
+    public ReconciliationService(
+            JdbcClient db,
+            Ledger ledger,
+            OpsQueue ops,
+            Audit audit,
+            org.springframework.jdbc.core.JdbcTemplate jdbcTemplate
+    ) {
+        this(db, ledger, ops, audit, jdbcTemplate, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -52,13 +68,15 @@ public class ReconciliationService {
             Ledger ledger,
             OpsQueue ops,
             Audit audit,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) org.springframework.jdbc.core.JdbcTemplate jdbcTemplate
+            @org.springframework.beans.factory.annotation.Autowired(required = false) org.springframework.jdbc.core.JdbcTemplate jdbcTemplate,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) Idempotency idempotency
     ) {
         this.db = db;
         this.ledger = ledger;
         this.ops = ops;
         this.audit = audit;
         this.jdbcTemplate = jdbcTemplate;
+        this.idempotency = idempotency;
     }
 
     public record StatementUploadRequest(
@@ -124,6 +142,21 @@ public class ReconciliationService {
         actor.requireOps();
         UUID actorUuid = resolveActorUuid(actor.subject());
 
+        // Duplicate statement ingestion protection (content SHA-256)
+        String contentHash = computeUploadSha256(request);
+        if (idempotency != null) {
+            if (idempotency.storedHash("reconciliation:statement_upload", contentHash).isPresent()) {
+                throw ApiException.conflict("duplicate_statement",
+                        "Duplicate statement content has already been uploaded and reconciled");
+            }
+            return idempotency.execute("reconciliation:statement_upload", contentHash, contentHash, UploadResult.class,
+                    () -> doUploadAndReconcile(request, actor, actorUuid));
+        }
+        return doUploadAndReconcile(request, actor, actorUuid);
+    }
+
+    private UploadResult doUploadAndReconcile(StatementUploadRequest request, Actor actor, UUID actorUuid) {
+
         UUID uploadId = UUID.randomUUID();
         db.sql("""
                 INSERT INTO statement_upload (id, rail, filename, uploaded_at, uploaded_by)
@@ -165,7 +198,7 @@ public class ReconciliationService {
                     matched = true;
                 } else {
                     unmatched++;
-                    // Insert into suspense item
+                    // Insert into suspense item and back with double-entry ledger posting
                     UUID suspenseId = UUID.randomUUID();
                     db.sql("""
                             INSERT INTO suspense_item (id, source, amount_pesewas, currency, reason, status, created_at)
@@ -173,6 +206,8 @@ public class ReconciliationService {
                             .param("id", suspenseId).param("src", "reconciliation:" + request.rail())
                             .param("amt", line.amountPesewas()).param("cur", cur)
                             .param("reason", "Unmatched statement line " + line.externalReference()).update();
+                    postSuspenseItemBacking(suspenseId, request.rail(), cur, line.amountPesewas(),
+                            "Unmatched statement line " + line.externalReference());
                 }
             }
 
@@ -192,7 +227,10 @@ public class ReconciliationService {
     private record BulkLineEntry(UUID lineId, StatementLineInput input, String currency, OffsetDateTime txTime,
                                  String matchStatus, String matchedInternalRef) {}
 
+    private record RailRow(UUID id, String reference, long amount, String currency, String purpose, UUID purposeId) {}
+
     private UploadResult uploadAndReconcileBulk(UUID uploadId, StatementUploadRequest request, String actorSubject) {
+        long tStart = System.nanoTime();
         List<StatementLineInput> lines = request.lines();
         List<String> refs = lines.stream()
                 .map(StatementLineInput::externalReference)
@@ -200,111 +238,597 @@ public class ReconciliationService {
                 .distinct()
                 .toList();
 
-        record RailRow(UUID id, String reference, long amount) {}
-        Map<String, RailRow> railMap = new HashMap<>(refs.size());
-        int chunkSize = 5000;
-        for (int start = 0; start < refs.size(); start += chunkSize) {
-            List<String> chunk = refs.subList(start, Math.min(start + chunkSize, refs.size()));
-            db.sql("""
-                    SELECT id, reference, rail_reference, amount
-                    FROM rail_transaction
-                    WHERE rail = :rail AND (reference IN (:refs) OR rail_reference IN (:refs))""")
-                    .param("rail", request.rail()).param("refs", chunk)
-                    .query((rs, i) -> {
-                        RailRow rr = new RailRow(rs.getObject(1, UUID.class), rs.getString(2), rs.getLong(4));
-                        String r1 = rs.getString(2);
-                        String r2 = rs.getString(3);
-                        if (r1 != null) railMap.putIfAbsent(r1, rr);
-                        if (r2 != null) railMap.putIfAbsent(r2, rr);
-                        return rr;
-                    }).list();
+        Map<String, List<RailRow>> railMap = new HashMap<>(refs.size());
+        List<RailRow> allFetchedRows = new ArrayList<>();
+        if (!refs.isEmpty()) {
+            int arrayChunkSize = 50_000;
+            for (int start = 0; start < refs.size(); start += arrayChunkSize) {
+                String[] chunkArr = refs.subList(start, Math.min(start + arrayChunkSize, refs.size()))
+                        .toArray(String[]::new);
+                jdbcTemplate.execute((java.sql.Connection conn) -> {
+                    java.sql.Array sqlRefs = conn.createArrayOf("text", chunkArr);
+                    try (var ps = conn.prepareStatement("""
+                            WITH refs AS (
+                                SELECT unnest(?::text[]) AS ref
+                            )
+                            SELECT rt.id, rt.reference, rt.rail_reference, rt.amount, UPPER(rt.currency), rt.purpose, rt.purpose_id
+                            FROM rail_transaction rt
+                            JOIN refs r ON rt.reference = r.ref
+                            WHERE rt.rail = ?
+                            UNION ALL
+                            SELECT rt.id, rt.reference, rt.rail_reference, rt.amount, UPPER(rt.currency), rt.purpose, rt.purpose_id
+                            FROM rail_transaction rt
+                            JOIN refs r ON rt.rail_reference = r.ref
+                            WHERE rt.rail = ?""")) {
+                        ps.setArray(1, sqlRefs);
+                        ps.setString(2, request.rail());
+                        ps.setString(3, request.rail());
+                        ps.setFetchSize(5000);
+                        Set<UUID> seenRailIds = new HashSet<>(chunkArr.length * 2);
+                        try (var rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                UUID id = rs.getObject(1, UUID.class);
+                                if (!seenRailIds.add(id)) {
+                                    continue;
+                                }
+                                RailRow rr = new RailRow(
+                                        id,
+                                        rs.getString(2),
+                                        rs.getLong(4),
+                                        rs.getString(5),
+                                        rs.getString(6),
+                                        rs.getObject(7, UUID.class)
+                                );
+                                allFetchedRows.add(rr);
+                                String r1 = rs.getString(2);
+                                String r2 = rs.getString(3);
+                                if (r1 != null) railMap.computeIfAbsent(r1, k -> new ArrayList<>()).add(rr);
+                                if (r2 != null) railMap.computeIfAbsent(r2, k -> new ArrayList<>()).add(rr);
+                            }
+                        }
+                    }
+                    return null;
+                });
+            }
         }
+
+        long tRail = System.nanoTime();
+        // Bulk-check commercial records (4-way verification)
+        Set<UUID> verifiedRailTxIds = bulkCheckCommercialRecords(allFetchedRows);
+        long tComm = System.nanoTime();
 
         PartnerFeeSchedule schedule = getFeeSchedule(request.rail());
         OffsetDateTime now = OffsetDateTime.now();
         List<BulkLineEntry> entries = new ArrayList<>(lines.size());
         List<BulkLineEntry> matchedEntries = new ArrayList<>(lines.size());
-        List<BulkLineEntry> unmatchedEntries = new ArrayList<>();
+        List<BulkLineEntry> fuzzyMatchedEntries = new ArrayList<>();
+        List<BulkLineEntry> pendingUnmatched = new ArrayList<>();
+        List<OpsQueue.BatchEntry> opsRaises = new ArrayList<>();
         int matchedExact = 0;
-        int unmatched = 0;
+        int matchedFuzzy = 0;
         int feeDiscrepancies = 0;
+        boolean perLineFeeOps = lines.size() <= 1_000;
+        long overchargeCount = 0;
+        long overchargeTotal = 0;
+        long underchargeCount = 0;
+        long underchargeTotal = 0;
 
         for (StatementLineInput line : lines) {
             UUID lineId = UUID.randomUUID();
             String cur = line.currency() != null ? line.currency().toUpperCase() : Ledger.GHS;
             OffsetDateTime txTime = line.transactionTime() != null ? line.transactionTime() : now;
-            RailRow rr = line.externalReference() != null ? railMap.get(line.externalReference()) : null;
 
-            if (rr != null && rr.amount() == line.amountPesewas()) {
+            RailRow matchedRow = null;
+            if (line.externalReference() != null) {
+                List<RailRow> candidates = railMap.get(line.externalReference());
+                if (candidates != null) {
+                    for (RailRow rr : candidates) {
+                        if (rr.amount() == line.amountPesewas()
+                                && cur.equalsIgnoreCase(rr.currency())
+                                && verifiedRailTxIds.contains(rr.id())) {
+                            matchedRow = rr;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (matchedRow != null) {
                 matchedExact++;
-                BulkLineEntry entry = new BulkLineEntry(lineId, line, cur, txTime, "MATCHED", rr.reference());
+                BulkLineEntry entry = new BulkLineEntry(lineId, line, cur, txTime, "MATCHED", matchedRow.reference());
                 entries.add(entry);
                 matchedEntries.add(entry);
-                if (schedule != null && line.feePesewas() != calculateExpectedFee(schedule, line.amountPesewas())) {
-                    feeDiscrepancies++;
+                if (schedule != null) {
+                    if (perLineFeeOps) {
+                        if (verifyPartnerFeeBulk(lineId, request.rail(), line, schedule, opsRaises)) {
+                            feeDiscrepancies++;
+                        }
+                    } else {
+                        long expectedFee = calculateExpectedFee(schedule, line.amountPesewas());
+                        long actualFee = line.feePesewas();
+                        if (actualFee > expectedFee) {
+                            overchargeCount++;
+                            overchargeTotal += (actualFee - expectedFee);
+                            feeDiscrepancies++;
+                        } else if (actualFee < expectedFee) {
+                            underchargeCount++;
+                            underchargeTotal += (expectedFee - actualFee);
+                            feeDiscrepancies++;
+                        }
+                    }
                 }
             } else {
-                unmatched++;
-                BulkLineEntry entry = new BulkLineEntry(lineId, line, cur, txTime, "UNMATCHED", null);
-                entries.add(entry);
-                unmatchedEntries.add(entry);
+                pendingUnmatched.add(new BulkLineEntry(lineId, line, cur, txTime, "UNMATCHED", null));
             }
         }
 
-        jdbcTemplate.batchUpdate("""
-                INSERT INTO statement_line (id, upload_id, external_reference, amount_pesewas, currency,
-                                            fee_pesewas, transaction_time, raw_description, match_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", entries, 2000, (ps, e) -> {
-            ps.setObject(1, e.lineId());
-            ps.setObject(2, uploadId);
-            ps.setString(3, e.input().externalReference());
-            ps.setLong(4, e.input().amountPesewas());
-            ps.setString(5, e.currency());
-            ps.setLong(6, e.input().feePesewas());
-            ps.setObject(7, e.txTime());
-            ps.setString(8, e.input().rawDescription());
-            ps.setString(9, e.matchStatus());
-        });
+        // Bounded fuzzy matching on remaining unmatched lines
+        List<BulkLineEntry> unmatchedEntries = new ArrayList<>();
+        if (!pendingUnmatched.isEmpty()) {
+            OffsetDateTime minTime = pendingUnmatched.stream()
+                    .map(BulkLineEntry::txTime).min(OffsetDateTime::compareTo).orElse(now).minusHours(24);
+            OffsetDateTime maxTime = pendingUnmatched.stream()
+                    .map(BulkLineEntry::txTime).max(OffsetDateTime::compareTo).orElse(now).plusHours(24);
+
+            var fuzzyCandidates = db.sql("""
+                    SELECT id, reference, amount, UPPER(currency), created_at
+                    FROM rail_transaction
+                    WHERE rail = :rail
+                      AND status IN ('succeeded', 'created', 'pending')
+                      AND created_at BETWEEN :from AND :to
+                    ORDER BY created_at DESC LIMIT 500""")
+                    .param("rail", request.rail())
+                    .param("from", minTime)
+                    .param("to", maxTime)
+                    .query((rs, i) -> new Object[]{
+                            rs.getObject(1, UUID.class),
+                            rs.getString(2),
+                            rs.getLong(3),
+                            rs.getString(4),
+                            rs.getObject(5, OffsetDateTime.class)
+                    }).list();
+
+            for (BulkLineEntry e : pendingUnmatched) {
+                String ref = e.input().externalReference() != null ? e.input().externalReference().trim() : "";
+                String matchedCandRef = null;
+                long matchedCandAmt = 0L;
+
+                if (!ref.isBlank()) {
+                    for (Object[] cand : fuzzyCandidates) {
+                        String candRef = (String) cand[1];
+                        long candAmount = (Long) cand[2];
+                        String candCur = (String) cand[3];
+                        OffsetDateTime candTime = (OffsetDateTime) cand[4];
+
+                        if (!e.currency().equalsIgnoreCase(candCur)) continue;
+                        boolean refMatch = candRef.startsWith(ref) || ref.startsWith(candRef)
+                                || (ref.length() >= 6 && candRef.contains(ref))
+                                || (candRef.length() >= 6 && ref.contains(candRef));
+                        boolean amountMatch = Math.abs(candAmount - e.input().amountPesewas()) <= 200;
+                        boolean timeMatch = e.input().transactionTime() == null
+                                || Math.abs(Duration.between(e.input().transactionTime(), candTime).toHours()) <= 24;
+
+                        if (refMatch && amountMatch && timeMatch) {
+                            matchedCandRef = candRef;
+                            matchedCandAmt = candAmount;
+                            break;
+                        }
+                    }
+                }
+
+                if (matchedCandRef != null) {
+                    matchedFuzzy++;
+                    BulkLineEntry fuzzyEntry = new BulkLineEntry(
+                            e.lineId(), e.input(), e.currency(), e.txTime(), "PROPOSED_MATCH", matchedCandRef);
+                    entries.add(fuzzyEntry);
+                    fuzzyMatchedEntries.add(fuzzyEntry);
+                    opsRaises.add(new OpsQueue.BatchEntry(
+                            "proposed_match",
+                            "medium",
+                            "reconciliation:" + e.lineId(),
+                            "{\"lineId\":" + jsonStr(e.lineId().toString())
+                                    + ",\"statementRef\":" + jsonStr(ref)
+                                    + ",\"candidateRef\":" + jsonStr(matchedCandRef)
+                                    + ",\"amountPesewas\":" + e.input().amountPesewas()
+                                    + ",\"candidateAmount\":" + matchedCandAmt
+                                    + ",\"status\":\"PROPOSED_MATCH\"}"
+                    ));
+                    if (schedule != null) {
+                        if (perLineFeeOps) {
+                            if (verifyPartnerFeeBulk(e.lineId(), request.rail(), e.input(), schedule, opsRaises)) {
+                                feeDiscrepancies++;
+                            }
+                        } else {
+                            long expectedFee = calculateExpectedFee(schedule, e.input().amountPesewas());
+                            long actualFee = e.input().feePesewas();
+                            if (actualFee > expectedFee) {
+                                overchargeCount++;
+                                overchargeTotal += (actualFee - expectedFee);
+                                feeDiscrepancies++;
+                            } else if (actualFee < expectedFee) {
+                                underchargeCount++;
+                                underchargeTotal += (expectedFee - actualFee);
+                                feeDiscrepancies++;
+                            }
+                        }
+                    }
+                } else {
+                    entries.add(e);
+                    unmatchedEntries.add(e);
+                }
+            }
+        }
+
+        if (schedule != null) {
+            if (overchargeCount > 0) {
+                opsRaises.add(new OpsQueue.BatchEntry(
+                        "partner_fee_overcharge",
+                        "medium",
+                        "reconciliation:upload:" + uploadId + ":overcharge",
+                        "{\"rail\":" + jsonStr(request.rail())
+                                + ",\"uploadId\":" + jsonStr(uploadId.toString())
+                                + ",\"count\":" + overchargeCount
+                                + ",\"totalDiscrepancy\":" + overchargeTotal
+                                + ",\"type\":\"overcharge\",\"version\":" + schedule.version() + "}"
+                ));
+            }
+            if (underchargeCount > 0) {
+                opsRaises.add(new OpsQueue.BatchEntry(
+                        "partner_fee_undercharge",
+                        "low",
+                        "reconciliation:upload:" + uploadId + ":undercharge",
+                        "{\"rail\":" + jsonStr(request.rail())
+                                + ",\"uploadId\":" + jsonStr(uploadId.toString())
+                                + ",\"count\":" + underchargeCount
+                                + ",\"totalDiscrepancy\":" + underchargeTotal
+                                + ",\"type\":\"undercharge\",\"version\":" + schedule.version() + "}"
+                ));
+            }
+        }
+
+        int unmatched = unmatchedEntries.size();
+        long tJavaLoop = System.nanoTime();
+
+        int writeChunkSize = 50_000;
+        for (int start = 0; start < entries.size(); start += writeChunkSize) {
+            List<BulkLineEntry> chunk = entries.subList(start, Math.min(start + writeChunkSize, entries.size()));
+            int n = chunk.size();
+            UUID[] lineIds = new UUID[n];
+            String[] extRefs = new String[n];
+            Long[] amts = new Long[n];
+            String[] curs = new String[n];
+            Long[] fees = new Long[n];
+            java.sql.Timestamp[] times = new java.sql.Timestamp[n];
+            String[] descs = new String[n];
+            String[] statuses = new String[n];
+            for (int i = 0; i < n; i++) {
+                BulkLineEntry e = chunk.get(i);
+                lineIds[i] = e.lineId();
+                extRefs[i] = e.input().externalReference();
+                amts[i] = e.input().amountPesewas();
+                curs[i] = e.currency();
+                fees[i] = e.input().feePesewas();
+                times[i] = java.sql.Timestamp.from(e.txTime().toInstant());
+                descs[i] = e.input().rawDescription();
+                statuses[i] = e.matchStatus();
+            }
+            jdbcTemplate.execute((java.sql.Connection conn) -> {
+                try (var ps = conn.prepareStatement("""
+                        INSERT INTO statement_line (id, upload_id, external_reference, amount_pesewas, currency,
+                                                    fee_pesewas, transaction_time, raw_description, match_status)
+                        SELECT u.id, ?, u.ext_ref, u.amt, u.cur, u.fee, u.tx_time, u.raw_desc, u.status
+                        FROM unnest(?::uuid[], ?::varchar[], ?::bigint[], ?::varchar[], ?::bigint[], ?::timestamptz[], ?::text[], ?::varchar[])
+                             AS u(id, ext_ref, amt, cur, fee, tx_time, raw_desc, status)""")) {
+                    ps.setObject(1, uploadId);
+                    ps.setArray(2, conn.createArrayOf("uuid", lineIds));
+                    ps.setArray(3, conn.createArrayOf("varchar", extRefs));
+                    ps.setArray(4, conn.createArrayOf("bigint", amts));
+                    ps.setArray(5, conn.createArrayOf("varchar", curs));
+                    ps.setArray(6, conn.createArrayOf("bigint", fees));
+                    ps.setArray(7, conn.createArrayOf("timestamptz", times));
+                    ps.setArray(8, conn.createArrayOf("text", descs));
+                    ps.setArray(9, conn.createArrayOf("varchar", statuses));
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        }
+        long tStmtInsert = System.nanoTime();
 
         if (!matchedEntries.isEmpty()) {
-            jdbcTemplate.batchUpdate("""
-                    INSERT INTO reconciliation_match (id, statement_line_id, internal_reference, match_type, confidence, matched_at)
-                    VALUES (?, ?, ?, 'EXACT_4WAY', 100.00, now())""", matchedEntries, 2000, (ps, e) -> {
-                ps.setObject(1, UUID.randomUUID());
-                ps.setObject(2, e.lineId());
-                ps.setString(3, e.matchedInternalRef());
-            });
+            bulkInsertMatches(matchedEntries, "EXACT_4WAY", 100.00);
+        }
+
+        if (!fuzzyMatchedEntries.isEmpty()) {
+            bulkInsertMatches(fuzzyMatchedEntries, "PROPOSED_MATCH", 85.00);
         }
 
         if (!unmatchedEntries.isEmpty()) {
             String src = "reconciliation:" + request.rail();
-            jdbcTemplate.batchUpdate("""
-                    INSERT INTO suspense_item (id, source, amount_pesewas, currency, reason, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, 'OPEN', now())""", unmatchedEntries, 2000, (ps, e) -> {
-                ps.setObject(1, UUID.randomUUID());
-                ps.setString(2, src);
-                ps.setLong(3, e.input().amountPesewas());
-                ps.setString(4, e.currency());
-                ps.setString(5, "Unmatched statement line " + e.input().externalReference());
-            });
+            for (int start = 0; start < unmatchedEntries.size(); start += writeChunkSize) {
+                List<BulkLineEntry> chunk = unmatchedEntries.subList(start, Math.min(start + writeChunkSize, unmatchedEntries.size()));
+                int n = chunk.size();
+                UUID[] sIds = new UUID[n];
+                Long[] sAmts = new Long[n];
+                String[] sCurs = new String[n];
+                String[] sReasons = new String[n];
+                for (int i = 0; i < n; i++) {
+                    BulkLineEntry e = chunk.get(i);
+                    sIds[i] = UUID.randomUUID();
+                    sAmts[i] = e.input().amountPesewas();
+                    sCurs[i] = e.currency();
+                    sReasons[i] = "Unmatched statement line " + e.input().externalReference();
+                }
+                jdbcTemplate.execute((java.sql.Connection conn) -> {
+                    try (var ps = conn.prepareStatement("""
+                            INSERT INTO suspense_item (id, source, amount_pesewas, currency, reason, status, created_at)
+                            SELECT u.id, ?, u.amt, u.cur, u.reason, 'OPEN', now()
+                            FROM unnest(?::uuid[], ?::bigint[], ?::varchar[], ?::text[])
+                                 AS u(id, amt, cur, reason)""")) {
+                        ps.setString(1, src);
+                        ps.setArray(2, conn.createArrayOf("uuid", sIds));
+                        ps.setArray(3, conn.createArrayOf("bigint", sAmts));
+                        ps.setArray(4, conn.createArrayOf("varchar", sCurs));
+                        ps.setArray(5, conn.createArrayOf("text", sReasons));
+                        ps.executeUpdate();
+                    }
+                    return null;
+                });
+            }
+            // Aggregate suspense backing postings per currency so ledger remains balanced and backed
+            Map<String, Long> suspenseTotalsByCurrency = new HashMap<>();
+            for (BulkLineEntry e : unmatchedEntries) {
+                if (e.input().amountPesewas() > 0) {
+                    suspenseTotalsByCurrency.merge(e.currency(), e.input().amountPesewas(), Long::sum);
+                }
+            }
+            for (var curEntry : suspenseTotalsByCurrency.entrySet()) {
+                postSuspenseItemBacking(uploadId, request.rail(), curEntry.getKey(), curEntry.getValue(),
+                        "Bulk unmatched statement lines for upload " + uploadId);
+            }
         }
 
+        long tMatchInsert = System.nanoTime();
+        if (!opsRaises.isEmpty()) {
+            ops.raiseBatch(opsRaises);
+        }
+
+        long tMatch = System.nanoTime();
         audit.record(actorSubject, "reconciliation.statement_uploaded", "upload:" + uploadId,
-                Map.of("total", lines.size(), "exact", matchedExact, "fuzzy", 0, "unmatched", unmatched));
+                Map.of("total", lines.size(), "exact", matchedExact, "fuzzy", matchedFuzzy, "unmatched", unmatched));
+        long tEnd = System.nanoTime();
+        log.debug("BULK_RECON_TIMING total={}ms railFetch={}ms commCheck={}ms javaLoop={}ms stmtInsert={}ms matchInsert={}ms opsRaise={}ms audit={}ms (opsRaises={})",
+                (tEnd - tStart) / 1_000_000,
+                (tRail - tStart) / 1_000_000,
+                (tComm - tRail) / 1_000_000,
+                (tJavaLoop - tComm) / 1_000_000,
+                (tStmtInsert - tJavaLoop) / 1_000_000,
+                (tMatchInsert - tStmtInsert) / 1_000_000,
+                (tMatch - tMatchInsert) / 1_000_000,
+                (tEnd - tMatch) / 1_000_000,
+                opsRaises.size());
 
         return new UploadResult(uploadId, request.rail(), request.filename(), lines.size(),
-                matchedExact, 0, unmatched, feeDiscrepancies);
+                matchedExact, matchedFuzzy, unmatched, feeDiscrepancies);
+    }
+
+    private void bulkInsertMatches(List<BulkLineEntry> matchEntries, String matchType, double confidence) {
+        int writeChunkSize = 50_000;
+        for (int start = 0; start < matchEntries.size(); start += writeChunkSize) {
+            List<BulkLineEntry> chunk = matchEntries.subList(start, Math.min(start + writeChunkSize, matchEntries.size()));
+            int n = chunk.size();
+            UUID[] mIds = new UUID[n];
+            UUID[] lineIds = new UUID[n];
+            String[] internalRefs = new String[n];
+            for (int i = 0; i < n; i++) {
+                BulkLineEntry e = chunk.get(i);
+                mIds[i] = UUID.randomUUID();
+                lineIds[i] = e.lineId();
+                internalRefs[i] = e.matchedInternalRef();
+            }
+            jdbcTemplate.execute((java.sql.Connection conn) -> {
+                try (var ps = conn.prepareStatement("""
+                        INSERT INTO reconciliation_match (id, statement_line_id, internal_reference, match_type, confidence, matched_at)
+                        SELECT u.id, u.line_id, u.internal_ref, ?, ?, now()
+                        FROM unnest(?::uuid[], ?::uuid[], ?::varchar[]) AS u(id, line_id, internal_ref)""")) {
+                    ps.setString(1, matchType);
+                    ps.setBigDecimal(2, BigDecimal.valueOf(confidence));
+                    ps.setArray(3, conn.createArrayOf("uuid", mIds));
+                    ps.setArray(4, conn.createArrayOf("uuid", lineIds));
+                    ps.setArray(5, conn.createArrayOf("varchar", internalRefs));
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        }
+    }
+
+    private boolean verifyPartnerFeeBulk(UUID lineId, String rail, StatementLineInput line,
+                                         PartnerFeeSchedule schedule, List<OpsQueue.BatchEntry> opsRaises) {
+        if (schedule == null) {
+            return false;
+        }
+        long amount = line.amountPesewas();
+        long actualFee = line.feePesewas();
+        long expectedFee = calculateExpectedFee(schedule, amount);
+
+        if (actualFee > expectedFee) {
+            opsRaises.add(new OpsQueue.BatchEntry(
+                    "partner_fee_overcharge",
+                    "medium",
+                    "reconciliation:" + lineId,
+                    "{\"rail\":" + jsonStr(rail)
+                            + ",\"amount\":" + amount
+                            + ",\"actualFee\":" + actualFee
+                            + ",\"expectedFee\":" + expectedFee
+                            + ",\"discrepancy\":" + (actualFee - expectedFee)
+                            + ",\"type\":\"overcharge\",\"version\":" + schedule.version() + "}"
+            ));
+            return true;
+        } else if (actualFee < expectedFee) {
+            opsRaises.add(new OpsQueue.BatchEntry(
+                    "partner_fee_undercharge",
+                    "low",
+                    "reconciliation:" + lineId,
+                    "{\"rail\":" + jsonStr(rail)
+                            + ",\"amount\":" + amount
+                            + ",\"actualFee\":" + actualFee
+                            + ",\"expectedFee\":" + expectedFee
+                            + ",\"discrepancy\":" + (expectedFee - actualFee)
+                            + ",\"type\":\"undercharge\",\"version\":" + schedule.version() + "}"
+            ));
+            return true;
+        }
+        return false;
+    }
+
+    private static String jsonStr(String s) {
+        if (s == null) return "null";
+        StringBuilder sb = new StringBuilder(s.length() + 2);
+        sb.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\b' -> sb.append("\\b");
+                case '\f' -> sb.append("\\f");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+        }
+        sb.append('"');
+        return sb.toString();
+    }
+
+    private Set<UUID> bulkCheckCommercialRecords(List<RailRow> rows) {
+        Set<UUID> verified = new HashSet<>();
+        if (rows.isEmpty()) return verified;
+
+        Set<UUID> checkoutIdSet = new HashSet<>();
+        List<UUID> checkoutTxIds = new ArrayList<>();
+        Set<UUID> payoutIdSet = new HashSet<>();
+        List<UUID> payoutTxIds = new ArrayList<>();
+        Set<UUID> walletIdSet = new HashSet<>();
+        List<UUID> walletTxIds = new ArrayList<>();
+
+        Map<UUID, RailRow> byId = new HashMap<>(rows.size() * 2);
+        for (RailRow r : rows) {
+            byId.put(r.id(), r);
+            if ("checkout".equalsIgnoreCase(r.purpose())) {
+                if (r.purposeId() != null) checkoutIdSet.add(r.purposeId());
+                checkoutTxIds.add(r.id());
+            } else if ("payout".equalsIgnoreCase(r.purpose())) {
+                if (r.purposeId() != null) payoutIdSet.add(r.purposeId());
+                payoutTxIds.add(r.id());
+            } else if ("wallet".equalsIgnoreCase(r.purpose())) {
+                if (r.purposeId() != null) walletIdSet.add(r.purposeId());
+                walletTxIds.add(r.id());
+            } else {
+                verified.add(r.id());
+            }
+        }
+
+        jdbcTemplate.execute((java.sql.Connection conn) -> {
+            if (!checkoutTxIds.isEmpty()) {
+                Set<UUID> foundIds = queryMatchingUuids(conn, "SELECT t.id FROM payment_attempt t JOIN unnest(?::uuid[]) u(id) ON t.id = u.id", checkoutIdSet);
+                Set<UUID> foundTxIds = queryMatchingUuids(conn, "SELECT t.rail_tx FROM payment_attempt t JOIN unnest(?::uuid[]) u(id) ON t.rail_tx = u.id", checkoutTxIds);
+                for (UUID txId : checkoutTxIds) {
+                    RailRow r = byId.get(txId);
+                    if (foundTxIds.contains(txId) || (r.purposeId() != null && foundIds.contains(r.purposeId()))) {
+                        verified.add(txId);
+                    }
+                }
+            }
+            if (!payoutTxIds.isEmpty()) {
+                Set<UUID> foundIds = queryMatchingUuids(conn, "SELECT t.id FROM payout t JOIN unnest(?::uuid[]) u(id) ON t.id = u.id", payoutIdSet);
+                Set<UUID> foundTxIds = queryMatchingUuids(conn, "SELECT t.rail_tx FROM payout t JOIN unnest(?::uuid[]) u(id) ON t.rail_tx = u.id", payoutTxIds);
+                for (UUID txId : payoutTxIds) {
+                    RailRow r = byId.get(txId);
+                    if (foundTxIds.contains(txId) || (r.purposeId() != null && foundIds.contains(r.purposeId()))) {
+                        verified.add(txId);
+                    }
+                }
+            }
+            if (!walletTxIds.isEmpty()) {
+                Set<UUID> foundIds = queryMatchingUuids(conn, "SELECT t.id FROM wallet_operation t JOIN unnest(?::uuid[]) u(id) ON t.id = u.id", walletIdSet);
+                Set<UUID> foundTxIds = queryMatchingUuids(conn, "SELECT t.rail_tx FROM wallet_operation t JOIN unnest(?::uuid[]) u(id) ON t.rail_tx = u.id", walletTxIds);
+                for (UUID txId : walletTxIds) {
+                    RailRow r = byId.get(txId);
+                    if (foundTxIds.contains(txId) || (r.purposeId() != null && foundIds.contains(r.purposeId()))) {
+                        verified.add(txId);
+                    }
+                }
+            }
+            return null;
+        });
+        return verified;
+    }
+
+    private static Set<UUID> queryMatchingUuids(java.sql.Connection conn, String sql, Collection<UUID> ids) throws java.sql.SQLException {
+        Set<UUID> result = new HashSet<>();
+        if (ids.isEmpty()) return result;
+        UUID[] arr = ids.toArray(UUID[]::new);
+        try (var ps = conn.prepareStatement(sql)) {
+            ps.setArray(1, conn.createArrayOf("uuid", arr));
+            ps.setFetchSize(5000);
+            try (var rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    UUID id = rs.getObject(1, UUID.class);
+                    if (id != null) result.add(id);
+                }
+            }
+        }
+        return result;
+    }
+
+    private void postSuspenseItemBacking(UUID keyId, String rail, String currency, long amountPesewas, String description) {
+        if (amountPesewas <= 0) return;
+        String cur = currency != null ? currency.toUpperCase() : Ledger.GHS;
+        String suspenseAccount = "platform:suspense:" + cur.toLowerCase();
+        String clearingAccount = "system:clearing:" + rail.toLowerCase() + ":" + cur;
+        ledger.openSystem(suspenseAccount, "suspense", cur, true);
+        ledger.openSystem(clearingAccount, "clearing", cur, true);
+        ledger.post(Ledger.Posting.of("suspense-open", keyId.toString() + ":" + cur, "suspense_item", List.of(
+                Leg.debit(clearingAccount, amountPesewas),
+                Leg.credit(suspenseAccount, amountPesewas)
+        )).describedAs(description));
+    }
+
+    private static String computeUploadSha256(StatementUploadRequest request) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(request.rail()).append('|');
+        for (StatementLineInput l : request.lines()) {
+            sb.append(l.externalReference()).append('|')
+              .append(l.amountPesewas()).append('|')
+              .append(l.currency() != null ? l.currency().toUpperCase() : Ledger.GHS).append('|')
+              .append(l.feePesewas()).append('|')
+              .append(l.transactionTime()).append('\n');
+        }
+        return Idempotency.sha256(sb.toString());
     }
 
     private boolean tryExact4WayMatch(UUID lineId, String rail, StatementLineInput line) {
         if (line.externalReference() == null || line.externalReference().isBlank()) return false;
+        String cur = line.currency() != null ? line.currency().toUpperCase() : Ledger.GHS;
 
-        // Query rail_transaction for exact reference match
+        // Query rail_transaction for exact reference and currency match
         var txOpt = db.sql("""
                 SELECT id, reference, amount, purpose, purpose_id
                 FROM rail_transaction
-                WHERE rail = :rail AND (reference = :ref OR rail_reference = :ref OR CAST(purpose_id AS text) = :ref)""")
-                .param("rail", rail).param("ref", line.externalReference())
+                WHERE rail = :rail
+                  AND UPPER(currency) = :cur
+                  AND (reference = :ref OR rail_reference = :ref OR CAST(purpose_id AS text) = :ref)
+                ORDER BY created_at DESC LIMIT 1""")
+                .param("rail", rail).param("cur", cur).param("ref", line.externalReference())
                 .query((rs, i) -> new Object[]{
                         rs.getObject(1, UUID.class), rs.getString(2), rs.getLong(3),
                         rs.getString(4), rs.getObject(5, UUID.class)
@@ -402,14 +926,22 @@ public class ReconciliationService {
     private boolean tryFuzzyMatch(UUID lineId, String rail, StatementLineInput line) {
         if (line.externalReference() == null || line.externalReference().isBlank()) return false;
         String ref = line.externalReference().trim();
+        String cur = line.currency() != null ? line.currency().toUpperCase() : Ledger.GHS;
+        OffsetDateTime txTime = line.transactionTime() != null ? line.transactionTime() : OffsetDateTime.now();
 
-        // Check for prefix/suffix match and timestamp +/- 24h and fee tolerance
+        // Check for prefix/suffix match within +/- 24h window and currency match
         var candidates = db.sql("""
                 SELECT id, reference, amount, created_at
                 FROM rail_transaction
-                WHERE rail = :rail AND status IN ('succeeded', 'created', 'pending')
-                ORDER BY created_at DESC LIMIT 50""")
+                WHERE rail = :rail
+                  AND UPPER(currency) = :cur
+                  AND status IN ('succeeded', 'created', 'pending')
+                  AND created_at BETWEEN :from AND :to
+                ORDER BY created_at DESC LIMIT 500""")
                 .param("rail", rail)
+                .param("cur", cur)
+                .param("from", txTime.minusHours(24))
+                .param("to", txTime.plusHours(24))
                 .query((rs, i) -> new Object[]{
                         rs.getObject(1, UUID.class), rs.getString(2), rs.getLong(3),
                         rs.getObject(4, OffsetDateTime.class)
@@ -520,6 +1052,13 @@ public class ReconciliationService {
         if (schedule == null) {
             return false;
         }
+        return verifyPartnerFee(lineId, rail, line, schedule);
+    }
+
+    private boolean verifyPartnerFee(UUID lineId, String rail, StatementLineInput line, PartnerFeeSchedule schedule) {
+        if (schedule == null) {
+            return false;
+        }
 
         long amount = line.amountPesewas();
         long actualFee = line.feePesewas();
@@ -542,8 +1081,11 @@ public class ReconciliationService {
     // ---- Suspense Aging & Maker-Checker Clearing (Algorithms 054 & 079) -------------------
 
     @GetMapping("/suspense")
-    public List<SuspenseItem> listSuspense(@RequestParam(defaultValue = "OPEN") String status) {
+    public List<SuspenseItem> listSuspense(
+            @RequestParam(defaultValue = "OPEN") String status,
+            @RequestParam(defaultValue = "500") int limit) {
         Actor.current().requireOps();
+        int boundedLimit = Math.max(1, Math.min(limit, 500));
         return db.sql("""
                 SELECT id, source, amount_pesewas, currency, reason, status, proposed_by,
                        proposed_action, proposed_target_account, approved_by, created_at, resolved_at,
@@ -555,8 +1097,9 @@ public class ReconciliationService {
                        END AS aging_bucket
                 FROM suspense_item
                 WHERE (:status = 'ALL' OR status = :status)
-                ORDER BY created_at ASC""")
+                ORDER BY created_at DESC LIMIT :limit""")
                 .param("status", status.toUpperCase())
+                .param("limit", boundedLimit)
                 .query(ReconciliationService::mapSuspense).list();
     }
 
@@ -581,11 +1124,26 @@ public class ReconciliationService {
                 .list();
     }
 
+    private static void validateSuspenseTargetAccount(String targetAccount) {
+        if (targetAccount == null || targetAccount.isBlank()) {
+            throw ApiException.badRequest("invalid_suspense_target", "Target account is required");
+        }
+        String trimmed = targetAccount.trim();
+        boolean allowlisted = (trimmed.startsWith("system:") || trimmed.startsWith("platform:"))
+                && !trimmed.contains(":available:")
+                && !trimmed.startsWith("merchant:")
+                && !trimmed.startsWith("customer:");
+        if (!allowlisted) {
+            throw ApiException.forbidden("Suspense clearing target must be an allowlisted system: or platform: account");
+        }
+    }
+
     @PostMapping("/suspense/propose")
     @Transactional
     public SuspenseItem proposeClearing(@Valid @RequestBody SuspenseProposalRequest request) {
         Actor actor = Actor.current();
         actor.requireOps();
+        validateSuspenseTargetAccount(request.targetAccount());
 
         var itemOpt = db.sql("SELECT id, status FROM suspense_item WHERE id = :id FOR UPDATE")
                 .param("id", request.id()).query((rs, i) -> Map.of("id", rs.getObject(1, UUID.class), "status", rs.getString(2)))
@@ -604,10 +1162,10 @@ public class ReconciliationService {
                     proposed_target_account = :target
                 WHERE id = :id""")
                 .param("by", actorUuid).param("action", request.action())
-                .param("target", request.targetAccount()).param("id", request.id()).update();
+                .param("target", request.targetAccount().trim()).param("id", request.id()).update();
 
         audit.record(actor.subject(), "suspense.proposed", "suspense:" + request.id(),
-                Map.of("action", request.action(), "targetAccount", request.targetAccount()));
+                Map.of("action", request.action(), "targetAccount", request.targetAccount().trim()));
 
         return getSuspenseItem(request.id());
     }
@@ -616,7 +1174,7 @@ public class ReconciliationService {
     @Transactional
     public SuspenseItem approveClearing(@PathVariable UUID id) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireOpsAdmin();
 
         var itemOpt = db.sql("""
                 SELECT id, source, amount_pesewas, currency, reason, status, proposed_by,
@@ -647,6 +1205,7 @@ public class ReconciliationService {
 
         // Post clearing entry in double-entry ledger using currency-specific suspense account
         if (item.proposedTargetAccount() != null && !item.proposedTargetAccount().isBlank()) {
+            validateSuspenseTargetAccount(item.proposedTargetAccount());
             long amt = item.amountPesewas();
             String cur = item.currency() != null ? item.currency().toUpperCase() : Ledger.GHS;
             String suspenseAccount = "platform:suspense:" + cur.toLowerCase();

@@ -67,7 +67,9 @@ public class DistributedSessionService {
                 redisTemplate.opsForValue().set(REDIS_PREFIX + sessionId, json, ttl);
                 redisTemplate.opsForSet().add(REDIS_USER_PREFIX + userId, sessionId);
                 redisTemplate.expire(REDIS_USER_PREFIX + userId, ttl.multipliedBy(2));
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to store session in Redis", e);
+            }
         }
 
         // 3. PostgreSQL
@@ -85,7 +87,9 @@ public class DistributedSessionService {
                         .param("lat", OffsetDateTime.ofInstant(now, ZoneOffset.UTC))
                         .param("attr", attrJson)
                         .update();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to persist session in PostgreSQL", e);
+            }
         }
 
         return session;
@@ -196,7 +200,9 @@ public class DistributedSessionService {
         if (redisTemplate != null) {
             try {
                 redisTemplate.delete(REDIS_PREFIX + sessionId);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to revoke session in Redis", e);
+            }
         }
 
         if (db != null) {
@@ -204,7 +210,9 @@ public class DistributedSessionService {
                 db.sql("UPDATE user_session SET revoked = true WHERE session_id = :sid")
                         .param("sid", sessionId)
                         .update();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to revoke session in PostgreSQL", e);
+            }
         }
     }
 
@@ -222,7 +230,9 @@ public class DistributedSessionService {
                     redisTemplate.delete(keys);
                     redisTemplate.delete(REDIS_USER_PREFIX + userId);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to revoke user sessions in Redis", e);
+            }
         }
 
         if (db != null) {
@@ -230,7 +240,9 @@ public class DistributedSessionService {
                 db.sql("UPDATE user_session SET revoked = true WHERE user_id = :uid")
                         .param("uid", userId)
                         .update();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to revoke user sessions in PostgreSQL", e);
+            }
         }
     }
 }

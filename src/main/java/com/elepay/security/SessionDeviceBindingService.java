@@ -105,9 +105,11 @@ public class SessionDeviceBindingService {
             throw ApiException.forbidden("Device ID mismatch: session bound to " + session.deviceId() + " but presented by " + currentDeviceId);
         }
 
-        if (session.deviceFingerprint() != null && !session.deviceFingerprint().isEmpty()
-                && currentFingerprint != null && !session.deviceFingerprint().equals(currentFingerprint)) {
-            throw ApiException.forbidden("Device fingerprint mismatch");
+        if (session.deviceFingerprint() != null && !session.deviceFingerprint().isEmpty()) {
+            if (currentFingerprint == null || currentFingerprint.isBlank()
+                    || !session.deviceFingerprint().equals(currentFingerprint)) {
+                throw ApiException.forbidden("Device fingerprint mismatch");
+            }
         }
 
         // 4. Token verification & Reuse Detection
@@ -176,7 +178,9 @@ public class SessionDeviceBindingService {
                 db.sql("UPDATE user_session_device SET is_revoked = true, revoked_reason = ?, updated_at = now() WHERE refresh_token_family = ?")
                         .params(reason, familyId)
                         .update();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to revoke session family", e);
+            }
         }
     }
 
@@ -203,7 +207,9 @@ public class SessionDeviceBindingService {
                                 rs.getTimestamp("expires_at").toInstant()
                         ))
                         .optional().orElse(null);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to load device session", e);
+            }
         }
         return null;
     }
@@ -234,7 +240,9 @@ public class SessionDeviceBindingService {
                     """)
                     .params(UUID.randomUUID(), s.sessionId().toString(), s.userId(), s.familyId(), s.currentRefreshTokenHash(), s.deviceId(), s.deviceFingerprint(), s.isRevoked(), s.revokedReason(), s.createdAt(), s.updatedAt(), s.expiresAt())
                     .update();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to persist device session", e);
+            }
         }
     }
 
@@ -248,7 +256,9 @@ public class SessionDeviceBindingService {
                     """)
                     .params(s.currentRefreshTokenHash(), s.isRevoked(), s.revokedReason(), s.updatedAt(), s.sessionId().toString())
                     .update();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to update device session", e);
+            }
         }
     }
 }

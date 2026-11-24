@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
 
@@ -30,8 +32,8 @@ public class MerchantPayouts {
     private final TransactionTemplate tx;
     private final DualControl dualControl;
 
-    @org.springframework.beans.factory.annotation.Value("${elepay.payouts.enforce-batch-destination-allowlist:false}")
-    private volatile boolean enforceBatchDestinationAllowlist = false;
+    @org.springframework.beans.factory.annotation.Value("${elepay.payouts.enforce-batch-destination-allowlist:true}")
+    private volatile boolean enforceBatchDestinationAllowlist = true;
 
     @org.springframework.beans.factory.annotation.Value("${elepay.security.large-payout-pesewas:5000000}")
     private long largePayoutPesewas = 5_000_000L;
@@ -59,6 +61,19 @@ public class MerchantPayouts {
 
     record BatchInput(@NotEmpty @Size(max = Payouts.MAX_BATCH) List<@Valid ItemInput> items,
                       @Size(max = 200) String description) {}
+
+    private void submitAfterCommit(UUID batchId) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    payouts.submit(batchId);
+                }
+            });
+        } else {
+            payouts.submit(batchId);
+        }
+    }
 
     @PostMapping("/withdrawals")
     public Payouts.Batch withdraw(@PathVariable UUID merchantId, @RequestHeader("Idempotency-Key") String key,
@@ -101,7 +116,7 @@ public class MerchantPayouts {
                             null, dest.verifiedName())),
                             null, actor);
                 }));
-        payouts.submit(batch.id());
+        submitAfterCommit(batch.id());
         return payouts.batch(batch.id());
     }
 
@@ -116,32 +131,65 @@ public class MerchantPayouts {
         }
         boolean requireAllowlist = enforceBatchDestinationAllowlist || a.actor().isApiKey();
         if (requireAllowlist) {
-            java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
-            for (ItemInput item : request.items()) {
-                Payouts.Destination norm = payouts.normalize(
-                        new Payouts.Destination(item.type(), item.network(), item.accountNumber(), item.accountName()));
-                var match = access.activeDestinationByAccount(merchantId, norm.type(), norm.network(), norm.accountNumber())
-                        .orElseThrow(() -> new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
-                                "destination_not_allowlisted",
-                                "Payouts are restricted to pre-approved, verified settlement destinations (" + norm.accountNumber() + ")"));
-                if (!match.verified()) {
-                    throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
-                            "destination_not_allowlisted",
-                            "Settlement destination is not verified (" + norm.accountNumber() + ")");
-                }
-                if (match.isCoolingOff(now)) {
-                    throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
-                            "destination_cooling_off_active",
-                            "Settlement destination is in 24-hour cooling-off lock until " + match.coolingOffUntil());
-                }
+            validateBatchDestinations(merchantId, request.items());
+        }
+        long batchTotal = 0L;
+        long maxItem = 0L;
+        for (ItemInput item : request.items()) {
+            batchTotal = Math.addExact(batchTotal, item.amount());
+            if (item.amount() > maxItem) {
+                maxItem = item.amount();
             }
+        }
+        if (maxItem >= largePayoutPesewas || batchTotal >= largePayoutPesewas) {
+            dualControl.hold("LARGE_PAYOUT", "payout-batch", merchantId.toString(), merchantId,
+                    Map.of("merchantId", merchantId.toString(),
+                            "totalAmount", batchTotal,
+                            "maxItemAmount", maxItem,
+                            "idempotencyKey", key,
+                            "request", request),
+                    "large payout batch", a.actor());
+        }
+        return executeBatch(merchantId, key, request, a.actor().subject());
+    }
+
+    private void validateBatchDestinations(UUID merchantId, List<ItemInput> items) {
+        java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
+        for (ItemInput item : items) {
+            validateDestinationAllowlist(merchantId, item.type(), item.network(), item.accountNumber(), item.accountName(), now);
+        }
+    }
+
+    private void validateDestinationAllowlist(UUID merchantId, String type, String network, String accountNumber,
+                                              String accountName, java.time.OffsetDateTime now) {
+        Payouts.Destination norm = payouts.normalize(
+                new Payouts.Destination(type, network, accountNumber, accountName));
+        var match = access.activeDestinationByAccount(merchantId, norm.type(), norm.network(), norm.accountNumber())
+                .orElseThrow(() -> new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                        "destination_not_allowlisted",
+                        "Payouts are restricted to pre-approved, verified settlement destinations (" + norm.accountNumber() + ")"));
+        if (!match.verified()) {
+            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                    "destination_not_allowlisted",
+                    "Settlement destination is not verified (" + norm.accountNumber() + ")");
+        }
+        if (match.isCoolingOff(now)) {
+            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                    "destination_cooling_off_active",
+                    "Settlement destination is in 24-hour cooling-off lock until " + match.coolingOffUntil());
+        }
+    }
+
+    public Payouts.Batch executeBatch(UUID merchantId, String key, BatchInput request, String actor) {
+        if (enforceBatchDestinationAllowlist) {
+            validateBatchDestinations(merchantId, request.items());
         }
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("payout-batch:" + merchantId, key, request,
                 Payouts.Batch.class, () -> payouts.create("merchant", merchantId, request.items().stream()
                         .map(i -> new Payouts.Item(i.reference(), i.amount(),
                                 new Payouts.Destination(i.type(), i.network(), i.accountNumber(), i.accountName()),
-                                i.platform(), null)).toList(), request.description(), a.actor().subject())));
-        payouts.submit(batch.id());
+                                i.platform(), null)).toList(), request.description(), actor)));
+        submitAfterCommit(batch.id());
         return payouts.batch(batch.id());
     }
 
@@ -176,25 +224,64 @@ public class MerchantPayouts {
     @PostMapping("/payouts/{reference}/retry")
     public Payouts.Batch retry(@PathVariable UUID merchantId, @PathVariable String reference,
                                @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-        var payoutOpt = db.sql("SELECT client_reference FROM payout WHERE reference = :r AND owner_type = 'merchant' AND owner_id = :m")
-                .param("r", reference).param("m", merchantId).query(String.class).optional();
+        record RetryRow(String clientRef, long amount, String type, String network, String accountNumber, String accountName) {}
+        var payoutOpt = db.sql("""
+                SELECT client_reference, amount, destination->>'type', destination->>'network',
+                       destination->>'accountNumber', destination->>'accountName'
+                FROM payout WHERE reference = :r AND owner_type = 'merchant' AND owner_id = :m""")
+                .param("r", reference).param("m", merchantId)
+                .query((rs, i) -> new RetryRow(rs.getString(1), rs.getLong(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5), rs.getString(6)))
+                .optional();
         if (payoutOpt.isEmpty()) {
             throw ApiException.notFound("Payout not found");
         }
         if (key == null || key.isBlank()) {
             throw ApiException.badRequest("missing_idempotency_key", "Idempotency-Key header is required");
         }
-        String clientRef = payoutOpt.get() == null ? "" : payoutOpt.get();
-        var a = access.require(merchantId, clientRef.contains("withdrawal-") ? WITHDRAW : PAYOUT);
+        RetryRow row = payoutOpt.get();
+        String clientRef = row.clientRef() == null ? "" : row.clientRef();
+        boolean isWithdrawal = clientRef.contains("withdrawal-");
+        var a = access.require(merchantId, isWithdrawal ? WITHDRAW : PAYOUT);
         if (a.actor().isApiKey() && !a.actor().isPayoutKey()) {
             throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
                     "payout_key_required",
                     "Secret keys (sk_live) cannot initiate payouts or withdrawals alone; use a dedicated payout_live key");
         }
+        if (isWithdrawal || enforceBatchDestinationAllowlist || a.actor().isApiKey()) {
+            validateDestinationAllowlist(merchantId, row.type(), row.network(), row.accountNumber(),
+                    row.accountName(), java.time.OffsetDateTime.now());
+        }
+        if (row.amount() >= largePayoutPesewas) {
+            dualControl.hold("LARGE_PAYOUT", "payout-retry", merchantId.toString(), merchantId,
+                    Map.of("merchantId", merchantId.toString(),
+                            "reference", reference,
+                            "amount", row.amount(),
+                            "idempotencyKey", key),
+                    "large payout retry", a.actor());
+        }
+        return executeRetry(merchantId, reference, key, a.actor().subject());
+    }
+
+    public Payouts.Batch executeRetry(UUID merchantId, String reference, String key, String actor) {
+        record RetryRow(String clientRef, String type, String network, String accountNumber, String accountName) {}
+        var row = db.sql("""
+                SELECT client_reference, destination->>'type', destination->>'network',
+                       destination->>'accountNumber', destination->>'accountName'
+                FROM payout WHERE reference = :r AND owner_type = 'merchant' AND owner_id = :m""")
+                .param("r", reference).param("m", merchantId)
+                .query((rs, i) -> new RetryRow(rs.getString(1), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5)))
+                .optional().orElseThrow(() -> ApiException.notFound("Payout not found"));
+        boolean isWithdrawal = row.clientRef() != null && row.clientRef().contains("withdrawal-");
+        if (isWithdrawal || enforceBatchDestinationAllowlist) {
+            validateDestinationAllowlist(merchantId, row.type(), row.network(), row.accountNumber(),
+                    row.accountName(), java.time.OffsetDateTime.now());
+        }
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("payout-retry:" + merchantId, key,
                 java.util.Map.of("reference", reference), Payouts.Batch.class,
-                () -> payouts.retry("merchant", merchantId, reference, a.actor().subject())));
-        payouts.submit(batch.id());
+                () -> payouts.retry("merchant", merchantId, reference, actor)));
+        submitAfterCommit(batch.id());
         return payouts.batch(batch.id());
     }
 }

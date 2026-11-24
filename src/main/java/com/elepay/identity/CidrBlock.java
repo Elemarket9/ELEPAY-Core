@@ -8,9 +8,9 @@ import java.net.UnknownHostException;
  * An IPv4 or IPv6 address block such as {@code 196.201.0.0/16} or a single address. Parsing accepts only
  * literal addresses, never host names, so configuration can never trigger a DNS lookup.
  */
-record CidrBlock(BigInteger network, BigInteger mask, int bytes) {
+public record CidrBlock(BigInteger network, BigInteger mask, int bytes) {
 
-    static CidrBlock parse(String spec) {
+    public static CidrBlock parse(String spec) {
         String s = spec.trim();
         int slash = s.indexOf('/');
         String addr = slash < 0 ? s : s.substring(0, slash);
@@ -24,9 +24,15 @@ record CidrBlock(BigInteger network, BigInteger mask, int bytes) {
         return new CidrBlock(new BigInteger(1, raw).and(mask), mask, raw.length);
     }
 
-    boolean contains(String address) {
+    public boolean contains(String address) {
         byte[] raw = literal(address);
         return raw != null && raw.length == bytes && new BigInteger(1, raw).and(mask).equals(network);
+    }
+
+    public boolean overlaps(CidrBlock other) {
+        if (other == null || other.bytes != this.bytes) return false;
+        return this.network.equals(other.network.and(this.mask))
+                || other.network.equals(this.network.and(other.mask));
     }
 
     /** Parses an IP literal without DNS; returns null for anything else. */

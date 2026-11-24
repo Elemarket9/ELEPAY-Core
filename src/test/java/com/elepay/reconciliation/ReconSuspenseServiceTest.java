@@ -24,17 +24,18 @@ class ReconSuspenseServiceTest extends PostgresTestBase {
     @DisplayName("Reconciliation suspense lifecycle: posting variance, aging bucket, and maker-checker resolution")
     void testSuspenseLifecycle() {
         // Create an un-reconciled statement line to obtain a real match_record_id
-        String unreconRef = "DISCREPANT-" + UUID.randomUUID().toString().substring(0, 8);
+        String s1 = UUID.randomUUID().toString().substring(0, 8);
+        String unreconRef = "DISCREPANT-" + s1;
         String mt940 = """
-                :20:GCB-SUSPENSE
-                :25:1010008888888
+                :20:GCB-SUSP-%s
+                :25:1010%s
                 :28C:00002/001
                 :60F:C260301GHS1000,00
                 :61:2603010301CR350,00NTRFNONREF//%s
                 :86:UNMATCHED
                 :62F:C260301GHS1350,00
                 -
-                """.formatted(unreconRef);
+                """.formatted(s1, s1, unreconRef);
 
         var batch = parser.ingestStatement("GCB", mt940);
         var report = reconEngine.reconcileBatch(batch.batchId());
@@ -86,17 +87,18 @@ class ReconSuspenseServiceTest extends PostgresTestBase {
     @Test
     @DisplayName("Resolving suspense variance requires non-empty target adjustment account")
     void testResolveVarianceRequiresTargetAdjustmentAccount() {
-        String unreconRef = "DISCREPANT-VAL-" + UUID.randomUUID().toString().substring(0, 8);
+        String s2 = UUID.randomUUID().toString().substring(0, 8);
+        String unreconRef = "DISCREPANT-VAL-" + s2;
         String mt940 = """
-                :20:GCB-SUSPENSE-VAL
-                :25:1010008888889
+                :20:GCB-VAL-%s
+                :25:1010%s
                 :28C:00003/001
                 :60F:C260301GHS1000,00
                 :61:2603010301CR100,00NTRFNONREF//%s
                 :86:UNMATCHED VALIDATION
                 :62F:C260301GHS1100,00
                 -
-                """.formatted(unreconRef);
+                """.formatted(s2, s2, unreconRef);
 
         var batch = parser.ingestStatement("GCB", mt940);
         var report = reconEngine.reconcileBatch(batch.batchId());

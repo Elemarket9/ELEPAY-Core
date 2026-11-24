@@ -47,8 +47,8 @@ public class OutboxDispatcher {
 
     /** Delivers up to {@code limit} events; returns the number marked published. */
     public int dispatchBatch(int limit) {
-        Integer published = claimTx.execute(status -> {
-            List<Outbox.Event> batch = db.sql("""
+        List<Outbox.Event> batch = claimTx.execute(status -> {
+            List<Outbox.Event> claimed = db.sql("""
                     SELECT id, sequence, aggregate_type, aggregate_id, event_type, payload::text, merchant_ids
                     FROM outbox_event
                     WHERE published_at IS NULL AND next_attempt_at <= now()
@@ -60,25 +60,33 @@ public class OutboxDispatcher {
                         return new Outbox.Event(rs.getObject(1, UUID.class), rs.getLong(2), rs.getString(3),
                                 rs.getString(4), rs.getString(5), rs.getString(6), merchants);
                     }).list();
-            int done = 0;
-            for (Outbox.Event event : batch) {
-                try {
-                    deliver(event);
-                    db.sql("UPDATE outbox_event SET published_at = now(), attempts = attempts + 1, last_error = NULL WHERE id = :id")
-                            .param("id", event.id()).update();
-                    done++;
-                } catch (RuntimeException e) {
-                    log.warn("Outbox event {} delivery failed: {}", event.id(), e.toString());
-                    db.sql("""
-                            UPDATE outbox_event SET attempts = attempts + 1, last_error = :err,
-                                   next_attempt_at = now() + make_interval(secs => least(300, power(2, attempts)))
-                            WHERE id = :id""")
-                            .param("id", event.id()).param("err", String.valueOf(e.getMessage())).update();
-                }
+            for (Outbox.Event event : claimed) {
+                db.sql("UPDATE outbox_event SET next_attempt_at = now() + interval '60 seconds' WHERE id = :id")
+                        .param("id", event.id()).update();
             }
-            return done;
+            return claimed;
         });
-        return published == null ? 0 : published;
+        if (batch == null || batch.isEmpty()) return 0;
+
+        int done = 0;
+        for (Outbox.Event event : batch) {
+            try {
+                deliver(event);
+                claimTx.executeWithoutResult(status ->
+                        db.sql("UPDATE outbox_event SET published_at = now(), attempts = attempts + 1, last_error = NULL, next_attempt_at = now() WHERE id = :id")
+                                .param("id", event.id()).update());
+                done++;
+            } catch (RuntimeException e) {
+                log.warn("Outbox event {} delivery failed: {}", event.id(), e.toString());
+                claimTx.executeWithoutResult(status ->
+                        db.sql("""
+                                UPDATE outbox_event SET attempts = attempts + 1, last_error = :err,
+                                       next_attempt_at = now() + make_interval(secs => least(300, power(2, attempts)))
+                                WHERE id = :id""")
+                                .param("id", event.id()).param("err", String.valueOf(e.getMessage())).update());
+            }
+        }
+        return done;
     }
 
     /** Delivers to every consumer; each consumer commits independently with inbox dedupe. */

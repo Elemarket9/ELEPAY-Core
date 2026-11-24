@@ -99,10 +99,28 @@ public class RiskEngineService {
     @Transactional
     public ComprehensiveRiskAssessment assessTransaction(AssessmentRequest req) {
         // 1. Velocity evaluation
+        // Public rail checkouts (CHECKOUT_MOMO, CHECKOUT_CARD, CHECKOUT_GHQR, etc.) identify unauthenticated
+        // payers by msisdn/email rather than a wallet customer UUID. Scope their velocity per merchant
+        // (targetRecipient) and use calibrated public checkout limits so shared or repeat payer MSISDNs
+        // across different merchants do not trip the authenticated wallet/payout ceiling while genuine
+        // per-merchant velocity abuse still triggers RULE_VEL_002.
+        boolean isPublicCheckout = req.actionType() != null
+                && req.actionType().startsWith("CHECKOUT_")
+                && !"CHECKOUT_WALLET".equals(req.actionType());
+        String velocityEntityType = isPublicCheckout ? "CHECKOUT_PAYER" : "CUSTOMER";
+        String velocityEntityId = isPublicCheckout && req.targetRecipient() != null && !req.targetRecipient().isBlank()
+                ? req.targetRecipient() + ":" + req.actorId()
+                : req.actorId();
+        if (velocityEntityId != null && velocityEntityId.length() > 128) {
+            velocityEntityId = velocityEntityId.substring(0, 128);
+        }
+        VelocityService.VelocityLimit velocityLimits = isPublicCheckout
+                ? VelocityService.VelocityLimit.publicCheckoutLimits()
+                : VelocityService.VelocityLimit.standardCustomerLimits();
         var velEvent = new VelocityService.VelocityEvent(
-                "CUSTOMER", req.actorId(), req.amountMinorUnits(), req.currency(), req.actionType()
+                velocityEntityType, velocityEntityId, req.amountMinorUnits(), req.currency(), req.actionType()
         );
-        var velResult = velocityService.checkAndRecord(velEvent, VelocityService.VelocityLimit.standardCustomerLimits());
+        var velResult = velocityService.checkAndRecord(velEvent, velocityLimits);
 
         // 2. Device risk evaluation
         DeviceRiskService.DeviceRiskResult devResult = null;

@@ -167,9 +167,12 @@ public class RecipeCostingService {
 
             String name = variantOpt.map(v -> v.name).orElse("Unknown Ingredient");
             long unitCost = variantOpt.map(v -> v.cost).orElse(0L);
-            long lineCost = (long) (unitCost * ing.quantityRequired().doubleValue());
+            long lineCost = ing.quantityRequired()
+                    .multiply(BigDecimal.valueOf(unitCost))
+                    .setScale(0, RoundingMode.HALF_UP)
+                    .longValueExact();
 
-            totalCostPesewas += lineCost;
+            totalCostPesewas = Math.addExact(totalCostPesewas, lineCost);
             details.add(new IngredientCostDetail(ing.ingredientVariantId(), name, ing.quantityRequired(), ing.unitOfMeasure(), unitCost, lineCost));
         }
 

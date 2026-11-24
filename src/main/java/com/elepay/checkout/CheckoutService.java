@@ -52,10 +52,28 @@ class CheckoutService {
     private final CheckoutConfigService config;
     private final EmtechCapture regulatory;
     private com.elepay.identity.KillSwitchService killSwitch;
+    private org.springframework.context.ApplicationEventPublisher events;
+    private com.elepay.wallet.TransferLimits transferLimits;
+    private com.elepay.risk.RiskEngineService riskEngine;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setKillSwitch(com.elepay.identity.KillSwitchService killSwitch) {
         this.killSwitch = killSwitch;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setEvents(org.springframework.context.ApplicationEventPublisher events) {
+        this.events = events;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTransferLimits(com.elepay.wallet.TransferLimits transferLimits) {
+        this.transferLimits = transferLimits;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setRiskEngine(com.elepay.risk.RiskEngineService riskEngine) {
+        this.riskEngine = riskEngine;
     }
 
     CheckoutService(JdbcClient db, Ledger ledger, MerchantAccess merchants, RailTransactions rails, Outbox outbox,
@@ -385,6 +403,17 @@ class CheckoutService {
         }
         long fee = customerFee("wallet", c.subtotal());
         long total = Math.addExact(c.subtotal(), fee);
+        if (transferLimits != null) {
+            transferLimits.check(customer, total);
+        }
+        if (riskEngine != null) {
+            var assessment = riskEngine.assessTransaction(new com.elepay.risk.RiskEngineService.AssessmentRequest(
+                    customer.toString(), c.reference(), "CHECKOUT_WALLET", total, Ledger.GHS,
+                    c.collectorId().toString(), null, null, null, null, null, false, false, false, false, false, null));
+            if (assessment.decision() == com.elepay.risk.RiskDecision.REJECT) {
+                throw ApiException.conflict("risk_blocked", "Checkout blocked by risk engine: " + assessment.explanation());
+            }
+        }
         UUID attempt = UUID.randomUUID();
         db.sql("INSERT INTO payment_attempt (id, checkout_id, method, status) VALUES (:id, :c, 'wallet', 'succeeded')")
                 .param("id", attempt).param("c", c.id()).update();
@@ -412,6 +441,15 @@ class CheckoutService {
         Checkout c = lockPayable(reference);
         long fee = customerFee(method, c.subtotal());
         long total = Math.addExact(c.subtotal(), fee);
+        if (riskEngine != null) {
+            String actorId = msisdn != null ? msisdn : (email != null ? email : c.reference());
+            var assessment = riskEngine.assessTransaction(new com.elepay.risk.RiskEngineService.AssessmentRequest(
+                    actorId, c.reference(), "CHECKOUT_" + method.toUpperCase(Locale.ROOT), total, Ledger.GHS,
+                    c.collectorId().toString(), null, null, msisdn, network, null, false, false, false, false, false, null));
+            if (assessment.decision() == com.elepay.risk.RiskDecision.REJECT) {
+                throw ApiException.conflict("risk_blocked", "Checkout blocked by risk engine: " + assessment.explanation());
+            }
+        }
         UUID attempt = UUID.randomUUID();
         var tx = rails.create(rails.defaultRail(), "charge", "checkout", attempt, total,
                 new RailTransactions.Request(method, msisdn, network, email, null,
@@ -420,8 +458,9 @@ class CheckoutService {
                 .param("id", attempt).param("c", c.id()).param("m", method).param("tx", tx.id()).update();
         db.sql("UPDATE checkout SET status = 'processing', payment_method = :m, customer_fee = :fee WHERE id = :id")
                 .param("m", method).param("fee", fee).param("id", c.id()).update();
-        return new PaymentResult(c.reference(), "processing", method, c.subtotal(), fee, total, attempt, "created", null,
-                "Approve the payment on your phone");
+        String msg = "ghqr".equals(method) ? "Scan the GhQR code to complete payment"
+                : "Approve the payment on your phone";
+        return new PaymentResult(c.reference(), "processing", method, c.subtotal(), fee, total, attempt, "created", null, msg);
     }
 
     @Transactional
@@ -482,15 +521,25 @@ class CheckoutService {
         long platform = 0;
         boolean held = false;
         for (Allocation a : c.allocations()) {
-            if (a.net() > 0) legs.add(Leg.credit(Ledger.code("merchant", a.merchantId(), "pending", Ledger.GHS), a.net()));
-            if (a.reserveAmount() > 0) legs.add(Leg.credit(Ledger.code("merchant", a.merchantId(), "reserved", Ledger.GHS), a.reserveAmount()));
+            if (a.net() > 0) {
+                legs.add(Leg.credit(ledger.open("merchant", a.merchantId(), "pending", Ledger.GHS), a.net()));
+            }
+            if (a.reserveAmount() > 0) {
+                legs.add(Leg.credit(ledger.open("merchant", a.merchantId(), "reserved", Ledger.GHS), a.reserveAmount()));
+            }
             platform += a.platformFee();
             deferred += a.merchantFee();
             held |= a.holdUntilDelivered();
         }
-        if (platform > 0) legs.add(Leg.credit(Ledger.code("merchant", c.collectorId(), "pending", Ledger.GHS), platform));
-        if (deferred > 0) legs.add(Leg.credit(Ledger.DEFERRED_REVENUE, deferred));
-        if (customerFee > 0) legs.add(Leg.credit(Ledger.REVENUE, customerFee));
+        if (platform > 0) {
+            legs.add(Leg.credit(ledger.open("merchant", c.collectorId(), "pending", Ledger.GHS), platform));
+        }
+        if (deferred > 0) {
+            legs.add(Leg.credit(ledger.openSystem(Ledger.DEFERRED_REVENUE, "deferred_revenue", Ledger.GHS, true), deferred));
+        }
+        if (customerFee > 0) {
+            legs.add(Leg.credit(ledger.openSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false), customerFee));
+        }
         var posted = ledger.post(Ledger.Posting.of("checkout-payment", c.id().toString(), "checkout_payment", legs)
                 .describedAs(c.reference()).withMetadata(Map.of("checkout", c.reference(), "method", method)));
         for (Allocation a : c.allocations()) {
@@ -515,6 +564,11 @@ class CheckoutService {
                         "merchantId", a.merchantId().toString(), "amount", a.amount())).toList()), recipients(c));
         audit.record("system", "checkout.paid", "checkout:" + c.reference(), Map.of("method", method, "total", total));
         regulatory.paidCheckout(c.id());
+        if (events != null) {
+            String channel = db.sql("SELECT channel FROM checkout WHERE id = :id")
+                    .param("id", c.id()).query(String.class).optional().orElse(null);
+            events.publishEvent(new CheckoutPaidEvent(c.id(), c.reference(), posted.transactionId(), total, Ledger.GHS, channel));
+        }
     }
 
     /** Stamps the customer channel. Web and app are not inferred from the handset's location. */
@@ -531,10 +585,15 @@ class CheckoutService {
     }
 
     @EventListener
+    @Transactional
     void onRailSucceeded(RailEvents.Succeeded event) {
         if (!event.purpose().equals("checkout")) return;
-        UUID checkoutId = db.sql("SELECT checkout_id FROM payment_attempt WHERE id = :id")
-                .param("id", event.purposeId()).query(UUID.class).single();
+        var attempt = db.sql("SELECT checkout_id, method FROM payment_attempt WHERE id = :id")
+                .param("id", event.purposeId())
+                .query((rs, i) -> new Object[]{rs.getObject(1, UUID.class), rs.getString(2)})
+                .single();
+        UUID checkoutId = (UUID) attempt[0];
+        String attemptMethod = (String) attempt[1];
         Checkout c = load(checkoutId, true);
         db.sql("UPDATE payment_attempt SET status = 'succeeded' WHERE id = :id").param("id", event.purposeId()).update();
         if (c.status().equals("paid")) {
@@ -544,14 +603,18 @@ class CheckoutService {
                     Leg.debit(Ledger.clearing(event.rail()), event.amount()), Leg.credit(Ledger.SUSPENSE, event.amount()))));
             return;
         }
-        complete(c, c.paymentMethod(), Ledger.clearing(event.rail()), null, c.customerFee(), event.amount());
+        String method = c.paymentMethod() != null ? c.paymentMethod() : attemptMethod;
+        String clearing = ledger.openSystem(Ledger.clearing(event.rail()), "clearing", Ledger.GHS, true);
+        complete(c, method, clearing, null, c.customerFee(), event.amount());
     }
 
     @EventListener
+    @Transactional
     void onRailFailed(RailEvents.Failed event) {
         if (!event.purpose().equals("checkout")) return;
         UUID checkoutId = db.sql("SELECT checkout_id FROM payment_attempt WHERE id = :id")
-                .param("id", event.purposeId()).query(UUID.class).single();
+                .param("id", event.purposeId()).query(UUID.class).optional().orElse(null);
+        if (checkoutId == null) return;
         load(checkoutId, true);
         db.sql("UPDATE payment_attempt SET status = 'failed' WHERE id = :id").param("id", event.purposeId()).update();
         db.sql("UPDATE checkout SET status = 'open', payment_method = NULL WHERE id = :id AND status = 'processing'")
@@ -566,9 +629,9 @@ class CheckoutService {
      * and the marketplace's share, and which bucket each part comes from. Fees return in proportion; the
      * last part returns whatever remains, so the totals always close exactly.
      */
-    record Take(long seller, long fee, long platform, long sellerFromPending, long feeFromDeferred,
-                long platformFromPending) {
-        long sellerFromAvailable() { return seller - sellerFromPending; }
+    record Take(long seller, long fee, long platform, long sellerFromPending, long sellerFromReserved,
+                long feeFromDeferred, long platformFromPending) {
+        long sellerFromAvailable() { return seller - sellerFromPending - sellerFromReserved; }
         long feeFromRevenue() { return fee - feeFromDeferred; }
         long platformFromAvailable() { return platform - platformFromPending; }
     }
@@ -583,14 +646,19 @@ class CheckoutService {
         fee = Math.min(fee, amount);
         platform = Math.min(platform, amount - fee);
         long seller = amount - fee - platform;
-        return new Take(seller, fee, platform, Math.min(a.pendingAmount(), seller), Math.min(a.feeDeferred(), fee),
-                Math.min(a.platformPending(), platform));
+        long sellerFromPending = Math.min(a.pendingAmount(), seller);
+        long remainingSeller = seller - sellerFromPending;
+        long availableReserve = Math.max(0L, a.reserveAmount() - a.reserveReleased());
+        long sellerFromReserved = Math.min(availableReserve, remainingSeller);
+        return new Take(seller, fee, platform, sellerFromPending, sellerFromReserved,
+                Math.min(a.feeDeferred(), fee), Math.min(a.platformPending(), platform));
     }
 
     /** Debit legs that pull a {@link Take} out of the seller, ELEPAY and marketplace accounts. */
     private static List<Leg> takeLegs(Checkout c, Allocation a, Take t) {
         List<Leg> legs = new ArrayList<>();
         if (t.sellerFromPending() > 0) legs.add(Leg.debit(Ledger.code("merchant", a.merchantId(), "pending", Ledger.GHS), t.sellerFromPending()));
+        if (t.sellerFromReserved() > 0) legs.add(Leg.debit(Ledger.code("merchant", a.merchantId(), "reserved", Ledger.GHS), t.sellerFromReserved()));
         if (t.sellerFromAvailable() > 0) legs.add(Leg.debit(Ledger.code("merchant", a.merchantId(), "available", Ledger.GHS), t.sellerFromAvailable()));
         if (t.feeFromDeferred() > 0) legs.add(Leg.debit(Ledger.DEFERRED_REVENUE, t.feeFromDeferred()));
         if (t.feeFromRevenue() > 0) legs.add(Leg.debit(Ledger.REVENUE, t.feeFromRevenue()));
@@ -639,11 +707,14 @@ class CheckoutService {
         db.sql("""
                 UPDATE checkout_allocation SET refunded = refunded + :amount, refunded_fee = refunded_fee + :fee,
                        refunded_platform_fee = refunded_platform_fee + :platform,
-                       pending_amount = pending_amount - :pending, platform_pending = platform_pending - :pp,
+                       pending_amount = pending_amount - :pending,
+                       reserve_released = reserve_released + :reserved,
+                       platform_pending = platform_pending - :pp,
                        fee_deferred = fee_deferred - :fd
                 WHERE checkout_id = :c AND line = :l""")
                 .param("amount", amount).param("fee", t.fee()).param("platform", t.platform())
-                .param("pending", t.sellerFromPending()).param("pp", t.platformFromPending())
+                .param("pending", t.sellerFromPending()).param("reserved", t.sellerFromReserved())
+                .param("pp", t.platformFromPending())
                 .param("fd", t.feeFromDeferred()).param("c", c.id()).param("l", line).update();
         UUID railTx = toWallet ? null : railRefund(c, id, amount);
         db.sql("""
@@ -673,6 +744,7 @@ class CheckoutService {
     }
 
     @EventListener
+    @Transactional
     void onRefundRail(RailEvents.Succeeded event) {
         if (!event.purpose().equals("refund")) return;
         var refund = db.sql("SELECT reference, amount FROM refund WHERE id = :id AND status = 'pending' FOR UPDATE")
@@ -687,6 +759,7 @@ class CheckoutService {
     }
 
     @EventListener
+    @Transactional
     void onRefundRailFailed(RailEvents.Failed event) {
         if (!event.purpose().equals("refund")) return;
         int failed = db.sql("UPDATE refund SET status = 'failed' WHERE id = :id AND status = 'pending'")
@@ -771,11 +844,14 @@ class CheckoutService {
         db.sql("""
                 UPDATE checkout_allocation SET disputed = disputed + :amount, disputed_fee = disputed_fee + :fee,
                        disputed_platform_fee = disputed_platform_fee + :platform,
-                       pending_amount = pending_amount - :p, platform_pending = platform_pending - :pp,
+                       pending_amount = pending_amount - :p,
+                       reserve_released = reserve_released + :reserved,
+                       platform_pending = platform_pending - :pp,
                        fee_deferred = fee_deferred - :fd
                 WHERE checkout_id = :c AND line = :l""")
                 .param("amount", amount).param("fee", t.fee()).param("platform", t.platform())
-                .param("p", t.sellerFromPending()).param("pp", t.platformFromPending()).param("fd", t.feeFromDeferred())
+                .param("p", t.sellerFromPending()).param("reserved", t.sellerFromReserved())
+                .param("pp", t.platformFromPending()).param("fd", t.feeFromDeferred())
                 .param("c", c.id()).param("l", line).update();
         db.sql("""
                 INSERT INTO dispute (id, checkout_id, line, amount, reason, status, hold_tx, rail_case, opened_by,
@@ -997,13 +1073,23 @@ class CheckoutService {
                     "currency", currency), Set.of(merchant));
             byBatch.put(entry.getKey(), settlementBatch(id));
         }
-        long fees = due.stream().mapToLong(Due::fee).sum();
-        UUID feeTx = null;
-        if (fees > 0) {
+        Map<String, Long> feesByCurrency = new LinkedHashMap<>();
+        for (Due d : due) {
+            if (d.fee() > 0) {
+                feesByCurrency.merge(d.currency(), d.fee(), Math::addExact);
+            }
+        }
+        Map<String, UUID> feeTxByCurrency = new LinkedHashMap<>();
+        for (var entry : feesByCurrency.entrySet()) {
+            String cur = entry.getKey();
+            long curFees = entry.getValue();
             UUID run = UUID.randomUUID();
-            feeTx = ledger.post(Ledger.Posting.of("fee-recognition", run.toString(), "fee_recognition", List.of(
-                    Leg.debit(Ledger.DEFERRED_REVENUE, fees), Leg.credit(Ledger.REVENUE, fees)))
-                    .describedAs("Fees earned on settled lines")).transactionId();
+            String deferredAcc = ledger.openSystem("system:deferred_revenue:" + cur, "deferred_revenue", cur, true);
+            String revenueAcc = ledger.openSystem("system:revenue:" + cur, "revenue", cur, false);
+            UUID txId = ledger.post(Ledger.Posting.of("fee-recognition", run.toString(), "fee_recognition", List.of(
+                    Leg.debit(deferredAcc, curFees), Leg.credit(revenueAcc, curFees)))
+                    .describedAs("Fees earned on settled lines (" + cur + ")")).transactionId();
+            feeTxByCurrency.put(cur, txId);
         }
         for (Due d : due) {
             SettlementBatch batch = byBatch.get(new BatchKey(d.pending() > 0 ? d.merchant() : d.collector(), d.currency()));
@@ -1013,7 +1099,7 @@ class CheckoutService {
                            fee_recognized = fee_recognized + fee_deferred, fee_deferred = 0,
                            settled_at = now(), settlement_tx = :tx, settlement_batch = :batch
                     WHERE checkout_id = :c AND line = :l""")
-                    .param("tx", batch != null ? batch.journalTx() : feeTx)
+                    .param("tx", batch != null ? batch.journalTx() : feeTxByCurrency.get(d.currency()))
                     .param("batch", batch != null ? batch.id() : null)
                     .param("c", d.checkout()).param("l", d.line()).update();
         }
@@ -1121,7 +1207,7 @@ class CheckoutService {
     ReserveRelease releaseReserve(UUID merchantId, String reference, int line, long amount, String reason, String actor) {
         Checkout c = load(reference, true);
         Allocation a = allocation(c, line);
-        if (!a.merchantId().equals(merchantId) && !c.collectorId().equals(merchantId)) {
+        if (!c.collectorId().equals(merchantId)) {
             throw ApiException.notFound("Allocation not found");
         }
         if (!c.status().equals("paid")) {
@@ -1137,7 +1223,7 @@ class CheckoutService {
 
         boolean settled = a.settledAt() != null && !a.awaitingDelivery();
         String reserved = Ledger.code("merchant", a.merchantId(), "reserved", Ledger.GHS);
-        String target = Ledger.code("merchant", a.merchantId(), settled ? "available" : "pending", Ledger.GHS);
+        String target = ledger.open("merchant", a.merchantId(), settled ? "available" : "pending", Ledger.GHS);
 
         UUID releaseId = UUID.randomUUID();
         List<Leg> legs = List.of(
@@ -1152,9 +1238,14 @@ class CheckoutService {
         db.sql("""
                 UPDATE checkout_allocation
                 SET reserve_released = reserve_released + :amt,
+                    pending_amount = pending_amount + :pendingInc,
+                    settled_amount = settled_amount + :settledInc,
                     release_status = CASE WHEN reserve_released + :amt >= reserve_amount THEN 'RELEASED' ELSE 'PARTIALLY_RELEASED' END
                 WHERE checkout_id = :c AND line = :l""")
-                .param("amt", amount).param("c", c.id()).param("l", line).update();
+                .param("amt", amount)
+                .param("pendingInc", settled ? 0L : amount)
+                .param("settledInc", settled ? amount : 0L)
+                .param("c", c.id()).param("l", line).update();
 
         db.sql("""
                 INSERT INTO settlement_reserve_release (id, checkout_id, line, merchant_id, amount, journal_tx, reason, released_by)

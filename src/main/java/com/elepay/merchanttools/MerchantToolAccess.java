@@ -58,21 +58,80 @@ public class MerchantToolAccess {
 
     /** Read access for any merchant member, including branch-scoped staff. */
     public UUID view(UUID merchantId) {
-        if (merchantId == null) throw ApiException.badRequest("merchant_required", "Merchant is required");
-        merchants.require(merchantId, MerchantAccess.Permission.VIEW);
+        viewAccess(merchantId);
         return merchantId;
     }
 
     public UUID view(Resource type, UUID id) { return view(owner(type, id)); }
 
+    public MerchantAccess.Access viewAccess(UUID merchantId) {
+        if (merchantId == null) throw ApiException.badRequest("merchant_required", "Merchant is required");
+        return merchants.require(merchantId, MerchantAccess.Permission.VIEW);
+    }
+
+    public MerchantAccess.Access viewAccess(Resource type, UUID id) { return viewAccess(owner(type, id)); }
+
     /** Day-to-day operation (cashiers, waiters, kitchen staff): placing and progressing orders. */
     public UUID operate(UUID merchantId) {
-        if (merchantId == null) throw ApiException.badRequest("merchant_required", "Merchant is required");
-        merchants.require(merchantId, MerchantAccess.Permission.COLLECT);
+        operateAccess(merchantId);
         return merchantId;
     }
 
     public UUID operate(Resource type, UUID id) { return operate(owner(type, id)); }
+
+    public MerchantAccess.Access operateAccess(UUID merchantId) {
+        if (merchantId == null) throw ApiException.badRequest("merchant_required", "Merchant is required");
+        return merchants.require(merchantId, MerchantAccess.Permission.COLLECT);
+    }
+
+    public MerchantAccess.Access operateAccess(Resource type, UUID id) { return operateAccess(owner(type, id)); }
+
+    public void requireBranch(MerchantAccess.Access access, UUID resourceBranchId) {
+        if (access != null && access.branchScoped() && !java.util.Objects.equals(access.branchId(), resourceBranchId)) {
+            throw ApiException.notFound("Resource not found");
+        }
+    }
+
+    public void requireOrderBranch(MerchantAccess.Access access, UUID orderId) {
+        if (access == null || !access.branchScoped()) return;
+        UUID branchId = db.sql("SELECT branch_id FROM pos_order WHERE id = :id")
+                .param("id", orderId)
+                .query(UUID.class)
+                .optional()
+                .orElse(null);
+        requireBranch(access, branchId);
+    }
+
+    public void requireTicketBranch(MerchantAccess.Access access, UUID ticketId) {
+        if (access == null || !access.branchScoped()) return;
+        UUID branchId = db.sql("""
+                SELECT o.branch_id
+                FROM restaurant_kds_ticket t
+                JOIN pos_order o ON o.id = t.order_id
+                WHERE t.id = :id
+                """)
+                .param("id", ticketId)
+                .query(UUID.class)
+                .optional()
+                .orElse(null);
+        requireBranch(access, branchId);
+    }
+
+    public void requireKdsItemBranch(MerchantAccess.Access access, UUID itemId) {
+        if (access == null || !access.branchScoped()) return;
+        UUID branchId = db.sql("""
+                SELECT o.branch_id
+                FROM restaurant_kds_item i
+                JOIN restaurant_kds_ticket t ON t.id = i.ticket_id
+                JOIN pos_order o ON o.id = t.order_id
+                WHERE i.id = :id
+                """)
+                .param("id", itemId)
+                .query(UUID.class)
+                .optional()
+                .orElse(null);
+        requireBranch(access, branchId);
+    }
 
     public UUID owner(Resource type, UUID id) {
         if (id == null) throw ApiException.badRequest("resource_required", "Resource is required");

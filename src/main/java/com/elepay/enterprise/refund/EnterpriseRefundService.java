@@ -75,20 +75,18 @@ public class EnterpriseRefundService {
                 new OrderRefundState(enterpriseId, orderReference, grossPesewas, 0L));
 
         if (db != null) {
-            try {
-                db.sql("""
-                    INSERT INTO enterprise_order_refund_aggregate
-                    (id, enterprise_id, order_reference, original_gross_pesewas, cumulative_refunded_pesewas, status)
-                    VALUES (:id, :eid, :oref, :gross, 0, 'ACTIVE')
-                    ON CONFLICT (enterprise_id, order_reference) DO UPDATE
-                    SET original_gross_pesewas = EXCLUDED.original_gross_pesewas
-                    """)
-                    .param("id", UUID.randomUUID())
-                    .param("eid", enterpriseId)
-                    .param("oref", orderReference)
-                    .param("gross", grossPesewas)
-                    .update();
-            } catch (Exception ignored) {}
+            db.sql("""
+                INSERT INTO enterprise_order_refund_aggregate
+                (id, enterprise_id, order_reference, original_gross_pesewas, cumulative_refunded_pesewas, status)
+                VALUES (:id, :eid, :oref, :gross, 0, 'ACTIVE')
+                ON CONFLICT (enterprise_id, order_reference) DO UPDATE
+                SET original_gross_pesewas = EXCLUDED.original_gross_pesewas
+                """)
+                .param("id", UUID.randomUUID())
+                .param("eid", enterpriseId)
+                .param("oref", orderReference)
+                .param("gross", grossPesewas)
+                .update();
         }
     }
 
@@ -99,10 +97,18 @@ public class EnterpriseRefundService {
     public EnterpriseRefundResult processRefund(EnterpriseItemRefundRequest request) {
         Objects.requireNonNull(request, "request cannot be null");
 
-        // 1. Idempotency Check
+        // 1. Idempotency Check (in-memory cache, then authoritative DB)
         EnterpriseRefundResult existing = refundsByIdempotency.get(request.idempotencyKey());
+        if (existing == null && db != null) {
+            existing = findRefundInDbByIdempotencyKey(request.enterpriseId(), request.idempotencyKey()).orElse(null);
+            if (existing != null) {
+                refundsById.put(existing.refundId(), existing);
+                refundsByIdempotency.put(request.idempotencyKey(), existing);
+            }
+        }
         if (existing != null) {
-            if (!existing.orderReference().equals(request.orderReference())
+            if (!existing.enterpriseId().equals(request.enterpriseId())
+                    || !existing.orderReference().equals(request.orderReference())
                     || existing.totalRefundPesewas() != request.totalRefundPesewas()
                     || existing.destination() != request.destination()) {
                 throw ApiException.conflict("idempotency_conflict",
@@ -258,10 +264,10 @@ public class EnterpriseRefundService {
             legs.add(Leg.debit(Ledger.code("merchant", request.enterpriseId(), "pending", currency), totalCommissionClawback));
         }
 
-        // Debit platform service fee from platform revenue account
-        ledger.openSystem(Ledger.REVENUE, "revenue", currency, false);
+        // Debit platform service fee from platform revenue account (currency-parameterized)
+        String revenueAccount = ledger.openSystem("system:revenue:" + currency, "revenue", currency, false);
         if (totalPlatformFeeClawback > 0) {
-            legs.add(Leg.debit(Ledger.REVENUE, totalPlatformFeeClawback));
+            legs.add(Leg.debit(revenueAccount, totalPlatformFeeClawback));
         }
 
         // Credit destination
@@ -393,56 +399,54 @@ public class EnterpriseRefundService {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
         if (db != null) {
-            try {
+            db.sql("""
+                INSERT INTO enterprise_refund
+                (id, enterprise_id, idempotency_key, refund_reference, order_reference, external_capture_id,
+                 external_customer_id, currency, total_refund_pesewas, refund_destination, status,
+                 ledger_tx_id, connector_refund_id, reason, created_at, completed_at)
+                VALUES
+                (:id, :eid, :ikey, :ref, :oref, :capid, :cid, :cur, :total, :dest, 'COMPLETED',
+                 :txid, :crid, :reason, :now, :now)
+                """)
+                .param("id", refundId)
+                .param("eid", request.enterpriseId())
+                .param("ikey", request.idempotencyKey())
+                .param("ref", refundRef)
+                .param("oref", request.orderReference())
+                .param("capid", request.externalCaptureId())
+                .param("cid", request.externalCustomerId())
+                .param("cur", currency)
+                .param("total", totalRefundRequested)
+                .param("dest", request.destination().name())
+                .param("txid", posted.transactionId())
+                .param("crid", connectorRefundId)
+                .param("reason", request.reason())
+                .param("now", now)
+                .update();
+
+            for (CalculatedItemRefund item : calculatedItems) {
                 db.sql("""
-                    INSERT INTO enterprise_refund
-                    (id, enterprise_id, idempotency_key, refund_reference, order_reference, external_capture_id,
-                     external_customer_id, currency, total_refund_pesewas, refund_destination, status,
-                     ledger_tx_id, connector_refund_id, reason, created_at, completed_at)
+                    INSERT INTO enterprise_refund_item
+                    (id, refund_id, item_reference, merchant_id, item_gross_pesewas, merchant_reversal_pesewas,
+                     commission_reversal_pesewas, platform_fee_reversal_pesewas, reserve_reversal_pesewas,
+                     tax_reversal_pesewas, reason, created_at)
                     VALUES
-                    (:id, :eid, :ikey, :ref, :oref, :capid, :cid, :cur, :total, :dest, 'COMPLETED',
-                     :txid, :crid, :reason, :now, :now)
+                    (:id, :rid, :iref, :mid, :gross, :mrev, :crev, :prev, :rrev, :trev, :reason, :now)
                     """)
-                    .param("id", refundId)
-                    .param("eid", request.enterpriseId())
-                    .param("ikey", request.idempotencyKey())
-                    .param("ref", refundRef)
-                    .param("oref", request.orderReference())
-                    .param("capid", request.externalCaptureId())
-                    .param("cid", request.externalCustomerId())
-                    .param("cur", currency)
-                    .param("total", totalRefundRequested)
-                    .param("dest", request.destination().name())
-                    .param("txid", posted.transactionId())
-                    .param("crid", connectorRefundId)
-                    .param("reason", request.reason())
+                    .param("id", UUID.randomUUID())
+                    .param("rid", refundId)
+                    .param("iref", item.itemReference())
+                    .param("mid", item.merchantId())
+                    .param("gross", item.grossRefundPesewas())
+                    .param("mrev", item.merchantReversalPesewas())
+                    .param("crev", item.commissionReversalPesewas())
+                    .param("prev", item.platformFeeReversalPesewas())
+                    .param("rrev", item.reserveReversalPesewas())
+                    .param("trev", item.taxReversalPesewas())
+                    .param("reason", item.reason())
                     .param("now", now)
                     .update();
-
-                for (CalculatedItemRefund item : calculatedItems) {
-                    db.sql("""
-                        INSERT INTO enterprise_refund_item
-                        (id, refund_id, item_reference, merchant_id, item_gross_pesewas, merchant_reversal_pesewas,
-                         commission_reversal_pesewas, platform_fee_reversal_pesewas, reserve_reversal_pesewas,
-                         tax_reversal_pesewas, reason, created_at)
-                        VALUES
-                        (:id, :rid, :iref, :mid, :gross, :mrev, :crev, :prev, :rrev, :trev, :reason, :now)
-                        """)
-                        .param("id", UUID.randomUUID())
-                        .param("rid", refundId)
-                        .param("iref", item.itemReference())
-                        .param("mid", item.merchantId())
-                        .param("gross", item.grossRefundPesewas())
-                        .param("mrev", item.merchantReversalPesewas())
-                        .param("crev", item.commissionReversalPesewas())
-                        .param("prev", item.platformFeeReversalPesewas())
-                        .param("rrev", item.reserveReversalPesewas())
-                        .param("trev", item.taxReversalPesewas())
-                        .param("reason", item.reason())
-                        .param("now", now)
-                        .update();
-                }
-            } catch (Exception ignored) {}
+            }
         }
 
         EnterpriseRefundResult result = new EnterpriseRefundResult(
@@ -485,6 +489,97 @@ public class EnterpriseRefundService {
         return Optional.ofNullable(refundsByIdempotency.get(idempotencyKey));
     }
 
+    private Optional<EnterpriseRefundResult> findRefundInDbByIdempotencyKey(UUID enterpriseId, String idempotencyKey) {
+        var rowOpt = db.sql("""
+            SELECT id, enterprise_id, idempotency_key, refund_reference, order_reference, external_capture_id,
+                   external_customer_id, currency, total_refund_pesewas, refund_destination, status,
+                   ledger_tx_id, connector_refund_id, created_at, completed_at
+            FROM enterprise_refund
+            WHERE enterprise_id = :eid AND idempotency_key = :ikey
+            """)
+            .param("eid", enterpriseId)
+            .param("ikey", idempotencyKey)
+            .query((rs, rowNum) -> new Object[] {
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("enterprise_id", UUID.class),
+                    rs.getString("idempotency_key"),
+                    rs.getString("refund_reference"),
+                    rs.getString("order_reference"),
+                    rs.getString("external_capture_id"),
+                    rs.getString("external_customer_id"),
+                    rs.getString("currency").trim(),
+                    rs.getLong("total_refund_pesewas"),
+                    rs.getString("refund_destination"),
+                    rs.getString("status"),
+                    rs.getObject("ledger_tx_id", UUID.class),
+                    rs.getString("connector_refund_id"),
+                    rs.getObject("created_at", OffsetDateTime.class),
+                    rs.getObject("completed_at", OffsetDateTime.class)
+            })
+            .optional();
+
+        if (rowOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        Object[] r = rowOpt.get();
+        UUID refundId = (UUID) r[0];
+        List<CalculatedItemRefund> items = db.sql("""
+            SELECT item_reference, merchant_id, item_gross_pesewas, merchant_reversal_pesewas,
+                   commission_reversal_pesewas, platform_fee_reversal_pesewas, reserve_reversal_pesewas,
+                   tax_reversal_pesewas, reason
+            FROM enterprise_refund_item
+            WHERE refund_id = :rid
+            ORDER BY created_at ASC
+            """)
+            .param("rid", refundId)
+            .query((rs, rowNum) -> new CalculatedItemRefund(
+                    rs.getString("item_reference"),
+                    rs.getObject("merchant_id", UUID.class),
+                    rs.getLong("item_gross_pesewas"),
+                    rs.getLong("merchant_reversal_pesewas"),
+                    rs.getLong("commission_reversal_pesewas"),
+                    rs.getLong("platform_fee_reversal_pesewas"),
+                    rs.getLong("reserve_reversal_pesewas"),
+                    rs.getLong("tax_reversal_pesewas"),
+                    rs.getString("reason")
+            ))
+            .list();
+
+        long itemsGross = items.stream().mapToLong(CalculatedItemRefund::grossRefundPesewas).sum();
+        long totalMerchantDebit = items.stream().mapToLong(CalculatedItemRefund::merchantReversalPesewas).sum();
+        long totalCommissionClawback = items.stream().mapToLong(CalculatedItemRefund::commissionReversalPesewas).sum();
+        long totalPlatformFeeClawback = items.stream().mapToLong(CalculatedItemRefund::platformFeeReversalPesewas).sum();
+        long totalReserveRelease = items.stream().mapToLong(CalculatedItemRefund::reserveReversalPesewas).sum();
+        long totalRefund = (long) r[8];
+        long deliveryReversal = Math.max(0L, totalRefund - itemsGross);
+
+        return Optional.of(new EnterpriseRefundResult(
+                refundId,
+                (String) r[3],
+                (String) r[2],
+                (UUID) r[1],
+                (String) r[4],
+                (String) r[5],
+                (String) r[6],
+                totalRefund,
+                (String) r[7],
+                RefundDestination.valueOf((String) r[9]),
+                RefundStatus.valueOf((String) r[10]),
+                (UUID) r[11],
+                (String) r[12],
+                items,
+                null,
+                totalMerchantDebit,
+                totalCommissionClawback,
+                totalPlatformFeeClawback,
+                totalReserveRelease,
+                deliveryReversal,
+                true,
+                (OffsetDateTime) r[13],
+                (OffsetDateTime) r[14]
+        ));
+    }
+
     private long resolveOriginalGross(UUID enterpriseId, String orderReference) {
         // First check in-memory state
         OrderRefundState state = orderRefundStates.get(orderKey(enterpriseId, orderReference));
@@ -503,19 +598,17 @@ public class EnterpriseRefundService {
 
         // Check DB
         if (db != null) {
-            try {
-                Long dbGross = db.sql("""
-                    SELECT original_gross_pesewas FROM enterprise_order_refund_aggregate
-                    WHERE enterprise_id = :eid AND order_reference = :oref
-                    """)
-                    .param("eid", enterpriseId)
-                    .param("oref", orderReference)
-                    .query(Long.class)
-                    .optional().orElse(null);
-                if (dbGross != null) {
-                    return dbGross;
-                }
-            } catch (Exception ignored) {}
+            Long dbGross = db.sql("""
+                SELECT original_gross_pesewas FROM enterprise_order_refund_aggregate
+                WHERE enterprise_id = :eid AND order_reference = :oref
+                """)
+                .param("eid", enterpriseId)
+                .param("oref", orderReference)
+                .query(Long.class)
+                .optional().orElse(null);
+            if (dbGross != null) {
+                return dbGross;
+            }
         }
 
         return 0L;
@@ -523,19 +616,17 @@ public class EnterpriseRefundService {
 
     public long resolveCumulativeRefunded(UUID enterpriseId, String orderReference) {
         if (db != null) {
-            try {
-                Long dbCum = db.sql("""
-                    SELECT cumulative_refunded_pesewas FROM enterprise_order_refund_aggregate
-                    WHERE enterprise_id = :eid AND order_reference = :oref
-                    """)
-                    .param("eid", enterpriseId)
-                    .param("oref", orderReference)
-                    .query(Long.class)
-                    .optional().orElse(null);
-                if (dbCum != null) {
-                    return dbCum;
-                }
-            } catch (Exception ignored) {}
+            Long dbCum = db.sql("""
+                SELECT cumulative_refunded_pesewas FROM enterprise_order_refund_aggregate
+                WHERE enterprise_id = :eid AND order_reference = :oref
+                """)
+                .param("eid", enterpriseId)
+                .param("oref", orderReference)
+                .query(Long.class)
+                .optional().orElse(null);
+            if (dbCum != null) {
+                return dbCum;
+            }
         }
 
         OrderRefundState state = orderRefundStates.get(orderKey(enterpriseId, orderReference));
@@ -551,21 +642,19 @@ public class EnterpriseRefundService {
                 new OrderRefundState(enterpriseId, orderReference, originalGross, newCumulative));
 
         if (db != null) {
-            try {
-                String status = (originalGross > 0 && newCumulative >= originalGross) ? "FULLY_REFUNDED" : "PARTIALLY_REFUNDED";
-                db.sql("""
-                    UPDATE enterprise_order_refund_aggregate
-                    SET cumulative_refunded_pesewas = :cum,
-                        status = :status,
-                        updated_at = now()
-                    WHERE enterprise_id = :eid AND order_reference = :oref
-                    """)
-                    .param("cum", newCumulative)
-                    .param("status", status)
-                    .param("eid", enterpriseId)
-                    .param("oref", orderReference)
-                    .update();
-            } catch (Exception ignored) {}
+            String status = (originalGross > 0 && newCumulative >= originalGross) ? "FULLY_REFUNDED" : "PARTIALLY_REFUNDED";
+            db.sql("""
+                UPDATE enterprise_order_refund_aggregate
+                SET cumulative_refunded_pesewas = :cum,
+                    status = :status,
+                    updated_at = now()
+                WHERE enterprise_id = :eid AND order_reference = :oref
+                """)
+                .param("cum", newCumulative)
+                .param("status", status)
+                .param("eid", enterpriseId)
+                .param("oref", orderReference)
+                .update();
         }
     }
 

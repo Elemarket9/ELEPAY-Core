@@ -72,10 +72,23 @@ public class PosOfflineSyncService {
             .optional();
     }
 
+    public Optional<OfflineSyncLog> findByTerminalAndOfflineTxId(UUID terminalId, String offlineTxId) {
+        return db.sql("""
+            SELECT id, terminal_id, offline_tx_id, idempotency_key, sync_status,
+                   conflict_reason, resolution_applied, synced_at
+            FROM pos_offline_sync_log WHERE terminal_id = :terminalId AND offline_tx_id = :offlineTxId
+            """)
+            .param("terminalId", terminalId)
+            .param("offlineTxId", offlineTxId)
+            .query(OfflineSyncLog.class)
+            .optional();
+    }
+
     @Transactional
     public SyncResult syncOfflineOrder(OfflineOrderPayload payload) {
-        // 1. Idempotency check: duplicate sync rejection/return
-        Optional<OfflineSyncLog> existingLog = findByIdempotencyKey(payload.idempotencyKey());
+        // 1. Idempotency check: duplicate sync rejection/return by idempotencyKey or (terminal_id, offline_tx_id)
+        Optional<OfflineSyncLog> existingLog = findByIdempotencyKey(payload.idempotencyKey())
+                .or(() -> findByTerminalAndOfflineTxId(payload.terminalId(), payload.offlineTxId()));
         if (existingLog.isPresent()) {
             return new SyncResult(
                     payload.offlineTxId(),
@@ -83,17 +96,27 @@ public class PosOfflineSyncService {
                     existingLog.get().syncStatus(),
                     null,
                     existingLog.get().resolutionApplied(),
-                    "Already processed under idempotency key " + payload.idempotencyKey()
+                    "Already processed under idempotency key " + existingLog.get().idempotencyKey()
             );
         }
 
-        // 2. Validate calculations / detect potential price conflicts
-        long expectedSubtotal = 0;
+        // 2. Validate calculations / detect potential price conflicts using BigDecimal & checked math
+        long expectedSubtotal = 0L;
         for (PosOrderService.OrderItemInput item : payload.items()) {
-            long itemTotal = (item.unitPricePesewas() * item.quantity().longValue()) - item.discountPesewas() + item.taxPesewas();
-            expectedSubtotal += itemTotal;
+            if (item == null || item.quantity() == null || item.quantity().signum() <= 0
+                    || item.unitPricePesewas() < 0 || item.discountPesewas() < 0 || item.taxPesewas() < 0) {
+                throw new IllegalArgumentException("Invalid offline order item amounts");
+            }
+            long gross = item.quantity()
+                    .multiply(java.math.BigDecimal.valueOf(item.unitPricePesewas()))
+                    .setScale(0, java.math.RoundingMode.HALF_UP)
+                    .longValueExact();
+            long itemTotal = Math.addExact(Math.subtractExact(gross, item.discountPesewas()), item.taxPesewas());
+            expectedSubtotal = Math.addExact(expectedSubtotal, itemTotal);
         }
-        long expectedTotal = expectedSubtotal - payload.discountPesewas() + payload.taxPesewas() + payload.tipPesewas();
+        long expectedTotal = Math.addExact(
+                Math.addExact(Math.subtractExact(expectedSubtotal, payload.discountPesewas()), payload.taxPesewas()),
+                payload.tipPesewas());
 
         boolean priceConflict = expectedTotal != payload.totalPesewas();
         String resolutionApplied = "NONE";
@@ -101,7 +124,7 @@ public class PosOfflineSyncService {
         String conflictReason = null;
 
         if (priceConflict) {
-            String strategy = payload.conflictStrategy() != null ? payload.conflictStrategy() : "ACCEPT_LOCAL_FORCE";
+            String strategy = payload.conflictStrategy() != null ? payload.conflictStrategy() : "SERVER_ADJUSTED";
             if ("REJECT_FLAGGED".equalsIgnoreCase(strategy)) {
                 UUID logId = UUID.randomUUID();
                 db.sql("""
@@ -121,14 +144,14 @@ public class PosOfflineSyncService {
                     .update();
 
                 return new SyncResult(payload.offlineTxId(), payload.idempotencyKey(), "REJECTED", null, "REJECT_FLAGGED", "Offline sync rejected due to calculation mismatch");
-            } else if ("SERVER_ADJUSTED".equalsIgnoreCase(strategy)) {
-                conflictReason = "Total adjusted from " + payload.totalPesewas() + " to server calculated " + expectedTotal;
-                resolutionApplied = "SERVER_ADJUSTED";
-                syncStatus = "CONFLICT_RESOLVED";
-            } else {
-                // ACCEPT_LOCAL_FORCE
+            } else if ("ACCEPT_LOCAL_FORCE".equalsIgnoreCase(strategy)) {
                 conflictReason = "Local total " + payload.totalPesewas() + " accepted over server calculated " + expectedTotal;
                 resolutionApplied = "ACCEPT_LOCAL_FORCE";
+                syncStatus = "CONFLICT_RESOLVED";
+            } else {
+                // SERVER_ADJUSTED (default)
+                conflictReason = "Total adjusted from " + payload.totalPesewas() + " to server calculated " + expectedTotal;
+                resolutionApplied = "SERVER_ADJUSTED";
                 syncStatus = "CONFLICT_RESOLVED";
             }
         }

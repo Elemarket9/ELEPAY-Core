@@ -26,7 +26,7 @@ NON_FINTECH_SOURCE = re.compile(
 )
 WEB_FALSE_SUCCESS = re.compile(
     r"(?:Authenticity Hash:|All Systems Green|Payroll successfully executed|Store Credit issued|Recharge successful!|Bill payment completed!|"
-    r"Virtual Visa Card issued successfully!|Restructuring file dispatched to credit risk committee\.)"
+    r"Virtual Visa Card issued successfully!|Restructuring file dispatched to credit risk committee\.|GRA e-VAT Compliant)"
 )
 # Payment references must come from real payouts, never be invented in code.
 INVENTED_PAYOUT_REF = re.compile(
@@ -36,6 +36,7 @@ UNSAFE_SECRET_DEFAULT = re.compile(
     r"\$\{[^}\n]*(?:password|secret|api[-_.]?key|token)[^}:\n]*:[^}\n]+\}",
     re.IGNORECASE,
 )
+BANNED_PARTNERS = re.compile(r"(?:paystack|hubtel)", re.IGNORECASE)
 BANNED_ROUTES = (
     '"/v1/fx/transfers"', '"/v1/fx/transfers/{reference}"',
     '"/v1/fx/partners/{partner}/inbound"',
@@ -63,6 +64,8 @@ def audit() -> list[str]:
                 failures.append(f"{rel}:{line_num}: production credential has a non-empty default")
             if re.search(r"\b(?:class|record)\s+Simulated\w+", line):
                 failures.append(f"{rel}:{line_num}: simulated production implementation")
+            if BANNED_PARTNERS.search(line):
+                failures.append(f"{rel}:{line_num}: excluded partner reference (paystack/hubtel)")
             if rel.endswith("/fx/FxApi.java") and any(route in line for route in BANNED_ROUTES):
                 failures.append(f"{rel}:{line_num}: international recipient payout API returned")
 
@@ -74,9 +77,12 @@ def audit() -> list[str]:
 
     for path in source_files(WEB, (".ts", ".tsx")):
         rel = path.relative_to(ROOT).as_posix()
+        is_test_file = path.name.endswith((".test.ts", ".test.tsx"))
         for line_num, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if WEB_FALSE_SUCCESS.search(line):
                 failures.append(f"{rel}:{line_num}: fabricated financial or regulatory success")
+            if not is_test_file and BANNED_PARTNERS.search(line):
+                failures.append(f"{rel}:{line_num}: excluded partner reference (paystack/hubtel)")
 
     return failures
 

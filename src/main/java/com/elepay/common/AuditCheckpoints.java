@@ -25,13 +25,22 @@ public class AuditCheckpoints {
     private final JdbcClient db;
     private final IntegrityKeys keys;
     private final Audit audit;
+    private final OpsQueue ops;
     private final boolean scheduled;
 
     public AuditCheckpoints(JdbcClient db, IntegrityKeys keys, Audit audit,
                             @Value("${elepay.integrity.checkpoints-enabled:true}") boolean scheduled) {
+        this(db, keys, audit, null, scheduled);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AuditCheckpoints(JdbcClient db, IntegrityKeys keys, Audit audit,
+                            @org.springframework.beans.factory.annotation.Autowired(required = false) OpsQueue ops,
+                            @Value("${elepay.integrity.checkpoints-enabled:true}") boolean scheduled) {
         this.db = db;
         this.keys = keys;
         this.audit = audit;
+        this.ops = ops;
         this.scheduled = scheduled;
     }
 
@@ -92,7 +101,19 @@ public class AuditCheckpoints {
     @Scheduled(fixedDelayString = "${elepay.integrity.checkpoint-ms:3600000}",
             initialDelayString = "${elepay.integrity.checkpoint-ms:3600000}")
     void scheduledCheckpoint() {
-        if (scheduled) create();
+        if (!scheduled) return;
+        try {
+            create();
+        } catch (Exception e) {
+            if (ops != null) {
+                try {
+                    ops.raise("audit_checkpoint_failed", "critical", "audit:checkpoint",
+                            Map.of("error", String.valueOf(e.getMessage())));
+                } catch (Exception ignored) {
+                    // Best-effort alerting if DB itself is unreachable
+                }
+            }
+        }
     }
 
     /** Every signing key's public half, oldest first, for auditors. */

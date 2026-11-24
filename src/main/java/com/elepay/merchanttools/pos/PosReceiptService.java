@@ -43,6 +43,10 @@ public class PosReceiptService {
     public PosReceipt generateReceipt(UUID orderId) {
         PosOrderService.PosOrder order = orderService.getOrder(orderId).orElseThrow();
         if (!"PAID".equals(order.status())) throw com.elepay.common.ApiException.conflict("order_unpaid", "Payment is not complete");
+        Optional<PosReceipt> existing = findByOrderId(orderId);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
         List<PosOrderService.PosOrderItem> items = orderService.listOrderItems(orderId);
         List<PosOrderService.TenderPayment> payments = orderService.listTenderPayments(orderId);
 

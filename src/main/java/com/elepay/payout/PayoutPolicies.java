@@ -223,7 +223,10 @@ public class PayoutPolicies {
      */
     Optional<DestinationRow> autoDestination(UUID merchant, UUID chosen) {
         if (chosen != null) return verifiedDestination(merchant, chosen);
-        var all = merchants.verifiedDestinations(merchant);
+        var now = java.time.OffsetDateTime.now();
+        var all = merchants.verifiedDestinations(merchant).stream()
+                .filter(d -> !d.isCoolingOff(now))
+                .toList();
         return all.size() == 1 ? Optional.of(DestinationRow.of(all.get(0))) : Optional.empty();
     }
 
@@ -252,7 +255,8 @@ public class PayoutPolicies {
             } catch (ApiException e) {
                 if (e.code().equals("insufficient_funds")
                         || e.code().equals("GLOBAL_KILL_SWITCH_ACTIVE")
-                        || e.code().equals("MERCHANT_KILL_SWITCH_ACTIVE")) {
+                        || e.code().equals("MERCHANT_KILL_SWITCH_ACTIVE")
+                        || e.code().equals("payout_velocity_ceiling_exceeded")) {
                     continue;
                 }
                 throw e;

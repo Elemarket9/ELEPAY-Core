@@ -1,5 +1,6 @@
 package com.elepay.reconciliation;
 
+import com.elepay.common.ApiException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -135,7 +136,7 @@ public class Mt940StatementParser {
                 Matcher m = FIELD_61_PATTERN.matcher(val);
                 if (m.find()) {
                     LocalDate valDate = parseDate6(m.group(1));
-                    LocalDate entryDate = m.group(2) != null ? parseDate4(m.group(1).substring(0, 2), m.group(2)) : valDate;
+                    LocalDate entryDate = m.group(2) != null ? parseDate4(valDate, m.group(2)) : valDate;
                     String dcMark = m.group(3).toUpperCase();
                     long amt = parseAmountPesewas(m.group(5));
                     String typeCode = m.group(6);
@@ -147,10 +148,10 @@ public class Mt940StatementParser {
                     );
                     statementLines.add(currentLine);
                 } else {
-                    // Fallback lenient parser for simpler lines
+                    // Flag malformed :61: line instead of silently treating as 0L valid line
                     LocalDate valDate = LocalDate.now();
                     currentLine = new StatementLine(
-                            lineCounter, valDate, valDate, "C", 0L, "MSC", null, "LINE-" + lineCounter, val
+                            lineCounter, valDate, valDate, "C", 0L, "ERR", null, "LINE-" + lineCounter, "PARSE_ERROR: " + val
                     );
                     statementLines.add(currentLine);
                 }
@@ -170,7 +171,12 @@ public class Mt940StatementParser {
                 Matcher m = BALANCE_PATTERN.matcher(val);
                 if (m.find()) {
                     String dOrC = m.group(1);
-                    currency = m.group(3);
+                    String closingCurrency = m.group(3);
+                    if (currency != null && !currency.equalsIgnoreCase(closingCurrency)) {
+                        throw ApiException.badRequest("currency_mismatch",
+                                "MT940 closing balance currency " + closingCurrency + " does not match opening currency " + currency);
+                    }
+                    currency = closingCurrency;
                     long rawAmt = parseAmountPesewas(m.group(4));
                     closingBalance = "D".equalsIgnoreCase(dOrC) ? -rawAmt : rawAmt;
                 }
@@ -193,8 +199,39 @@ public class Mt940StatementParser {
     @Transactional
     public BatchIngestionResult ingestStatement(String bankCode, String mt940Content) {
         ParsedStatement parsed = parse(mt940Content);
+
+        // Reject statements containing malformed :61: lines
+        for (StatementLine line : parsed.lines()) {
+            if ("ERR".equals(line.transactionTypeCode())
+                    || (line.supplementaryDetails() != null && line.supplementaryDetails().startsWith("PARSE_ERROR:"))) {
+                throw ApiException.badRequest("malformed_statement_line",
+                        "Malformed :61: statement line at line " + line.lineNumber());
+            }
+        }
+
+        // Duplicate statement ingestion protection (SHA-256 or natural statement key)
+        String normalizedBank = bankCode.toUpperCase();
+        var duplicateOpt = db.sql("""
+            SELECT id FROM recon_bank_statement_batch
+            WHERE raw_content_sha256 = :sha256
+               OR (bank_code = :bankCode AND account_number = :accNum
+                   AND statement_number = :stmtNum AND COALESCE(sequence_number, '') = COALESCE(:seqNum, ''))
+            LIMIT 1
+        """)
+                .param("sha256", parsed.rawSha256())
+                .param("bankCode", normalizedBank)
+                .param("accNum", parsed.accountNumber())
+                .param("stmtNum", parsed.statementNumber())
+                .param("seqNum", parsed.sequenceNumber())
+                .query(UUID.class)
+                .optional();
+        if (duplicateOpt.isPresent()) {
+            throw ApiException.conflict("duplicate_statement",
+                    "MT940 statement has already been ingested (batch " + duplicateOpt.get() + ")");
+        }
+
         UUID batchId = UUID.randomUUID();
-        String batchRef = "BATCH-" + bankCode.toUpperCase() + "-" + parsed.statementNumber() + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String batchRef = "BATCH-" + normalizedBank + "-" + parsed.statementNumber() + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         OffsetDateTime now = OffsetDateTime.now();
 
         db.sql("""
@@ -212,7 +249,7 @@ public class Mt940StatementParser {
         """)
                 .param("id", batchId)
                 .param("batchRef", batchRef)
-                .param("bankCode", bankCode.toUpperCase())
+                .param("bankCode", normalizedBank)
                 .param("accNum", parsed.accountNumber())
                 .param("stmtNum", parsed.statementNumber())
                 .param("seqNum", parsed.sequenceNumber())
@@ -294,18 +331,36 @@ public class Mt940StatementParser {
         }
     }
 
-    private LocalDate parseDate4(String yearPrefix, String mmdd) {
+    private LocalDate parseDate4(LocalDate valDate, String mmdd) {
         try {
-            return LocalDate.parse(yearPrefix + mmdd, DATE_FORMAT_6_DIGIT);
+            int month = Integer.parseInt(mmdd.substring(0, 2));
+            int day = Integer.parseInt(mmdd.substring(2, 4));
+            int year = valDate.getYear();
+            if (valDate.getMonthValue() == 1 && month == 12) {
+                year -= 1;
+            } else if (valDate.getMonthValue() == 12 && month == 1) {
+                year += 1;
+            }
+            return LocalDate.of(year, month, day);
         } catch (Exception e) {
-            return LocalDate.now();
+            return valDate;
         }
     }
 
     private long parseAmountPesewas(String amtStr) {
         if (amtStr == null || amtStr.isBlank()) return 0L;
-        String normalized = amtStr.replace(',', '.').trim();
-        return new java.math.BigDecimal(normalized).multiply(java.math.BigDecimal.valueOf(100)).setScale(0, java.math.RoundingMode.HALF_UP).longValue();
+        String trimmed = amtStr.trim();
+        String normalized;
+        int lastComma = trimmed.lastIndexOf(',');
+        int lastDot = trimmed.lastIndexOf('.');
+        if (lastComma > lastDot) {
+            normalized = trimmed.replace(".", "").replace(',', '.');
+        } else {
+            normalized = trimmed.replace(",", "");
+        }
+        return new java.math.BigDecimal(normalized)
+                .multiply(java.math.BigDecimal.valueOf(100))
+                .longValueExact();
     }
 
     private String calculateSha256(String input) {

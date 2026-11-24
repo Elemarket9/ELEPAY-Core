@@ -31,7 +31,14 @@ export async function api<T>(path: string, options: CallOptions = {}): Promise<T
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data: { code?: string; detail?: string } | null = null;
+  if (text) {
+    try {
+      data = JSON.parse(text) as { code?: string; detail?: string };
+    } catch {
+      throw new ApiError(response.status, "invalid_response", response.statusText || "Invalid response");
+    }
+  }
   if (!response.ok) {
     throw new ApiError(response.status, data?.code ?? "error", data?.detail ?? response.statusText);
   }

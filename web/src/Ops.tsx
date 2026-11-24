@@ -7,11 +7,12 @@ interface MerchantView { id: string; legalName: string; tradingName: string; kin
 interface Integrity { accountsWithDrift: number; netByCurrency: Record<string, number>; unbalancedTransactions: number }
 
 const TABS = [
-  "Overview", "Agent Banking", "Lending Portfolio", "System Health",
+  "Overview", "Maker-Checker", "Kill Switches", "Custodian Trust",
+  "Agent Banking", "Lending Portfolio", "System Health",
   "Exceptions", "Onboarding", "Disputes", "Reconciliation"
 ] as const;
 
-/** Operations console: agent banking, lending review, system health, exceptions, and reconciliation. */
+/** Operations console: maker-checker, kill switches, custodian trust, exceptions, disputes, and reconciliation. */
 export function OpsConsole() {
   const [tab, setTab] = useState<(typeof TABS)[number]>("Overview");
   return (
@@ -20,6 +21,9 @@ export function OpsConsole() {
       <nav className="tabs">{TABS.map((t) => <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}</nav>
 
       {tab === "Overview" && <Overview />}
+      {tab === "Maker-Checker" && <MakerChecker />}
+      {tab === "Kill Switches" && <KillSwitches />}
+      {tab === "Custodian Trust" && <CustodianTrust />}
       {tab === "Agent Banking" && <AgentBanking />}
       {tab === "Lending Portfolio" && <LendingPortfolio />}
       {tab === "System Health" && <SystemHealth />}
@@ -160,22 +164,48 @@ function Onboarding() {
   );
 }
 
+export function formatDualControlOutcome(res: unknown, completedMessage: string): string {
+  if (res && typeof res === "object") {
+    const record = res as Record<string, unknown>;
+    if (record.code === "pending_approval" || record.status === "PENDING") {
+      const detail = typeof record.detail === "string" && record.detail.trim()
+        ? record.detail
+        : "Awaiting second operator approval in Maker-Checker.";
+      return `Pending dual-control approval: ${detail}`;
+    }
+  }
+  return completedMessage;
+}
+
 function Disputes() {
   const [rows, setRows] = useState<Record<string, string | number>[]>([]);
-  const { msg, run } = useAction();
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const load = () => api<Record<string, string | number>[]>("/v1/ops/disputes").then(setRows);
   useEffect(() => { void load(); }, []);
-  const resolve = (id: string, outcome: string) =>
-    void run(() => api(`/v1/ops/disputes/${id}/resolve`, { body: { outcome, note: "Resolved in console" } }).then(load), "Dispute resolved");
+  async function resolve(id: string, outcome: string) {
+    setMsg(null);
+    setError(null);
+    try {
+      const res = await api<Record<string, unknown>>(`/v1/ops/disputes/${id}/resolve`, {
+        body: { outcome, note: "Resolved in console" },
+      });
+      setMsg(formatDualControlOutcome(res, "Dispute resolved"));
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
   return (
     <>
-      {msg && <p className="small">{msg}</p>}
+      {error && <p className="error">{error}</p>}
+      {msg && <p className="notice ok">{msg}</p>}
       <table className="grid">
         <thead><tr><th>Checkout</th><th>Merchant</th><th className="num">Amount</th><th>Reason</th><th /></tr></thead>
         <tbody>{rows.map((d) => (
           <tr key={String(d.id)}><td>{d.checkout} #{d.line}</td><td>{d.merchant}</td><td className="num">{formatMoney(Number(d.amount))}</td>
-            <td>{d.reason}</td><td><button className="small" onClick={() => resolve(String(d.id), "merchant_won")}>Merchant won</button>
-              <button className="small secondary" onClick={() => resolve(String(d.id), "customer_won")}>Customer won</button></td></tr>
+            <td>{d.reason}</td><td><button className="small" onClick={() => void resolve(String(d.id), "merchant_won")}>Merchant won</button>
+              <button className="small secondary" onClick={() => void resolve(String(d.id), "customer_won")}>Customer won</button></td></tr>
         ))}</tbody>
       </table>
     </>
@@ -191,5 +221,306 @@ function Reconciliation() {
       <tbody>{runs.map((r) => <tr key={r.id}><td>{r.rail}</td><td>{r.period}</td><td className="mono small">{r.summary}</td>
         <td>{r.imported_by}</td><td className="small">{new Date(r.created_at).toLocaleString()}</td></tr>)}</tbody>
     </table>
+  );
+}
+
+interface MakerCheckerProposal {
+  id: string;
+  actionType: string;
+  resourceType: string;
+  resourceId: string;
+  merchantId: string | null;
+  reason: string | null;
+  status: string;
+  proposedBy: string;
+  proposedAt: string;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+  expiresAt: string;
+}
+
+function MakerChecker() {
+  const [proposals, setProposals] = useState<MakerCheckerProposal[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string>("PENDING");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    const q = statusFilter === "ALL" ? "" : `?status=${encodeURIComponent(statusFilter)}`;
+    api<MakerCheckerProposal[]>(`/v1/ops/maker-checker/proposals${q}`)
+      .then((res) => { setProposals(res); setError(null); })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
+  useEffect(() => { load(); }, [statusFilter]);
+
+  async function review(id: string, action: "approve" | "reject") {
+    const note = prompt(action === "approve" ? "Approval note (optional)" : "Rejection reason") ?? "";
+    setMsg(null);
+    setError(null);
+    try {
+      const res = await api<MakerCheckerProposal>(`/v1/ops/maker-checker/proposals/${id}/${action}`, {
+        body: { note },
+      });
+      setMsg(`Proposal ${res.id} ${res.status.toLowerCase()}.`);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex-between">
+        <h3>Maker-Checker Dual Control</h3>
+        <label className="choice">
+          Status:
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: "auto" }}>
+            <option value="PENDING">Pending</option>
+            <option value="APPROVED">Approved</option>
+            <option value="REJECTED">Rejected</option>
+            <option value="ALL">All</option>
+          </select>
+        </label>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {msg && <p className="notice ok">{msg}</p>}
+      <table className="grid" style={{ marginTop: "1rem" }}>
+        <thead>
+          <tr><th>Action</th><th>Resource</th><th>Reason</th><th>Proposed By</th><th>Status</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+          {proposals.map((p) => (
+            <tr key={p.id}>
+              <td className="mono small">{p.actionType}</td>
+              <td className="mono small">{p.resourceType}:{p.resourceId}</td>
+              <td className="small">{p.reason ?? "—"}</td>
+              <td className="small">{p.proposedBy}</td>
+              <td><span className={`tag ${p.status === "APPROVED" ? "active" : p.status === "PENDING" ? "pending" : "failed"}`}>{p.status}</span></td>
+              <td>
+                {p.status === "PENDING" ? (
+                  <>
+                    <button className="small" onClick={() => void review(p.id, "approve")}>Approve</button>
+                    <button className="small secondary" onClick={() => void review(p.id, "reject")}>Reject</button>
+                  </>
+                ) : (
+                  <span className="small muted">{p.reviewedBy ?? "—"}</span>
+                )}
+              </td>
+            </tr>
+          ))}
+          {proposals.length === 0 && (
+            <tr><td colSpan={6} className="muted">No maker-checker proposals found.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+interface KillSwitchStatus {
+  globalFrozen: boolean;
+  globalFreezeReason: string | null;
+  frozenMerchants: string[];
+  modules: Record<string, boolean>;
+}
+
+function KillSwitches() {
+  const [status, setStatus] = useState<KillSwitchStatus | null>(null);
+  const [merchantId, setMerchantId] = useState("");
+  const [reason, setReason] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    api<KillSwitchStatus>("/v1/ops/kill-switch/status")
+      .then((res) => { setStatus(res); setError(null); })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  async function toggleGlobal(frozen: boolean) {
+    setMsg(null);
+    setError(null);
+    try {
+      const res = await api<Record<string, unknown>>("/v1/ops/kill-switch/global", {
+        body: { frozen, reason: reason || undefined },
+      });
+      setMsg(formatDualControlOutcome(res, frozen ? "Global payout freeze activated." : "Global payout freeze lifted."));
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function toggleMerchant(id: string, frozen: boolean) {
+    if (!id.trim()) { setError("Enter a merchant UUID."); return; }
+    setMsg(null);
+    setError(null);
+    try {
+      const res = await api<Record<string, unknown>>(`/v1/ops/kill-switch/merchants/${id.trim()}`, {
+        body: { frozen, reason: reason || undefined },
+      });
+      setMsg(formatDualControlOutcome(res, `Merchant ${id.trim()} ${frozen ? "frozen" : "unfrozen"}.`));
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function toggleModule(moduleKey: string, enabled: boolean) {
+    setMsg(null);
+    setError(null);
+    try {
+      const res = await api<Record<string, unknown>>(`/v1/ops/kill-switch/modules/${moduleKey}`, {
+        body: { enabled, reason: reason || undefined },
+      });
+      setMsg(formatDualControlOutcome(res, `Module ${moduleKey} ${enabled ? "enabled" : "disabled"}.`));
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div>
+      <h3>Stage 1 Kill Switches</h3>
+      {error && <p className="error">{error}</p>}
+      {msg && <p className="notice ok">{msg}</p>}
+
+      <label>Reason / Audit Note
+        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Incident or maintenance reason" />
+      </label>
+
+      {status && (
+        <>
+          <section className="panel" style={{ marginTop: "1rem" }}>
+            <h4>Global Payout Kill Switch</h4>
+            <p>
+              Current state:{" "}
+              <span className={`tag ${status.globalFrozen ? "failed" : "active"}`}>
+                {status.globalFrozen ? "FROZEN" : "ACTIVE"}
+              </span>
+              {status.globalFreezeReason && <span className="small muted"> — {status.globalFreezeReason}</span>}
+            </p>
+            <button onClick={() => void toggleGlobal(!status.globalFrozen)}>
+              {status.globalFrozen ? "Unfreeze Global Payouts" : "Freeze Global Payouts"}
+            </button>
+          </section>
+
+          <section className="panel" style={{ marginTop: "1rem" }}>
+            <h4>Merchant Payout Kill Switch</h4>
+            <div className="flex-row">
+              <input value={merchantId} onChange={(e) => setMerchantId(e.target.value)} placeholder="Merchant UUID" />
+              <button onClick={() => void toggleMerchant(merchantId, true)}>Freeze Merchant</button>
+              <button className="secondary" onClick={() => void toggleMerchant(merchantId, false)}>Unfreeze Merchant</button>
+            </div>
+            {status.frozenMerchants.length > 0 && (
+              <p className="small muted" style={{ marginTop: ".5rem" }}>
+                Frozen merchants: {status.frozenMerchants.join(", ")}
+              </p>
+            )}
+          </section>
+
+          <section className="panel" style={{ marginTop: "1rem" }}>
+            <h4>Module Route Kill Switches</h4>
+            <table className="grid">
+              <thead><tr><th>Module</th><th>State</th><th>Action</th></tr></thead>
+              <tbody>
+                {Object.entries(status.modules).map(([mod, enabled]) => (
+                  <tr key={mod}>
+                    <td className="mono small">{mod}</td>
+                    <td><span className={`tag ${enabled ? "active" : "failed"}`}>{enabled ? "ENABLED" : "DISABLED"}</span></td>
+                    <td>
+                      <button className="small secondary" onClick={() => void toggleModule(mod, !enabled)}>
+                        {enabled ? "Disable" : "Enable"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+interface CustodianSafeguardReport {
+  trustAccountCode: string;
+  currency: string;
+  merchantPendingEscrowPesewas: number;
+  merchantAvailablePesewas: number;
+  merchantReservedPesewas: number;
+  totalSafeguardedLiabilitiesPesewas: number;
+  clearingReceivablesPesewas: number;
+  reconciledBankBalancePesewas: number | null;
+  totalTrustAssetsPesewas: number;
+  dailyOutflowCapPesewas: number;
+  todayTotalOutflowPesewas: number;
+  todayRejectedOutflowCount: number;
+  outflowFrozen: boolean;
+  safeguardingSatisfied: boolean;
+}
+
+interface TrustAccountConfig {
+  accountCode: string;
+  bankCode: string;
+  bankAccountNumber: string;
+  currency: string;
+  dailyOutflowCapPesewas: number;
+  perPayoutCapPesewas: number;
+  minReserveFloorPesewas: number;
+  outflowFrozen: boolean;
+}
+
+function CustodianTrust() {
+  const [report, setReport] = useState<CustodianSafeguardReport | null>(null);
+  const [config, setConfig] = useState<TrustAccountConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      api<CustodianSafeguardReport>("/v1/ops/custodian/safeguard-report"),
+      api<TrustAccountConfig>("/v1/ops/custodian/config"),
+    ])
+      .then(([r, c]) => { setReport(r); setConfig(c); setError(null); })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  return (
+    <div>
+      <h3>Custodian Trust Safeguarding</h3>
+      {error && <p className="error">{error}</p>}
+      {report && (
+        <>
+          <p className={report.safeguardingSatisfied ? "notice ok" : "notice warn"}>
+            Trust Safeguarding ({report.trustAccountCode} / {report.currency}):{" "}
+            <strong>{report.safeguardingSatisfied ? "SATISFIED" : "DEFICIT / REVIEW REQUIRED"}</strong>
+            {report.outflowFrozen && " — OUTFLOW FROZEN"}
+          </p>
+          <div className="cards">
+            <div className="card"><div className="muted">Total Trust Assets</div><div className="big">{formatMoney(report.totalTrustAssetsPesewas)}</div></div>
+            <div className="card"><div className="muted">Safeguarded Liabilities</div><div className="big">{formatMoney(report.totalSafeguardedLiabilitiesPesewas)}</div></div>
+            <div className="card"><div className="muted">Today's Outflow / Cap</div><div className="big">{formatMoney(report.todayTotalOutflowPesewas)} / {formatMoney(report.dailyOutflowCapPesewas)}</div></div>
+            <div className="card"><div className="muted">Rejected Outflows Today</div><div className="big">{report.todayRejectedOutflowCount}</div></div>
+          </div>
+        </>
+      )}
+      {config && (
+        <section className="panel" style={{ marginTop: "1rem" }}>
+          <h4>Primary Trust Account Config</h4>
+          <dl>
+            <dt>Account Code</dt><dd className="mono">{config.accountCode}</dd>
+            <dt>Bank / Account</dt><dd className="mono">{config.bankCode} — {config.bankAccountNumber}</dd>
+            <dt>Per-Payout Cap</dt><dd>{formatMoney(config.perPayoutCapPesewas)}</dd>
+            <dt>Min Reserve Floor</dt><dd>{formatMoney(config.minReserveFloorPesewas)}</dd>
+          </dl>
+        </section>
+      )}
+    </div>
   );
 }

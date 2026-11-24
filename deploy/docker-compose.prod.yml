@@ -23,9 +23,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
-    # Not published to the host: only the app on the private network reaches it.
+    # Not published to the host: only the app on the internal_backend network reaches it.
     expose:
       - "5432"
+    networks:
+      - internal_backend
     restart: unless-stopped
 
   redis:
@@ -43,12 +45,17 @@ services:
       REDIS_PASSWORD: ${ELEPAY_REDIS_PASSWORD:?set me}
     expose:
       - "6379"
+    networks:
+      - internal_backend
     restart: unless-stopped
 
   elepay:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        VITE_OIDC_ISSUER: ${ELEPAY_OIDC_ISSUER:?set me}
+        VITE_OIDC_CLIENT_ID: ${ELEPAY_OIDC_CLIENT_ID:?set me}
     # Non-root runtime (uid 10001 defined in the Dockerfile).
     user: "10001"
     depends_on:
@@ -82,12 +89,24 @@ services:
       ELEPAY_PARTNER_EGRESS_HOSTS: ${ELEPAY_PARTNER_EGRESS_HOSTS:-}
       # Optional mobile TLS pins (empty = no-op). Format documented in application.properties.
       ELEPAY_MOBILE_CERT_PINS: ${ELEPAY_MOBILE_CERT_PINS:-}
-      # Management endpoint reachable from inside the container for the Docker healthcheck.
-      ELEPAY_MANAGEMENT_ADDRESS: 0.0.0.0
+      # Management port (:9090) binds to loopback (127.0.0.1) by default so only the container-local
+      # HEALTHCHECK can reach it. Never publish :9090 in `ports:`; only override to an internal
+      # interface if an in-stack Prometheus scraper on `internal_backend` requires it.
+      ELEPAY_MANAGEMENT_ADDRESS: ${ELEPAY_MANAGEMENT_ADDRESS:-127.0.0.1}
     ports:
-      # Public API only. Management port 9090 stays internal; do not publish it.
+      # Public API only. Management port 9090 is never published externally.
       - "8080:8080"
+    networks:
+      - internal_backend
+      - edge_egress
     restart: unless-stopped
+
+networks:
+  internal_backend:
+    # No external/internet routing; isolates Postgres, Redis, and internal-only management traffic.
+    internal: true
+  edge_egress:
+    driver: bridge
 
 volumes:
   pgdata:

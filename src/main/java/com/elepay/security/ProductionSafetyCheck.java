@@ -53,6 +53,9 @@ public class ProductionSafetyCheck {
         if (env.getProperty("elepay.rails.sandbox.enabled", Boolean.class, false)) {
             p.add("elepay.rails.sandbox.enabled must be false (simulated money)");
         }
+        if (env.getProperty("elepay.emtech.enabled", Boolean.class, false)) {
+            p.add("elepay.emtech.enabled must be false in production (EMTECH BoG Sandbox is for sandbox/test only)");
+        }
         if (has(env, "elepay.security.dev-jwt-secret")) {
             p.add("elepay.security.dev-jwt-secret must not be set (development tokens)");
         }
@@ -131,9 +134,50 @@ public class ProductionSafetyCheck {
         if (bdk.isBlank() || bdk.equalsIgnoreCase("0123456789ABCDEFFEDCBA9876543210")) {
             p.add("elepay.pos.dukpt.bdk-hex must be a KMS or HSM key and must not be the public ANSI test key");
         }
+        if (!env.getProperty("spring.flyway.clean-disabled", Boolean.class, true)) {
+            p.add("spring.flyway.clean-disabled must be true in production");
+        }
+        if (env.getProperty("spring.flyway.out-of-order", Boolean.class, false)) {
+            p.add("spring.flyway.out-of-order must be false in production");
+        }
+        String legacyVault = env.getProperty("elepay.vault.legacy-master-key", "");
+        if (!legacyVault.isBlank()) {
+            if ("test-fixture-card-migration-key-32bytes-only".equals(legacyVault)
+                    || KNOWN_SECRETS.contains(legacyVault)) {
+                p.add("elepay.vault.legacy-master-key must not use a test fixture or published secret");
+            }
+            if (KmsSecretProvider.isDiskFileSecret(legacyVault)) {
+                p.add("elepay.vault.legacy-master-key must be provided via KMS/HSM, never a disk secret file path (" + legacyVault + ")");
+            }
+        }
+        if (!env.getProperty("elepay.stage1.strict-kill-switch-enabled", Boolean.class, true)) {
+            p.add("elepay.stage1.strict-kill-switch-enabled must be true in production");
+        }
         String proxies = env.getProperty("elepay.security.trusted-proxies", "");
-        if (proxies.contains("127.0.0.1") || proxies.contains("0.0.0.0/0") || proxies.contains("::1")) {
-            p.add("elepay.security.trusted-proxies must list only real ingress addresses, never loopback or the whole internet");
+        if ("native".equalsIgnoreCase(env.getProperty("server.forward-headers-strategy", "")) && proxies.isBlank()) {
+            p.add("elepay.security.trusted-proxies must be non-blank when server.forward-headers-strategy=native");
+        }
+        if (!proxies.isBlank()) {
+            List<com.elepay.identity.CidrBlock> loopbackRanges = List.of(
+                    com.elepay.identity.CidrBlock.parse("127.0.0.0/8"),
+                    com.elepay.identity.CidrBlock.parse("::1/128")
+            );
+            for (String entry : proxies.split(",")) {
+                String trimmed = entry.trim();
+                if (trimmed.isEmpty()) continue;
+                try {
+                    com.elepay.identity.CidrBlock block = com.elepay.identity.CidrBlock.parse(trimmed);
+                    boolean isWildcard = block.mask().bitCount() <= 1;
+                    boolean overlapsLoopback = loopbackRanges.stream().anyMatch(block::overlaps);
+                    if (isWildcard || overlapsLoopback) {
+                        p.add("elepay.security.trusted-proxies must list only real ingress addresses, never loopback or the whole internet: " + trimmed);
+                        break;
+                    }
+                } catch (IllegalArgumentException e) {
+                    p.add("elepay.security.trusted-proxies contains an invalid CIDR/IP literal: " + trimmed);
+                    break;
+                }
+            }
         }
         for (String secretProp : List.of(
                 "elepay.security.signing-secret",

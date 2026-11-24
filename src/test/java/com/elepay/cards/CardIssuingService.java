@@ -50,7 +50,7 @@ public class CardIssuingService {
     }
 
     public CardIssuingService(JdbcClient db) {
-        this(db, new CardPanVault());
+        this(db, new CardPanVault("dGVzdC1vbmx5LWNhcmQtdmF1bHQta2V5LTMyLWJ5dGU="));
     }
 
     public record CardDetails(

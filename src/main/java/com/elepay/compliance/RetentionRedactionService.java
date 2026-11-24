@@ -1,6 +1,7 @@
 package com.elepay.compliance;
 
 import com.elepay.common.ApiException;
+import com.elepay.wallet.CustomerDirectory;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -54,12 +55,18 @@ public class RetentionRedactionService {
     ) {}
 
     private final JdbcClient db;
+    private final CustomerDirectory customerDirectory;
     private final Map<RecordCategory, RetentionPolicy> policies = new ConcurrentHashMap<>();
     private final Map<UUID, LegalHold> legalHolds = new ConcurrentHashMap<>();
     private final List<RedactionResult> redactionAuditLog = new ArrayList<>();
 
     public RetentionRedactionService(JdbcClient db) {
+        this(db, db != null ? new CustomerDirectory(db) : null);
+    }
+
+    public RetentionRedactionService(JdbcClient db, CustomerDirectory customerDirectory) {
         this.db = db;
+        this.customerDirectory = customerDirectory;
         // Default statutory baselines
         registerPolicy(new RetentionPolicy("AML_FINANCIAL_RECORDS", RecordCategory.TRANSACTION, 60, "Anti-Money Laundering Act, 2020 (Act 1044) & BoG Directives"));
         registerPolicy(new RetentionPolicy("KYC_CUSTOMER_ID", RecordCategory.KYC_IDENTIFICATION, 60, "Payment Systems and Services Act (Act 987) § 38"));
@@ -70,16 +77,14 @@ public class RetentionRedactionService {
     public void registerPolicy(RetentionPolicy policy) {
         policies.put(policy.category(), policy);
         if (db != null) {
-            try {
-                db.sql("""
-                    INSERT INTO data_retention_policy
-                    (id, policy_name, record_category, retention_period_months, legal_basis, active)
-                    VALUES (gen_random_uuid(), ?, ?, ?, ?, true)
-                    ON CONFLICT (policy_name) DO UPDATE SET retention_period_months = EXCLUDED.retention_period_months
-                    """)
-                    .params(policy.policyName(), policy.category().name(), policy.retentionMonths(), policy.legalBasis())
-                    .update();
-            } catch (Exception ignored) {}
+            db.sql("""
+                INSERT INTO data_retention_policy
+                (id, policy_name, record_category, retention_period_months, legal_basis, active)
+                VALUES (gen_random_uuid(), ?, ?, ?, ?, true)
+                ON CONFLICT (policy_name) DO UPDATE SET retention_period_months = EXCLUDED.retention_period_months
+                """)
+                .params(policy.policyName(), policy.category().name(), policy.retentionMonths(), policy.legalBasis())
+                .update();
         }
     }
 
@@ -93,15 +98,13 @@ public class RetentionRedactionService {
         legalHolds.put(holdId, hold);
 
         if (db != null) {
-            try {
-                db.sql("""
-                    INSERT INTO legal_hold
-                    (id, customer_id, reference_id, reason, placed_by, active, created_at)
-                    VALUES (?, ?, ?, ?, ?, true, ?)
-                    """)
-                    .params(holdId, customerId, referenceId, reason, placedBy, now)
-                    .update();
-            } catch (Exception ignored) {}
+            db.sql("""
+                INSERT INTO legal_hold
+                (id, customer_id, reference_id, reason, placed_by, active, created_at)
+                VALUES (?, ?, ?, ?, ?, true, ?)
+                """)
+                .params(holdId, customerId, referenceId, reason, placedBy, java.sql.Timestamp.from(now))
+                .update();
         }
 
         return hold;
@@ -109,6 +112,25 @@ public class RetentionRedactionService {
 
     public LegalHold releaseLegalHold(UUID holdId) {
         LegalHold existing = legalHolds.get(holdId);
+        if (existing == null && db != null) {
+            existing = db.sql("""
+                    SELECT id, customer_id, reference_id, reason, placed_by, active, created_at, released_at
+                    FROM legal_hold
+                    WHERE id = :id""")
+                    .param("id", holdId)
+                    .query((rs, i) -> new LegalHold(
+                            rs.getObject("id", UUID.class),
+                            rs.getObject("customer_id", UUID.class),
+                            rs.getString("reference_id"),
+                            rs.getString("reason"),
+                            rs.getObject("placed_by", UUID.class),
+                            rs.getBoolean("active"),
+                            rs.getTimestamp("created_at").toInstant(),
+                            rs.getTimestamp("released_at") != null ? rs.getTimestamp("released_at").toInstant() : null
+                    ))
+                    .optional()
+                    .orElse(null);
+        }
         if (existing == null) {
             throw ApiException.notFound("Legal hold not found: " + holdId);
         }
@@ -128,17 +150,26 @@ public class RetentionRedactionService {
         legalHolds.put(holdId, released);
 
         if (db != null) {
-            try {
-                db.sql("UPDATE legal_hold SET active = false, released_at = ? WHERE id = ?")
-                        .params(now, holdId)
-                        .update();
-            } catch (Exception ignored) {}
+            db.sql("UPDATE legal_hold SET active = false, released_at = ? WHERE id = ?")
+                    .params(java.sql.Timestamp.from(now), holdId)
+                    .update();
         }
 
         return released;
     }
 
     public boolean hasActiveLegalHold(UUID customerId) {
+        if (db != null) {
+            Boolean exists = db.sql("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM legal_hold
+                        WHERE customer_id = :cid AND active = true
+                    )""")
+                    .param("cid", customerId)
+                    .query(Boolean.class)
+                    .single();
+            return Boolean.TRUE.equals(exists);
+        }
         return legalHolds.values().stream()
                 .anyMatch(h -> h.active() && Objects.equals(h.customerId(), customerId));
     }
@@ -175,31 +206,33 @@ public class RetentionRedactionService {
 
         List<String> fieldsRedacted = List.of("full_name", "email", "phone_number", "id_number", "face_selfie");
         UUID auditId = UUID.randomUUID();
+        String reason = "GDPR / Act 843 right to erasure following retention expiry";
+
+        if (customerDirectory != null) {
+            customerDirectory.redactPii(customerId);
+        }
+
+        if (db != null) {
+            db.sql("""
+                INSERT INTO redaction_audit
+                (id, target_table, record_id, fields_redacted, reason, executed_by, executed_at)
+                VALUES (?, ?, ?, ?, ?, ?, now())
+                """)
+                .params(auditId, "customer", customerId.toString(), fieldsRedacted.toString(), reason, authorizedOfficerId)
+                .update();
+        }
 
         // Financial preservation invariant: Note that ledger moves, amounts, and postings remain untouched
         RedactionResult result = new RedactionResult(
                 true,
                 customerId,
                 fieldsRedacted,
-                "customer_profile",
+                "customer",
                 auditId.toString(),
-                "GDPR / Act 843 right to erasure following retention expiry"
+                reason
         );
 
         redactionAuditLog.add(result);
-
-        if (db != null) {
-            try {
-                db.sql("""
-                    INSERT INTO redaction_audit
-                    (id, target_table, record_id, fields_redacted, reason, executed_by, executed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, now())
-                    """)
-                    .params(auditId, "customer_profile", customerId.toString(), fieldsRedacted.toString(), result.reason(), authorizedOfficerId)
-                    .update();
-            } catch (Exception ignored) {}
-        }
-
         return result;
     }
 

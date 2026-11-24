@@ -42,24 +42,20 @@ public class CardPanVault {
         this.cvk = hmac(this.kek, "elepay:cards:cvk:v1".getBytes(StandardCharsets.UTF_8));
     }
 
-    public CardPanVault() {
-        this("");
-    }
-
     private static byte[] deriveMasterKey(String configured) {
-        if (configured != null && !configured.isBlank()) {
-            try {
-                byte[] decoded = Base64.getDecoder().decode(configured.trim());
-                if (decoded.length == 32) return decoded;
-            } catch (IllegalArgumentException ignored) {}
-            try {
-                return MessageDigest.getInstance("SHA-256").digest(configured.getBytes(StandardCharsets.UTF_8));
-            } catch (NoSuchAlgorithmException e) {
-                throw new IllegalStateException(e);
-            }
+        if (configured == null || configured.isBlank()) {
+            throw new IllegalStateException("elepay.vault.master-key (or elepay.cards.master-key) is required");
+        }
+        String key = configured.trim();
+        try {
+            byte[] decoded = Base64.getDecoder().decode(key);
+            if (decoded.length == 32) return decoded;
+        } catch (IllegalArgumentException ignored) {}
+        if (key.length() < 32) {
+            throw new IllegalStateException("elepay.vault.master-key must be base64 of 32 bytes or at least 32 characters");
         }
         try {
-            return MessageDigest.getInstance("SHA-256").digest("elepay:default-cards-vault-kek-master".getBytes(StandardCharsets.UTF_8));
+            return MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }

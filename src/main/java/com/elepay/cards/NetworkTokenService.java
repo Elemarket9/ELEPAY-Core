@@ -8,6 +8,8 @@ import java.time.YearMonth;
 import java.util.*;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,37 +31,46 @@ public class NetworkTokenService {
             long atc
     ) {}
 
-    public NetworkTokenService(JdbcClient db) {
-        this.db = db;
-        this.tokenCryptogramKey = deriveCryptogramKey();
-        initTable();
+    public NetworkTokenService(JdbcClient db, String networkTokenKey) {
+        this(db, networkTokenKey, "");
     }
 
-    private byte[] deriveCryptogramKey() {
+    @Autowired
+    public NetworkTokenService(
+            JdbcClient db,
+            @Value("${elepay.cards.network-token-key:}") String networkTokenKey,
+            @Value("${elepay.vault.master-key:}") String vaultMasterKey
+    ) {
+        this.db = db;
+        this.tokenCryptogramKey = deriveCryptogramKey(networkTokenKey, vaultMasterKey);
+    }
+
+    private static byte[] deriveCryptogramKey(String networkTokenKey, String vaultMasterKey) {
+        if (networkTokenKey != null && !networkTokenKey.isBlank()) {
+            return parseOrHashKey(networkTokenKey.trim());
+        }
+        if (vaultMasterKey != null && !vaultMasterKey.isBlank()) {
+            byte[] masterBytes = parseOrHashKey(vaultMasterKey.trim());
+            return hmacSha256(masterBytes, "elepay:network-token:tck:v1".getBytes(StandardCharsets.UTF_8));
+        }
+        throw new IllegalStateException("elepay.cards.network-token-key or elepay.vault.master-key is required");
+    }
+
+    private static byte[] parseOrHashKey(String key) {
         try {
-            return MessageDigest.getInstance("SHA-256").digest("elepay:network-token:tck:v1".getBytes(StandardCharsets.UTF_8));
+            byte[] decoded = Base64.getDecoder().decode(key);
+            if (decoded.length == 32) return decoded;
+        } catch (IllegalArgumentException ignored) {
+            // fall back to passphrase length check + SHA-256
+        }
+        if (key.length() < 32) {
+            throw new IllegalStateException("Network token / master key must be base64 of 32 bytes or at least 32 characters");
+        }
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
-    }
-
-    private void initTable() {
-        db.sql("""
-            CREATE TABLE IF NOT EXISTS network_card_token (
-                id                  uuid PRIMARY KEY,
-                card_id             uuid NOT NULL REFERENCES card_registry(id) ON DELETE CASCADE,
-                token_pan           varchar(19) NOT NULL UNIQUE,
-                token_requester_id  varchar(64) NOT NULL,
-                device_id           varchar(128),
-                expiry_month        integer NOT NULL,
-                expiry_year         integer NOT NULL,
-                status              varchar(32) NOT NULL DEFAULT 'ACTIVE',
-                created_at          timestamptz NOT NULL DEFAULT now(),
-                updated_at          timestamptz NOT NULL DEFAULT now()
-            )
-        """).update();
-        db.sql("CREATE INDEX IF NOT EXISTS idx_net_token_card ON network_card_token(card_id)").update();
-        db.sql("CREATE INDEX IF NOT EXISTS idx_net_token_pan ON network_card_token(token_pan)").update();
     }
 
     @Transactional
@@ -181,16 +192,54 @@ public class NetworkTokenService {
         return new CryptogramResult(cryptogram, "05", atc);
     }
 
+    @Transactional
     public boolean validateCryptogram(UUID tokenId, long amountPesewas, String currency, long atc, byte[] unpredictableNumber, String submittedCryptogram) {
         if (submittedCryptogram == null || submittedCryptogram.isBlank()) {
             return false;
         }
         try {
-            CryptogramResult expected = generateCryptogram(tokenId, amountPesewas, currency, atc, unpredictableNumber);
-            return MessageDigest.isEqual(
-                    expected.cryptogram().getBytes(StandardCharsets.UTF_8),
+            var lockedOpt = db.sql("""
+                SELECT token_pan, expiry_month, expiry_year, status, last_atc
+                FROM network_card_token
+                WHERE id = ?
+                FOR UPDATE
+            """).param(tokenId).query((rs, rowNum) -> new Object() {
+                final String tokenPan = rs.getString("token_pan");
+                final int expiryMonth = rs.getInt("expiry_month");
+                final int expiryYear = rs.getInt("expiry_year");
+                final TokenStatus status = TokenStatus.valueOf(rs.getString("status"));
+                final long lastAtc = rs.getLong("last_atc");
+            }).optional();
+
+            if (lockedOpt.isEmpty()) {
+                return false;
+            }
+            var locked = lockedOpt.get();
+            if (locked.status != TokenStatus.ACTIVE) {
+                return false;
+            }
+            if (YearMonth.of(locked.expiryYear, locked.expiryMonth).isBefore(YearMonth.now())) {
+                return false;
+            }
+            if (atc <= locked.lastAtc) {
+                return false;
+            }
+
+            String nonceHex = unpredictableNumber != null ? HexFormat.of().formatHex(unpredictableNumber) : "00000000";
+            String cryptogramInput = locked.tokenPan + ":" + amountPesewas + ":" + (currency != null ? currency : "GHS")
+                    + ":" + atc + ":" + nonceHex;
+            byte[] hmac = hmacSha256(tokenCryptogramKey, cryptogramInput.getBytes(StandardCharsets.UTF_8));
+            String expectedCryptogram = Base64.getEncoder().encodeToString(Arrays.copyOf(hmac, 20));
+
+            boolean match = MessageDigest.isEqual(
+                    expectedCryptogram.getBytes(StandardCharsets.UTF_8),
                     submittedCryptogram.getBytes(StandardCharsets.UTF_8)
             );
+            if (match) {
+                db.sql("UPDATE network_card_token SET last_atc = ?, updated_at = now() WHERE id = ?")
+                        .params(atc, tokenId).update();
+            }
+            return match;
         } catch (Exception e) {
             return false;
         }

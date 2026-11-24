@@ -2,16 +2,17 @@ package com.elepay.identity;
 
 import com.elepay.common.Idempotency;
 import com.elepay.common.RedisBreaker;
+import com.elepay.common.SecretProtector;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -26,27 +27,68 @@ import org.springframework.transaction.annotation.Transactional;
 public class ApiKeys {
     public static final String REDIS_REVOKED_PREFIX = "elepay:apikey:revoked:";
     public static final String REDIS_REVOKED_HASH_PREFIX = "elepay:apikey:revoked_hash:";
+    private static final int REVOKED_CACHE_MAX_ENTRIES = 10_000;
+    private static final long REVOKED_CACHE_TTL_MS = Duration.ofHours(24).toMillis();
 
     private static final SecureRandom RANDOM = new SecureRandom();
     private final JdbcClient db;
     private final StringRedisTemplate redis;
     private final RedisBreaker redisBreaker;
-    private final Set<UUID> revokedKeyIds = ConcurrentHashMap.newKeySet();
-    private final Set<String> revokedKeyHashes = ConcurrentHashMap.newKeySet();
+    private final SecretProtector secretProtector;
+    private final BoundedTtlCache<UUID> revokedKeyIds = new BoundedTtlCache<>(REVOKED_CACHE_MAX_ENTRIES, REVOKED_CACHE_TTL_MS);
+    private final BoundedTtlCache<String> revokedKeyHashes = new BoundedTtlCache<>(REVOKED_CACHE_MAX_ENTRIES, REVOKED_CACHE_TTL_MS);
 
     @org.springframework.beans.factory.annotation.Value("${elepay.rails.sandbox.enabled:false}")
     private boolean testEnvironment;
 
     public ApiKeys(JdbcClient db) {
-        this(db, null);
+        this(db, null, null);
+    }
+
+    public ApiKeys(JdbcClient db, StringRedisTemplate redis) {
+        this(db, redis, null);
     }
 
     @Autowired
     public ApiKeys(JdbcClient db,
-                   @Autowired(required = false) StringRedisTemplate redis) {
+                   @Autowired(required = false) StringRedisTemplate redis,
+                   @Autowired(required = false) SecretProtector secretProtector) {
         this.db = db;
         this.redis = redis;
+        this.secretProtector = secretProtector;
         this.redisBreaker = new RedisBreaker(5_000L);
+    }
+
+    private static final class BoundedTtlCache<K> {
+        private final long ttlMs;
+        private final Map<K, Long> map;
+
+        BoundedTtlCache(int maxEntries, long ttlMs) {
+            this.ttlMs = ttlMs;
+            this.map = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<K, Long> eldest) {
+                    return size() > maxEntries;
+                }
+            });
+        }
+
+        void add(K key) {
+            if (key != null) {
+                map.put(key, System.currentTimeMillis() + ttlMs);
+            }
+        }
+
+        boolean contains(K key) {
+            if (key == null) return false;
+            Long expiresAt = map.get(key);
+            if (expiresAt == null) return false;
+            if (System.currentTimeMillis() > expiresAt) {
+                map.remove(key, expiresAt);
+                return false;
+            }
+            return true;
+        }
     }
 
     public record Created(UUID id, String prefix, String secret, List<String> scopes, String signingSecret,
@@ -107,6 +149,7 @@ public class ApiKeys {
 
         UUID id = UUID.randomUUID();
         List<String> sortedScopes = resolvedScopes.stream().distinct().sorted().toList();
+        String storedSigningSecret = protectSigningSecret(id, signingSecret);
         db.sql("""
                 INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes,
                     signing_secret, key_type, allowed_ips)
@@ -114,7 +157,7 @@ public class ApiKeys {
                 .param("id", id).param("prefix", prefix).param("hash", Idempotency.sha256(secret))
                 .param("merchant", merchantId).param("label", label).param("by", createdBy)
                 .param("scopes", sortedScopes.toArray(String[]::new))
-                .param("signing_secret", signingSecret)
+                .param("signing_secret", storedSigningSecret)
                 .param("key_type", normalizedType)
                 .param("allowed_ips", normalizedIps.toArray(String[]::new))
                 .update();
@@ -137,13 +180,14 @@ public class ApiKeys {
         String signingSecret = "sec_" + HexFormat.of().formatHex(signingBytes);
         UUID id = UUID.randomUUID();
         List<String> scopes = List.of("collect", "view");
+        String storedSigningSecret = protectSigningSecret(id, signingSecret);
         db.sql("""
                 INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes,
                     signing_secret, key_type, allowed_ips)
                 VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes, :signing_secret, 'kitchen', '{}')""")
                 .param("id", id).param("prefix", prefix).param("hash", Idempotency.sha256(secret))
                 .param("merchant", merchantId).param("label", label).param("by", createdBy)
-                .param("scopes", scopes.toArray(String[]::new)).param("signing_secret", signingSecret)
+                .param("scopes", scopes.toArray(String[]::new)).param("signing_secret", storedSigningSecret)
                 .update();
         return new Created(id, prefix, secret, scopes, signingSecret, "kitchen", List.of());
     }
@@ -163,6 +207,40 @@ public class ApiKeys {
         boolean kitchen = db.sql("SELECT count(*) FROM api_credential WHERE id = :id AND merchant_id = :m AND key_type = 'kitchen'")
                 .param("id", id).param("m", merchantId).query(Long.class).single() > 0;
         return kitchen && revoke(merchantId, id);
+    }
+
+    /**
+     * Credential for a paired POS terminal ({@code pos_live_<8hex>_<40hex>}). Scoped strictly to
+     * {@link PosDevicePaths} at the gateway and {@code ["collect", "view"]} for its own merchant.
+     */
+    @Transactional
+    public Created createPosTerminal(UUID merchantId, String label, String createdBy) {
+        byte[] bytes = new byte[24];
+        RANDOM.nextBytes(bytes);
+        String prefix = "pos_live_" + HexFormat.of().formatHex(bytes, 0, 4);
+        String secret = prefix + "_" + HexFormat.of().formatHex(bytes, 4, 24);
+        byte[] signingBytes = new byte[32];
+        RANDOM.nextBytes(signingBytes);
+        String signingSecret = "sec_" + HexFormat.of().formatHex(signingBytes);
+        UUID id = UUID.randomUUID();
+        List<String> scopes = List.of("collect", "view");
+        String storedSigningSecret = protectSigningSecret(id, signingSecret);
+        db.sql("""
+                INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes,
+                    signing_secret, key_type, allowed_ips)
+                VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes, :signing_secret, 'pos_terminal', '{}')""")
+                .param("id", id).param("prefix", prefix).param("hash", Idempotency.sha256(secret))
+                .param("merchant", merchantId).param("label", label).param("by", createdBy)
+                .param("scopes", scopes.toArray(String[]::new)).param("signing_secret", storedSigningSecret)
+                .update();
+        return new Created(id, prefix, secret, scopes, signingSecret, "pos_terminal", List.of());
+    }
+
+    /** Revokes a POS terminal credential; returns false if no such POS terminal belongs to the merchant. */
+    public boolean revokePosTerminal(UUID merchantId, UUID id) {
+        boolean posTerminal = db.sql("SELECT count(*) FROM api_credential WHERE id = :id AND merchant_id = :m AND key_type = 'pos_terminal'")
+                .param("id", id).param("m", merchantId).query(Long.class).single() > 0;
+        return posTerminal && revoke(merchantId, id);
     }
 
     // ---- developer portal: live and test keys ------------------------------------------------
@@ -212,13 +290,14 @@ public class ApiKeys {
         byte[] signingBytes = new byte[32];
         RANDOM.nextBytes(signingBytes);
         String signingSecret = "sec_" + HexFormat.of().formatHex(signingBytes);
+        String storedSigningSecret = protectSigningSecret(id, signingSecret);
         db.sql("""
                 INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes,
                     environment, signing_secret, key_type, allowed_ips)
                 VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes, :env, :signing, :key_type, :allowed_ips)""")
                 .param("id", id).param("prefix", prefix).param("hash", Idempotency.sha256(secret))
                 .param("merchant", merchantId).param("label", label).param("by", createdBy)
-                .param("scopes", sorted.toArray(String[]::new)).param("env", env).param("signing", signingSecret)
+                .param("scopes", sorted.toArray(String[]::new)).param("env", env).param("signing", storedSigningSecret)
                 .param("key_type", normalizedType)
                 .param("allowed_ips", normalizedIps.toArray(String[]::new))
                 .update();
@@ -276,6 +355,10 @@ public class ApiKeys {
         }
         if (!SCOPES.containsAll(requestedScopes)) {
             throw com.elepay.common.ApiException.badRequest("invalid_scope", "Scopes: view, collect, refund, withdraw, payouts");
+        }
+        if (requestedScopes.contains("withdraw") || requestedScopes.contains("payouts")) {
+            throw com.elepay.common.ApiException.badRequest("invalid_scope_for_key_type",
+                    "Secret keys cannot hold withdraw or payouts scopes; use a payout key");
         }
         return requestedScopes;
     }
@@ -390,7 +473,7 @@ public class ApiKeys {
 
     private static boolean hasValidKeyPrefix(String secret) {
         return secret.startsWith("ek_") || secret.startsWith("pk_") || secret.startsWith("sk_") || secret.startsWith("payout_")
-                || secret.startsWith("kd_");
+                || secret.startsWith("kd_") || secret.startsWith("pos_");
     }
 
     private static boolean isTestKey(String secret) {
@@ -412,6 +495,7 @@ public class ApiKeys {
                 WHERE secret_hash = :hash AND revoked_at IS NULL AND (environment = 'live' OR :test)""")
                 .param("hash", hash).param("test", testEnvironment)
                 .query((rs, i) -> {
+                    UUID credId = rs.getObject(1, UUID.class);
                     String dbKeyType = rs.getString(5);
                     String effectiveKeyType = resolveEffectiveKeyType(secret, dbKeyType);
                     java.util.Set<String> scopes = new java.util.HashSet<>(java.util.Set.of((String[]) rs.getArray(3).getArray()));
@@ -421,11 +505,12 @@ public class ApiKeys {
                         scopes.remove("payouts");
                     }
                     List<String> ips = rs.getArray(6) != null ? List.of((String[]) rs.getArray(6).getArray()) : List.of();
+                    String signingSecret = unprotectSigningSecret(credId, rs.getString(4));
                     return new ApiKeyAuthentication(
-                            rs.getObject(1, UUID.class),
+                            credId,
                             rs.getObject(2, UUID.class),
                             scopes,
-                            rs.getString(4),
+                            signingSecret,
                             effectiveKeyType,
                             ips
                     );
@@ -443,6 +528,7 @@ public class ApiKeys {
         if (secret.startsWith("sk_")) return "secret";
         if (secret.startsWith("ek_")) return "secret";
         if (secret.startsWith("kd_")) return "kitchen";
+        if (secret.startsWith("pos_")) return "pos_terminal";
         return dbKeyType != null ? dbKeyType : "secret";
     }
 
@@ -471,7 +557,7 @@ public class ApiKeys {
         if (credentialId == null) return Optional.empty();
         return db.sql("SELECT signing_secret FROM api_credential WHERE id = :id AND revoked_at IS NULL")
                 .param("id", credentialId)
-                .query((rs, i) -> rs.getString(1))
+                .query((rs, i) -> unprotectSigningSecret(credentialId, rs.getString(1)))
                 .optional();
     }
 
@@ -479,10 +565,20 @@ public class ApiKeys {
         if (apiKey == null || !hasValidKeyPrefix(apiKey) || apiKey.length() > 120) return Optional.empty();
         String hash = Idempotency.sha256(apiKey);
         if (isRevokedInCache(null, hash)) return Optional.empty();
-        return db.sql("SELECT signing_secret FROM api_credential WHERE secret_hash = :hash AND revoked_at IS NULL AND (environment = 'live' OR :test)")
+        return db.sql("SELECT id, signing_secret FROM api_credential WHERE secret_hash = :hash AND revoked_at IS NULL AND (environment = 'live' OR :test)")
                 .param("hash", hash).param("test", testEnvironment)
-                .query((rs, i) -> rs.getString(1))
+                .query((rs, i) -> unprotectSigningSecret(rs.getObject(1, UUID.class), rs.getString(2)))
                 .optional();
+    }
+
+    private String protectSigningSecret(UUID credentialId, String plaintext) {
+        if (plaintext == null || secretProtector == null) return plaintext;
+        return secretProtector.wrapSecret(plaintext, "api_credential:" + credentialId);
+    }
+
+    private String unprotectSigningSecret(UUID credentialId, String stored) {
+        if (stored == null || secretProtector == null) return stored;
+        return secretProtector.unwrapSecret(stored, "api_credential:" + credentialId);
     }
 
     private void writeRedisRevocation(String key, String value) {

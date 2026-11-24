@@ -5,15 +5,16 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
-import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -21,17 +22,43 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.filter.CompositeFilter;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 @Configuration
 class SecurityConfig {
+
+    @Bean
+    FilterRegistrationBean<EdgeProtectionFilter> edgeProtectionFilterRegistration(EdgeProtectionFilter filter) {
+        var reg = new FilterRegistrationBean<>(filter);
+        reg.setEnabled(false);
+        return reg;
+    }
+
+    @Bean
+    FilterRegistrationBean<Stage1KillSwitchFilter> stage1KillSwitchFilterRegistration(Stage1KillSwitchFilter filter) {
+        var reg = new FilterRegistrationBean<>(filter);
+        reg.setEnabled(false);
+        return reg;
+    }
+
+    @Bean
+    FilterRegistrationBean<RateLimitFilter> rateLimitFilterRegistration(RateLimitFilter filter) {
+        var reg = new FilterRegistrationBean<>(filter);
+        reg.setEnabled(false);
+        return reg;
+    }
+
+    @Bean
+    FilterRegistrationBean<RequestSigningFilter> requestSigningFilterRegistration(RequestSigningFilter filter) {
+        var reg = new FilterRegistrationBean<>(filter);
+        reg.setEnabled(false);
+        return reg;
+    }
 
     @Bean
     org.springframework.security.web.firewall.HttpFirewall httpFirewall() {
@@ -45,11 +72,26 @@ class SecurityConfig {
     }
 
     @Bean
-    SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys, RequestSigningFilter requestSigningFilter,
-                            RateLimitFilter rateLimitFilter, Stage1KillSwitchFilter stage1KillSwitchFilter,
-                            @org.springframework.beans.factory.annotation.Value("${management.server.port:0}") int managementPort,
+    SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys,
+                            EdgeProtectionFilter edgeProtectionFilter,
+                            Stage1KillSwitchFilter stage1KillSwitchFilter,
+                            RateLimitFilter rateLimitFilter,
+                            RequestSigningFilter requestSigningFilter,
+                            Environment env,
+                            @Value("${management.server.port:0}") int managementPort,
                             @Value("${elepay.security.trusted-proxies:}") String trustedProxies)
             throws Exception {
+        boolean isProd = env != null && Arrays.stream(env.getActiveProfiles())
+                .anyMatch(p -> "prod".equalsIgnoreCase(p) || "production".equalsIgnoreCase(p));
+
+        CompositeFilter preAuthFilters = new CompositeFilter();
+        preAuthFilters.setFilters(List.of(
+                edgeProtectionFilter,
+                stage1KillSwitchFilter,
+                rateLimitFilter,
+                new ApiKeyFilter(apiKeys, trustedProxies)
+        ));
+
         http.csrf(csrf -> csrf.disable())
                 .cors(cors -> {})
                 // OWASP secure headers: strict CSP for the web app, HSTS, no framing, no referrer leakage.
@@ -65,35 +107,34 @@ class SecurityConfig {
                         .addHeaderWriter(new org.springframework.security.web.header.writers.StaticHeadersWriter(
                                 "Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(self)")))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth
-                        // Quarantine device pairing, offline sync and simulated 3DS until their trust protocols are implemented.
-                        // POS and inventory controllers independently enforce merchant-wide membership.
-                        .requestMatchers("/v1/pos/sync", "/v1/pos/terminals/pair", "/v1/rails/card/3ds/**").denyAll()
-                        // The legacy sandbox only runs under the sandbox profile and binds to loopback.
-                        .requestMatchers("/sandbox/**").permitAll()
-                        .requestMatchers("/actuator/health/**", "/actuator/health", "/actuator/info").permitAll()
-                        // Metrics are served only on the internal management port (prod: 9090), never publicly.
-                        .requestMatchers(request -> {
-                            String path = RequestPaths.normalized(request);
-                            return path != null && path.startsWith("/actuator/")
-                                    && managementPort > 0 && request.getLocalPort() == managementPort;
-                        }).permitAll()
-                        .requestMatchers("/actuator/**").hasAnyRole("ops", "ops_admin")
-                        .requestMatchers("/v1/public/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/v3/api-docs", "/v3/api-docs/**").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/v1/rails/*/callbacks/**").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/v1/fx/partners/*/callbacks", "/v1/fx/partners/*/inbound").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/v1/ussd/**").permitAll()
-                        .requestMatchers("/dev/token").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**", "/pay/**", "/favicon.svg",
-                                "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**", "/developer", "/developer/**",
-                                "/kitchen", "/kitchen/**", "/kitchen-sw.js", "/kitchen.webmanifest").permitAll()
-                        .anyRequest().authenticated())
+                .authorizeHttpRequests(auth -> {
+                    if (isProd) {
+                        auth.requestMatchers("/sandbox/**", "/dev/token").denyAll();
+                    } else {
+                        auth.requestMatchers("/sandbox/**", "/dev/token").permitAll();
+                    }
+                    auth
+                            .requestMatchers("/actuator/health/**", "/actuator/health", "/actuator/info").permitAll()
+                            // Metrics are served only on the internal management port (prod: 9090), never publicly.
+                            .requestMatchers(request -> {
+                                String path = RequestPaths.normalized(request);
+                                return path != null && path.startsWith("/actuator/")
+                                        && managementPort > 0 && request.getLocalPort() == managementPort;
+                            }).permitAll()
+                            .requestMatchers("/actuator/**").hasAnyRole("ops", "ops_admin")
+                            .requestMatchers("/v1/public/**").permitAll()
+                            .requestMatchers(HttpMethod.GET, "/v3/api-docs", "/v3/api-docs/**").permitAll()
+                            .requestMatchers(HttpMethod.POST, "/v1/rails/*/callbacks/**").permitAll()
+                            .requestMatchers(HttpMethod.POST, "/v1/fx/partners/*/callbacks", "/v1/fx/partners/*/inbound").permitAll()
+                            .requestMatchers(HttpMethod.POST, "/v1/ussd/**").permitAll()
+                            .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**", "/pay/**", "/favicon.svg",
+                                    "/merchant", "/merchant/**", "/ops", "/ops/**", "/app", "/app/**", "/developer", "/developer/**",
+                                    "/kitchen", "/kitchen/**", "/kitchen-sw.js", "/kitchen.webmanifest").permitAll()
+                            .anyRequest().authenticated();
+                })
                 .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter())))
-                .addFilterBefore(stage1KillSwitchFilter, BearerTokenAuthenticationFilter.class)
-                .addFilterBefore(rateLimitFilter, BearerTokenAuthenticationFilter.class)
-                .addFilterBefore(requestSigningFilter, BearerTokenAuthenticationFilter.class)
-                .addFilterBefore(new ApiKeyFilter(apiKeys, trustedProxies), BearerTokenAuthenticationFilter.class);
+                .addFilterBefore(preAuthFilters, BearerTokenAuthenticationFilter.class)
+                .addFilterAfter(requestSigningFilter, BearerTokenAuthenticationFilter.class);
         return http.build();
     }
 
@@ -175,25 +216,63 @@ class SecurityConfig {
                     return;
                 }
 
-                // Gate 1: sk_live_* and legacy ek_* keys cannot initiate payouts or withdrawals.
-                if ("secret".equalsIgnoreCase(auth.keyType()) || "legacy".equalsIgnoreCase(auth.keyType())) {
-                    String method = request.getMethod();
-                    String path = pathForGates;
-                    boolean isPayoutMutation = ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method))
-                            && (path.matches("^/v1/merchants/[^/]+/withdrawals(?:/.*)?$")
-                                || path.matches("^/v1/merchants/[^/]+/payout-batches(?:/.*)?$")
-                                || path.matches("^/v1/merchants/[^/]+/payouts/.+/retry$"));
-                    if (isPayoutMutation) {
+                // POS terminal keys (pos_live_*) reach only POS terminal/order/cart/shift/NFC/sync endpoints.
+                if ("pos_terminal".equalsIgnoreCase(auth.keyType()) && !PosDevicePaths.allowed(request.getMethod(), pathForGates)) {
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"pos_terminal_key_restricted\",\"error\":\"pos_terminal_key_restricted\",\"message\":\"POS terminal keys can only access POS terminal endpoints\"}");
+                    return;
+                }
+
+                String method = request.getMethod();
+                boolean isRead = "GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method) || "OPTIONS".equalsIgnoreCase(method);
+
+                // Gate 1: Non-payout keys cannot perform any non-GET mutation on payout, withdrawal, or payroll-payout routes.
+                if (!"payout".equalsIgnoreCase(auth.keyType()) && !isRead) {
+                    boolean isPayoutRoute = pathForGates.matches("^/v1/merchants/[^/]+/withdrawals(?:/.*)?$")
+                            || pathForGates.matches("^/v1/merchants/[^/]+/payout-batches(?:/.*)?$")
+                            || pathForGates.matches("^/v1/merchants/[^/]+/payouts(?:/.*)?$")
+                            || pathForGates.matches("^/v1/merchants/[^/]+/payroll(?:/.*)?/payouts(?:/.*)?$")
+                            || pathForGates.matches("^/v1/payouts(?:/.*)?$");
+                    if (isPayoutRoute) {
                         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
                         response.setContentType("application/json");
-                        response.getWriter().write("{\"code\":\"payout_key_required\",\"error\":\"payout_key_required\",\"message\":\"Secret keys (sk_live) cannot initiate payouts or withdrawals alone; use a dedicated payout_live key\"}");
+                        response.getWriter().write("{\"code\":\"payout_key_required\",\"error\":\"payout_key_required\",\"message\":\"Non-payout API keys cannot initiate or modify payouts or withdrawals; use a dedicated payout_live key\"}");
                         return;
                     }
+                }
+
+                // Enforce fine-grained scopes (view, collect, refund, withdraw, payouts) on API keys.
+                if (!hasRequiredScope(auth, method, pathForGates)) {
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"insufficient_scope\",\"error\":\"insufficient_scope\",\"message\":\"API key lacks required scope for this operation\"}");
+                    return;
                 }
 
                 SecurityContextHolder.getContext().setAuthentication(auth);
             }
             chain.doFilter(request, response);
+        }
+
+        private static boolean hasRequiredScope(ApiKeyAuthentication auth, String method, String path) {
+            var scopes = auth.scopes();
+            if ("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method) || "OPTIONS".equalsIgnoreCase(method)) {
+                return scopes.contains("view");
+            }
+            if (path.contains("/refunds")) {
+                return scopes.contains("refund");
+            }
+            if (path.matches("^/v1/merchants/[^/]+/withdrawals(?:/.*)?$")) {
+                return scopes.contains("withdraw") || scopes.contains("payouts");
+            }
+            if (path.matches("^/v1/merchants/[^/]+/payout-batches(?:/.*)?$")
+                    || path.matches("^/v1/merchants/[^/]+/payouts(?:/.*)?$")
+                    || path.matches("^/v1/merchants/[^/]+/payroll(?:/.*)?/payouts(?:/.*)?$")
+                    || path.matches("^/v1/payouts(?:/.*)?$")) {
+                return scopes.contains("payouts") || scopes.contains("withdraw");
+            }
+            return scopes.contains("collect");
         }
 
     }

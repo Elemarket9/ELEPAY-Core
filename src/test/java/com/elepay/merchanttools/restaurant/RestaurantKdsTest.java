@@ -55,18 +55,23 @@ public class RestaurantKdsTest extends PostgresTestBase {
     @BeforeEach
     void setup() {
         merchantId = UUID.randomUUID();
-        db.sql("""
-            INSERT INTO merchant (
-                id, legal_name, trading_name, kind, status, contact_phone,
-                merchant_code, fee_bps, fee_fixed, settlement_delay_hours, created_by
-            ) VALUES (
-                :id, 'Buka Restaurant & Bar', 'Buka', 'merchant', 'active', '0243334455',
-                :code, 0, 0, 24, 'system'
-            ) ON CONFLICT DO NOTHING
-            """)
-            .param("id", merchantId)
-            .param("code", String.format("%06d", (int)(Math.random() * 900000 + 100000)))
-            .update();
+        int inserted = 0;
+        for (int attempt = 0; attempt < 20 && inserted == 0; attempt++) {
+            String code = String.format("%06d", java.util.concurrent.ThreadLocalRandom.current().nextInt(100000, 1000000));
+            inserted = db.sql("""
+                INSERT INTO merchant (
+                    id, legal_name, trading_name, kind, status, contact_phone,
+                    merchant_code, fee_bps, fee_fixed, settlement_delay_hours, created_by
+                ) VALUES (
+                    :id, 'Buka Restaurant & Bar', 'Buka', 'merchant', 'active', '0243334455',
+                    :code, 0, 0, 24, 'system'
+                ) ON CONFLICT DO NOTHING
+                """)
+                .param("id", merchantId)
+                .param("code", code)
+                .update();
+        }
+        assertThat(inserted).isEqualTo(1);
 
         warehouse = warehouseService.createWarehouse(merchantId, null, "WH-REST-" + UUID.randomUUID().toString().substring(0, 5), "Restaurant Pantry", "Airport Residential");
     }

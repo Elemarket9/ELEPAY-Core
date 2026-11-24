@@ -187,7 +187,7 @@ class AirtelTigoProductionRailTest {
                 json, health, URI.create("https://api.at.com.gh"), creds, null
         );
 
-        String body = "{\"event\":\"charge.success\",\"data\":{\"reference\":\"AT-100\",\"status\":\"SUCCESSFUL\",\"amount\":5000,\"currency\":\"GHS\"}}";
+        String body = "{\"event\":\"charge.success\",\"data\":{\"reference\":\"AT-100\",\"status\":\"SUCCESSFUL\",\"amount\":\"50.00\",\"currency\":\"GHS\"}}";
         String timestamp = String.valueOf(java.time.Instant.now().getEpochSecond());
         String nonce = "at-nonce-1";
         String validSig = AirtelTigoProductionRail.computeHmac("test-at-secret", timestamp + "." + nonce + "." + body);

@@ -96,5 +96,67 @@ class PosDukptAndOfflineTest extends PostgresTestBase {
         // Verify merchant account balance reflects the synced offline settlement capture
         long merchantBalance = ledger.balance(Ledger.code("merchant", merchantId, "available", Ledger.GHS));
         assertThat(merchantBalance).isEqualTo(3_500L);
+
+        // 8. Verify encrypted_ipek is envelope-encrypted in DB
+        String storedIpek = db.sql("SELECT encrypted_ipek FROM pos_terminal_dukpt_key WHERE terminal_id = :tid")
+                .param("tid", terminalId).query(String.class).single();
+        assertThat(storedIpek).startsWith("ENC:v1:");
+
+        // 9. Offline raw PAN rejection
+        assertThatThrownBy(() -> offlineEngine.processOfflineTransaction(new PosOfflineTransactionEngine.OfflineTransactionRequest(
+                terminalId, merchantId, "000009", 1_500L, "GHS", "5411", "4022341234567890", "051", OffsetDateTime.now()
+        ))).hasMessageContaining("raw PANs are forbidden");
+    }
+
+    @Test
+    @DisplayName("Pillar 3: DUKPT verifyAndConsumeKsn enforces strict monotonicity, prefix binding, and tenant isolation")
+    void testVerifyAndConsumeKsnReplayAndTenantIsolation() {
+        UUID merchantId = UUID.randomUUID();
+        UUID otherMerchantId = UUID.randomUUID();
+        String s = UUID.randomUUID().toString().substring(0, 8);
+        int inserted = 0;
+        for (int attempt = 0; attempt < 20 && inserted == 0; attempt++) {
+            String code = String.format("%06d", java.util.concurrent.ThreadLocalRandom.current().nextInt(100000, 1000000));
+            inserted = db.sql("""
+                    INSERT INTO merchant (id, legal_name, trading_name, kind, status, contact_phone, merchant_code, created_by)
+                    VALUES (:id, :name, :name, 'merchant', 'active', '0240000001', :code, 'test')
+                    ON CONFLICT DO NOTHING""")
+                    .param("id", merchantId).param("name", "DUKPT Shop " + s).param("code", code).update();
+        }
+        assertThat(inserted).isEqualTo(1);
+        UUID terminalUuid = UUID.randomUUID();
+        db.sql("""
+                INSERT INTO pos_terminal (id, merchant_id, serial_number, model, secret_key, status, created_at)
+                VALUES (:id, :m, :sn, 'PAX-A920', 'sec-test', 'INACTIVE', now())""")
+                .param("id", terminalUuid).param("m", merchantId).param("sn", "SN-DUKPT-" + s).update();
+
+        var profile = dukptService.provisionTerminal(terminalUuid, merchantId, "BDK-GH-02");
+        String prefix = profile.initialKsn().substring(0, 15);
+        String ksn1 = prefix + "00001";
+        String ksn2 = prefix + "00002";
+
+        var tx1 = dukptService.verifyAndConsumeKsn(merchantId, terminalUuid, ksn1);
+        assertThat(tx1.ksn()).isEqualTo(ksn1);
+        assertThat(tx1.transactionKeyHex()).hasSize(64);
+
+        // Replay of ksn1 must be rejected
+        assertThatThrownBy(() -> dukptService.verifyAndConsumeKsn(merchantId, terminalUuid, ksn1))
+                .hasMessageContaining("strictly greater");
+
+        // Advance to ksn2 succeeds and produces a different key
+        var tx2 = dukptService.verifyAndConsumeKsn(merchantId, terminalUuid, ksn2);
+        assertThat(tx2.transactionKeyHex()).isNotEqualTo(tx1.transactionKeyHex());
+
+        // Regression back to ksn1 must be rejected
+        assertThatThrownBy(() -> dukptService.verifyAndConsumeKsn(merchantId, terminalUuid, ksn1))
+                .hasMessageContaining("strictly greater");
+
+        // Cross-tenant probe must be rejected with not found
+        assertThatThrownBy(() -> dukptService.verifyAndConsumeKsn(otherMerchantId, terminalUuid, prefix + "00003"))
+                .hasMessageContaining("not found");
+
+        // Mismatched prefix must be rejected
+        assertThatThrownBy(() -> dukptService.verifyAndConsumeKsn(merchantId, terminalUuid, "FFFFFFFFFFFFFFF00003"))
+                .hasMessageContaining("prefix");
     }
 }

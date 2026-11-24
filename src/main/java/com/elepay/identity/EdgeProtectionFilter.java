@@ -58,6 +58,21 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
     private final long admissionWaitMillis;
     private final AbusePenaltyBox penaltyBox;
     @Nullable private final MeterRegistry meters;
+    private final String trustedProxies;
+
+    public EdgeProtectionFilter(boolean enabled,
+                                long maxBodyBytes,
+                                int maxUriLength,
+                                int perClientBurst,
+                                int perClientPerMinute,
+                                int maxInFlight,
+                                long admissionWaitMillis,
+                                AbusePenaltyBox penaltyBox,
+                                @Nullable StringRedisTemplate redis,
+                                @Nullable MeterRegistry meters) {
+        this(enabled, maxBodyBytes, maxUriLength, perClientBurst, perClientPerMinute,
+                maxInFlight, admissionWaitMillis, penaltyBox, redis, meters, "");
+    }
 
     @Autowired
     public EdgeProtectionFilter(@Value("${elepay.edge.enabled:true}") boolean enabled,
@@ -69,7 +84,8 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
                                 @Value("${elepay.edge.admission-wait-ms:50}") long admissionWaitMillis,
                                 AbusePenaltyBox penaltyBox,
                                 @Nullable StringRedisTemplate redis,
-                                @Nullable MeterRegistry meters) {
+                                @Nullable MeterRegistry meters,
+                                @Value("${elepay.security.trusted-proxies:}") String trustedProxies) {
         this.enabled = enabled;
         this.maxBodyBytes = maxBodyBytes;
         this.maxUriLength = maxUriLength;
@@ -79,6 +95,7 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
         this.admissionWaitMillis = Math.max(0, admissionWaitMillis);
         this.penaltyBox = penaltyBox;
         this.meters = meters;
+        this.trustedProxies = trustedProxies == null ? "" : trustedProxies;
         if (meters != null) meters.gauge("elepay.edge.in_flight", this, EdgeProtectionFilter::inFlight);
     }
 
@@ -91,8 +108,7 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        // Real client only when the ingress is a trusted proxy (server.forward-headers-strategy=native in prod).
-        String client = request.getRemoteAddr();
+        String client = ClientIpResolver.resolve(request, trustedProxies);
 
         long banned = penaltyBox.banRemainingSeconds(client);
         if (banned > 0) {

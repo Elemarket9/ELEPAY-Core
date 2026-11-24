@@ -3,13 +3,17 @@ package com.elepay.rails;
 import com.elepay.common.ApiException;
 import com.elepay.common.OpsQueue;
 import com.elepay.common.References;
+import com.elepay.identity.KillSwitchService;
 import com.elepay.ledger.Ledger;
 import com.elepay.rails.PaymentRail.Result;
 import com.elepay.rails.PaymentRail.Status;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -41,6 +45,7 @@ import tools.jackson.databind.ObjectMapper;
 public class RailTransactions {
     private static final Logger log = LoggerFactory.getLogger(RailTransactions.class);
     private static final int MAX_UNKNOWN_CHECKS = 8;
+    private static final ZoneId ACCRA_ZONE = ZoneId.of("Africa/Accra");
 
     private final JdbcClient db;
     private final ObjectMapper json;
@@ -51,11 +56,21 @@ public class RailTransactions {
     private final TransactionTemplate tx;
     private final boolean recoveryEnabled;
     private final CustodianBankBackstopService custodianBackstop;
+    private final KillSwitchService killSwitch;
 
     RailTransactions(JdbcClient db, ObjectMapper json, RailRegistry rails, ApplicationEventPublisher events,
                          OpsQueue ops, Ledger ledger, PlatformTransactionManager tm,
+                         boolean recoveryEnabled,
+                         CustodianBankBackstopService custodianBackstop) {
+        this(db, json, rails, events, ops, ledger, tm, recoveryEnabled, custodianBackstop, null);
+    }
+
+    @Autowired
+    RailTransactions(JdbcClient db, ObjectMapper json, RailRegistry rails, ApplicationEventPublisher events,
+                         OpsQueue ops, Ledger ledger, PlatformTransactionManager tm,
                          @Value("${elepay.rails.recovery-enabled:true}") boolean recoveryEnabled,
-                         @org.springframework.beans.factory.annotation.Autowired(required = false) CustodianBankBackstopService custodianBackstop) {
+                         @Autowired(required = false) CustodianBankBackstopService custodianBackstop,
+                         @Autowired(required = false) KillSwitchService killSwitch) {
         this.db = db;
         this.json = json;
         this.rails = rails;
@@ -65,6 +80,7 @@ public class RailTransactions {
         this.tx = new TransactionTemplate(tm);
         this.recoveryEnabled = recoveryEnabled;
         this.custodianBackstop = custodianBackstop;
+        this.killSwitch = killSwitch;
     }
 
     public record RailTx(UUID id, String rail, String direction, String reference, String purpose,
@@ -146,6 +162,14 @@ public class RailTransactions {
                 rs.getObject("created_at", OffsetDateTime.class));
     }
 
+    private record SendOutcome(Result result, boolean backstopDenied) {}
+
+    private static LocalDate accraDate(RailTx t) {
+        return t.createdAt() != null
+                ? t.createdAt().atZoneSameInstant(ACCRA_ZONE).toLocalDate()
+                : LocalDate.now(ACCRA_ZONE);
+    }
+
     /**
      * Sends a {@code created} transaction to its rail exactly once. Must be
      * called outside any transaction so the intent is durable before the call.
@@ -159,23 +183,24 @@ public class RailTransactions {
                 WHERE id = :id AND status = 'created'""").param("id", id).update() == 1);
         RailTx current = find(id).orElseThrow();
         if (!Boolean.TRUE.equals(claimed)) return current;
-        Result result = send(current);
-        apply(id, result, "submit");
+        SendOutcome outcome = send(current);
+        String source = outcome.backstopDenied() ? "submit-backstop-denied" : "submit";
+        apply(id, outcome.result(), source);
         return find(id).orElseThrow();
     }
 
-    private Result send(RailTx t) {
+    private SendOutcome send(RailTx t) {
         if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))) {
             var decision = custodianBackstop.authorizeOutboundDisbursement(
                     t.id(), t.reference(), t.rail(), t.direction(), t.amount(), t.currency());
             if (!decision.allowed()) {
-                return Result.unavailable(decision.reason());
+                return new SendOutcome(Result.unavailable(decision.reason()), true);
             }
         }
         PaymentRail rail = rails.get(t.rail());
         Request r = json.readValue(t.request(), Request.class);
         try {
-            return switch (t.direction()) {
+            Result res = switch (t.direction()) {
                 case "charge" -> rail.charge(new PaymentRail.Charge(t.reference(), t.amount(), t.currency(),
                         r.channel(), r.msisdn(), r.network(), r.email(), r.customerName(), r.description(), r.returnUrl()));
                 case "payout" -> rail.payout(new PaymentRail.Payout(t.reference(), t.amount(), t.currency(),
@@ -185,9 +210,10 @@ public class RailTransactions {
                         r.originalRailReference(), t.amount(), t.currency(), r.msisdn(), r.network()));
                 default -> throw new IllegalStateException(t.direction());
             };
+            return new SendOutcome(res, false);
         } catch (RuntimeException e) {
             log.warn("Rail {} call for {} failed: {}", t.rail(), t.reference(), e.toString());
-            return Result.unknown(e.getClass().getSimpleName());
+            return new SendOutcome(Result.unknown(e.getClass().getSimpleName()), false);
         }
     }
 
@@ -207,7 +233,7 @@ public class RailTransactions {
                         UPDATE rail_transaction SET status = 'returned', updated_at = now(), failure_reason = :reason
                         WHERE id = :id""").param("id", id).param("reason", result.message()).update();
                 if (custodianBackstop != null) {
-                    custodianBackstop.onOutboundReleased(t.amount(), t.currency());
+                    custodianBackstop.onOutboundReleased(t.id(), t.amount(), t.currency(), accraDate(t));
                 }
                 events.publishEvent(new RailEvents.Returned(id, t.rail(), t.direction(), t.purpose(), t.purposeId(),
                         t.amount(), result.message()));
@@ -255,14 +281,20 @@ public class RailTransactions {
                                rail_reference = coalesce(:pref, rail_reference), rail_fee = :fee
                         WHERE id = :id""")
                         .param("id", id).param("pref", result.railReference()).param("fee", fee).update();
+                String cur = t.currency() == null || t.currency().isBlank()
+                        ? Ledger.GHS : t.currency().toUpperCase(Locale.ROOT);
+                String clearingAcct = Ledger.GHS.equals(cur)
+                        ? Ledger.clearing(t.rail()) : "system:clearing:" + t.rail() + ":" + cur;
+                ledger.openSystem(clearingAcct, "clearing", cur, true);
                 if (fee > 0) {
-                    ledger.openSystem(Ledger.clearing(t.rail()), "clearing", Ledger.GHS, true);
+                    String feeAcct = "system:rail_fees:" + cur;
+                    ledger.openSystem(feeAcct, "rail_fees", cur, false);
                     ledger.post(Ledger.Posting.of("rail-fee", t.reference(), "rail_fee", List.of(
-                            Ledger.Leg.debit("system:rail_fees:GHS", fee),
-                            Ledger.Leg.credit(Ledger.clearing(t.rail()), fee))));
+                            Ledger.Leg.debit(feeAcct, fee),
+                            Ledger.Leg.credit(clearingAcct, fee))));
                 }
                 if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))) {
-                    custodianBackstop.onOutboundSucceeded(t.amount(), t.currency());
+                    custodianBackstop.onOutboundSucceeded(t.id(), t.amount(), t.currency(), accraDate(t));
                 }
                 events.publishEvent(new RailEvents.Succeeded(id, t.rail(), t.direction(), t.purpose(),
                         t.purposeId(), t.amount(), fee));
@@ -275,7 +307,7 @@ public class RailTransactions {
                         .param("id", id).param("pref", result.railReference())
                         .param("reason", result.message()).update();
                 if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))) {
-                    custodianBackstop.onOutboundReleased(t.amount(), t.currency());
+                    custodianBackstop.onOutboundReleased(t.id(), t.amount(), t.currency(), accraDate(t));
                 }
                 events.publishEvent(new RailEvents.Failed(id, t.rail(), t.direction(), t.purpose(),
                         t.purposeId(), t.amount(), result.message()));
@@ -299,16 +331,31 @@ public class RailTransactions {
             }
             case NOT_FOUND -> handleNotFound(t);
             case UNAVAILABLE -> {
-                db.sql("""
-                        UPDATE rail_transaction SET status = 'failed', updated_at = now(), completed_at = now(),
-                                failure_reason = :reason WHERE id = :id""")
-                        .param("id", id).param("reason", result.message()).update();
-                if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))
-                        && result.message() != null && !result.message().startsWith("Custodian Bank")) {
-                    custodianBackstop.onOutboundReleased(t.amount(), t.currency());
+                boolean preSubmission = t.status().equals("created")
+                        || "submit".equals(source)
+                        || "submit-backstop-denied".equals(source);
+                if (preSubmission) {
+                    db.sql("""
+                            UPDATE rail_transaction SET status = 'failed', updated_at = now(), completed_at = now(),
+                                    failure_reason = :reason WHERE id = :id""")
+                            .param("id", id).param("reason", result.message()).update();
+                    if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))
+                            && !"submit-backstop-denied".equals(source)) {
+                        custodianBackstop.onOutboundReleased(t.id(), t.amount(), t.currency(), accraDate(t));
+                    }
+                    events.publishEvent(new RailEvents.Failed(id, t.rail(), t.direction(), t.purpose(),
+                            t.purposeId(), t.amount(), result.message()));
+                } else {
+                    // Post-submission UNAVAILABLE: keep unknown/pending for retry and NEVER release funds.
+                    db.sql("""
+                            UPDATE rail_transaction SET updated_at = now(),
+                                   next_check_at = now() + make_interval(secs => least(1800, 30 * power(2, check_attempts)))
+                            WHERE id = :id""").param("id", id).update();
+                    if (!"submit".equals(source) && checkAttempts(id) >= MAX_UNKNOWN_CHECKS) {
+                        ops.raise("rail_result_unknown", "high", "rail_tx:" + t.reference(), Map.of(
+                                "rail", t.rail(), "direction", t.direction(), "amount", t.amount()));
+                    }
                 }
-                events.publishEvent(new RailEvents.Failed(id, t.rail(), t.direction(), t.purpose(),
-                        t.purposeId(), t.amount(), result.message()));
             }
         }
     }
@@ -327,7 +374,11 @@ public class RailTransactions {
             return;
         }
         // Payouts and refunds that never reached the rail are re-sent with the SAME
-        // reference, which rails treat as idempotent. Funds stay reserved meanwhile.
+        // reference, which rails treat as idempotent. Release custodian reservation
+        // before resetting to 'created' so retry does not double-reserve daily outflow.
+        if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))) {
+            custodianBackstop.onOutboundReleased(t.id(), t.amount(), t.currency(), accraDate(t));
+        }
         db.sql("UPDATE rail_transaction SET status = 'created', updated_at = now() WHERE id = :id")
                 .param("id", t.id()).update();
     }
@@ -352,52 +403,61 @@ public class RailTransactions {
         }
         UUID callbackId = UUID.randomUUID();
         JsonNode payload = json.readTree(body);
-        Boolean fresh = tx.execute(s -> db.sql("""
-                INSERT INTO rail_callback (id, rail, dedupe_key, reference, event_type, payload)
-                VALUES (:id, :rail, :key, :reference, :type, CAST(:payload AS jsonb))
-                ON CONFLICT (rail, dedupe_key) DO NOTHING""")
-                .param("id", callbackId).param("rail", railName).param("key", callback.dedupeKey())
-                .param("reference", callback.reference()).param("type", callback.eventType())
-                .param("payload", json.writeValueAsString(payload)).update() == 1);
-        if (!Boolean.TRUE.equals(fresh)) return new CallbackOutcome(true, "duplicate");
+        String payloadJson = json.writeValueAsString(payload);
 
-        Optional<RailTx> match = Optional.empty();
-        if (callback.reference() != null) {
-            UUID asUuid = null;
-            try {
-                asUuid = UUID.fromString(callback.reference());
-            } catch (IllegalArgumentException ignored) {}
-            if (asUuid != null) {
-                match = db.sql("SELECT * FROM rail_transaction WHERE reference = :r OR purpose_id = :uuid")
-                        .param("r", callback.reference()).param("uuid", asUuid)
+        return tx.execute(s -> {
+            boolean fresh = db.sql("""
+                    INSERT INTO rail_callback (id, rail, dedupe_key, reference, event_type, payload)
+                    VALUES (:id, :rail, :key, :reference, :type, CAST(:payload AS jsonb))
+                    ON CONFLICT (rail, dedupe_key) DO NOTHING""")
+                    .param("id", callbackId).param("rail", railName).param("key", callback.dedupeKey())
+                    .param("reference", callback.reference()).param("type", callback.eventType())
+                    .param("payload", payloadJson).update() == 1;
+            if (!fresh) return new CallbackOutcome(true, "duplicate");
+
+            Optional<RailTx> match = Optional.empty();
+            if (callback.reference() != null) {
+                UUID asUuid = null;
+                try {
+                    asUuid = UUID.fromString(callback.reference());
+                } catch (IllegalArgumentException ignored) {}
+                if (asUuid != null) {
+                    match = db.sql("""
+                            SELECT * FROM rail_transaction
+                            WHERE reference = :r OR purpose_id = :uuid
+                            ORDER BY created_at DESC LIMIT 1""")
+                            .param("r", callback.reference()).param("uuid", asUuid)
+                            .query(RailTransactions::map).optional();
+                } else {
+                    match = findByReference(callback.reference());
+                }
+            }
+            if (match.isEmpty() && callback.railReference() != null) {
+                match = db.sql("""
+                        SELECT * FROM rail_transaction
+                        WHERE rail = :p AND rail_reference = :r
+                        ORDER BY created_at DESC LIMIT 1""")
+                        .param("p", railName).param("r", callback.railReference())
                         .query(RailTransactions::map).optional();
+            }
+            String outcome;
+            if (match.isEmpty() || !match.get().rail().equals(railName)) {
+                ops.raise("callback_unknown_reference", "medium", "callback:" + railName + ":" + callback.dedupeKey(),
+                        Map.of("reference", String.valueOf(callback.reference()), "event", String.valueOf(callback.eventType())));
+                outcome = "unmatched";
             } else {
-                match = findByReference(callback.reference());
+                RailTx t = match.get();
+                Result result = callback.result();
+                if (!rail.callbacksAreAuthoritative() || result == null) {
+                    result = safeQuery(rail, t);
+                }
+                applyLocked(t.id(), result, "callback");
+                outcome = "applied:" + result.status();
             }
-        }
-        if (match.isEmpty() && callback.railReference() != null) {
-            match = db.sql("SELECT * FROM rail_transaction WHERE rail = :p AND rail_reference = :r")
-                    .param("p", railName).param("r", callback.railReference())
-                    .query(RailTransactions::map).optional();
-        }
-        String outcome;
-        if (match.isEmpty() || !match.get().rail().equals(railName)) {
-            ops.raise("callback_unknown_reference", "medium", "callback:" + railName + ":" + callback.dedupeKey(),
-                    Map.of("reference", String.valueOf(callback.reference()), "event", String.valueOf(callback.eventType())));
-            outcome = "unmatched";
-        } else {
-            RailTx t = match.get();
-            Result result = callback.result();
-            if (!rail.callbacksAreAuthoritative() || result == null) {
-                result = safeQuery(rail, t);
-            }
-            apply(t.id(), result, "callback");
-            outcome = "applied:" + result.status();
-        }
-        String finalOutcome = outcome;
-        tx.executeWithoutResult(s -> db.sql("UPDATE rail_callback SET outcome = :o WHERE id = :id")
-                .param("o", finalOutcome).param("id", callbackId).update());
-        return new CallbackOutcome(false, outcome);
+            db.sql("UPDATE rail_callback SET outcome = :o WHERE id = :id")
+                    .param("o", outcome).param("id", callbackId).update();
+            return new CallbackOutcome(false, outcome);
+        });
     }
 
     private Result safeQuery(PaymentRail rail, RailTx t) {
@@ -430,27 +490,46 @@ public class RailTransactions {
             RailTx t = find(id).orElseThrow();
             if (!rails.names().contains(t.rail())) {
                 ops.raise("rail_not_configured", "high", "rail_tx:" + t.reference(), Map.of("rail", t.rail()));
+                tx.executeWithoutResult(s -> db.sql("""
+                        UPDATE rail_transaction SET next_check_at = now() + interval '1 hour', updated_at = now()
+                        WHERE id = :id""").param("id", id).update());
                 continue; // Historic records remain intact; never reroute without authoritative evidence.
             }
-            if (t.status().equals("created")) {
-                // Either never submitted (crash before call) or reset after NOT_FOUND.
-                boolean stale = t.createdAt().isBefore(OffsetDateTime.now().minusSeconds(30));
-                if (force || stale) {
-                    if (t.direction().equals("charge")) {
-                        // A charge that was never sent is abandoned rather than sent late.
-                        apply(id, safeQuery(rails.get(t.rail()), t), "recovery");
-                    } else {
-                        submit(id);
+            try {
+                if (t.status().equals("created")) {
+                    // Either never submitted (crash before call) or reset after NOT_FOUND.
+                    boolean stale = t.createdAt().isBefore(OffsetDateTime.now().minusSeconds(30));
+                    if (force || stale) {
+                        if (t.direction().equals("charge")) {
+                            // A charge that was never sent is abandoned rather than sent late.
+                            apply(id, safeQuery(rails.get(t.rail()), t), "recovery");
+                        } else {
+                            if ("payout".equals(t.direction()) && killSwitch != null) {
+                                try {
+                                    killSwitch.requirePayoutsAllowed(null);
+                                } catch (ApiException blocked) {
+                                    log.warn("Skipping recovery resubmission of payout {} due to kill switch: {}",
+                                            t.reference(), blocked.getMessage());
+                                    continue;
+                                }
+                            }
+                            submit(id);
+                        }
                     }
+                    continue;
                 }
-                continue;
+                tx.executeWithoutResult(s -> db.sql("UPDATE rail_transaction SET check_attempts = check_attempts + 1 WHERE id = :id")
+                        .param("id", id).update());
+                Result result = safeQuery(rails.get(t.rail()), t);
+                apply(id, result, "recovery");
+                String after = find(id).orElseThrow().status();
+                if (!after.equals(t.status()) && Set.of("succeeded", "failed", "mismatch").contains(after)) resolved++;
+            } catch (RuntimeException e) {
+                log.error("Recovery failed for rail_tx {} ({}): {}", t.reference(), id, e.getMessage(), e);
+                tx.executeWithoutResult(s -> db.sql("""
+                        UPDATE rail_transaction SET next_check_at = now() + interval '5 minutes', updated_at = now()
+                        WHERE id = :id""").param("id", id).update());
             }
-            tx.executeWithoutResult(s -> db.sql("UPDATE rail_transaction SET check_attempts = check_attempts + 1 WHERE id = :id")
-                    .param("id", id).update());
-            Result result = safeQuery(rails.get(t.rail()), t);
-            apply(id, result, "recovery");
-            String after = find(id).orElseThrow().status();
-            if (!after.equals(t.status()) && Set.of("succeeded", "failed", "mismatch").contains(after)) resolved++;
         }
         return resolved;
     }

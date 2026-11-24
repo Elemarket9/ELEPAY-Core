@@ -53,6 +53,7 @@ public class KillSwitchService {
     private final Map<String, Boolean> moduleStates = new ConcurrentHashMap<>();
     private final Map<String, String> moduleChangedBy = new ConcurrentHashMap<>();
     private volatile boolean controlsUnreadable = false;
+    private volatile boolean redisObservedHealthy = false;
 
     @Autowired
     public KillSwitchService(
@@ -142,7 +143,25 @@ public class KillSwitchService {
     public boolean isModuleEnabled(String moduleKey) {
         if (controlsUnreadable) return false;
         if (moduleKey == null) return true;
-        return moduleStates.getOrDefault(moduleKey, true);
+        String key = moduleKey.toLowerCase(Locale.ROOT);
+        if (redis != null) {
+            if (!redisBreaker.allow()) {
+                return moduleStates.getOrDefault(key, true);
+            }
+            try {
+                String redisVal = redis.opsForValue().get(REDIS_MODULE_PREFIX + key);
+                redisObservedHealthy = true;
+                if (redisVal != null) {
+                    boolean enabled = Boolean.parseBoolean(redisVal);
+                    moduleStates.put(key, enabled);
+                    return enabled;
+                }
+            } catch (Exception e) {
+                redisBreaker.failure();
+                return moduleStates.getOrDefault(key, true);
+            }
+        }
+        return moduleStates.getOrDefault(key, true);
     }
 
     public boolean isConsumerWalletEnabled() {
@@ -153,11 +172,13 @@ public class KillSwitchService {
     public void setModuleEnabled(String moduleKey, boolean enabled, String reason, String actor) {
         String key = moduleKey.toLowerCase(Locale.ROOT);
         moduleStates.put(key, enabled);
+        writeRedis(REDIS_MODULE_PREFIX + key, Boolean.toString(enabled));
         if ("consumer-wallet".equals(key) || "consumer-w2w".equals(key)) {
             moduleStates.put("consumer-wallet", enabled);
             moduleStates.put("consumer-w2w", enabled);
+            writeRedis(REDIS_MODULE_PREFIX + "consumer-wallet", Boolean.toString(enabled));
+            writeRedis(REDIS_MODULE_PREFIX + "consumer-w2w", Boolean.toString(enabled));
         }
-        writeRedis(REDIS_MODULE_PREFIX + key, Boolean.toString(enabled));
         moduleChangedBy.put(key, actor);
         if (db != null) {
             db.sql("""
@@ -233,13 +254,26 @@ public class KillSwitchService {
 
     public boolean isGlobalFrozen() {
         if (controlsUnreadable) return true;
-        if (globalFrozen.get()) return true;
-        String redisVal = readRedis(REDIS_GLOBAL_KEY);
-        if ("true".equalsIgnoreCase(redisVal)) {
-            globalFrozen.set(true);
-            return true;
+        if (redis != null) {
+            if (!redisBreaker.allow()) {
+                return redisObservedHealthy || globalFrozen.get();
+            }
+            try {
+                String redisVal = redis.opsForValue().get(REDIS_GLOBAL_KEY);
+                redisObservedHealthy = true;
+                if (redisVal != null) {
+                    boolean frozen = "true".equalsIgnoreCase(redisVal);
+                    globalFrozen.set(frozen);
+                    return frozen;
+                }
+            } catch (Exception e) {
+                redisBreaker.failure();
+                if (redisObservedHealthy) {
+                    return true;
+                }
+            }
         }
-        return false;
+        return globalFrozen.get();
     }
 
     public void requirePayoutsAllowed(UUID merchantId) {
@@ -289,12 +323,28 @@ public class KillSwitchService {
     public boolean isMerchantFrozen(UUID merchantId) {
         if (merchantId == null) return false;
         if (controlsUnreadable) return true;
-        if (frozenMerchants.contains(merchantId)) return true;
-        if (isMemberRedis(REDIS_MERCHANTS_KEY, merchantId.toString())) {
-            frozenMerchants.add(merchantId);
-            return true;
+        if (redis != null) {
+            if (!redisBreaker.allow()) {
+                return redisObservedHealthy || frozenMerchants.contains(merchantId);
+            }
+            try {
+                Boolean res = redis.opsForSet().isMember(REDIS_MERCHANTS_KEY, merchantId.toString());
+                redisObservedHealthy = true;
+                if (Boolean.TRUE.equals(res)) {
+                    frozenMerchants.add(merchantId);
+                    return true;
+                } else {
+                    frozenMerchants.remove(merchantId);
+                    return false;
+                }
+            } catch (Exception e) {
+                redisBreaker.failure();
+                if (redisObservedHealthy) {
+                    return true;
+                }
+            }
         }
-        return false;
+        return frozenMerchants.contains(merchantId);
     }
 
     @Transactional

@@ -146,11 +146,14 @@ public class TransferLimits {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void check(UUID sender, UUID recipient, long amount) {
+        db.sql("SELECT id FROM customer WHERE id IN (:sender, :recipient) ORDER BY id FOR UPDATE")
+                .param("sender", sender).param("recipient", recipient).query(UUID.class).list();
+
         check(sender, amount);
 
         record RecipientInfo(int kycTier, long balance) {}
         RecipientInfo rec = db.sql("""
-                SELECT kyc_tier FROM customer WHERE id = :recipient
+                SELECT kyc_tier FROM customer WHERE id = :recipient FOR UPDATE
                 """)
                 .param("recipient", recipient)
                 .query((rs, i) -> new RecipientInfo(rs.getInt(1), ledger.balance(CustomerDirectory.available(recipient))))

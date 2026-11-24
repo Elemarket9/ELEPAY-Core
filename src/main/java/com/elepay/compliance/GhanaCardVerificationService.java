@@ -5,7 +5,9 @@ import java.time.LocalDate;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Service;
 
 /**
  * Ghana Card matching engine (Algorithm 040).
@@ -13,6 +15,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * distinguishes simulated from live verification, validates format and check digits,
  * and records auditable verification status.
  */
+@Service
 public class GhanaCardVerificationService {
 
     private static final Pattern GHANA_CARD_PATTERN = Pattern.compile("^GHA-(\\d{9})-(\\d)$");
@@ -59,7 +62,8 @@ public class GhanaCardVerificationService {
         this(db, null);
     }
 
-    public GhanaCardVerificationService(JdbcClient db, NiaClient niaClient) {
+    @Autowired
+    public GhanaCardVerificationService(JdbcClient db, @Autowired(required = false) NiaClient niaClient) {
         this.db = db;
         this.niaClient = niaClient != null ? niaClient : new UnconfiguredNiaClient();
     }

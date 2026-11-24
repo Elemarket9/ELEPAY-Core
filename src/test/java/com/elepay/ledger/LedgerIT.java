@@ -164,4 +164,20 @@ class LedgerIT extends PostgresTestBase {
         assertThat(ids).hasSize(1);
         assertThat(ledger.balance(alice)).isEqualTo(700);
     }
+
+    @Test
+    void legRejectsNonPositiveAmounts() {
+        assertThatThrownBy(() -> debit(alice, 0))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("positive");
+        assertThatThrownBy(() -> debit(alice, -50))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("positive");
+        assertThatThrownBy(() -> credit(bob, 0))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("positive");
+        assertThatThrownBy(() -> credit(bob, -1))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("positive");
+    }
 }

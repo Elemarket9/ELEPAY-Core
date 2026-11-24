@@ -7,6 +7,8 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,14 +25,22 @@ public class EnterpriseCheckoutService {
 
     private final Ledger ledger;
     private final EnterpriseMultiMerchantSplitter splitter;
+    private final JdbcClient db;
 
     // Concurrent lookup indices for processed enterprise checkouts
     private final Map<UUID, EnterpriseCheckoutResult> checkoutsById = new ConcurrentHashMap<>();
     private final Map<String, EnterpriseCheckoutResult> checkoutsByOrderRef = new ConcurrentHashMap<>();
 
-    public EnterpriseCheckoutService(Ledger ledger, EnterpriseMultiMerchantSplitter splitter) {
+    @Autowired
+    public EnterpriseCheckoutService(Ledger ledger, EnterpriseMultiMerchantSplitter splitter,
+                                     @Autowired(required = false) JdbcClient db) {
         this.ledger = Objects.requireNonNull(ledger, "ledger cannot be null");
         this.splitter = Objects.requireNonNull(splitter, "splitter cannot be null");
+        this.db = db;
+    }
+
+    public EnterpriseCheckoutService(Ledger ledger, EnterpriseMultiMerchantSplitter splitter) {
+        this(ledger, splitter, null);
     }
 
     /**
@@ -77,8 +87,8 @@ public class EnterpriseCheckoutService {
         // Open enterprise marketplace account
         ledger.open("merchant", request.enterpriseId(), "pending", currency);
 
-        // Open platform revenue account
-        ledger.openSystem(Ledger.REVENUE, "revenue", currency, false);
+        // Open platform revenue account (currency-parameterized)
+        String revenueAccount = ledger.openSystem("system:revenue:" + currency, "revenue", currency, false);
 
         // 4. Construct double-entry journal legs
         List<Leg> legs = new ArrayList<>();
@@ -110,7 +120,7 @@ public class EnterpriseCheckoutService {
 
         // Credit ELEPAY platform service charge to system revenue
         if (splitResult.totalPlatformRevenue() > 0) {
-            legs.add(Leg.credit(Ledger.REVENUE, splitResult.totalPlatformRevenue()));
+            legs.add(Leg.credit(revenueAccount, splitResult.totalPlatformRevenue()));
         }
 
         // Verify journal balance: sum of legs must strictly be zero
@@ -136,6 +146,21 @@ public class EnterpriseCheckoutService {
          .withMetadata(meta);
 
         Ledger.Posted posted = ledger.post(posting);
+
+        if (db != null) {
+            db.sql("""
+                INSERT INTO enterprise_order_refund_aggregate
+                (id, enterprise_id, order_reference, original_gross_pesewas, cumulative_refunded_pesewas, currency, status)
+                VALUES (:id, :eid, :oref, :gross, 0, :cur, 'ACTIVE')
+                ON CONFLICT (enterprise_id, order_reference) DO NOTHING
+                """)
+                .param("id", UUID.randomUUID())
+                .param("eid", request.enterpriseId())
+                .param("oref", request.orderReference())
+                .param("gross", request.totalPesewas())
+                .param("cur", currency)
+                .update();
+        }
 
         UUID checkoutId = UUID.nameUUIDFromBytes((request.enterpriseId() + ":" + request.orderReference()).getBytes());
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);

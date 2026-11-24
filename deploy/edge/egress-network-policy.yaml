@@ -52,3 +52,25 @@ spec:
           port: 443
         - protocol: TCP
           port: 8443
+    # 5. OIDC Provider JWKS & Discovery (.well-known/openid-configuration)
+    # Replace the placeholder CIDR below with your OIDC Identity Provider IP range(s)
+    # (or use namespaceSelector/podSelector if self-hosted in-cluster, e.g. Keycloak).
+    - to:
+        - ipBlock:
+            cidr: 203.0.113.0/24 # REPLACE with OIDC IdP / JWKS CIDR(s)
+      ports:
+        - protocol: TCP
+          port: 443
+    # 6. Merchant Webhook Delivery Egress (SSRF-guarded by OutboundUrlGuard;
+    # route via dedicated webhook egress proxy or NAT gateway CIDR).
+    - to:
+        - podSelector:
+            matchLabels:
+              app: elepay-webhook-egress-proxy
+        - ipBlock:
+            cidr: 198.51.100.0/24 # REPLACE with webhook egress proxy / NAT gateway CIDR
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 8443

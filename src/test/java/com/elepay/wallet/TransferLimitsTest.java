@@ -154,4 +154,68 @@ class TransferLimitsTest extends PostgresTestBase {
                 tx.executeWithoutResult(status -> limits.check(sender, recipient, 40_001L)));
         assertEquals("daily_transfer_limit", exDaily.code());
     }
+
+    @Test
+    void concurrentTransfersDoNotExceedRecipientMaxBalance() throws Exception {
+        UUID sender1 = createCustomer(TestApi.uniquePhone(), 3);
+        UUID sender2 = createCustomer(TestApi.uniquePhone(), 3);
+        UUID recipient = createCustomer(TestApi.uniquePhone(), 1); // Tier 1 maxBalance = 100,000 pesewas
+
+        // Fund both senders and bring recipient to 80,000 pesewas
+        String recAcc = Ledger.code("customer", recipient, "available", Ledger.GHS);
+        String s1Acc = Ledger.code("customer", sender1, "available", Ledger.GHS);
+        String s2Acc = Ledger.code("customer", sender2, "available", Ledger.GHS);
+        ledger.post(Ledger.Posting.of("test-conc-setup-" + UUID.randomUUID(), "tx-setup", "topup", List.of(
+                Ledger.Leg.debit(Ledger.clearing("sandbox"), 280_000),
+                Ledger.Leg.credit(recAcc, 80_000),
+                Ledger.Leg.credit(s1Acc, 100_000),
+                Ledger.Leg.credit(s2Acc, 100_000)
+        )));
+
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        java.util.concurrent.atomic.AtomicInteger successes = new java.util.concurrent.atomic.AtomicInteger();
+        try {
+            var f1 = pool.submit(() -> {
+                start.await();
+                try {
+                    tx.executeWithoutResult(st -> {
+                        limits.check(sender1, recipient, 20_000L);
+                        ledger.post(Ledger.Posting.of("test-conc-1-" + UUID.randomUUID(), "t1", "transfer", List.of(
+                                Ledger.Leg.debit(s1Acc, 20_000),
+                                Ledger.Leg.credit(recAcc, 20_000)
+                        )));
+                    });
+                    successes.incrementAndGet();
+                } catch (ApiException expected) {
+                    assertEquals("recipient_balance_limit", expected.code());
+                }
+                return null;
+            });
+            var f2 = pool.submit(() -> {
+                start.await();
+                try {
+                    tx.executeWithoutResult(st -> {
+                        limits.check(sender2, recipient, 20_000L);
+                        ledger.post(Ledger.Posting.of("test-conc-2-" + UUID.randomUUID(), "t2", "transfer", List.of(
+                                Ledger.Leg.debit(s2Acc, 20_000),
+                                Ledger.Leg.credit(recAcc, 20_000)
+                        )));
+                    });
+                    successes.incrementAndGet();
+                } catch (ApiException expected) {
+                    assertEquals("recipient_balance_limit", expected.code());
+                }
+                return null;
+            });
+            start.countDown();
+            f1.get(15, java.util.concurrent.TimeUnit.SECONDS);
+            f2.get(15, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertEquals(1, successes.get());
+        assertEquals(100_000L, ledger.balance(recAcc));
+    }
 }

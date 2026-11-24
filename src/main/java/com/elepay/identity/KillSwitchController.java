@@ -2,9 +2,11 @@ package com.elepay.identity;
 
 import com.elepay.common.ApiException;
 import java.util.*;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.web.bind.annotation.*;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Stage 1 Kill-Switch Operations & Admin Endpoints.
@@ -23,13 +25,22 @@ public class KillSwitchController {
     private final KillSwitchService killSwitchService;
     private final ApiKeys apiKeys;
     private final JdbcClient db;
+    private final ObjectMapper json;
     private final boolean dualControl;
 
     public KillSwitchController(KillSwitchService killSwitchService, ApiKeys apiKeys, JdbcClient db,
                                 @Value("${elepay.security.dual-control.enforced:true}") boolean dualControl) {
+        this(killSwitchService, apiKeys, db, new ObjectMapper(), dualControl);
+    }
+
+    @Autowired
+    public KillSwitchController(KillSwitchService killSwitchService, ApiKeys apiKeys, JdbcClient db,
+                                ObjectMapper json,
+                                @Value("${elepay.security.dual-control.enforced:true}") boolean dualControl) {
         this.killSwitchService = killSwitchService;
         this.apiKeys = apiKeys;
         this.db = db;
+        this.json = json != null ? json : new ObjectMapper();
         this.dualControl = dualControl;
     }
 
@@ -95,7 +106,7 @@ public class KillSwitchController {
             String freezer = killSwitchService.globalFrozenBy();
             if (dualControl) {
                 propose("KILL_SWITCH_CHANGE", "kill_switch", "global", null,
-                        "{\"target\":\"global\",\"frozen\":false}", reason, actor.subject());
+                        Map.of("target", "global", "frozen", false), reason, actor.subject());
             }
             if (freezer != null && freezer.equals(actor.subject())) {
                 throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
@@ -127,7 +138,7 @@ public class KillSwitchController {
             actor.requireOpsAdmin();
             if (dualControl) {
                 propose("MERCHANT_UNFREEZE", "merchant", merchantId.toString(), merchantId,
-                        "{\"merchantId\":\"" + merchantId + "\",\"frozen\":false}", reason, actor.subject());
+                        Map.of("merchantId", merchantId.toString(), "frozen", false), reason, actor.subject());
             }
             String freezer = killSwitchService.merchantFrozenBy(merchantId);
             if (freezer != null && freezer.equals(actor.subject())) {
@@ -159,7 +170,7 @@ public class KillSwitchController {
         if (enabled && dualControl) {
             actor.requireOpsAdmin();
             propose("MODULE_ENABLE", "module", moduleKey, null,
-                    "{\"target\":\"module\",\"module\":\"" + moduleKey.replace("\"", "") + "\",\"frozen\":false}",
+                    Map.of("target", "module", "module", moduleKey, "frozen", false),
                     reason, actor.subject());
         }
         killSwitchService.setModuleEnabled(moduleKey, enabled, reason, actor.subject());
@@ -183,8 +194,9 @@ public class KillSwitchController {
     }
 
     private void propose(String action, String resourceType, String resourceId, UUID merchantId,
-                         String payloadJson, String reason, String proposer) {
+                         Map<String, Object> payload, String reason, String proposer) {
         UUID id = UUID.randomUUID();
+        String payloadJson = json.writeValueAsString(payload != null ? payload : Map.of());
         db.sql("""
                 INSERT INTO maker_checker_proposal (
                     id, action_type, resource_type, resource_id, merchant_id,

@@ -2,10 +2,14 @@ package com.elepay.common;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Component;
 
 /**
  * Rail and gateway callbacks must sign {@code timestamp.nonce.body} and are accepted only inside
@@ -13,9 +17,23 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class CallbackAuthenticity {
     public static final long WINDOW_SECONDS = 300L;
+    private static final String REDIS_NONCE_PREFIX = "elepay:callback:nonce:";
     private static final ConcurrentHashMap<String, Long> SEEN = new ConcurrentHashMap<>();
+    private static volatile StringRedisTemplate redis;
 
     private CallbackAuthenticity() {}
+
+    @Component
+    static class RedisBridge {
+        RedisBridge(@Autowired(required = false) StringRedisTemplate redisTemplate) {
+            CallbackAuthenticity.redis = redisTemplate;
+        }
+    }
+
+    /** Visible to tests to wire a Redis template without a Spring context. */
+    public static void configureRedis(StringRedisTemplate redisTemplate) {
+        CallbackAuthenticity.redis = redisTemplate;
+    }
 
     public static void verify(String secret, Map<String, String> headers, String body, String... signatureHeaderNames) {
         String timestamp = header(headers, "x-callback-timestamp");
@@ -50,6 +68,23 @@ public final class CallbackAuthenticity {
             throw new IllegalArgumentException("Callback signature is invalid");
         }
         String key = nonce + ":" + timestamp.trim();
+        StringRedisTemplate redisClient = redis;
+        if (redisClient != null) {
+            try {
+                Boolean fresh = redisClient.opsForValue()
+                        .setIfAbsent(REDIS_NONCE_PREFIX + key, "1", Duration.ofSeconds(WINDOW_SECONDS * 2));
+                if (Boolean.FALSE.equals(fresh)) {
+                    throw new IllegalArgumentException("Callback nonce was already used");
+                }
+                if (Boolean.TRUE.equals(fresh)) {
+                    return;
+                }
+            } catch (IllegalArgumentException replay) {
+                throw replay;
+            } catch (RuntimeException ignored) {
+                // Redis unreachable; fall back to in-JVM replay cache
+            }
+        }
         Long previous = SEEN.putIfAbsent(key, now);
         if (previous != null) {
             throw new IllegalArgumentException("Callback nonce was already used");

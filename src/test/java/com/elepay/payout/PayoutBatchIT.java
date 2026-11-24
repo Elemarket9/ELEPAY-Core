@@ -38,6 +38,20 @@ class PayoutBatchIT extends PostgresTestBase {
         ledger.post(Ledger.Posting.of("test-funding", s, "platform_funding", List.of(
                 Ledger.Leg.debit(Ledger.clearing("sandbox"), 100_000),
                 Ledger.Leg.credit(Ledger.code("merchant", platform, "available", "GHS"), 100_000))));
+        // Register pre-approved, verified settlement destinations past cooling-off for batch allowlist enforcement.
+        for (String[] dest : List.of(
+                new String[]{"momo", "mtn", "233245550005", "Driver drv-1"},
+                new String[]{"momo", "telecel", "233205550001", "Driver drv-2"},
+                new String[]{"momo", "mtn", "233245550006", "Driver drv-3"},
+                new String[]{"bank", "GCB", "1234567890", "Driver drv-4"},
+                new String[]{"momo", "mtn", "233245550002", "Driver drv-5"})) {
+            db.sql("""
+                    INSERT INTO settlement_destination
+                        (id, owner_type, owner_id, type, network, account_number, account_name, verification, verified_name, status, created_by, cooling_off_until)
+                    VALUES (:id, 'merchant', :m, :t, :n, :a, :name, 'verified', :name, 'active', 'test', now() - interval '1 hour')""")
+                    .param("id", UUID.randomUUID()).param("m", platform).param("t", dest[0])
+                    .param("n", dest[1]).param("a", dest[2]).param("name", dest[3]).update();
+        }
     }
 
     long available() { return ledger.balance(Ledger.code("merchant", platform, "available", "GHS")); }

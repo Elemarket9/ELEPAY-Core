@@ -40,6 +40,17 @@ public class VelocityService {
                     10_000_000L// 100,000.00 GHS in 7d
             );
         }
+
+        public static VelocityLimit publicCheckoutLimits() {
+            return new VelocityLimit(
+                    25,         // 25 txns per hour per payer per merchant
+                    2_000_000L, // 20,000.00 GHS in 1h
+                    100,        // 100 txns per 24h
+                    10_000_000L,// 100,000.00 GHS in 24h
+                    500,        // 500 txns per 7d
+                    50_000_000L // 500,000.00 GHS in 7d
+            );
+        }
     }
 
     public record VelocityStats(
@@ -68,9 +79,15 @@ public class VelocityService {
 
     @Transactional(readOnly = true)
     public VelocityStats getStats(String entityType, String entityId, OffsetDateTime now) {
+        return getStats(entityType, entityId, "GHS", now);
+    }
+
+    @Transactional(readOnly = true)
+    public VelocityStats getStats(String entityType, String entityId, String currency, OffsetDateTime now) {
         OffsetDateTime t1h = now.minusHours(1);
         OffsetDateTime t24h = now.minusHours(24);
         OffsetDateTime t7d = now.minusDays(7);
+        String cur = (currency == null || currency.isBlank()) ? "GHS" : currency;
 
         String sql = """
             SELECT
@@ -83,12 +100,14 @@ public class VelocityService {
             FROM risk_velocity_events
             WHERE entity_type = :entityType
               AND entity_id = :entityId
+              AND currency = :currency
               AND created_at >= :t7d
         """;
 
         return db.sql(sql)
                 .param("entityType", entityType)
                 .param("entityId", entityId)
+                .param("currency", cur)
                 .param("t1h", t1h)
                 .param("t24h", t24h)
                 .param("t7d", t7d)
@@ -106,8 +125,15 @@ public class VelocityService {
 
     @Transactional
     public VelocityCheckResult checkAndRecord(VelocityEvent event, VelocityLimit limits) {
+        String cur = (event.currency() == null || event.currency().isBlank()) ? "GHS" : event.currency();
+        String lockKey = event.entityType() + ":" + event.entityId() + ":" + cur;
+        db.sql("SELECT pg_advisory_xact_lock(hashtext(:lockKey))")
+                .param("lockKey", lockKey)
+                .query((rs, rowNum) -> 1)
+                .optional();
+
         OffsetDateTime now = OffsetDateTime.now();
-        VelocityStats stats = getStats(event.entityType(), event.entityId(), now);
+        VelocityStats stats = getStats(event.entityType(), event.entityId(), cur, now);
 
         // Check 1h window
         if (stats.count1h() + 1 > limits.maxCount1h()) {

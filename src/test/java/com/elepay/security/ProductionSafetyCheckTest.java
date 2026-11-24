@@ -23,6 +23,7 @@ class ProductionSafetyCheckTest {
                 .withProperty("server.forward-headers-strategy", "native")
                 .withProperty("elepay.pos.dukpt.bdk-hex", "A1B2C3D4E5F60718293A4B5C6D7E8F90")
                 .withProperty("elepay.environment", "production")
+                .withProperty("elepay.security.trusted-proxies", "10.0.0.0/8")
                 .withProperty("elepay.outbound.partner-egress.allowed-hosts", "api.ghipss.com,proxy.momoapi.mtn.com");
     }
 
@@ -60,5 +61,31 @@ class ProductionSafetyCheckTest {
         assertThat(ProductionSafetyCheck.problems(env))
                 .anyMatch(p -> p.contains("disk secret file path"))
                 .anyMatch(p -> p.contains("destination-cooling-off-hours"));
+    }
+
+    @Test
+    void unsafeFlywayLegacyKeyAndBlankTrustedProxiesAreRefused() {
+        var env = safe()
+                .withProperty("spring.flyway.clean-disabled", "false")
+                .withProperty("spring.flyway.out-of-order", "true")
+                .withProperty("elepay.vault.legacy-master-key", "test-fixture-card-migration-key-32bytes-only")
+                .withProperty("elepay.security.trusted-proxies", "   ");
+        assertThat(ProductionSafetyCheck.problems(env))
+                .anyMatch(p -> p.contains("spring.flyway.clean-disabled"))
+                .anyMatch(p -> p.contains("spring.flyway.out-of-order"))
+                .anyMatch(p -> p.contains("elepay.vault.legacy-master-key"))
+                .anyMatch(p -> p.contains("elepay.security.trusted-proxies"));
+
+        var diskLegacy = safe()
+                .withProperty("elepay.vault.legacy-master-key", "file:/etc/elepay/legacy.key");
+        assertThat(ProductionSafetyCheck.problems(diskLegacy))
+                .anyMatch(p -> p.contains("elepay.vault.legacy-master-key") && p.contains("disk secret file path"));
+    }
+
+    @Test
+    void emtechBogSandboxIsRefusedInProduction() {
+        var env = safe().withProperty("elepay.emtech.enabled", "true");
+        assertThat(ProductionSafetyCheck.problems(env))
+                .anyMatch(p -> p.contains("elepay.emtech.enabled"));
     }
 }

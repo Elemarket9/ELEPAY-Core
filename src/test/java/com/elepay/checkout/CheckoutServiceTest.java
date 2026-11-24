@@ -127,4 +127,19 @@ class CheckoutServiceTest extends PostgresTestBase {
         var thirty360 = com.elepay.wallet.DayCountConvention.THIRTY_360;
         assertThat(thirty360.calculateInterest(principalPesewas, rateBps, start, end)).isEqualTo(967L);
     }
+
+    @Test
+    void ghqrCustomerFeeAndCheckoutPaidEventContract() {
+        assertThat(configService.calculateCustomerFee("ghqr", 10_000L)).isZero();
+
+        UUID checkoutId = UUID.randomUUID();
+        UUID journalTx = UUID.randomUUID();
+        var evt = new CheckoutPaidEvent(checkoutId, "CHK-123", journalTx, 10_000L, "GHS", "WEB");
+        assertThat(evt.checkoutId()).isEqualTo(checkoutId);
+        assertThat(evt.reference()).isEqualTo("CHK-123");
+        assertThat(evt.journalTx()).isEqualTo(journalTx);
+        assertThat(evt.amountPesewas()).isEqualTo(10_000L);
+        assertThat(evt.currency()).isEqualTo("GHS");
+        assertThat(evt.channel()).isEqualTo("WEB");
+    }
 }

@@ -267,7 +267,7 @@ public class RollingReserveScheduleService {
 
         var posting = Ledger.Posting.of(
                 "reserve_impairment",
-                "IMP-" + trancheId + "-" + System.currentTimeMillis(),
+                "IMP-" + trancheId + "-" + existingImpaired + "-" + amountToImpair,
                 "RESERVE_IMPAIRMENT",
                 List.of(
                         Ledger.Leg.debit(reserveCode, amountToImpair),
