@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkoutMethodLabel, resolveInitialMethod } from "./Checkout";
-import { validateWebhookInput } from "./Developer";
+import { validateWebhookInput, validateKeyInput, keyScopes, explorerPath, canReplayDelivery, canonicalRequestV2, safeDeveloperKeyPrefix } from "./Developer";
 import { validateRefundInput } from "./Merchant";
 import { upsertKnownCashier } from "./pos/PosTerminalBar";
 import { filterOperationsByRange } from "./Wallet";
@@ -82,4 +82,11 @@ describe("POS terminal cashier list helper", () => {
     expect(afterUpdate).toHaveLength(2);
     expect(afterUpdate[0].name).toBe("Ama Mensah");
   });
+});
+
+describe("Developer production safeguards",()=>{
+  it("restricts scopes and requires payout allowlists",()=>{expect(keyScopes("publishable")).toEqual(["collect"]);expect(validateKeyInput("secret",["withdraw"],[])).not.toBeNull();expect(validateKeyInput("payout",["withdraw"],[])).not.toBeNull();expect(validateKeyInput("payout",["withdraw"],["0.0.0.0/0"])).not.toBeNull();expect(validateKeyInput("payout",["withdraw"],["203.0.113.10/32"])).toBeNull();});
+  it("rejects sensitive or local webhook URLs and unsupported events",()=>{for(const url of ["https://user:pass@example.com/hook","https://localhost/hook","https://127.0.0.1/hook","https://example.com/hook?secret=x","https://example.com/hook#token"])expect(validateWebhookInput(url,["checkout.paid"])).not.toBeNull();expect(validateWebhookInput("https://example.com/hook",["unknown.event"])).not.toBeNull();});
+  it("limits explorer to fixed merchant-owned reads and failed replay",()=>{expect(explorerPath("m1","checkout","abc-1")).toBe("/v1/merchants/m1/checkouts/abc-1");expect(explorerPath("m1","checkout","../ops")).toBeNull();expect(explorerPath("m1","create_checkout","")).toBeNull();expect(canReplayDelivery("DELIVERED")).toBe(false);expect(canReplayDelivery("FAILED")).toBe(true);expect(safeDeveloperKeyPrefix("kds_live_x")).toBe(false);});
+  it("counts UTF-8 bytes in canonical signing",()=>{expect(canonicalRequestV2(["é","GH₵",""])).toBe("elepay-request:v2:2:é:5:GH₵:0:");});
 });
