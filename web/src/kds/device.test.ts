@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canonicalV2, sign } from "./device";
+import { canonicalV2, sign, kitchenClient } from "./device";
 
 // Vectors computed with the server's RequestSigningFilter.computeSignatureV2, so the tablet and server agree.
 describe("kitchen device request signing", () => {
@@ -14,3 +14,5 @@ describe("kitchen device request signing", () => {
     expect(await sign("sec_abc123", payload)).toBe("540de6e92ce9afc016ddce9371a7bb47d29ad1bdd187ea35c3eceb266d80535b");
   });
 });
+
+it("rejects unrelated or cross-origin kitchen device requests before fetching", async()=>{const client=kitchenClient({apiKey:"test",signingSecret:"test",deviceId:"d",merchantId:"m",merchantName:"m",stationId:null,stationName:null});for(const p of ["https://example.com","/v1/wallet","/v1/restaurant/kds/../../wallet"])await expect(client(p)).rejects.toMatchObject({code:"invalid_device_path"});});

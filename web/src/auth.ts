@@ -12,7 +12,8 @@ export function validIssuer(value: string | undefined, dev = false): boolean {
   try{const u=new URL(value);return !u.username&&!u.password&&!u.search&&!u.hash&&(u.protocol==="https:"||(dev&&u.protocol==="http:"&&["localhost","127.0.0.1","[::1]"].includes(u.hostname)));}catch{return false;}
 }
 export const SESSION_EXPIRED = "elepay:session-expired";
-export function notifySessionExpired(){if(typeof window!=="undefined")window.dispatchEvent(new Event(SESSION_EXPIRED));}
+let rejectedToken:string|null=null;
+export function notifySessionExpired(token?:string){if(token)rejectedToken=token;if(typeof window!=="undefined")window.dispatchEvent(new Event(SESSION_EXPIRED));}
 
 let managerPromise: Promise<UserManager> | null = null;
 
@@ -53,9 +54,9 @@ export async function getToken(): Promise<string | null> {
   const pending = oidc();
   if (pending) {
     const user = await (await pending).getUser();
-    return user && !user.expired ? user.access_token : null;
+    return user && !user.expired && user.access_token!==rejectedToken ? user.access_token : null;
   }
-  return devSignInEnabled ? sessionStorage.getItem(DEV_KEY) : null;
+  const token=devSignInEnabled ? sessionStorage.getItem(DEV_KEY) : null;return token===rejectedToken?null:token;
 }
 
 export async function signIn(devSubject?: string, roles: string[] = []): Promise<void> {
@@ -71,7 +72,7 @@ export async function signIn(devSubject?: string, roles: string[] = []): Promise
     body: JSON.stringify({ subject: devSubject, roles }),
   });
   if (!response.ok) throw new Error("Development sign-in is not available on this server");
-  sessionStorage.setItem(DEV_KEY, (await response.json()).accessToken);
+  sessionStorage.setItem(DEV_KEY, (await response.json()).accessToken);rejectedToken=null;
 }
 
 let callbackPromise: Promise<string> | null = null;

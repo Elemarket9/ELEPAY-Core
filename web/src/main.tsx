@@ -92,7 +92,7 @@ function SignedIn({ children, roles = [] }: { children: React.ReactNode; roles?:
 function SessionAction() {
   const [signedIn, setSignedIn] = useState(false);
   const [error, setError] = useState(false);
-  useEffect(() => { void getToken().then(t => setSignedIn(Boolean(t))).catch(() => setSignedIn(false)); }, []);
+  useEffect(() => {let active=true;void getToken().then(t => {if(active)setSignedIn(Boolean(t));}).catch(() => {if(active)setSignedIn(false);});const expire=()=>setSignedIn(false);window.addEventListener(SESSION_EXPIRED,expire);return()=>{active=false;window.removeEventListener(SESSION_EXPIRED,expire);}; }, []);
   return signedIn ? <div><button className="link" onClick={() => { setError(false); void signOut().then(() => window.location.assign("/")).catch(() => setError(true)); }}>Sign out</button>{error && <span role="alert">Sign-out unavailable. Try again.</span>}</div> : <a className="header-action" href="/app">Sign in</a>;
 }
 

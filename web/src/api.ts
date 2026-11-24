@@ -30,10 +30,11 @@ export async function api<T>(path: string, options: CallOptions = {}): Promise<T
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
+  let sentToken:string|undefined;
   if (!options.anonymous) {
     const token = await getToken();
     if (!token) { notifySessionExpired(); throw new ApiError(401,"session_required","Sign in again to continue."); }
-    headers.Authorization = `Bearer ${token}`;
+    sentToken=token;headers.Authorization = `Bearer ${token}`;
   }
   const response = await fetch(path, {
     method: options.method ?? (options.body === undefined ? "GET" : "POST"),
@@ -44,7 +45,7 @@ export async function api<T>(path: string, options: CallOptions = {}): Promise<T
     redirect: "error",
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
-  if (response.status === 401 && !options.anonymous) notifySessionExpired();
+  if (response.status === 401 && sentToken) {const current=await getToken().catch(()=>null);if(current===sentToken)notifySessionExpired(sentToken);}
   const text = await response.text();
   let data: { code?: string; detail?: string; message?: string } | null = null;
   if (text) {
