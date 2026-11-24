@@ -105,7 +105,7 @@ describe("Audit Remediation Tests", () => {
     expect(checkoutPhase(null)).toBe("unknown");
   });
   it("does not release an attempt based on an older failed payment", () => {
-    const a = {key:"original",method:"momo" as const,previousAttemptId:"old",phone:"233241234567",network:"mtn"};
+    const a = {key:"original",method:"momo" as const,previousAttemptId:"old",approvedTotal:100,approvedFee:0,phone:"233241234567",network:"mtn"};
     const s = {reference:"ref",status:"open",method:"momo",fee:0,total:100,railStatus:"failed",redirectUrl:null,message:null,attemptId:"old"};
     expect(checkoutAttemptResolved(a,s)).toBe(false);
     expect(checkoutAttemptResolved(a,{...s,attemptId:"new"})).toBe(true);

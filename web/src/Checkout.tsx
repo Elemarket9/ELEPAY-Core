@@ -18,18 +18,19 @@ interface PaymentStatus {
 
 const NETWORKS = [["mtn", "MTN MoMo"], ["telecel", "Telecel Cash"], ["airteltigo", "AT Money"]];
 type PaymentMethod = "wallet" | "momo" | "card" | "ghqr";
-export interface CheckoutAttempt { key: string; method: PaymentMethod; previousAttemptId: string | null; phone?: string; network?: string; }
+export interface CheckoutAttempt { key: string; method: PaymentMethod; previousAttemptId: string | null; approvedTotal: number; approvedFee: number; phone?: string; network?: string; }
 const KNOWN_METHODS = new Set<string>(["wallet", "momo", "card", "ghqr"]);
 
 export function decodeCheckoutAttempt(raw: string | null): CheckoutAttempt | null {
   if (raw === null) return null;
   const v = JSON.parse(raw) as Partial<CheckoutAttempt> | null;
   if (!v || typeof v.key !== "string" || !v.key || v.key.length > 200 || typeof v.method !== "string" || !KNOWN_METHODS.has(v.method) || (v.previousAttemptId !== null && typeof v.previousAttemptId !== "string")) throw new Error("Invalid saved checkout attempt");
+  if (typeof v.approvedTotal !== "number" || typeof v.approvedFee !== "number" || !validCheckoutTotal(v.approvedTotal - v.approvedFee, v.approvedFee, v.approvedTotal)) throw new Error("Invalid saved payment amount");
   if (v.method === "momo") {
     if (typeof v.phone !== "string" || normalizeGhanaPhone(v.phone) !== v.phone || !NETWORKS.some(n => n[0] === v.network)) throw new Error("Invalid saved payment details");
-    return { key: v.key, method: v.method, previousAttemptId: v.previousAttemptId, phone: v.phone, network: v.network };
+    return { key: v.key, method: v.method, previousAttemptId: v.previousAttemptId, approvedTotal: v.approvedTotal, approvedFee: v.approvedFee, phone: v.phone, network: v.network };
   }
-  return { key: v.key, method: v.method, previousAttemptId: v.previousAttemptId };
+  return { key: v.key, method: v.method, previousAttemptId: v.previousAttemptId, approvedTotal: v.approvedTotal, approvedFee: v.approvedFee };
 }
 export function checkoutPhase(status: Pick<PaymentStatus, "status" | "railStatus"> | null): "paid" | "waiting" | "open" | "closed" | "unknown" {
   if (!status) return "unknown";
@@ -215,6 +216,9 @@ export function Checkout({ reference }: { reference: string }) {
       if (!retry && (!quote || !selected || !validCheckoutTotal(fresh.checkout.subtotal, quote.fee, quote.total) || quote.total !== selected.total || quote.fee !== selected.fee || fresh.checkout.subtotal !== checkout?.subtotal)) {
         setError("Payment details changed. Review the updated amount and confirm again."); return;
       }
+      if (retry && (!quote || !validCheckoutTotal(fresh.checkout.subtotal, quote.fee, quote.total) || quote.total !== retry.approvedTotal || quote.fee !== retry.approvedFee)) {
+        setError("The original approved amount has changed or is unavailable. Contact support to resolve the original attempt before making another payment."); return;
+      }
       if (payMethod === "wallet") {
         // Wallet retries after navigation are not automatic: the authenticated customer may have changed.
         if (retry) { setError("Check the original wallet payment status and contact support if unresolved. Do not submit from a different wallet."); return; }
@@ -224,7 +228,7 @@ export function Checkout({ reference }: { reference: string }) {
           else { setError("Wallet sign-in is unavailable. Choose another payment method."); return; }
         }
       }
-      const attempt: CheckoutAttempt = retry ?? { key: newKey(), method: payMethod, previousAttemptId: fresh.status.attemptId ?? null, ...(payMethod === "momo" ? { phone: normalizeGhanaPhone(phone)!, network } : {}) };
+      const attempt: CheckoutAttempt = retry ?? { key: newKey(), method: payMethod, previousAttemptId: fresh.status.attemptId ?? null, approvedTotal: quote!.total, approvedFee: quote!.fee, ...(payMethod === "momo" ? { phone: normalizeGhanaPhone(phone)!, network } : {}) };
       // Tab-scoped recovery: save exact retry details only while the outcome is uncertain.
       try { sessionStorage.setItem(keyName, JSON.stringify(attempt)); }
       catch { setError("Payment recovery storage is unavailable. No payment was submitted."); return; }
@@ -326,6 +330,7 @@ export function StartFromLink({ slug, code }: { slug?: string; code?: string }) 
   async function start() {
     if (startLock.current || !info) return;
     const pesewas = parseMoney(amount);
+    if (typeof info.amount === "number" && (!Number.isSafeInteger(info.amount) || info.amount <= 0)) { setError("This payment link has an invalid amount. Ask the merchant for another link."); return; }
     startLock.current = true;
     setBusy(true);
     setError(null);
