@@ -38,6 +38,7 @@ public class MtnProductionRail implements PaymentRail {
     private static final Logger log = LoggerFactory.getLogger(MtnProductionRail.class);
 
     public record Credentials(String user, String key, String subscription) {
+        @Override public String toString() { return "Credentials[redacted]"; }
         public boolean isValid() {
             return user != null && !user.isBlank()
                     && key != null && !key.isBlank()
@@ -113,7 +114,7 @@ public class MtnProductionRail implements PaymentRail {
     }
 
     public static long calculateFee(long amount) {
-        long fee = (amount * 100L) / 10000L; // 1.00%
+        long fee = amount / 100L; // 1.00%, without overflowing minor units
         return Math.min(fee, 1000L); // Capped at 1000 pesewas (10 GHS)
     }
 
@@ -232,7 +233,7 @@ public class MtnProductionRail implements PaymentRail {
             }
             if (response.status() == 400 || response.status() == 422) {
                 return new Result(Status.FAILED, null, request.amount(), request.currency(), 0L, null,
-                        "MTN rejected refund: " + response.body());
+                        "MTN rejected refund: HTTP " + response.status());
             }
             return Result.unknown("MTN refund submission outcome requires status verification");
         } catch (InterruptedException e) {
@@ -243,7 +244,7 @@ public class MtnProductionRail implements PaymentRail {
             return Result.unknown("MTN refund network timeout; verify status with query");
         } catch (Exception e) {
             health.record(name(), false, false, System.currentTimeMillis() - start);
-            return Result.unknown("MTN refund communication unavailable: " + e.getMessage());
+            return Result.unknown("MTN refund communication unavailable");
         }
     }
 
@@ -303,7 +304,7 @@ public class MtnProductionRail implements PaymentRail {
             }
             if (response.status() == 400 || response.status() == 422) {
                 return new Result(Status.FAILED, null, amount, currency, fee, null,
-                        "MTN rejected submission: " + response.body());
+                        "MTN rejected submission: HTTP " + response.status());
             }
 
             // Duplicate, unexpected, or server response: preserve uncertainty and query the same reference.
@@ -316,7 +317,7 @@ public class MtnProductionRail implements PaymentRail {
             return Result.unknown("MTN network timeout during submission; verify status with query");
         } catch (Exception e) {
             health.record(name(), false, false, System.currentTimeMillis() - start);
-            return Result.unknown("MTN network or communication unavailable: " + e.getMessage());
+            return Result.unknown("MTN network or communication unavailable");
         }
     }
 
@@ -373,7 +374,7 @@ public class MtnProductionRail implements PaymentRail {
             return Result.unknown("MTN status request timed out");
         } catch (Exception e) {
             health.record(name(), false, false, System.currentTimeMillis() - start);
-            return Result.unknown("MTN status unavailable: " + e.getMessage());
+            return Result.unknown("MTN status unavailable");
         }
     }
 
@@ -383,10 +384,9 @@ public class MtnProductionRail implements PaymentRail {
         String status = node.path("status").asString("");
         if ("PENDING".equals(status)) return new Result(Status.PENDING, null, null, null, null, null, "MTN payment pending");
         if ("FAILED".equals(status) || "REJECTED".equals(status)) {
-            String reason = node.path("reason").asString("MTN payment failed");
-            return new Result(Status.FAILED, null, null, null, null, null, reason);
+            return new Result(Status.FAILED, null, null, null, null, null, "MTN payment failed");
         }
-        if (!"SUCCESSFUL".equals(status)) return Result.unknown("Unknown MTN status: " + status);
+        if (!"SUCCESSFUL".equals(status)) return Result.unknown("Unknown MTN status");
         try {
             long amount = new BigDecimal(node.path("amount").asString("")).movePointRight(2).longValueExact();
             String currency = node.path("currency").asString("");
@@ -439,9 +439,10 @@ public class MtnProductionRail implements PaymentRail {
         }
         String token = root.path("access_token").asString("");
         if (token.isBlank()) throw new IllegalStateException("MTN token missing");
-        long expiresIn = root.path("expires_in").asLong(3600L);
-        // Cache with safety margin of 60 seconds
-        Instant expiresAt = Instant.now().plusSeconds(Math.max(60L, expiresIn - 60L));
+        long expiresIn = root.path("expires_in").asLong(0L);
+        if (expiresIn <= 0) throw new IllegalStateException("MTN token expiry missing or invalid");
+        // Never extend a provider token's lifetime; short-lived tokens are not cached.
+        Instant expiresAt = Instant.now().plusSeconds(Math.max(0L, Math.min(expiresIn, 86400L) - 60L));
         tokenCache.put(product, new CachedToken(token, expiresAt));
         return token;
     }
