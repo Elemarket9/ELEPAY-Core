@@ -57,6 +57,12 @@ public class RailTransactions {
     private final boolean recoveryEnabled;
     private final CustodianBankBackstopService custodianBackstop;
     private final KillSwitchService killSwitch;
+    private com.elepay.common.ScheduledJobLock jobLock;
+
+    @Autowired(required = false)
+    void setJobLock(com.elepay.common.ScheduledJobLock jobLock) {
+        this.jobLock = jobLock;
+    }
 
     RailTransactions(JdbcClient db, ObjectMapper json, RailRegistry rails, ApplicationEventPublisher events,
                          OpsQueue ops, Ledger ledger, PlatformTransactionManager tm,
@@ -472,7 +478,12 @@ public class RailTransactions {
 
     @Scheduled(fixedDelayString = "${elepay.rails.recovery-ms:15000}")
     void scheduledRecovery() {
-        if (recoveryEnabled) recover(50, false);
+        if (!recoveryEnabled) return;
+        if (jobLock != null) {
+            jobLock.runIfLeader("rail-recovery", () -> recover(50, false));
+        } else {
+            recover(50, false);
+        }
     }
 
     /**

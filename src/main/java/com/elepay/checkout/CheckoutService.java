@@ -55,6 +55,7 @@ class CheckoutService {
     private org.springframework.context.ApplicationEventPublisher events;
     private com.elepay.wallet.TransferLimits transferLimits;
     private com.elepay.risk.RiskEngineService riskEngine;
+    private com.elepay.common.ScheduledJobLock jobLock;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setKillSwitch(com.elepay.identity.KillSwitchService killSwitch) {
@@ -74,6 +75,11 @@ class CheckoutService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setRiskEngine(com.elepay.risk.RiskEngineService riskEngine) {
         this.riskEngine = riskEngine;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setJobLock(com.elepay.common.ScheduledJobLock jobLock) {
+        this.jobLock = jobLock;
     }
 
     CheckoutService(JdbcClient db, Ledger ledger, MerchantAccess merchants, RailTransactions rails, Outbox outbox,
@@ -1279,6 +1285,7 @@ class CheckoutService {
     @Transactional
     void jobs() {
         if (!jobsEnabled) return;
+        if (jobLock != null && !jobLock.tryLockInCurrentTx("checkout-jobs")) return;
         settleDue(false, null, null);
         db.sql("""
                 UPDATE checkout SET status = 'expired' WHERE status = 'open' AND expires_at < now()""").update();

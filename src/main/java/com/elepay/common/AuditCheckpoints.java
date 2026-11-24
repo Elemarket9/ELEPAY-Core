@@ -27,6 +27,12 @@ public class AuditCheckpoints {
     private final Audit audit;
     private final OpsQueue ops;
     private final boolean scheduled;
+    private ScheduledJobLock jobLock;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setJobLock(ScheduledJobLock jobLock) {
+        this.jobLock = jobLock;
+    }
 
     public AuditCheckpoints(JdbcClient db, IntegrityKeys keys, Audit audit,
                             @Value("${elepay.integrity.checkpoints-enabled:true}") boolean scheduled) {
@@ -102,17 +108,24 @@ public class AuditCheckpoints {
             initialDelayString = "${elepay.integrity.checkpoint-ms:3600000}")
     void scheduledCheckpoint() {
         if (!scheduled) return;
-        try {
-            create();
-        } catch (Exception e) {
-            if (ops != null) {
-                try {
-                    ops.raise("audit_checkpoint_failed", "critical", "audit:checkpoint",
-                            Map.of("error", String.valueOf(e.getMessage())));
-                } catch (Exception ignored) {
-                    // Best-effort alerting if DB itself is unreachable
+        Runnable run = () -> {
+            try {
+                create();
+            } catch (Exception e) {
+                if (ops != null) {
+                    try {
+                        ops.raise("audit_checkpoint_failed", "critical", "audit:checkpoint",
+                                Map.of("error", String.valueOf(e.getMessage())));
+                    } catch (Exception ignored) {
+                        // Best-effort alerting if DB itself is unreachable
+                    }
                 }
             }
+        };
+        if (jobLock != null) {
+            jobLock.runIfLeader("audit-checkpoint", run);
+        } else {
+            run.run();
         }
     }
 

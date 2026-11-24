@@ -34,6 +34,12 @@ public class PayoutPolicies {
     private final OpsQueue ops;
     private final TransactionTemplate tx;
     private final boolean autoEnabled;
+    private com.elepay.common.ScheduledJobLock jobLock;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setJobLock(com.elepay.common.ScheduledJobLock jobLock) {
+        this.jobLock = jobLock;
+    }
 
     PayoutPolicies(JdbcClient db, Ledger ledger, Payouts payouts, MerchantAccess merchants, Audit audit, OpsQueue ops,
                    PlatformTransactionManager tm, @Value("${elepay.payouts.auto-enabled:true}") boolean autoEnabled) {
@@ -270,6 +276,11 @@ public class PayoutPolicies {
 
     @Scheduled(fixedDelayString = "${elepay.payouts.auto-ms:60000}", initialDelayString = "${elepay.payouts.auto-ms:60000}")
     void scheduledRun() {
-        if (autoEnabled) runAutomatic();
+        if (!autoEnabled) return;
+        if (jobLock != null) {
+            jobLock.runIfLeader("payout-auto-run", this::runAutomatic);
+        } else {
+            runAutomatic();
+        }
     }
 }

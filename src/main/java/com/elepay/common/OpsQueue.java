@@ -14,20 +14,27 @@ public class OpsQueue {
     private final JdbcClient db;
     private final ObjectMapper json;
     private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    private final AlertDispatcher alerts;
 
     public OpsQueue(JdbcClient db, ObjectMapper json) {
-        this(db, json, null);
+        this(db, json, null, null);
+    }
+
+    public OpsQueue(JdbcClient db, ObjectMapper json, org.springframework.jdbc.core.JdbcTemplate jdbcTemplate) {
+        this(db, json, jdbcTemplate, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public OpsQueue(
             JdbcClient db,
             ObjectMapper json,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) org.springframework.jdbc.core.JdbcTemplate jdbcTemplate
+            @org.springframework.beans.factory.annotation.Autowired(required = false) org.springframework.jdbc.core.JdbcTemplate jdbcTemplate,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) AlertDispatcher alerts
     ) {
         this.db = db;
         this.json = json;
         this.jdbcTemplate = jdbcTemplate;
+        this.alerts = alerts;
     }
 
     public record Item(UUID id, String kind, String severity, String subject, String details, String status,
@@ -45,6 +52,9 @@ public class OpsQueue {
                 DO UPDATE SET details = ops_item.details || EXCLUDED.details""")
                 .param("id", UUID.randomUUID()).param("kind", kind).param("severity", normalizedSeverity)
                 .param("subject", subject).param("details", json.writeValueAsString(details)).update();
+        if ("high".equalsIgnoreCase(normalizedSeverity) && alerts != null) {
+            alerts.notifyHighSeverity(kind, subject, details);
+        }
     }
 
     @Transactional
