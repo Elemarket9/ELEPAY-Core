@@ -40,12 +40,14 @@ public class PosNfcController {
     }
 
     @PostMapping("/orders/{orderId}/nfc-tap")
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
     public PosNfcPaymentService.NfcTapResult nfcTap(
             @PathVariable UUID orderId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody PosNfcPaymentService.NfcTapRequest req) {
         var caller = access.operateAccess(ORDER, orderId);
         access.requireOrderBranch(caller, orderId);
-        return nfcPaymentService.processNfcTap(orderId, idempotencyKey, req, Actor.current().subject());
+        var prepared = nfcPaymentService.processNfcTap(orderId, idempotencyKey, req, Actor.current().subject());
+        return nfcPaymentService.submitPreparedTap(prepared);
     }
 }

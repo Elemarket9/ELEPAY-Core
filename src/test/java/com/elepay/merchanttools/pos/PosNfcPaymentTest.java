@@ -196,7 +196,13 @@ class PosNfcPaymentTest extends PostgresTestBase {
                 paired.terminalId(), ksn1, VALID_EMV_TLV, "402234******7890", "VISA", null, 3_500L, "GHS", null);
 
         var res = nfcPaymentService.processNfcTap(order.id(), "nfc-idem-1", tapReq, "cashier-1");
-        assertThat(res.status()).isEqualTo("PENDING_SETTLEMENT");
+        assertThat(res.status()).isEqualTo("AWAITING_CARD_APPROVAL");
+        assertThat(res.authCode()).isNull();
+        assertThat(res.attemptId()).isNotNull();
+        assertThat(db.sql("SELECT status FROM rail_transaction WHERE id = (SELECT rail_tx FROM payment_attempt WHERE id = :attempt)")
+                .param("attempt", res.attemptId()).query(String.class).single()).isEqualTo("created");
+        var replay = nfcPaymentService.processNfcTap(order.id(), "nfc-idem-1", tapReq, "cashier-1");
+        assertThat(replay.attemptId()).isEqualTo(res.attemptId());
         assertThat(res.checkoutRef()).isNotBlank();
         assertThat(res.ksn()).isEqualTo(ksn1);
         assertThat(res.ksnCounter()).isEqualTo(1L);
