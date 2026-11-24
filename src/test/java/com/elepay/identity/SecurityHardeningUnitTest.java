@@ -187,4 +187,11 @@ class SecurityHardeningUnitTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Redis");
     }
+    @org.junit.jupiter.api.Test
+    void cspAllowsOnlyConfiguredOidcOrigin() {
+        org.junit.jupiter.api.Assertions.assertEquals(" https://identity.example:8443", SecurityConfig.trustedOidcOrigin("https://identity.example:8443/realms/elepay", true));
+        org.junit.jupiter.api.Assertions.assertEquals("", SecurityConfig.trustedOidcOrigin("http://identity.example/realm", true));
+        org.junit.jupiter.api.Assertions.assertEquals("", SecurityConfig.trustedOidcOrigin("https://user:pass@identity.example/realm", true));
+        org.junit.jupiter.api.Assertions.assertEquals(" http://localhost:8080", SecurityConfig.trustedOidcOrigin("http://localhost:8080/realm", false));
+    }
 }

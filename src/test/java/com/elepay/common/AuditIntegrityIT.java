@@ -40,7 +40,7 @@ class AuditIntegrityIT extends PostgresTestBase {
         var keysResponse = api.http.get().uri("/v1/public/integrity/keys").retrieve().toEntity(String.class);
         assertThat(keysResponse.getHeaders().getFirst("Content-Security-Policy")).contains("frame-ancestors 'none'");
         assertThat(keysResponse.getHeaders().getFirst("X-Frame-Options")).isEqualTo("DENY");
-        assertThat(keysResponse.getHeaders().getFirst("Referrer-Policy")).isEqualTo("strict-origin-when-cross-origin");
+        assertThat(keysResponse.getHeaders().getFirst("Referrer-Policy")).isEqualTo("no-referrer");
         assertThat(keysResponse.getHeaders().getFirst("Permissions-Policy")).contains("camera=()");
         var keys = api.call("GET", "/v1/public/integrity/keys", null, null, null).body();
         assertThat(keys.get("keys").toString()).contains(cp.body().get("keyId").asString());

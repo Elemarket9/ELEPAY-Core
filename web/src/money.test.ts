@@ -20,3 +20,5 @@ describe("money", () => {
     expect(normalizeGhanaPhone("12345")).toBeNull();
   });
 });
+
+it("rejects invalid monetary values and malformed separators",()=>{expect(formatMoney(NaN)).toBe("Unavailable");expect(formatMoney(1.5)).toBe("Unavailable");expect(parseMoney("1,000.50")).toBe(100050);expect(parseMoney("1,2")).toBeNull();expect(normalizeGhanaPhone("abc0241234567")).toBeNull();});

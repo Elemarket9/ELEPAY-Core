@@ -1,44 +1,24 @@
-// Kitchen screen service worker: lets a tablet reopen /kitchen after a power cut even before the internet is back.
-// Orders themselves are never cached here; the screen keeps its own copy and syncs when the network returns.
-const CACHE = "elepay-kitchen-v2";
-
-self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.add("/kitchen")).then(() => self.skipWaiting()));
+// Cache only the public kitchen shell and immutable built assets, never API or authenticated responses.
+const CACHE = "elepay-kitchen-v3";
+const assetPath = p => /^\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|woff2|svg|png|webp)$/.test(p) || p === "/favicon.svg";
+const publicRequest = p => new Request(p, {credentials:"omit",cache:"no-cache",redirect:"error"});
+const safeResponse = res => res.ok && !res.redirected && res.type === "basic";
+self.addEventListener("install", event => {
+  event.waitUntil(caches.open(CACHE).then(async c=>{const res=await fetch(publicRequest("/kitchen"));if(!safeResponse(res)||!res.headers.get("Content-Type")?.includes("text/html"))throw Error("Kitchen shell unavailable");await c.put("/kitchen",res);await self.skipWaiting();}));
 });
-
-self.addEventListener("activate", (event) => {
-  event.waitUntil(caches.keys()
-    .then((keys) => Promise.all(keys.filter((k) => k.startsWith("elepay-kitchen-") && k !== CACHE).map((k) => caches.delete(k))))
-    .then(() => self.clients.claim()));
+self.addEventListener("activate", event => {
+  event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith("elepay-kitchen-")&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));
 });
-
-// The page lists the app files it loaded before this worker took control; keep copies of them.
-self.addEventListener("message", (event) => {
-  const files = event.data && event.data.type === "cache" && Array.isArray(event.data.files) ? event.data.files : [];
-  const safe = files.filter((f) => typeof f === "string" && (f.startsWith("/assets/") || f === "/favicon.svg"));
-  event.waitUntil(caches.open(CACHE).then((c) => Promise.all(safe.map((f) =>
-    c.match(f).then((hit) => hit || c.add(f).catch(() => {}))))));
+self.addEventListener("message", event=>{
+  const files=event.data?.type==="cache"&&Array.isArray(event.data.files)?event.data.files:[];
+  const safe=files.filter(f=>typeof f==="string"&&assetPath(f)).slice(0,100);
+  event.waitUntil(caches.open(CACHE).then(c=>Promise.all(safe.map(async f=>{if(await c.match(f))return;try{const res=await fetch(publicRequest(f));if(safeResponse(res))await c.put(f,res);}catch{}}))));
 });
-
-self.addEventListener("fetch", (event) => {
-  const req = event.request;
-  if (req.method !== "GET") return;
-  const url = new URL(req.url);
-  if (url.origin !== self.location.origin || url.pathname.startsWith("/v1/") || url.pathname.startsWith("/dev/")) return;
-
-  if (req.mode === "navigate") {
-    // Fresh page when online; the cached one when not.
-    event.respondWith(fetch(req).then((res) => {
-      if (res.ok) caches.open(CACHE).then((c) => c.put("/kitchen", res.clone()));
-      return res;
-    }).catch(() => caches.match("/kitchen")));
-    return;
+self.addEventListener("fetch",event=>{
+  const req=event.request,url=new URL(req.url);
+  if(req.method!=="GET"||url.origin!==self.location.origin||req.headers.has("Authorization")||req.headers.has("X-Elepay-Api-Key"))return;
+  if(req.mode==="navigate"&&(url.pathname==="/kitchen"||url.pathname.startsWith("/kitchen/"))&&!url.search){
+    event.respondWith(fetch(publicRequest("/kitchen")).then(async res=>{if(safeResponse(res)&&res.headers.get("Content-Type")?.includes("text/html")){const c=await caches.open(CACHE);await c.put("/kitchen",res.clone());}return res;}).catch(async()=>await caches.match("/kitchen")||Response.error()));return;
   }
-  if (url.pathname.startsWith("/assets/") || url.pathname === "/favicon.svg") {
-    // Built assets have content hashes in their names, so a cached copy is always correct.
-    event.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => {
-      if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
-      return res;
-    })));
-  }
+  if(assetPath(url.pathname)&&!url.search){event.respondWith(caches.match(url.pathname).then(async hit=>{if(hit)return hit;const res=await fetch(publicRequest(url.pathname));if(safeResponse(res)){const c=await caches.open(CACHE);await c.put(url.pathname,res.clone());}return res;}));}
 });

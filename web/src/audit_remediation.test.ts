@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "./api";
-import { formatSplitReceipt, safeRedirectUrl } from "./Checkout";
-import { formatDualControlOutcome } from "./Ops";
-import { sanitizeCsvCell } from "./Wallet";
+import { api, ApiError, safeApiPath } from "./api";
+import { formatSplitReceipt, safeRedirectUrl, checkoutPhase, checkoutAttemptResolved, checkoutExpired, validCheckoutTotal, decodeCheckoutAttempt } from "./Checkout";
+import { formatDualControlOutcome, ledgerIntegrityClear, canReviewProposal, canResolveException } from "./Ops";
+import { sanitizeCsvCell, transactionStatusClass, decodePendingTransfer, confirmationExpired, statementWindow, searchWalletHistory, decodeFundingAttempt } from "./Wallet";
+import { safeReturnPath, validIssuer } from "./auth";
+import { destinationReady, summarizePaidLines, safeMerchantCsv, decodeMerchantAction, merchantStatusClass } from "./Merchant";
 
 describe("Audit Remediation Tests", () => {
   afterEach(() => {
@@ -62,6 +64,8 @@ describe("Audit Remediation Tests", () => {
     it("accepts only https: and http: redirect URLs and rejects javascript:/data: schemes", () => {
       expect(safeRedirectUrl("https://3ds.example.com/challenge")).toBe("https://3ds.example.com/challenge");
       expect(safeRedirectUrl("http://localhost:8080/callback")).toBe("http://localhost:8080/callback");
+      expect(safeRedirectUrl("http://external.example/pay")).toBeNull();
+      expect(safeRedirectUrl("https://user:password@example.com/pay")).toBeNull();
       expect(safeRedirectUrl("javascript:alert(1)")).toBeNull();
       expect(safeRedirectUrl("data:text/html,<script>alert(1)</script>")).toBeNull();
       expect(safeRedirectUrl("vbscript:msgbox(1)")).toBeNull();
@@ -90,7 +94,101 @@ describe("Audit Remediation Tests", () => {
       expect(receipt).toContain("GH₵50.50");
       expect(receipt).not.toMatch(/GRA\s+e-VAT/i);
       expect(receipt).not.toContain("Ghana Revenue Authority");
+      expect(receipt).not.toContain("Authorized by Bank of Ghana");
     });
+  });
+
+  it("never treats an unknown or in-flight rail as payable", () => {
+    expect(checkoutPhase({status:"open",railStatus:"unknown"})).toBe("waiting");
+    expect(checkoutPhase({status:"processing",railStatus:"failed"})).toBe("waiting");
+    expect(checkoutPhase({status:"open",railStatus:"failed"})).toBe("open");
+    expect(checkoutPhase({status:"paid",railStatus:"succeeded"})).toBe("paid");
+    expect(checkoutPhase(null)).toBe("unknown");
+  });
+  it("does not release an attempt based on an older failed payment", () => {
+    const a = {key:"original",method:"momo" as const,previousAttemptId:"old",approvedTotal:100,approvedFee:0,phone:"233241234567",network:"mtn"};
+    const s = {reference:"ref",status:"open",method:"momo",fee:0,total:100,railStatus:"failed",redirectUrl:null,message:null,attemptId:"old"};
+    expect(checkoutAttemptResolved(a,s)).toBe(false);
+    expect(checkoutAttemptResolved(a,{...s,attemptId:"new"})).toBe(true);
+    expect(checkoutAttemptResolved(a,{...s,attemptId:"new",railStatus:"unknown"})).toBe(false);
+    expect(decodeCheckoutAttempt(JSON.stringify(a))).toEqual(a);
+    expect(() => decodeCheckoutAttempt(JSON.stringify({...a,phone:"invalid"}))).toThrow();
+  });
+  it("requires safe integer totals and a valid unexpired checkout", () => {
+    expect(validCheckoutTotal(100,2,102)).toBe(true);
+    expect(validCheckoutTotal(100,2,103)).toBe(false);
+    expect(validCheckoutTotal(100,0.5,100.5)).toBe(false);
+    expect(checkoutExpired("invalid",0)).toBe(true);
+    expect(checkoutExpired("2026-11-24T12:00:00Z",Date.parse("2026-11-24T12:00:00Z"))).toBe(true);
+  });
+  it("rejects external API paths before fetching", async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+    for (const path of ["https://other.example/api", "//other.example/api", "/\\\\other.example/api"]) {
+      await expect(api(path, { anonymous: true })).rejects.toMatchObject({ code: "invalid_api_path" });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts internal callback routes only", () => {
+    expect(safeReturnPath("/pay/abc?x=1")).toBe("/pay/abc?x=1");
+    expect(safeReturnPath("//other.example")).toBe("/");
+    expect(safeReturnPath("/\\\\other.example")).toBe("/");
+    expect(safeReturnPath("https://other.example")).toBe("/");
+    expect(safeReturnPath("/app/callback")).toBe("/");
+    expect(safeReturnPath("/a/..//other.example")).toBe("/");
+  });
+
+  it("does not label uncertain or failed wallet operations as completed", () => {
+    expect(transactionStatusClass("succeeded")).toBe("active");
+    expect(transactionStatusClass("failed")).toBe("failed");
+    expect(transactionStatusClass("unknown")).toBe("pending");
+  });
+
+  it("preserves the exact transfer recovery key and amount", () => {
+    const p = { key: "idem-123", confirmationId: "11111111-1111-1111-1111-111111111111", amount: 5000 };
+    expect(decodePendingTransfer(JSON.stringify(p))).toEqual(p);
+    expect(decodePendingTransfer(null)).toBeNull();
+    expect(() => decodePendingTransfer(JSON.stringify({...p, amount: -5}))).toThrow();
+    expect(() => decodePendingTransfer("{")).toThrow();
+  });
+  it("rejects expired or malformed confirmation timestamps", () => {
+    const now = Date.parse("2026-11-24T12:00:00Z");
+    expect(confirmationExpired("2026-11-24T12:00:01Z", now)).toBe(false);
+    expect(confirmationExpired("2026-11-24T12:00:00Z", now)).toBe(true);
+    expect(confirmationExpired("invalid", now)).toBe(true);
+  });
+  it("uses an inclusive Ghana calendar range of at most 31 days", () => {
+    expect(statementWindow("2026-11-01", "2026-11-30")).toEqual({from:"2026-11-01T00:00:00.000Z",to:"2026-12-01T00:00:00.000Z"});
+    expect(statementWindow("2026-10-01", "2026-11-01")).toBeNull();
+    expect(statementWindow("2026-02-30", "2026-03-01")).toBeNull();
+  });
+  it("filters history by text and status without changing the underlying records", () => {
+    const rows = [{reference:"TOP-1",kind:"topup",amount:100,status:"completed",counterparty:"Ama",createdAt:"2026-11-24"},{reference:"PAY-2",kind:"payout",amount:200,status:"returned",counterparty:null,createdAt:"2026-11-24"}];
+    expect(searchWalletHistory(rows,"ama","active")).toEqual([rows[0]]);
+    expect(searchWalletHistory(rows,"","failed")).toEqual([rows[1]]);
+    expect(rows).toHaveLength(2);
+    expect(sanitizeCsvCell("  =1+1")).toContain("'  =1+1");
+  });
+
+  it("excludes processing allocations from paid analytics",()=>{
+    const line={amount:1000,fee:100,net:900,refunded:200,disputed:0};
+    expect(summarizePaidLines([{...line,paidAt:null},{...line,paidAt:"2026-11-24T00:00:00Z"}])).toEqual({count:1,gross:1000,fee:100,net:900,refunded:200,disputed:0});
+  });
+  it("rejects cooling-off, removed and unconfirmed settlement destinations",()=>{
+    const d={status:"active",verification:"verified",coolingOffUntil:null,oobVerificationStatus:"confirmed"};
+    expect(destinationReady(d,0)).toBe(true);
+    expect(destinationReady({...d,status:"removed"},0)).toBe(false);
+    expect(destinationReady({...d,oobVerificationStatus:"pending_oob"},0)).toBe(false);
+    expect(destinationReady({...d,coolingOffUntil:"2026-11-24T00:00:00Z"},0)).toBe(false);
+  });
+  it("preserves refund retry identity and prevents spreadsheet formula injection",()=>{
+    const action={kind:"refund",key:"key",reference:"CHK-1",line:0,amount:500,reason:"Returned"};
+    expect(decodeMerchantAction(JSON.stringify(action),"refund")).toEqual(action);
+    expect(()=>decodeMerchantAction(JSON.stringify(action),"withdraw")).toThrow();
+    expect(()=>decodeMerchantAction(JSON.stringify({...action,amount:-1}),"refund")).toThrow();
+    expect(safeMerchantCsv("  =1+1")).toContain("'  =1+1");
+    expect(safeMerchantCsv(-200)).toBe("-200");
+    expect(merchantStatusClass("returned")).toBe("failed");
   });
 
   describe("Ops.tsx dual-control proposal handling", () => {
@@ -126,3 +224,9 @@ describe("Audit Remediation Tests", () => {
     });
   });
 });
+
+describe("Operations safety checks",()=>{it("requires independent nonexpired proposal review",()=>{const p={status:"PENDING",proposedBy:"maker",expiresAt:"2027-01-01T00:00:00Z"};expect(canReviewProposal(p,"checker",true,0)).toBe(true);expect(canReviewProposal(p,"maker",true,0)).toBe(false);expect(canReviewProposal(p,"checker",false,0)).toBe(false);expect(canReviewProposal(p,"checker",true,Date.parse(p.expiresAt))).toBe(false);});it("checks every currency for ledger imbalance",()=>{expect(ledgerIntegrityClear({accountsWithDrift:0,unbalancedTransactions:0,netByCurrency:{GHS:0}})).toBe(true);expect(ledgerIntegrityClear({accountsWithDrift:0,unbalancedTransactions:0,netByCurrency:{GHS:1}})).toBe(false);});it("restricts financial exceptions",()=>{const p={canApproveMakerChecker:false,canFreezeRisk:false,canManageFinance:false,canOnboardMerchants:false,canManageSupport:true};expect(canResolveException({severity:"low",kind:"fraud"},p)).toBe(false);expect(canResolveException({severity:"low",kind:"support"},p)).toBe(true);});});
+
+describe("Stage 8 browser security",()=>{it("rejects normalized traversal and encoded path separators",()=>{for(const p of ["/v1/../ops","/v1/%2e%2e/ops","/v1/%2fsecret","/v1/wallet#fragment","//outside.example/x"])expect(safeApiPath(p)).toBe(false);expect(safeApiPath("/v1/ops/audit?subject=merchant%3Aabc")).toBe(true);});it("requires a trustworthy OIDC issuer",()=>{expect(validIssuer("https://id.example/realm")).toBe(true);expect(validIssuer("http://id.example")).toBe(false);expect(validIssuer("https://user:pass@id.example")).toBe(false);expect(validIssuer("http://localhost:8080",true)).toBe(true);});});
+
+it("validates exact saved wallet funding identity and minor units",()=>{const a={key:"idem",amount:100,phone:"233241234567",network:"mtn",reference:null};expect(decodeFundingAttempt(JSON.stringify(a))).toEqual(a);expect(()=>decodeFundingAttempt(JSON.stringify({...a,amount:-1}))).toThrow();expect(()=>decodeFundingAttempt(JSON.stringify({...a,network:"other"}))).toThrow();expect(()=>decodeFundingAttempt(JSON.stringify({...a,reference:"../ops"}))).toThrow();});

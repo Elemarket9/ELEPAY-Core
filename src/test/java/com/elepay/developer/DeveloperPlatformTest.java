@@ -98,4 +98,19 @@ class DeveloperPlatformTest {
         assertTrue(DeveloperService.ALLOWED_SCOPES.contains("payouts"));
         assertFalse(DeveloperService.ALLOWED_SCOPES.contains("admin_superuser"));
     }
+    @Test
+    void webhookMetadataDoesNotSerializeStoredSensitiveData() throws Exception {
+        UUID id = UUID.randomUUID();
+        var now = java.time.OffsetDateTime.now();
+        var endpoint = new DeveloperService.WebhookEndpointView(id, "https://example.com/hook", "live", null,
+                List.of("checkout.paid"), true, 0, null, now);
+        var endpointJson = json.writeValueAsString(endpoint);
+        assertFalse(endpointJson.contains("\"secret\""));
+        var delivery = new DeveloperService.WebhookDeliveryLogView(id,id,id,id,id,"checkout.paid","https://example.com/hook",
+                "PRIVATE_HEADERS","PRIVATE_PAYLOAD",200,"PRIVATE_RESPONSE_HEADERS","PRIVATE_RESPONSE_BODY",20,"DELIVERED",1,false,now);
+        var deliveryJson = json.writeValueAsString(delivery);
+        assertFalse(deliveryJson.contains("PRIVATE_"));
+        assertTrue(deliveryJson.contains("checkout.paid"));
+        assertEquals("PRIVATE_PAYLOAD", delivery.requestPayload());
+    }
 }

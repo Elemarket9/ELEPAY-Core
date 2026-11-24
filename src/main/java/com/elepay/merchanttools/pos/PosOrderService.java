@@ -387,7 +387,7 @@ public class PosOrderService {
     private Optional<Link> link(UUID orderId) {
         return db.sql("""
                 SELECT id, order_id, checkout_ref, amount, status, split_key FROM pos_checkout_link
-                WHERE order_id = :id AND status IN ('open','applied') ORDER BY created_at DESC LIMIT 1
+                WHERE order_id = :id AND status IN ('open','applied') ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END, created_at DESC LIMIT 1
                 """).param("id", orderId).query(Link.class).optional();
     }
 
@@ -411,6 +411,10 @@ public class PosOrderService {
         long amount = Math.subtractExact(order.totalPesewas(), order.paidPesewas());
         if ("PAID".equals(order.status()) || amount <= 0)
             throw ApiException.conflict("order_paid", "Order already paid");
+        if (db.sql("SELECT EXISTS (SELECT 1 FROM pos_checkout_link WHERE order_id = :id AND status = 'open')")
+                .param("id", orderId).query(Boolean.class).single()) {
+            throw ApiException.conflict("digital_payment_active", "Resolve existing split checkouts before requesting the whole balance");
+        }
         UUID linkId = UUID.randomUUID();
         String ref = checkout.createSplitAware(order.merchantId(), order.branchId(), linkId, amount, null, actor);
         db.sql("""
@@ -474,6 +478,7 @@ public class PosOrderService {
         Link linkRecord;
         if (existing.isPresent()) {
             linkRecord = existing.get();
+            if (linkRecord.amount() != amount) throw ApiException.conflict("pos_payment_mismatch", "Existing tender has a different amount; resolve it before requesting another");
             if ("applied".equals(linkRecord.status())) {
                 return new TenderResult(orderId, order.status(), req.tenderType(), linkRecord.amount(),
                         linkRecord.id(), linkRecord.checkoutRef(), null, "paid",
@@ -509,14 +514,14 @@ public class PosOrderService {
                 if (network == null || !MOMO_NETWORKS.contains(network)) {
                     throw ApiException.badRequest("invalid_network", "Choose mtn, telecel or airteltigo");
                 }
-                var railRes = checkout.startAndSubmitRail(linkRecord.checkoutRef(), "momo", msisdn, network, req.email());
+                var railRes = checkout.prepareRail(linkRecord.checkoutRef(), "momo", msisdn, network, req.email());
                 yield new TenderResult(orderId, order.status(), TenderType.MOMO, linkRecord.amount(),
                         linkRecord.id(), linkRecord.checkoutRef(), railRes.attemptId(), railRes.status(),
                         checkout.payUrl(linkRecord.checkoutRef()), null, null,
                         railRes.message() != null ? railRes.message() : "Approve the payment on your phone", order);
             }
             case CARD -> {
-                var railRes = checkout.startAndSubmitRail(linkRecord.checkoutRef(), "card", null, null, req.email());
+                var railRes = checkout.prepareRail(linkRecord.checkoutRef(), "card", null, null, req.email());
                 yield new TenderResult(orderId, order.status(), TenderType.CARD, linkRecord.amount(),
                         linkRecord.id(), linkRecord.checkoutRef(), railRes.attemptId(), railRes.status(),
                         checkout.payUrl(linkRecord.checkoutRef()), null, null,
@@ -528,7 +533,7 @@ public class PosOrderService {
                         .orElse("ELEPAY Merchant");
                 String terminalRef = order.terminalId() != null ? order.terminalId().toString().replace("-", "") : "POS";
                 var qr = checkout.createGhQrIntent(order.merchantId(), terminalRef, linkRecord.amount(), merchantName);
-                var railRes = checkout.startAndSubmitRail(linkRecord.checkoutRef(), "ghqr", null, null, req.email());
+                var railRes = checkout.prepareRail(linkRecord.checkoutRef(), "ghqr", null, null, req.email());
                 PosOrder latestOrder = getOrder(orderId).orElse(order);
                 yield new TenderResult(orderId, latestOrder.status(), TenderType.GHQR, linkRecord.amount(),
                         linkRecord.id(), linkRecord.checkoutRef(), railRes.attemptId(), railRes.status(),
@@ -586,17 +591,35 @@ public class PosOrderService {
         if (tenderType != TenderType.CASH)
             throw ApiException.unprocessable("digital_payment_unverified", "Use the linked ELEPAY checkout");
         PosOrder order = lockOrder(orderId);
-        if (link(orderId).isPresent())
-            throw ApiException.conflict("digital_payment_active", "Resolve the linked checkout before recording cash");
         return recordTender(order, tenderType, amountPesewas, reference);
     }
 
+    /** External submission follows commit of the order, attempt and idempotency response. */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
+    public TenderResult submitPreparedTender(TenderResult prepared) {
+        if (prepared.attemptId() == null) return prepared;
+        var rail = checkout.submitPreparedRail(prepared.checkoutRef(), prepared.attemptId());
+        var order = getOrder(prepared.orderId()).orElseThrow();
+        return new TenderResult(order.id(), order.status(), prepared.tenderType(), prepared.amountPesewas(),
+                prepared.linkId(), prepared.checkoutRef(), prepared.attemptId(), rail.status(), prepared.payUrl(),
+                prepared.qrPayload(), prepared.qrReference(), rail.message(), order);
+    }
+
     private PosOrder recordTender(PosOrder order, TenderType tenderType, long amountPesewas, String reference) {
-        if (amountPesewas <= 0) throw new IllegalArgumentException("Payment amount must be positive");
+        if (amountPesewas <= 0) throw ApiException.badRequest("invalid_amount", "Payment amount must be positive");
         UUID orderId = order.id();
         if ("PAID".equals(order.status()))
             throw ApiException.conflict("order_paid", "Order is already fully paid");
 
+        // Central guard covers both cash entry points and every open split checkout.
+        if (tenderType == TenderType.CASH && db.sql("SELECT EXISTS (SELECT 1 FROM pos_checkout_link WHERE order_id = :id AND status = 'open')")
+                .param("id", orderId).query(Boolean.class).single()) {
+            throw ApiException.conflict("digital_payment_active", "Resolve all linked digital checkouts before recording cash");
+        }
+        long outstanding = Math.subtractExact(order.totalPesewas(), order.paidPesewas());
+        if (outstanding <= 0 || (tenderType != TenderType.CASH && amountPesewas > outstanding)) {
+            throw ApiException.conflict("pos_payment_mismatch", "Tender does not match the remaining order balance");
+        }
         UUID paymentId = UUID.randomUUID();
         db.sql("""
             INSERT INTO pos_tender_payment (id, order_id, tender_type, amount_pesewas, reference, status, created_at)
@@ -612,7 +635,7 @@ public class PosOrderService {
         // Update active shift if cash
         if (tenderType == TenderType.CASH && order.terminalId() != null) {
             cashierService.getActiveShift(order.terminalId())
-                    .ifPresent(shift -> cashierService.recordCashTender(shift.id(), amountPesewas));
+                    .ifPresent(shift -> cashierService.recordCashTender(shift.id(), Math.min(amountPesewas, outstanding)));
         }
 
         long newPaid = Math.addExact(order.paidPesewas(), amountPesewas);

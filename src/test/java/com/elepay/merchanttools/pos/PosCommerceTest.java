@@ -175,6 +175,7 @@ public class PosCommerceTest extends PostgresTestBase {
         assertThat(finalOrder.status()).isEqualTo("PAID");
         assertThat(finalOrder.paidPesewas()).isEqualTo(3500L);
         assertThat(finalOrder.changePesewas()).isEqualTo(500L); // 5.00 GHS change
+        assertThat(cashierService.getActiveShift(terminal.id()).orElseThrow().expectedCashPesewas()).isEqualTo(13000L);
 
         // Verify stock automatically deducted by 2 pies: 30 - 2 = 28 pies
         var stockAfterSale = stockService.getOrCreateStock(defaultWarehouse.id(), variant.id());
@@ -326,6 +327,35 @@ public class PosCommerceTest extends PostgresTestBase {
     }
 
     @Test
+    void cashCannotBypassOpenDigitalCheckoutThroughEitherTenderEndpoint() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Item", BigDecimal.ONE, 4500L, 0L, 0L, "[]", 1, "MAIN", null)),
+                0L, 0L, 0L, "STANDARD");
+        orderService.startDigital(order.id(), "cashier-test");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.addTenderPayment(order.id(), TenderType.CASH, 4500L, null))
+                .isInstanceOf(com.elepay.common.ApiException.class).hasMessageContaining("linked digital checkouts");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.initiateTender(order.id(),
+                new PosOrderService.TenderRequest(TenderType.CASH, 4500L, null, null, null, null, null), "cashier-test"))
+                .isInstanceOf(com.elepay.common.ApiException.class).hasMessageContaining("linked digital checkouts");
+        assertThat(orderService.getOrder(order.id()).orElseThrow().paidPesewas()).isZero();
+    }
+
+    @Test
+    void existingSplitCheckoutCannotBeReplacedByDifferentAmountOrWholeBalance() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Item", BigDecimal.ONE, 4500L, 0L, 0L, "[]", 1, "MAIN", null)),
+                0L, 0L, 0L, "STANDARD");
+        orderService.initiateTender(order.id(),
+                new PosOrderService.TenderRequest(TenderType.WALLET, 2000L, "split-1", null, null, null, null), "cashier-test");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.startDigital(order.id(), "cashier-test"))
+                .isInstanceOf(com.elepay.common.ApiException.class).hasMessageContaining("split checkouts");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.initiateTender(order.id(),
+                new PosOrderService.TenderRequest(TenderType.WALLET, 2500L, "split-1", null, null, null, null), "cashier-test"))
+                .isInstanceOf(com.elepay.common.ApiException.class).hasMessageContaining("different amount");
+        assertThat(orderService.getOrder(order.id()).orElseThrow().paidPesewas()).isZero();
+    }
+
+    @Test
     @DisplayName("GHQR tender wires checkout rail attempt and settles order + KDS ticket on CheckoutPaidEvent")
     void ghqrTenderWiresCheckoutRailAndSettlesOrderWithKdsTicket() {
         var order = orderService.createOrder(
@@ -420,5 +450,17 @@ public class PosCommerceTest extends PostgresTestBase {
                 .query(String.class)
                 .single();
         assertThat(storedFmt).isEqualTo("ECDSA_P256");
+    }
+    @Test
+    void preparedDigitalTenderDoesNotSubmitBeforeCommit() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Item", BigDecimal.ONE, 1500L, 0L, 0L, "[]", 1, "MAIN", null)),
+                0L, 0L, 0L, "STANDARD");
+        var prepared = orderService.initiateTender(order.id(),
+                new PosOrderService.TenderRequest(TenderType.MOMO, 1500L, null, "0241234567", "mtn", null, null), "cashier");
+        String status = db.sql("SELECT r.status FROM rail_transaction r JOIN payment_attempt a ON a.rail_tx=r.id WHERE a.id=:id")
+                .param("id", prepared.attemptId()).query(String.class).single();
+        assertThat(status).isEqualTo("created");
+        assertThat(orderService.getOrder(order.id()).orElseThrow().paidPesewas()).isZero();
     }
 }

@@ -27,6 +27,7 @@ public class PosController {
     private final PosOfflineSyncService syncService;
     private final DeviceEvents deviceEvents;
     private final MerchantAccess merchants;
+    private final org.springframework.transaction.support.TransactionTemplate tenderTx;
 
     public PosController(
             MerchantToolAccess access,
@@ -39,7 +40,8 @@ public class PosController {
             PosReceiptService receiptService,
             PosOfflineSyncService syncService,
             DeviceEvents deviceEvents,
-            MerchantAccess merchants
+            MerchantAccess merchants,
+            org.springframework.transaction.PlatformTransactionManager transactionManager
     ) {
         this.access = access;
         this.idempotency = idempotency;
@@ -52,6 +54,7 @@ public class PosController {
         this.syncService = syncService;
         this.deviceEvents = deviceEvents;
         this.merchants = merchants;
+        this.tenderTx = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
     }
 
     // Terminal endpoints
@@ -269,16 +272,17 @@ public class PosController {
     }
 
     @PostMapping("/orders/{orderId}/tenders")
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
     public PosOrderService.TenderResult initiateTender(
             @PathVariable UUID orderId,
             @RequestHeader("Idempotency-Key") String key,
             @RequestBody PosOrderService.TenderRequest req) {
         var order = verifyOrder(orderId);
         String actor = com.elepay.identity.Actor.current().subject();
-        return idempotency.execute("pos-tender:" + order.merchantId() + ":" + orderId, key, req,
+        var prepared = tenderTx.execute(s -> idempotency.execute("pos-tender:" + order.merchantId() + ":" + orderId, key, req,
                 PosOrderService.TenderResult.class,
-                () -> orderService.initiateTender(orderId, req, actor));
+                () -> orderService.initiateTender(orderId, req, actor)));
+        return orderService.submitPreparedTender(java.util.Objects.requireNonNull(prepared));
     }
 
     @PostMapping("/orders/{orderId}/digital-checkout")

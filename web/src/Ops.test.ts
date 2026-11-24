@@ -88,6 +88,7 @@ describe("Ops.tsx permissions and labels", () => {
         "Exceptions",
         "System Health",
       ]);
+      expect(tabs).not.toContain("Risk & Audit");
       expect(tabs).not.toContain("Kill Switches");
       expect(tabs).not.toContain("Custodian Trust");
       expect(tabs).not.toContain("Maker-Checker");
@@ -119,13 +120,14 @@ describe("Ops.tsx permissions and labels", () => {
         "Onboarding",
         "Disputes",
         "Exceptions",
+        "Risk & Audit",
         "System Health",
       ]);
       expect(tabs).not.toContain("Custodian Trust");
       expect(tabs).not.toContain("Reconciliation");
     });
 
-    it("grants all 10 tabs to ops_admin and ops", () => {
+    it("grants all 11 tabs to ops_admin and ops", () => {
       const expectedAll = [
         "Overview",
         "Merchant Controls",
@@ -136,6 +138,7 @@ describe("Ops.tsx permissions and labels", () => {
         "Disputes",
         "Reconciliation",
         "Exceptions",
+        "Risk & Audit",
         "System Health",
       ];
       expect(visibleTabsFor(ROLE_PERMISSIONS.ops_admin)).toEqual(expectedAll);
