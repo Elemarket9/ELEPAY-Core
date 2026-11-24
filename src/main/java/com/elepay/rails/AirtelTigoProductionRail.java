@@ -50,7 +50,7 @@ public class AirtelTigoProductionRail implements PaymentRail {
         }
     }
 
-    private record Response(int status, String body) {}
+    private record Response(int status, String body, String contentType) {}
 
     private static class CachedToken {
         final String token;
@@ -213,7 +213,7 @@ public class AirtelTigoProductionRail implements PaymentRail {
                     "amount", BigDecimal.valueOf(amount, 2).toPlainString(),
                     "currency", currency,
                     direction.equals("charge") ? "msisdn" : "recipientMsisdn", msisdn,
-                    "description", description != null ? description : "ELEPAY " + ref
+                    "description", MtnProductionRail.sanitizeNote(description, ref)
             );
             String payload = json.writeValueAsString(bodyMap);
             String signature = computeHmac(credentials.clientSecret(), payload);
@@ -240,8 +240,12 @@ public class AirtelTigoProductionRail implements PaymentRail {
             }
 
             long latency = System.currentTimeMillis() - start;
-            health.record(name(), response.status() == 200 || response.status() == 202, false, latency);
+            boolean accepted = (response.status() == 200 || response.status() == 202) && !isNonJsonWafResponse(response);
+            health.record(name(), accepted, false, latency);
 
+            if (isNonJsonWafResponse(response)) {
+                return Result.unknown("AirtelTigo request rejected by upstream WAF (non-JSON HTML response)");
+            }
             if (response.status() == 200 || response.status() == 202) {
                 return new Result(Status.PENDING, railRef, amount, currency, fee, null,
                         "AirtelTigo payment initiated; awaiting subscriber confirmation");
@@ -291,8 +295,12 @@ public class AirtelTigoProductionRail implements PaymentRail {
             }
 
             long latency = System.currentTimeMillis() - start;
-            health.record(name(), response.status() == 200 || response.status() == 404, false, latency);
+            boolean ok = (response.status() == 200 && !isNonJsonWafResponse(response)) || response.status() == 404;
+            health.record(name(), ok, false, latency);
 
+            if (isNonJsonWafResponse(response)) {
+                return Result.unknown("AirtelTigo status unavailable: upstream returned non-JSON WAF/HTML response");
+            }
             if (response.status() == 404) {
                 return new Result(Status.NOT_FOUND, null, null, null, null, null, "AirtelTigo transaction not found");
             }
@@ -300,7 +308,13 @@ public class AirtelTigoProductionRail implements PaymentRail {
                 return Result.unknown("AirtelTigo status unavailable: HTTP " + response.status());
             }
 
-            return parseStatus(json.readTree(response.body()), reference);
+            JsonNode statusNode;
+            try {
+                statusNode = json.readTree(response.body());
+            } catch (RuntimeException parseError) {
+                return Result.unknown("AirtelTigo status unavailable: invalid non-JSON response");
+            }
+            return parseStatus(statusNode, reference);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return Result.unknown("AirtelTigo status request interrupted");
@@ -349,6 +363,7 @@ public class AirtelTigoProductionRail implements PaymentRail {
 
     private HttpRequest.Builder buildRequest(String path) {
         return HttpRequest.newBuilder(base.resolve(path)).timeout(Duration.ofSeconds(15))
+                .header("User-Agent", "ELEPAY-Core/1.0")
                 .header("Accept", "application/json");
     }
 
@@ -369,10 +384,18 @@ public class AirtelTigoProductionRail implements PaymentRail {
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(tokenReq))).build());
 
+        if (isNonJsonWafResponse(response)) {
+            throw new IllegalStateException("AirtelTigo authentication rejected by upstream WAF (non-JSON HTML response)");
+        }
         if (response.status() != 200) {
             throw new IllegalStateException("AirtelTigo authentication rejected with HTTP " + response.status());
         }
-        JsonNode root = json.readTree(response.body());
+        JsonNode root;
+        try {
+            root = json.readTree(response.body());
+        } catch (RuntimeException parseError) {
+            throw new IllegalStateException("AirtelTigo authentication returned invalid non-JSON response", parseError);
+        }
         String token = root.path("access_token").asString("");
         if (token.isBlank()) throw new IllegalStateException("AirtelTigo access token missing");
         long expiresIn = root.path("expires_in").asLong(3600L);
@@ -380,12 +403,26 @@ public class AirtelTigoProductionRail implements PaymentRail {
         return token;
     }
 
+    private static boolean isNonJsonWafResponse(Response response) {
+        if (response == null) return false;
+        if (response.contentType() != null && response.contentType().toLowerCase(Locale.ROOT).contains("text/html")) {
+            return true;
+        }
+        String trimmed = response.body() == null ? "" : response.body().trim();
+        if (trimmed.isEmpty()) {
+            return false;
+        }
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        return lower.startsWith("<") || lower.contains("<html") || lower.contains("request rejected");
+    }
+
     private Response send(HttpRequest request) throws Exception {
         HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
         try (InputStream in = response.body()) {
             byte[] body = in.readNBytes(65537);
             if (body.length > 65536) throw new IllegalStateException("AirtelTigo response too large");
-            return new Response(response.statusCode(), new String(body, StandardCharsets.UTF_8));
+            String contentType = response.headers().firstValue("Content-Type").orElse("");
+            return new Response(response.statusCode(), new String(body, StandardCharsets.UTF_8), contentType);
         }
     }
 

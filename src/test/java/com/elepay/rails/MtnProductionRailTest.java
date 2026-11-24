@@ -240,4 +240,93 @@ class MtnProductionRailTest {
         assertThat(tokenRequests.get()).isEqualTo(2); // Initial + refreshed after 401
         assertThat(submitRequests.get()).isEqualTo(2); // Attempt 1 (401) + retry (202)
     }
+
+    @Test
+    void sanitizeNoteReplacesAmpersandStripsSpecialCharsAndBoundsLength() {
+        assertThat(MtnProductionRail.sanitizeNote("Jollof & Chicken", "EP-1"))
+                .isEqualTo("Jollof and Chicken");
+        assertThat(MtnProductionRail.sanitizeNote("  Waakye & \"Beef\" <special>'s;  ", "EP-2"))
+                .isEqualTo("Waakye and Beef special s");
+        assertThat(MtnProductionRail.sanitizeNote("   ", "EP-3"))
+                .isEqualTo("ELEPAY EP-3");
+        assertThat(MtnProductionRail.sanitizeNote("A".repeat(150), "EP-4"))
+                .hasSize(100);
+    }
+
+    @Test
+    void chargeSendsSanitizedPayerMessageAndPayeeNoteWithUserAgentHeader() throws Exception {
+        var capturedBody = new java.util.concurrent.atomic.AtomicReference<String>();
+        var capturedTokenUa = new java.util.concurrent.atomic.AtomicReference<String>();
+        var capturedSubmitUa = new java.util.concurrent.atomic.AtomicReference<String>();
+
+        testServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        testServer.createContext("/collection/token/", exchange -> {
+            capturedTokenUa.set(exchange.getRequestHeaders().getFirst("User-Agent"));
+            byte[] bytes = "{\"access_token\":\"mtn-test-token\",\"expires_in\":3600}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+        });
+        testServer.createContext("/collection/v1_0/requesttopay", exchange -> {
+            capturedSubmitUa.set(exchange.getRequestHeaders().getFirst("User-Agent"));
+            capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            exchange.sendResponseHeaders(202, 0);
+            exchange.close();
+        });
+        testServer.start();
+        serverUri = URI.create("http://127.0.0.1:" + testServer.getAddress().getPort());
+
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        MtnProductionRail.Credentials collCreds = new MtnProductionRail.Credentials("col-user", "col-key", "col-sub");
+        MtnProductionRail.Credentials disbCreds = new MtnProductionRail.Credentials("disb-user", "disb-key", "disb-sub");
+        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client);
+
+        PaymentRail.Charge charge = new PaymentRail.Charge(
+                "EPC-WAF-1", 1500L, "GHS", "momo", "0241234567",
+                "mtn", "c@test.com", "Customer", "Jollof & Chicken <Order>", null
+        );
+        PaymentRail.Result result = rail.charge(charge);
+
+        assertThat(result.status()).isEqualTo(PaymentRail.Status.PENDING);
+        assertThat(capturedTokenUa.get()).isEqualTo("ELEPAY-Core/1.0");
+        assertThat(capturedSubmitUa.get()).isEqualTo("ELEPAY-Core/1.0");
+        var sentJson = json.readTree(capturedBody.get());
+        assertThat(sentJson.path("payerMessage").asString("")).isEqualTo("Jollof and Chicken Order");
+        assertThat(sentJson.path("payeeNote").asString("")).isEqualTo("Jollof and Chicken Order");
+    }
+
+    @Test
+    void htmlWafResponseOnSubmitQueryAndTokenFailsCleanlyWithoutJsonCrash() throws Exception {
+        String wafHtml = "<html><head><title>Request Rejected</title></head><body>The requested URL was rejected. Please consult with your administrator.</body></html>";
+
+        startServer(
+                "{\"access_token\":\"mtn-test-token\",\"expires_in\":3600}",
+                200, wafHtml,
+                200, wafHtml
+        );
+
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        MtnProductionRail.Credentials collCreds = new MtnProductionRail.Credentials("col-user", "col-key", "col-sub");
+        MtnProductionRail.Credentials disbCreds = new MtnProductionRail.Credentials("disb-user", "disb-key", "disb-sub");
+        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client);
+
+        PaymentRail.Charge charge = new PaymentRail.Charge(
+                "EPC-WAF-2", 1500L, "GHS", "momo", "0241234567",
+                "mtn", "c@test.com", "Customer", "Jollof & Chicken", null
+        );
+        PaymentRail.Result submitResult = rail.charge(charge);
+        assertThat(submitResult.status()).isEqualTo(PaymentRail.Status.UNKNOWN);
+        assertThat(submitResult.message()).containsIgnoringCase("WAF");
+
+        PaymentRail.Result queryResult = rail.query("charge", "EPC-WAF-2", null);
+        assertThat(queryResult.status()).isEqualTo(PaymentRail.Status.UNKNOWN);
+        assertThat(queryResult.message()).containsIgnoringCase("WAF");
+
+        // Also verify HTTP 200 HTML WAF page on /token/ endpoint
+        testServer.stop(0);
+        startServer(wafHtml, 202, "", 200, "{}");
+        MtnProductionRail freshRail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client);
+        PaymentRail.Result tokenWafResult = freshRail.charge(charge);
+        assertThat(tokenWafResult.status()).isEqualTo(PaymentRail.Status.UNKNOWN);
+        assertThat(tokenWafResult.message()).containsIgnoringCase("WAF");
+    }
 }

@@ -45,7 +45,7 @@ public class MtnProductionRail implements PaymentRail {
         }
     }
 
-    private record Response(int status, String body) {}
+    private record Response(int status, String body, String contentType) {}
 
     private static class CachedToken {
         final String token;
@@ -116,6 +116,28 @@ public class MtnProductionRail implements PaymentRail {
         return Math.min(fee, 1000L); // Capped at 1000 pesewas (10 GHS)
     }
 
+    /**
+     * Sanitizes {@code payerMessage} / {@code payeeNote} for MTN MoMo's F5 ASM WAF,
+     * which rejects requests containing {@code &} or HTML/script metacharacters.
+     */
+    public static String sanitizeNote(String note, String fallbackRef) {
+        String raw = (note == null || note.isBlank())
+                ? "ELEPAY " + (fallbackRef != null ? fallbackRef : "")
+                : note;
+        String cleaned = raw
+                .replace("&", " and ")
+                .replaceAll("[<>\"'\\\\;\\p{Cntrl}]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (cleaned.isEmpty()) {
+            cleaned = "ELEPAY";
+        }
+        if (cleaned.length() > 100) {
+            cleaned = cleaned.substring(0, 100).trim();
+        }
+        return cleaned;
+    }
+
     public boolean isConfigured(String direction) {
         Credentials c = credentials(direction);
         return c != null && c.isValid();
@@ -145,7 +167,7 @@ public class MtnProductionRail implements PaymentRail {
             return new Result(Status.FAILED, null, request.amount(), request.currency(), null, null, "Unsupported destination");
         if (!isConfigured("charge"))
             return Result.unavailable("MTN Mobile Money collection credentials not configured");
-        return submit("charge", request.reference(), request.amount(), request.currency(), request.msisdn());
+        return submit("charge", request.reference(), request.amount(), request.currency(), request.msisdn(), request.description());
     }
 
     @Override public Result payout(Payout request) {
@@ -153,7 +175,7 @@ public class MtnProductionRail implements PaymentRail {
             return new Result(Status.FAILED, null, request.amount(), request.currency(), null, null, "Unsupported destination");
         if (!isConfigured("payout"))
             return Result.unavailable("MTN Mobile Money disbursement credentials not configured");
-        return submit("payout", request.reference(), request.amount(), request.currency(), request.accountNumber());
+        return submit("payout", request.reference(), request.amount(), request.currency(), request.accountNumber(), request.description());
     }
 
     @Override public Result refund(Refund request) {
@@ -161,7 +183,7 @@ public class MtnProductionRail implements PaymentRail {
         return Result.unknown("MTN refund operation not configured");
     }
 
-    private Result submit(String direction, String ref, long amount, String currency, String phone) {
+    private Result submit(String direction, String ref, long amount, String currency, String phone, String description) {
         if (amount <= 0 || !"GHS".equals(currency))
             return new Result(Status.FAILED, null, amount, currency, null, null, "Invalid Ghana currency or amount");
         long start = System.currentTimeMillis();
@@ -172,14 +194,15 @@ public class MtnProductionRail implements PaymentRail {
             Credentials c = credentials(direction);
             String token = getOrRefreshToken(product, c, false);
             String id = providerId(direction, ref).toString();
+            String note = sanitizeNote(description, ref);
             Map<String, Object> body = Map.of(
                     "amount", BigDecimal.valueOf(amount, 2).toPlainString(),
                     "currency", currency,
                     "externalId", ref,
                     direction.equals("charge") ? "payer" : "payee",
                     Map.of("partyIdType", "MSISDN", "partyId", msisdn),
-                    "payerMessage", "ELEPAY " + ref,
-                    "payeeNote", "ELEPAY " + ref);
+                    "payerMessage", note,
+                    "payeeNote", note);
 
             HttpRequest req = buildRequest(path(direction))
                     .header("Authorization", "Bearer " + token)
@@ -204,8 +227,12 @@ public class MtnProductionRail implements PaymentRail {
             }
 
             long latency = System.currentTimeMillis() - start;
-            health.record(name(), response.status() == 202, false, latency);
+            boolean accepted = response.status() == 202 && !isNonJsonWafResponse(response);
+            health.record(name(), accepted, false, latency);
 
+            if (isNonJsonWafResponse(response)) {
+                return Result.unknown("MTN request rejected by upstream WAF (non-JSON HTML response)");
+            }
             if (response.status() == 202) {
                 return new Result(Status.PENDING, id, amount, currency, fee, null,
                         "MTN accepted the request; awaiting verified status");
@@ -258,12 +285,22 @@ public class MtnProductionRail implements PaymentRail {
             }
 
             long latency = System.currentTimeMillis() - start;
-            health.record(name(), response.status() == 200 || response.status() == 404, false, latency);
+            boolean ok = (response.status() == 200 && !isNonJsonWafResponse(response)) || response.status() == 404;
+            health.record(name(), ok, false, latency);
 
+            if (isNonJsonWafResponse(response)) {
+                return Result.unknown("MTN status unavailable: upstream returned non-JSON WAF/HTML response");
+            }
             if (response.status() == 404) return new Result(Status.NOT_FOUND, null, null, null, null, null, "MTN reference not found");
             if (response.status() != 200) return Result.unknown("MTN status unavailable: HTTP " + response.status());
 
-            return parseStatus(json.readTree(response.body()), reference);
+            JsonNode statusNode;
+            try {
+                statusNode = json.readTree(response.body());
+            } catch (RuntimeException parseError) {
+                return Result.unknown("MTN status unavailable: invalid non-JSON response");
+            }
+            return parseStatus(statusNode, reference);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return Result.unknown("MTN status request interrupted");
@@ -303,7 +340,9 @@ public class MtnProductionRail implements PaymentRail {
 
     private HttpRequest.Builder buildRequest(String path) {
         return HttpRequest.newBuilder(base.resolve(path)).timeout(Duration.ofSeconds(15))
-                .header("Accept", "application/json").header("X-Target-Environment", "mtnghana");
+                .header("User-Agent", "ELEPAY-Core/1.0")
+                .header("Accept", "application/json")
+                .header("X-Target-Environment", "mtnghana");
     }
 
     private String getOrRefreshToken(String product, Credentials c, boolean forceRefresh) throws Exception {
@@ -318,8 +357,16 @@ public class MtnProductionRail implements PaymentRail {
         Response response = send(buildRequest("/" + product + "/token/")
                 .header("Authorization", "Basic " + basic).header("Ocp-Apim-Subscription-Key", c.subscription())
                 .POST(HttpRequest.BodyPublishers.noBody()).build());
+        if (isNonJsonWafResponse(response)) {
+            throw new IllegalStateException("MTN authentication rejected by upstream WAF (non-JSON HTML response)");
+        }
         if (response.status() != 200) throw new IllegalStateException("MTN authentication rejected with status " + response.status());
-        JsonNode root = json.readTree(response.body());
+        JsonNode root;
+        try {
+            root = json.readTree(response.body());
+        } catch (RuntimeException parseError) {
+            throw new IllegalStateException("MTN authentication returned invalid non-JSON response", parseError);
+        }
         String token = root.path("access_token").asString("");
         if (token.isBlank()) throw new IllegalStateException("MTN token missing");
         long expiresIn = root.path("expires_in").asLong(3600L);
@@ -329,12 +376,26 @@ public class MtnProductionRail implements PaymentRail {
         return token;
     }
 
+    private static boolean isNonJsonWafResponse(Response response) {
+        if (response == null) return false;
+        if (response.contentType() != null && response.contentType().toLowerCase(Locale.ROOT).contains("text/html")) {
+            return true;
+        }
+        String trimmed = response.body() == null ? "" : response.body().trim();
+        if (trimmed.isEmpty()) {
+            return false;
+        }
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        return lower.startsWith("<") || lower.contains("<html") || lower.contains("request rejected");
+    }
+
     private Response send(HttpRequest request) throws Exception {
         HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
         try (InputStream in = response.body()) {
             byte[] body = in.readNBytes(65537);
             if (body.length > 65536) throw new IllegalStateException("MTN response too large");
-            return new Response(response.statusCode(), new String(body, StandardCharsets.UTF_8));
+            String contentType = response.headers().firstValue("Content-Type").orElse("");
+            return new Response(response.statusCode(), new String(body, StandardCharsets.UTF_8), contentType);
         }
     }
 
