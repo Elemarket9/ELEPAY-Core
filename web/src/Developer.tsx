@@ -47,10 +47,13 @@ export function explorerPath(id:string,endpoint:string,reference:string):string|
   if(endpoint==="checkout"&&/^[A-Za-z0-9_-]{1,120}$/.test(reference.trim()))return root+"/checkouts/"+encodeURIComponent(reference.trim());
   return null;
 }
-function useRows<T>(path:string){
+// Whitelist list fields before retaining data in React state. The API currently returns additional sensitive fields.
+function endpointMetadata(e:WebhookEndpoint):WebhookEndpoint {const {id,url,environment,description,eventTypes,active,failureCount,lastDeliveryAt,createdAt}=e;return {id,url,environment,description,eventTypes,active,failureCount,lastDeliveryAt,createdAt};}
+function deliveryMetadata(e:WebhookLog):WebhookLog {const {id,deliveryId,endpointId,eventId,merchantId,eventType,requestUrl,responseCode,durationMs,status,attemptNumber,isManualRetry,createdAt}=e;return {id,deliveryId,endpointId,eventId,merchantId,eventType,requestUrl,responseCode,durationMs,status,attemptNumber,isManualRetry,createdAt};}
+function useRows<T>(path:string, project?:(row:T)=>T){
   const [data,setData]=useState<T[]|null>(null),[error,setError]=useState<string|null>(null),[loading,setLoading]=useState(true);
   const sequence=useRef(0);
-  const load=useCallback(async()=>{const n=++sequence.current;setLoading(true);setError(null);setData(null);try{const rows=await api<T[]>(path,{signal:timeout()});if(!Array.isArray(rows))throw new Error("Unexpected list response");if(n===sequence.current)setData(rows);}catch(e){if(n===sequence.current)setError(msg(e));}finally{if(n===sequence.current)setLoading(false);}},[path]);
+  const load=useCallback(async()=>{const n=++sequence.current;setLoading(true);setError(null);setData(null);try{const rows=await api<T[]>(path,{signal:timeout()});if(!Array.isArray(rows))throw new Error("Unexpected list response");if(n===sequence.current)setData(project?rows.map(project):rows);}catch(e){if(n===sequence.current)setError(msg(e));}finally{if(n===sequence.current)setLoading(false);}},[path,project]);
   useEffect(()=>{void load();return()=>{sequence.current++;};},[load]);
   return {data,error,loading,load};
 }
@@ -88,7 +91,7 @@ function ApiKeysView({merchantId}:{merchantId:string}){
   const [filter,setFilter]=useState("all"),[label,setLabel]=useState(""),[env,setEnv]=useState<"live"|"test">("live"),[type,setType]=useState<KeyType>("secret"),[scopes,setScopes]=useState<string[]>(["view"]),[ips,setIps]=useState(""),[show,setShow]=useState(false),[credentials,setCredentials]=useState<{label:string;value:string}[]>([]),[confirm,setConfirm]=useState<{kind:"rotate"|"revoke";id:string;prefix:string}|null>(null);
   const rows=useRows<ApiKey>(base(merchantId)+"/keys"+(filter==="all"?"":"?environment="+filter));
   const action=useAction();
-  function accept(r:CreatedKey){if(!r||typeof r.apiKey!=="string"||!r.apiKey||!safeDeveloperKeyPrefix(r.prefix)||!r.apiKey.startsWith(r.prefix)||(!r.prefix.startsWith("pk_")&&(!r.signingSecret||typeof r.signingSecret!=="string")))throw new Error("Credential response incomplete. Review the key list and revoke any unusable key.");setCredentials([{label:"API key",value:r.apiKey},...(r.signingSecret?[{label:"Request signing secret",value:r.signingSecret}]:[])]);setShow(false);setConfirm(null);void rows.load();}
+  function accept(r:CreatedKey){if(!r||typeof r.apiKey!=="string"||!r.apiKey||typeof r.prefix!=="string"||!safeDeveloperKeyPrefix(r.prefix)||!r.apiKey.startsWith(r.prefix)||(!r.prefix.startsWith("pk_")&&(!r.signingSecret||typeof r.signingSecret!=="string")))throw new Error("Credential response incomplete. Review the key list and revoke any unusable key.");setCredentials([{label:"API key",value:r.apiKey},...(r.signingSecret?[{label:"Request signing secret",value:r.signingSecret}]:[])]);setShow(false);setConfirm(null);void rows.load();}
   function create(e:React.FormEvent){e.preventDefault();const allow=ips.split(",").map(s=>s.trim()).filter(Boolean);const err=validateKeyInput(type,scopes,allow);if(err){action.setError(err);return;}void action.run(async()=>{accept(await api<CreatedKey>(base(merchantId)+"/keys",{body:{label:label.trim()||null,environment:env,keyType:type,scopes,allowedIps:allow},signal:timeout()}));});}
   function change(){if(!confirm)return;const target=confirm;void action.run(async()=>{if(target.kind==="rotate"){accept(await api<CreatedKey>(base(merchantId)+"/keys/"+target.id+"/rotate",{body:{},signal:timeout()}));}else{const r=await api<{status:string}>(base(merchantId)+"/keys/"+target.id,{method:"DELETE",signal:timeout()});if(r.status!=="revoked")throw new Error("Revocation not confirmed.");setConfirm(null);action.setMessage("Credential revoked.");void rows.load();}});}
   return <section className="panel"><div className="page-title"><div><h2>API credentials</h2><p className="muted small">Live keys authorize real requests. Test credentials require an isolated test deployment.</p></div><button disabled={action.busy||credentials.length>0} onClick={()=>setShow(!show)}>{show?"Close form":"Generate API key"}</button></div><Feedback error={rows.error||action.error} message={action.message}/>
@@ -100,7 +103,7 @@ function ApiKeysView({merchantId}:{merchantId:string}){
 }
 
 function WebhooksView({merchantId}:{merchantId:string}){
-  const rows=useRows<WebhookEndpoint>(base(merchantId)+"/webhooks");
+  const rows=useRows<WebhookEndpoint>(base(merchantId)+"/webhooks",endpointMetadata);
   const [show,setShow]=useState(false),[url,setUrl]=useState(""),[description,setDescription]=useState(""),[env,setEnv]=useState<"live"|"test">("live"),[events,setEvents]=useState<string[]>(["checkout.paid"]),[secret,setSecret]=useState<string|null>(null),[confirm,setConfirm]=useState<{kind:"rotate"|"toggle";endpoint:WebhookEndpoint}|null>(null);
   const action=useAction();
   function register(e:React.FormEvent){e.preventDefault();const error=validateWebhookInput(url,events);if(error){action.setError(error);return;}void action.run(async()=>{const r=await api<{id:string;secret:string}>(base(merchantId)+"/webhooks",{body:{url:url.trim(),environment:env,description:description.trim(),eventTypes:events},signal:timeout()});if(!r?.id||!r.secret)throw new Error("Endpoint or signing secret unavailable.");setSecret(r.secret);setShow(false);setUrl("");setDescription("");void rows.load();});}
@@ -115,8 +118,8 @@ function WebhooksView({merchantId}:{merchantId:string}){
 
 function DeliveryLogsView({merchantId}:{merchantId:string}){
   const [filter,setFilter]=useState("all"),[query,setQuery]=useState(""),[inspect,setInspect]=useState<WebhookLog|null>(null),[confirm,setConfirm]=useState<WebhookLog|null>(null);
-  const rows=useRows<WebhookLog>(base(merchantId)+"/webhooks/deliveries?limit=100"+(filter==="all"?"":"&status="+filter)),action=useAction();
-  const found=(rows.data??[]).filter(l=>[l.eventId,l.eventType,l.deliveryId,l.requestUrl].some(v=>v.toLowerCase().includes(query.trim().toLowerCase())));
+  const rows=useRows<WebhookLog>(base(merchantId)+"/webhooks/deliveries?limit=100"+(filter==="all"?"":"&status="+filter),deliveryMetadata),action=useAction();
+  const found=(rows.data??[]).filter(l=>[l.eventId,l.eventType,l.deliveryId,l.requestUrl].some(v=>String(v??"").toLowerCase().includes(query.trim().toLowerCase())));
   function replay(){if(!confirm||!canReplayDelivery(confirm.status))return;const log=confirm;void action.run(async()=>{const r=await api<ReplayResult>(base(merchantId)+"/webhooks/deliveries/"+log.id+"/replay",{method:"POST",signal:timeout()});if(typeof r?.success!=="boolean"||!r.newLogId)throw new Error("Replay outcome not verified.");action.setMessage("Replay "+(r.success?"delivered":"failed")+" · HTTP "+r.statusCode+" · Log "+r.newLogId);setConfirm(null);setInspect(null);void rows.load();});}
   return <section className="panel"><h2>Delivery monitoring</h2><p className="muted small">Latest 100 records. A successful HTTP response is not evidence that a financial event was processed correctly by your application.</p><Feedback error={rows.error||action.error} message={action.message}/><div className="wallet-filter"><label>Status<select value={filter} onChange={e=>{setFilter(e.target.value);setInspect(null);setConfirm(null);}}>{["all","PENDING","DELIVERED","FAILED","RETRYING","DEAD"].map(v=><option key={v}>{v}</option>)}</select></label><label>Search event / delivery<input value={query} onChange={e=>setQuery(e.target.value)}/></label><button className="secondary" disabled={rows.loading||action.busy} onClick={()=>{setInspect(null);setConfirm(null);void rows.load();}}>Refresh</button></div>
   {confirm&&<div className="notice warn"><h3>Replay original event?</h3><p>Event {confirm.eventId}. The receiver may already have processed it. Confirm the receiver deduplicates this event ID.</p><button disabled={action.busy} onClick={replay}>Confirm replay</button><button className="secondary" disabled={action.busy} onClick={()=>setConfirm(null)}>Cancel</button></div>}
@@ -144,7 +147,7 @@ function SdkSnippetsView({merchantId}:{merchantId:string}){
     'const orderKey = process.env.ELEPAY_ORDER_IDEMPOTENCY_KEY; // persist per logical order',
     'if (!base || !apiKey || !secret || !orderKey) throw Error("Missing configuration");',
     'const url = new URL("/v1/merchants/'+merchantId+'/checkouts", base);',
-    'if (url.protocol !== "https:") throw Error("HTTPS required");',
+    'if (url.protocol !== "https:" || url.username || url.password) throw Error("HTTPS origin required");',
     'const body = JSON.stringify({ amount: 2500, description: "Order payment" });',
     'const ts = String(Math.floor(Date.now() / 1000));',
     'const nonce = randomUUID();',
@@ -163,7 +166,8 @@ function SdkSnippetsView({merchantId}:{merchantId:string}){
     'base = os.environ["ELEPAY_BASE_URL"].rstrip("/")',
     'path = "/v1/merchants/'+merchantId+'/checkouts"',
     'url = base + path',
-    'if urllib.parse.urlsplit(url).scheme != "https": raise ValueError("HTTPS required")',
+    'origin = urllib.parse.urlsplit(base)',
+    'if origin.scheme != "https" or origin.username or origin.password or origin.path or origin.query or origin.fragment: raise ValueError("HTTPS origin required")',
     'key = os.environ["ELEPAY_ORDER_IDEMPOTENCY_KEY"]  # persist per logical order',
     'body = json.dumps({"amount":2500,"description":"Order payment"}, separators=(",",":")).encode()',
     'ts, nonce = str(int(time.time())), str(uuid.uuid4())',
