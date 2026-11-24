@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError, newKey } from "./api";
 import { formatMoney, normalizeGhanaPhone, parseMoney } from "./money";
 
@@ -22,17 +22,23 @@ export function Wallet() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [moduleDisabled, setModuleDisabled] = useState(false);
+  const loadSequence = useRef(0);
   const [activeTab, setActiveTab] = useState<(typeof WALLET_TABS)[number]>("Send Money");
 
   async function load() {
+    const sequence = ++loadSequence.current;
+    setAccounts([]); setOperations([]);
     setError(null);
     setModuleDisabled(false);
     setLoading(true);
     try {
       const w = await api<{ accounts: Account[] }>("/v1/wallet");
+      if (sequence !== loadSequence.current) return;
       setAccounts(w.accounts);
-      setOperations(await api<Operation[]>("/v1/wallet/operations"));
+      const history = await api<Operation[]>("/v1/wallet/operations");
+      if (sequence === loadSequence.current) setOperations(history);
     } catch (e) {
+      if (sequence !== loadSequence.current) return;
       if (e instanceof ApiError && e.code === "FEATURE_NOT_ENABLED") {
         setModuleDisabled(true);
         setAccounts([]);
@@ -41,7 +47,7 @@ export function Wallet() {
         setError(e instanceof ApiError && e.status === 404 ? "No ELEPAY wallet is linked to this sign-in yet." : String(e));
       }
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   }
   useEffect(() => { void load(); }, []);
@@ -54,20 +60,20 @@ export function Wallet() {
 
   return (
     <main>
-      <h1>My wallet</h1>
+      <div className="page-title"><div><p className="eyebrow">PERSONAL WALLET</p><h1>My wallet</h1><p className="muted">Your balances and transaction activity.</p></div><button className="secondary" disabled={loading} onClick={() => void load()}>{loading ? "Refreshing…" : "Refresh balances"}</button></div>
       {moduleDisabled && (
         <p className="notice warn">Consumer wallet module is disabled in this environment (Stage 1).</p>
       )}
-      {error && <p className="error">{error}</p>}
-      <div className="cards">
-        <div className="card"><div className="muted">Available</div><div className="big">{bal("available")}</div></div>
+      {error && <p className="error" role="alert">{error}</p>}
+      <div className="cards wallet-balances" aria-busy={loading}>
+        <div className="card balance-primary"><div className="muted">Available</div><div className="big">{bal("available")}</div></div>
         <div className="card"><div className="muted">Pending</div><div>{bal("pending")}</div></div>
         <div className="card"><div className="muted">Reserved</div><div>{bal("reserved")}</div></div>
       </div>
 
-      <nav className="tabs">
+      <nav className="tabs" aria-label="Wallet services">
         {WALLET_TABS.map((t) => (
-          <button key={t} className={t === activeTab ? "active" : ""} onClick={() => setActiveTab(t)}>
+          <button key={t} aria-pressed={t === activeTab} className={t === activeTab ? "active" : ""} onClick={() => setActiveTab(t)}>
             {t}
           </button>
         ))}
@@ -81,7 +87,7 @@ export function Wallet() {
       {activeTab === "Export Statements" && <ExportStatements operations={operations} />}
 
       <h2 style={{ marginTop: "2rem" }}>Recent Activity</h2>
-      <table className="grid">
+      <div className="table-scroll" tabIndex={0} role="region" aria-label="Recent wallet transactions"><table className="grid">
         <thead>
           <tr>
             <th>Reference</th>
@@ -99,7 +105,7 @@ export function Wallet() {
               <td>{o.kind}</td>
               <td>{o.counterparty ?? "—"}</td>
               <td className="num">{formatMoney(o.amount)}</td>
-              <td><span className={`tag ${o.status === "completed" || o.status === "success" ? "active" : "pending"}`}>{o.status}</span></td>
+              <td><span className={`tag ${transactionStatusClass(o.status)}`}>{o.status}</span></td>
               <td>
                 <button
                   className="small secondary"
@@ -114,7 +120,7 @@ export function Wallet() {
             <tr><td colSpan={6} className="muted">{loading ? "Loading…" : "No transactions found."}</td></tr>
           )}
         </tbody>
-      </table>
+      </table></div>
     </main>
   );
 }
@@ -122,6 +128,14 @@ export function Wallet() {
 // -------------------------------------------------------------------------------------------------
 // 1. Send Money (Core Wallet)
 // -------------------------------------------------------------------------------------------------
+export function transactionStatusClass(status: string): string {
+  switch (status.toLowerCase()) {
+    case "completed": case "success": case "succeeded": case "settled": case "paid": return "active";
+    case "failed": case "declined": case "cancelled": case "expired": case "rejected": return "failed";
+    default: return "pending";
+  }
+}
+
 function SendMoney({ onSent }: { onSent: () => void }) {
   const [rail, setRail] = useState("wallet");
   const [phone, setPhone] = useState("");
@@ -132,6 +146,7 @@ function SendMoney({ onSent }: { onSent: () => void }) {
   const [key, setKey] = useState(newKey());
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const actionLock = useRef(false);
 
   function edit(next: string) {
     setPhone(next);
@@ -140,44 +155,48 @@ function SendMoney({ onSent }: { onSent: () => void }) {
   }
 
   async function check() {
-    if (busy) return;
+    if (actionLock.current) return;
     const msisdn = normalizeGhanaPhone(phone);
     if (!msisdn) { setMessage("Enter the full number, e.g. 024 123 4567 or +233 24 123 4567"); return; }
+    actionLock.current = true;
     setBusy(true);
     try {
       setLookup(await api<Lookup>("/v1/wallet/recipients/lookup", { body: { rail, phone: msisdn, network } }));
       setMessage(null);
     } catch (e) { setMessage(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    finally { actionLock.current = false; setBusy(false); }
   }
 
   async function review() {
-    if (busy) return;
+    if (actionLock.current) return;
     const pesewas = parseMoney(amount);
     if (!lookup?.confirmationId || !pesewas) { setMessage("Enter an amount"); return; }
+    actionLock.current = true;
     setBusy(true);
     try {
       setPreview(await api<Preview>("/v1/wallet/transfers/preview", { body: { confirmationId: lookup.confirmationId, amount: pesewas } }));
       setKey(newKey());
       setMessage(null);
     } catch (e) { setMessage(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    finally { actionLock.current = false; setBusy(false); }
   }
 
   async function confirm() {
-    if (busy || !preview || !lookup?.confirmationId) return;
+    if (actionLock.current || !preview || !lookup?.confirmationId) return;
+    actionLock.current = true;
     setBusy(true);
     try {
       const r = await api<{ reference: string; status: string }>("/v1/wallet/transfers/confirmed", {
         idempotencyKey: key, body: { confirmationId: lookup.confirmationId, amount: preview.amount },
       });
-      setMessage(`Sent. Reference ${r.reference} (${r.status}).`);
+      setMessage(`Transfer status: ${r.status}. Reference ${r.reference}. Check recent activity for updates.`);
       setLookup(null); setPreview(null); setPhone(""); setAmount("");
       onSent();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.code.startsWith("confirmation_")) { setLookup(null); setPreview(null); }
     } finally {
+      actionLock.current = false;
       setBusy(false);
     }
   }
@@ -185,11 +204,11 @@ function SendMoney({ onSent }: { onSent: () => void }) {
   return (
     <section className="panel">
       <h2>Send money</h2>
-      <label>Send to<select value={rail} onChange={(e) => { setRail(e.target.value); edit(phone); }}>
+      <label>Send to<select disabled={busy} value={rail} onChange={(e) => { setRail(e.target.value); edit(phone); }}>
         <option value="wallet">ELEPAY wallet</option><option value="momo">Mobile money</option>
       </select></label>
-      <label>Phone number<input inputMode="tel" value={phone} onChange={(e) => edit(e.target.value)} onBlur={() => phone && void check()} /></label>
-      {rail === "momo" && <label>Network<select value={network} onChange={(e) => { setNetwork(e.target.value); setLookup(null); }}>
+      <label>Phone number<input inputMode="tel" autoComplete="tel" disabled={busy} value={phone} onChange={(e) => edit(e.target.value)} /></label>
+      {rail === "momo" && <label>Network<select disabled={busy} value={network} onChange={(e) => { setNetwork(e.target.value); setLookup(null); setPreview(null); }}>
         <option value="mtn">MTN</option><option value="telecel">Telecel</option><option value="airteltigo">AirtelTigo</option>
       </select></label>}
       {!lookup && <button disabled={busy} onClick={() => void check()}>{busy ? "Checking…" : "Check recipient"}</button>}
@@ -197,7 +216,7 @@ function SendMoney({ onSent }: { onSent: () => void }) {
       {lookup?.status === "verified" && !preview && (
         <>
           <p className="notice ok">Recipient: <strong>{lookup.verifiedName}</strong> ({lookup.destination})</p>
-          <label>Amount (GH₵)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label>Amount (GH₵)<input inputMode="decimal" disabled={busy} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           <button disabled={busy} onClick={() => void review()}>{busy ? "Reviewing…" : "Review"}</button>
         </>
       )}
@@ -215,7 +234,7 @@ function SendMoney({ onSent }: { onSent: () => void }) {
           <button className="secondary" disabled={busy} onClick={() => setPreview(null)}>Back</button>
         </div>
       )}
-      {message && <p className="small">{message}</p>}
+      {message && <p className="notice" role="status">{message}</p>}
     </section>
   );
 }

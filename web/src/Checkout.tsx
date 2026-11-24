@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { api, ApiError, newKey } from "./api";
-import { getToken, oidcEnabled, signIn } from "./auth";
+import { devSignInEnabled, getToken, oidcEnabled, signIn } from "./auth";
 import { formatMoney, normalizeGhanaPhone, parseMoney } from "./money";
 
 interface Line { merchant: string; kind: string; description: string | null; amount: number }
@@ -38,7 +38,8 @@ export function safeRedirectUrl(url: string | null | undefined): string | null {
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+    if (parsed.username || parsed.password) return null;
+    if (parsed.protocol === "https:" || (parsed.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname) && import.meta.env.DEV)) {
       return parsed.toString();
     }
   } catch {
@@ -66,7 +67,7 @@ Subtotal: ${formatMoney(checkout.subtotal)}
 Processing Fee: ${formatMoney(fee)}
 Total Paid: ${formatMoney(total)}
 
-Authorized by Bank of Ghana National Payment Systems
+Payment status and amounts are supplied by ELEPAY. This is not a bank settlement certificate.
 ===================================================
 Thank you for your payment!
 `;
@@ -86,8 +87,12 @@ export function Checkout({ reference }: { reference: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const keyName = `elepay.pay.${reference}`;
+  const inFlight = useRef(false);
+  const refreshing = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (refreshing.current) return;
+    refreshing.current = true;
     try {
       const [c, s] = await Promise.all([
         api<PublicCheckout>(`/v1/public/checkouts/${reference}`, { anonymous: true }),
@@ -96,10 +101,9 @@ export function Checkout({ reference }: { reference: string }) {
       setCheckout(c);
       setMethod((prev) => resolveInitialMethod(c.methods, prev));
       setStatus(s);
-      setError(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "No connection. Your payment reference is " + reference + ".");
-    }
+    } finally { refreshing.current = false; }
   }, [reference]);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -123,17 +127,24 @@ export function Checkout({ reference }: { reference: string }) {
   const selected = checkout?.methods.find((m) => m.method === method);
 
   async function pay() {
+    if (inFlight.current || !selected || checkout?.status !== "open" || !status || status.status === "paid" || status.status === "processing") return;
+    inFlight.current = true;
     setBusy(true);
     setError(null);
-    const key = localStorage.getItem(keyName) ?? newKey();
-    localStorage.setItem(keyName, key);
     try {
+      const key = localStorage.getItem(keyName) ?? newKey();
+      localStorage.setItem(keyName, key);
       if (method === "wallet") {
         if (!(await getToken())) {
           if (oidcEnabled) {
             await signIn();
+            return;
+          } else if (devSignInEnabled) {
+            const subject = prompt("Sign in (development subject)");
+            if (!subject) return;
+            await signIn(subject);
           } else {
-            await signIn(prompt("Sign in (development subject)") ?? undefined);
+            throw new Error("Wallet sign-in is temporarily unavailable. Choose another payment method.");
           }
         }
         await api(`/v1/checkouts/${reference}/pay/wallet`, { method: "POST", idempotencyKey: key });
@@ -149,19 +160,18 @@ export function Checkout({ reference }: { reference: string }) {
       }
       await refresh();
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409 && e.code === "idempotency_conflict") {
-        localStorage.removeItem(keyName);
-      }
-      setError(e instanceof Error ? e.message : String(e));
+      // Do not silently rotate the key after a conflicting or uncertain payment request.
+      setError(e instanceof ApiError && e.code === "idempotency_conflict" ? "A previous payment attempt has different details. Check its status before starting another payment." : e instanceof Error ? e.message : String(e));
       await refresh();
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
 
   function downloadSplitReceipt() {
-    if (!checkout) return;
-    const content = formatSplitReceipt(checkout, selected?.fee ?? 0, selected?.total ?? checkout.subtotal);
+    if (!checkout || status?.status !== "paid" || checkout.status !== "paid") return;
+    const content = formatSplitReceipt(checkout, status.fee, status.total);
     const blob = new Blob([content], { type: "text/plain;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -174,14 +184,17 @@ export function Checkout({ reference }: { reference: string }) {
   }
 
   if (!checkout) {
-    return <main className="narrow"><p>{error ?? "Loading…"}</p><p className="muted">Reference {reference}</p></main>;
+    return <main className="narrow checkout-page"><div className="panel"><p className="eyebrow">ELEPAY CHECKOUT</p><p role={error ? "alert" : "status"}>{error ?? "Loading payment details…"}</p><p className="muted small">Reference {reference}</p>{error && <button onClick={() => { setError(null); void refresh(); }}>Try again</button>}</div></main>;
   }
 
   const safeStatusRedirect = safeRedirectUrl(status?.redirectUrl);
+  const finalized = status?.status === "paid" || status?.status === "processing";
+  const fee = finalized ? status.fee : selected?.fee;
+  const total = finalized ? status.total : selected?.total;
 
   return (
-    <main className="narrow">
-      <div className="flex-between">
+    <main className="narrow checkout-page">
+      <p className="eyebrow">ELEPAY CHECKOUT</p><div className="flex-between">
         <h1>Pay {checkout.collector}</h1>
       </div>
 
@@ -202,13 +215,13 @@ export function Checkout({ reference }: { reference: string }) {
             </tr>
           ))}
           <tr>
-            <td>Fee ({method})</td>
-            <td className="num">{formatMoney(selected?.fee ?? 0)}</td>
+            <td>Fee ({checkoutMethodLabel(finalized ? status.method ?? "payment" : method)})</td>
+            <td className="num">{fee === undefined ? "—" : formatMoney(fee)}</td>
           </tr>
           <tr className="total">
             <td>Total</td>
             <td className="num">
-              <div>{formatMoney(selected?.total ?? checkout.subtotal)}</div>
+              <div>{total === undefined ? "—" : formatMoney(total)}</div>
             </td>
           </tr>
         </tbody>
@@ -223,27 +236,27 @@ export function Checkout({ reference }: { reference: string }) {
 
       {showQr && (
         <div style={{ textAlign: "center", background: "#fff", padding: "1.2rem", borderRadius: "8px", border: "1px solid var(--line)", margin: "1rem 0" }}>
-          <h3>Scan to Pay with ELEPAY / GhQR</h3>
+          <h3>Open this payment link on another device</h3>
           {qrCodeUrl ? (
             <img src={qrCodeUrl} alt="Payment QR Code" width={220} height={220} style={{ margin: ".5rem auto" }} />
           ) : (
             <p>Generating QR…</p>
           )}
-          <p className="small muted">Scan with ELEPAY Wallet, MTN MoMo App, or any GhQR banking app.</p>
+          <p className="small muted">Scan with a phone camera or QR reader that opens web links. This is a payment-link QR, not a GhQR network payment code.</p>
         </div>
       )}
 
       {status?.status === "paid" ? (
-        <div className="notice ok">
+        <div className="notice ok" role="status">
           <strong>Payment received.</strong> Receipt {checkout.reference}
           <div style={{ marginTop: ".8rem" }}>
-            <button className="small" onClick={() => downloadSplitReceipt()}>
+            <button className="small" disabled={checkout.status !== "paid"} onClick={() => downloadSplitReceipt()}>
               📥 Download Itemized Receipt
             </button>
           </div>
         </div>
       ) : status?.status === "processing" ? (
-        <div className="notice">
+        <div className="notice" role="status">
           <strong>Waiting for confirmation…</strong>
           <p>{status.message}</p>
           {safeStatusRedirect && <p><a href={safeStatusRedirect}>Continue to approve the payment</a></p>}
@@ -251,9 +264,11 @@ export function Checkout({ reference }: { reference: string }) {
         </div>
       ) : checkout.status !== "open" ? (
         <div className="notice warn">This checkout is {checkout.status}.</div>
+      ) : !status || !checkout.methods.length ? (
+        <div className="notice warn" role="status">No verified payment method is currently available. <button className="secondary small" onClick={() => { setError(null); void refresh(); }}>Refresh status</button></div>
       ) : (
-        <form onSubmit={(e) => { e.preventDefault(); void pay(); }}>
-          <fieldset>
+        <form onSubmit={(e) => { e.preventDefault(); void pay(); }} aria-busy={busy}>
+          <fieldset disabled={busy}>
             <legend>Pay with</legend>
             {checkout.methods.map((m) => (
               <label key={m.method} className="choice">
@@ -264,13 +279,13 @@ export function Checkout({ reference }: { reference: string }) {
           </fieldset>
           {method === "momo" && (
             <>
-              <label>MoMo number<input inputMode="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="024 123 4567" required /></label>
-              <label>Network<select value={network} onChange={(e) => setNetwork(e.target.value)}>
+              <label>MoMo number<input inputMode="tel" autoComplete="tel" disabled={busy} value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="024 123 4567" required /></label>
+              <label>Network<select disabled={busy} value={network} onChange={(e) => setNetwork(e.target.value)}>
                 {NETWORKS.map(([v, n]) => <option key={v} value={v}>{n}</option>)}
               </select></label>
             </>
           )}
-          <button disabled={busy} type="submit">{busy ? "Working…" : `Approve ${formatMoney(selected?.total ?? 0)}`}</button>
+          <button className="primary-payment" disabled={busy || !selected} type="submit">{busy ? "Checking payment…" : selected ? `Approve ${formatMoney(selected.total)}` : "Choose a payment method"}</button>
         </form>
       )}
       {error && <p className="error" role="alert">{error}</p>}

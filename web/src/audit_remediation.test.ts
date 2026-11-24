@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "./api";
 import { formatSplitReceipt, safeRedirectUrl } from "./Checkout";
 import { formatDualControlOutcome } from "./Ops";
-import { sanitizeCsvCell } from "./Wallet";
+import { sanitizeCsvCell, transactionStatusClass } from "./Wallet";
+import { safeReturnPath } from "./auth";
 
 describe("Audit Remediation Tests", () => {
   afterEach(() => {
@@ -62,6 +63,8 @@ describe("Audit Remediation Tests", () => {
     it("accepts only https: and http: redirect URLs and rejects javascript:/data: schemes", () => {
       expect(safeRedirectUrl("https://3ds.example.com/challenge")).toBe("https://3ds.example.com/challenge");
       expect(safeRedirectUrl("http://localhost:8080/callback")).toBe("http://localhost:8080/callback");
+      expect(safeRedirectUrl("http://external.example/pay")).toBeNull();
+      expect(safeRedirectUrl("https://user:password@example.com/pay")).toBeNull();
       expect(safeRedirectUrl("javascript:alert(1)")).toBeNull();
       expect(safeRedirectUrl("data:text/html,<script>alert(1)</script>")).toBeNull();
       expect(safeRedirectUrl("vbscript:msgbox(1)")).toBeNull();
@@ -90,7 +93,30 @@ describe("Audit Remediation Tests", () => {
       expect(receipt).toContain("GH₵50.50");
       expect(receipt).not.toMatch(/GRA\s+e-VAT/i);
       expect(receipt).not.toContain("Ghana Revenue Authority");
+      expect(receipt).not.toContain("Authorized by Bank of Ghana");
     });
+  });
+
+  it("rejects external API paths before fetching", async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+    for (const path of ["https://other.example/api", "//other.example/api", "/\\\\other.example/api"]) {
+      await expect(api(path, { anonymous: true })).rejects.toMatchObject({ code: "invalid_api_path" });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts internal callback routes only", () => {
+    expect(safeReturnPath("/pay/abc?x=1")).toBe("/pay/abc?x=1");
+    expect(safeReturnPath("//other.example")).toBe("/");
+    expect(safeReturnPath("/\\\\other.example")).toBe("/");
+    expect(safeReturnPath("https://other.example")).toBe("/");
+    expect(safeReturnPath("/app/callback")).toBe("/");
+  });
+
+  it("does not label uncertain or failed wallet operations as completed", () => {
+    expect(transactionStatusClass("succeeded")).toBe("active");
+    expect(transactionStatusClass("failed")).toBe("failed");
+    expect(transactionStatusClass("unknown")).toBe("pending");
   });
 
   describe("Ops.tsx dual-control proposal handling", () => {

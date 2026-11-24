@@ -123,3 +123,47 @@ body.kitchen-body { min-height: 100vh; }
 .doc-line { display: grid; grid-template-columns: 3fr 1fr 1fr 1fr auto; gap: .4rem; align-items: center; margin: .3rem 0; }
 .doc-line input { margin: 0; }
 td.num, .lines .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Production web design system: no external fonts, no runtime assets. */
+:root { --green: #075638; --gold: #f5c542; --ink: #172a24; --muted: #51645b; --line: #d9e2dc; --bg: #f4f7f5; --surface: #fff; --radius: 14px; --shadow: 0 6px 24px rgba(18,51,35,.06); line-height: 1.55; }
+*, *::before, *::after { box-sizing: border-box; }
+body:not(.kitchen-body) { min-width: 0; }
+body:not(.kitchen-body) main { max-width: 1240px; padding: clamp(1rem,3vw,2.4rem); }
+body:not(.kitchen-body) main.narrow { max-width: 530px; }
+body:not(.kitchen-body) h1 { font-size: clamp(1.65rem,3vw,2.25rem); line-height: 1.2; letter-spacing: -.035em; margin: .3rem 0 .7rem; }
+body:not(.kitchen-body) h2 { line-height: 1.3; font-size: 1.2rem; letter-spacing: -.015em; }
+a { color: var(--green); }
+:focus-visible { outline: 3px solid #b87512; outline-offset: 3px; }
+button, input, select, textarea { font: inherit; }
+body:not(.kitchen-body) button { min-height: 44px; border-radius: 9px; font-weight: 600; }
+body:not(.kitchen-body) button.small { min-height: 36px; }
+body:not(.kitchen-body) button:disabled { cursor: not-allowed; }
+input, select, textarea { min-height: 44px; border-radius: 9px; }
+label { font-weight: 550; }
+body:not(.kitchen-body) .panel, body:not(.kitchen-body) .card { border-radius: var(--radius); padding: clamp(1rem,2.2vw,1.5rem); box-shadow: var(--shadow); min-width: 0; }
+body:not(.kitchen-body) .cards { grid-template-columns: repeat(auto-fit,minmax(min(100%,220px),1fr)); gap: 1rem; }
+.site-header { padding: .85rem max(1rem,calc((100% - 1160px)/2)); background: #fff; color: var(--ink); border-bottom: 1px solid var(--line); gap: 1rem; flex-wrap: wrap; }
+.site-header a, .site-header .link { color: var(--ink); margin: 0; }
+.site-header .brand { display: inline-flex; align-items: center; gap: .55rem; color: var(--green) !important; font-size: 1.15rem; letter-spacing: .08em; }
+.brand-mark { display: inline-grid; place-items: center; width: 2rem; height: 2rem; background: var(--green); color: #fff; border-radius: 9px; font-weight: 800; }
+.site-header nav { display: flex; flex-wrap: wrap; gap: .25rem; align-items: center; }
+.site-header nav a { padding: .55rem .75rem; border-radius: 8px; font-size: .9rem; font-weight: 600; }
+.site-header nav a[aria-current=page] { background: #e4f0e8; color: var(--green); }
+.site-header .header-action, .site-header .link { font-weight: 700; color: var(--green); padding: .45rem .6rem; }
+.eyebrow { color: var(--muted); font-size: .72rem; font-weight: 750; letter-spacing: .12em; margin: 0 0 .6rem; }
+.home-hero { display: grid; grid-template-columns: minmax(0,1.45fr) minmax(0,1fr); align-items: center; gap: clamp(1rem,4vw,3.5rem); background: #e5efe8; border: 1px solid #d3e2d7; border-radius: 22px; padding: clamp(1.25rem,4vw,3rem); }
+body:not(.kitchen-body) .home-hero h1 { font-size: clamp(2rem,4.8vw,3.7rem); max-width: 15ch; }
+.hero-copy > p:not(.eyebrow) { color: #40594b; max-width: 46ch; font-size: 1.05rem; }
+.hero-actions { display: flex; gap: .65rem; flex-wrap: wrap; margin-top: 1.4rem; }
+.action-link { display: inline-flex; align-items: center; min-height: 46px; padding: .7rem 1rem; border-radius: 9px; background: var(--green); color: #fff; font-weight: 650; text-decoration: none; }
+.action-link.outline { background: transparent; color: var(--green); border: 1px solid var(--green); }
+.merchant-pay h2 { margin-top: 0; }.merchant-pay button,.primary-payment { width: 100%; margin-right: 0; }
+.workspace-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 1rem; margin: 1.2rem 0 2rem; }
+.workspace-card { text-decoration: none; color: var(--ink); display: flex; flex-direction: column; }
+.workspace-card h2 { margin-top: 0; }.workspace-card span { color: var(--green); font-weight: 700; margin-top: auto; }
+.site-footer { display:flex; gap: 1rem; justify-content: space-between; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 1rem; color: var(--muted); font-size: .85rem; }
+.auth-page { margin-top: 2rem; }.auth-panel button { width: 100%; }.checkout-page { margin-top: 1rem; }.checkout-page .lines { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }.checkout-page .total { background: #eaf3ed; }.checkout-page .total td { font-size: 1.25rem; padding: .9rem; }.checkout-page .choice { min-height: 44px; padding: .4rem; }.choice input { min-height: 0; width: 1.15rem; height: 1.15rem; flex-shrink: 0; }
+.page-title { display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; }.page-title p { margin: 0; }.wallet-balances .balance-primary { background: var(--green); color: white; border-color: var(--green); }.balance-primary .muted { color: #d2e7da; }.wallet-balances .big { font-size: clamp(1.5rem,3vw,2.4rem); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tabs { gap: .35rem; }.tabs button { white-space: normal; }.table-scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--line); border-radius: 12px; }.table-scroll .grid { min-width: 660px; }.grid th { background: #edf3ef; font-size: .8rem; color: #40584a; }.grid td,.grid th { padding: .75rem; }.grid td { overflow-wrap: anywhere; }.error { overflow-wrap: anywhere; }.loading-state { display:flex; align-items:center; gap: .75rem; }.spinner { display:inline-block; width: 20px; height:20px; border: 2px solid var(--line); border-top-color: var(--green); border-radius:50%; animation: elepay-spin .8s linear infinite; } @keyframes elepay-spin { to { transform: rotate(360deg); } }
+@media (max-width: 740px) { .home-hero,.workspace-grid { grid-template-columns: 1fr; }.site-header nav { order:3; width:100%; overflow-x:auto; flex-wrap:nowrap; }.site-header nav a { white-space:nowrap; }.site-header nav a:first-child { padding-left: .4rem; } body:not(.kitchen-body) main > .grid,body:not(.kitchen-body) .panel > .grid { display:block; overflow-x:auto; } .flex-between { flex-wrap: wrap; gap: .5rem; }.virtual-card { max-width:100%; }.grid-2 { grid-template-columns: 1fr; }.doc-line { grid-template-columns: 1fr 1fr; }.pos-layout { grid-template-columns: minmax(0,1fr); } }
+@media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
