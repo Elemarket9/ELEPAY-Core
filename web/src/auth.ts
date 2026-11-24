@@ -36,7 +36,7 @@ export function safeReturnPath(state: unknown): string {
   const base = "https://elepay.invalid";
   try {
     const url = new URL(state, base);
-    return url.origin === base && url.pathname !== "/app/callback" ? url.pathname + url.search + url.hash : "/";
+    return url.origin === base && !url.pathname.startsWith("//") && url.pathname !== "/app/callback" ? url.pathname + url.search + url.hash : "/";
   } catch { return "/"; }
 }
 
