@@ -132,31 +132,37 @@ class PayoutAndKillSwitchRegressionTest extends PostgresTestBase {
 
         KillSwitchService instanceA = new KillSwitchService(db, null, null, redis, true, true, true, true, true, true);
         KillSwitchService instanceB = new KillSwitchService(db, null, null, redis, true, true, true, true, true, true);
+        boolean wasPosEnabled = instanceA.isModuleEnabled("pos");
 
-        // 1. Module disable on A propagates to B
-        instanceA.setModuleEnabled("pos", true, "init", "ops-0");
-        assertThat(instanceB.isModuleEnabled("pos")).isTrue();
-        instanceA.setModuleEnabled("pos", false, "incident", "ops-1");
-        assertThat(instanceB.isModuleEnabled("pos")).isFalse();
+        try {
+            // 1. Module disable on A propagates to B
+            instanceA.setModuleEnabled("pos", true, "init", "ops-0");
+            assertThat(instanceB.isModuleEnabled("pos")).isTrue();
+            instanceA.setModuleEnabled("pos", false, "incident", "ops-1");
+            assertThat(instanceB.isModuleEnabled("pos")).isFalse();
 
-        // 2. Global freeze and unfreeze on A propagates to B
-        instanceA.setGlobalFrozen(true, "emergency", "ops-1");
-        assertThat(instanceB.isGlobalFrozen()).isTrue();
-        instanceA.setGlobalFrozen(false, "resolved", "ops-2");
-        assertThat(instanceB.isGlobalFrozen()).isFalse();
+            // 2. Global freeze and unfreeze on A propagates to B
+            instanceA.setGlobalFrozen(true, "emergency", "ops-1");
+            assertThat(instanceB.isGlobalFrozen()).isTrue();
+            instanceA.setGlobalFrozen(false, "resolved", "ops-2");
+            assertThat(instanceB.isGlobalFrozen()).isFalse();
 
-        // 3. Merchant freeze and unfreeze on A propagates to B
-        UUID merchantId = UUID.randomUUID();
-        instanceA.setMerchantFrozen(merchantId, true, "risk", "ops-1");
-        assertThat(instanceB.isMerchantFrozen(merchantId)).isTrue();
-        instanceA.setMerchantFrozen(merchantId, false, "cleared", "ops-2");
-        assertThat(instanceB.isMerchantFrozen(merchantId)).isFalse();
+            // 3. Merchant freeze and unfreeze on A propagates to B
+            UUID merchantId = UUID.randomUUID();
+            instanceA.setMerchantFrozen(merchantId, true, "risk", "ops-1");
+            assertThat(instanceB.isMerchantFrozen(merchantId)).isTrue();
+            instanceA.setMerchantFrozen(merchantId, false, "cleared", "ops-2");
+            assertThat(instanceB.isMerchantFrozen(merchantId)).isFalse();
 
-        // 4. Redis outage after being healthy fails closed
-        redisDown.set(true);
-        assertThat(instanceB.isModuleEnabled("pos")).isFalse();
-        assertThat(instanceB.isGlobalFrozen()).isTrue();
-        assertThat(instanceB.isMerchantFrozen(merchantId)).isTrue();
+            // 4. Redis outage after being healthy fails closed
+            redisDown.set(true);
+            assertThat(instanceB.isModuleEnabled("pos")).isFalse();
+            assertThat(instanceB.isGlobalFrozen()).isTrue();
+            assertThat(instanceB.isMerchantFrozen(merchantId)).isTrue();
+        } finally {
+            redisDown.set(false);
+            instanceA.setModuleEnabled("pos", wasPosEnabled, "restore after kill-switch test", "test-cleanup");
+        }
     }
 
     @Test
@@ -306,8 +312,8 @@ class PayoutAndKillSwitchRegressionTest extends PostgresTestBase {
         Payouts customPayouts = new Payouts(db, ledger, rails, notFoundVerifier, outbox, audit, ops, json,
                 events, regulatory, null, velocityService);
 
-        long beforeHourly = db.sql("SELECT total_outflow_pesewas FROM payout_global_velocity_window WHERE window_type = 'HOURLY'")
-                .query(Long.class).optional().orElse(0L);
+        long beforeHourly = db.sql("SELECT COALESCE(SUM(total_outflow_pesewas), 0) FROM payout_global_velocity_window WHERE window_type = 'HOURLY'")
+                .query(Long.class).single();
 
         var batch = customPayouts.create("merchant", merchantId,
                 List.of(new Payouts.Item("nf-" + s, 123_456L,
@@ -317,8 +323,8 @@ class PayoutAndKillSwitchRegressionTest extends PostgresTestBase {
         assertThat(batch.items()).hasSize(1);
         assertThat(batch.items().get(0).status()).isEqualTo("rejected");
 
-        long afterHourly = db.sql("SELECT total_outflow_pesewas FROM payout_global_velocity_window WHERE window_type = 'HOURLY'")
-                .query(Long.class).optional().orElse(0L);
+        long afterHourly = db.sql("SELECT COALESCE(SUM(total_outflow_pesewas), 0) FROM payout_global_velocity_window WHERE window_type = 'HOURLY'")
+                .query(Long.class).single();
         assertThat(afterHourly).isEqualTo(beforeHourly);
     }
 }

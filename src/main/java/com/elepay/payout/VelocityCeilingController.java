@@ -24,7 +24,7 @@ class VelocityCeilingController {
     @PutMapping("/v1/ops/payouts/velocity-ceilings")
     public Map<String, String> update(@RequestBody CeilingChange request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFinance();
         dualControl.hold("VELOCITY_CEILING_CHANGE", "payout_safety", "global", null, Map.of(
                 "hourly", request.hourlyCeilingPesewas(),
                 "daily", request.dailyCeilingPesewas(),

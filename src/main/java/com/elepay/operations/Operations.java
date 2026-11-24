@@ -71,20 +71,24 @@ class Operations {
                 SELECT d.id, c.reference AS checkout, d.line, d.amount, d.reason, d.status, d.created_at, m.trading_name AS merchant
                 FROM dispute d JOIN checkout c ON c.id = d.checkout_id
                 JOIN checkout_allocation a ON a.checkout_id = d.checkout_id AND a.line = d.line
-                JOIN merchant m ON m.id = a.merchant_id WHERE d.status = :s ORDER BY d.created_at""")
+                JOIN merchant m ON m.id = a.merchant_id WHERE d.status = :s ORDER BY d.created_at DESC LIMIT 200""")
                 .param("s", status).query().listOfRows();
     }
 
     @GetMapping("/audit")
     public List<Map<String, Object>> audit(@RequestParam String subject) {
         Actor.current().requireOps();
-        String normalized = subject.startsWith("customer:") ? subject.substring("customer:".length()) : subject;
+        if (subject == null || subject.isBlank()) {
+            throw com.elepay.common.ApiException.badRequest("blank_subject", "Audit subject must not be blank");
+        }
+        String trimmedSubject = subject.trim();
+        String normalized = trimmedSubject.startsWith("customer:") ? trimmedSubject.substring("customer:".length()) : trimmedSubject;
         return db.sql("""
                 SELECT actor, action, subject, details::text AS details, created_at
                 FROM audit_log
                 WHERE subject = :s OR subject = :norm OR subject = ('customer:' || :norm)
                 ORDER BY id DESC LIMIT 200""")
-                .param("s", subject).param("norm", normalized).query().listOfRows();
+                .param("s", trimmedSubject).param("norm", normalized).query().listOfRows();
     }
 
     @GetMapping("/reconciliation/runs")
@@ -116,18 +120,22 @@ class Operations {
     public List<Map<String, Object>> searchMerchants(@RequestParam(defaultValue = "") String q) {
         Actor.current().requireOps();
         String trimmed = q == null ? "" : q.trim();
-        String like = "%" + trimmed.toLowerCase() + "%";
+        String escaped = trimmed.toLowerCase(java.util.Locale.ROOT)
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
+        String like = "%" + escaped + "%";
         return db.sql("""
                 SELECT m.id, m.merchant_code, m.legal_name, m.trading_name, m.status, m.contact_phone,
                        m.fee_bps, m.settlement_delay_hours, m.created_at,
-                       COALESCE(k.frozen, false) AS frozen, k.reason AS freeze_reason
+                       COALESCE(k.payouts_frozen, false) AS frozen, k.reason AS freeze_reason
                 FROM merchant m
                 LEFT JOIN merchant_kill_switch k ON k.merchant_id = m.id
                 WHERE (:empty = true
-                       OR lower(m.trading_name) LIKE :like
-                       OR lower(m.legal_name) LIKE :like
-                       OR lower(COALESCE(m.merchant_code, '')) LIKE :like
-                       OR lower(COALESCE(m.contact_phone, '')) LIKE :like
+                       OR lower(m.trading_name) LIKE :like ESCAPE '\\'
+                       OR lower(m.legal_name) LIKE :like ESCAPE '\\'
+                       OR lower(COALESCE(m.merchant_code, '')) LIKE :like ESCAPE '\\'
+                       OR lower(COALESCE(m.contact_phone, '')) LIKE :like ESCAPE '\\'
                        OR m.id::text = :exact)
                 ORDER BY m.created_at DESC
                 LIMIT 50""")
@@ -143,7 +151,7 @@ class Operations {
         var merchant = db.sql("""
                 SELECT m.id, m.merchant_code, m.legal_name, m.trading_name, m.status, m.contact_phone,
                        m.fee_bps, m.settlement_delay_hours, m.created_at,
-                       COALESCE(k.frozen, false) AS frozen, k.reason AS freeze_reason
+                       COALESCE(k.payouts_frozen, false) AS frozen, k.reason AS freeze_reason
                 FROM merchant m
                 LEFT JOIN merchant_kill_switch k ON k.merchant_id = m.id
                 WHERE m.id = :id""")
@@ -153,7 +161,9 @@ class Operations {
             throw com.elepay.common.ApiException.notFound("Merchant not found");
         }
         var apiKeys = db.sql("""
-                SELECT id, key_prefix, COALESCE(key_type, 'legacy') AS key_type, status, label, created_at, revoked_at
+                SELECT id, prefix AS key_prefix, COALESCE(key_type, 'legacy') AS key_type,
+                       CASE WHEN revoked_at IS NULL THEN 'active' ELSE 'revoked' END AS status,
+                       label, created_at, revoked_at
                 FROM api_credential
                 WHERE merchant_id = :id
                 ORDER BY created_at DESC
@@ -170,7 +180,7 @@ class Operations {
                 .query().listOfRows();
         var balances = db.sql("""
                 SELECT bucket, currency, balance
-                FROM account
+                FROM ledger_account
                 WHERE owner_type = 'merchant' AND owner_id = :id
                 ORDER BY currency, bucket""")
                 .param("id", id)

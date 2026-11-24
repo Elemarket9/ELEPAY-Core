@@ -118,6 +118,7 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [newKeyPlaintext, setNewKeyPlaintext] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   // Form state
   const [label, setLabel] = useState("");
@@ -136,8 +137,10 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
   useEffect(() => { load(); }, [merchantId, envFilter]);
 
   async function createKey() {
+    if (busy) return;
     setError(null);
     setMsg(null);
+    setBusy(true);
     try {
       const ips = allowedIps.split(",").map((s) => s.trim()).filter(Boolean);
       const res = await api<{ apiKey: string }>(`/v1/developer/merchants/${merchantId}/keys`, {
@@ -149,26 +152,34 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
   async function revoke(id: string) {
+    if (busy) return;
     if (!confirm("Are you sure you want to revoke this API key? This cannot be undone.")) return;
     setError(null);
     setMsg(null);
+    setBusy(true);
     try {
       await api(`/v1/developer/merchants/${merchantId}/keys/${id}`, { method: "DELETE" });
       setMsg("API key revoked");
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
   async function rotate(id: string) {
+    if (busy) return;
     if (!confirm("Rotate this API key? The old key will be revoked immediately and a new key generated.")) return;
     setError(null);
     setMsg(null);
+    setBusy(true);
     try {
       const res = await api<{ apiKey: string }>(`/v1/developer/merchants/${merchantId}/keys/${id}/rotate`, {
         body: { label: "Rotated Key" },
@@ -178,6 +189,8 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -242,8 +255,8 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
               <td>
                 {!k.revokedAt && (
                   <>
-                    <button className="small secondary" onClick={() => rotate(k.id)}>Rotate</button>
-                    <button className="small secondary" style={{ color: "#a12a1f" }} onClick={() => revoke(k.id)}>Revoke</button>
+                    <button className="small secondary" disabled={busy} onClick={() => void rotate(k.id)}>Rotate</button>
+                    <button className="small secondary" disabled={busy} style={{ color: "#a12a1f" }} onClick={() => void revoke(k.id)}>Revoke</button>
                   </>
                 )}
               </td>
@@ -297,8 +310,8 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
               ))}
             </fieldset>
             <div style={{ marginTop: "1rem" }}>
-              <button onClick={() => void createKey()}>Generate Key</button>
-              <button className="secondary" onClick={() => setShowModal(false)}>Cancel</button>
+              <button disabled={busy} onClick={() => void createKey()}>{busy ? "Generating…" : "Generate Key"}</button>
+              <button className="secondary" disabled={busy} onClick={() => setShowModal(false)}>Cancel</button>
             </div>
           </div>
         </div>
@@ -310,9 +323,27 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
 // -------------------------------------------------------------------------------------------------
 // 2. Webhooks View
 // -------------------------------------------------------------------------------------------------
+export function validateWebhookInput(url: string, selectedEvents: string[]): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) return "Webhook URL is required.";
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:") {
+      return "Webhook URL must begin with https://";
+    }
+  } catch {
+    return "Enter a valid https:// webhook URL.";
+  }
+  if (selectedEvents.length === 0) {
+    return "Select at least one subscribed event.";
+  }
+  return null;
+}
+
 function WebhooksView({ merchantId }: { merchantId: string }) {
   const [endpoints, setEndpoints] = useState<WebhookEndpoint[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [url, setUrl] = useState("");
   const [env, setEnv] = useState<"live" | "test">("live");
@@ -320,30 +351,47 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
   const [selectedEvents, setSelectedEvents] = useState<string[]>([
     "checkout.paid", "payment.failed", "payout.completed", "refund.created"
   ]);
+  const [busy, setBusy] = useState(false);
 
   const load = () => {
     api<WebhookEndpoint[]>(`/v1/developer/merchants/${merchantId}/webhooks`)
-      .then(setEndpoints)
-      .catch((e) => setMsg(e.message));
+      .then((res) => { setEndpoints(res); setError(null); })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   };
 
   useEffect(() => { load(); }, [merchantId]);
 
-  async function register() {
+  async function register(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    setError(null);
+    setMsg(null);
+    const validationError = validateWebhookInput(url, selectedEvents);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setBusy(true);
     try {
       await api(`/v1/developer/merchants/${merchantId}/webhooks`, {
-        body: { url, environment: env, description: desc, eventTypes: selectedEvents },
+        body: { url: url.trim(), environment: env, description: desc, eventTypes: selectedEvents },
       });
       setMsg("Webhook endpoint registered successfully.");
       setShowAdd(false);
       setUrl(""); setDesc("");
       load();
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
     }
   }
 
   async function ping(id: string) {
+    if (busy) return;
+    setError(null);
+    setMsg(null);
+    setBusy(true);
     try {
       const res = await api<{ success: boolean; statusCode: number; durationMs: number }>(
         `/v1/developer/merchants/${merchantId}/webhooks/${id}/ping`,
@@ -352,18 +400,26 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
       setMsg(`Ping test completed: HTTP ${res.statusCode} in ${res.durationMs}ms (${res.success ? "Success" : "Failed"})`);
       load();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
   async function rotateSecret(id: string) {
+    if (busy) return;
     if (!confirm("Rotate webhook signing secret? You will need to update your application server immediately.")) return;
+    setError(null);
+    setMsg(null);
+    setBusy(true);
     try {
       const res = await api<{ secret: string }>(`/v1/developer/merchants/${merchantId}/webhooks/${id}/secret/rotate`, { method: "POST" });
       setMsg(`New secret generated: ${res.secret}`);
       load();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -371,9 +427,10 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
     <div>
       <div className="flex-between">
         <p className="muted">ELEPAY sends signed JSON payloads to your endpoints with the <code className="mono">Elepay-Signature</code> HMAC header.</p>
-        <button onClick={() => setShowAdd(true)}>+ Register Webhook Endpoint</button>
+        <button onClick={() => { setError(null); setShowAdd(true); }}>+ Register Webhook Endpoint</button>
       </div>
 
+      {error && <p className="notice error" role="alert">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
 
       <table className="grid" style={{ marginTop: "1rem" }}>
@@ -397,16 +454,16 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
               <td><span className={`tag ${ep.environment === "live" ? "active" : "info"}`}>{ep.environment}</span></td>
               <td className="small">{ep.eventTypes.join(", ")}</td>
               <td>
-                <div className="mono small">{ep.secret.substring(0, 12)}…</div>
-                <button className="small secondary" onClick={() => navigator.clipboard.writeText(ep.secret)}>Copy</button>
-                <button className="small secondary" onClick={() => rotateSecret(ep.id)}>Rotate</button>
+                <div className="mono small">{ep.secret ? `${ep.secret.slice(0, 12)}…` : "Hidden"}</div>
+                {ep.secret && <button className="small secondary" onClick={() => navigator.clipboard.writeText(ep.secret)}>Copy</button>}
+                <button className="small secondary" disabled={busy} onClick={() => void rotateSecret(ep.id)}>Rotate</button>
               </td>
               <td>
                 {ep.active ? <span className="tag active">Active</span> : <span className="tag warn">Disabled</span>}
                 {ep.failureCount > 0 && <span className="tag failed" style={{ marginLeft: ".25rem" }}>{ep.failureCount} fails</span>}
               </td>
               <td>
-                <button className="small" onClick={() => ping(ep.id)}>Test Ping</button>
+                <button className="small" disabled={busy} onClick={() => void ping(ep.id)}>Test Ping</button>
               </td>
             </tr>
           ))}
@@ -420,38 +477,41 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
         <div className="modal-backdrop">
           <div className="modal-content">
             <h3>Register Webhook Endpoint</h3>
-            <label>Endpoint URL (must begin with https://)
-              <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.myshop.com/webhooks/elepay" required />
-            </label>
-            <label>Environment
-              <select value={env} onChange={(e) => setEnv(e.target.value as "live" | "test")}>
-                <option value="live">Live (Production)</option>
-                <option value="test">Test / Sandbox</option>
-              </select>
-            </label>
-            <label>Description / Name
-              <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="e.g. Primary ERP webhook" />
-            </label>
-            <fieldset>
-              <legend>Subscribed Events</legend>
-              {["checkout.paid", "payment.failed", "payout.completed", "refund.created", "mandate.active"].map((ev) => (
-                <label key={ev} className="choice">
-                  <input
-                    type="checkbox"
-                    checked={selectedEvents.includes(ev)}
-                    onChange={(e) => {
-                      if (e.target.checked) setSelectedEvents([...selectedEvents, ev]);
-                      else setSelectedEvents(selectedEvents.filter((x) => x !== ev));
-                    }}
-                  />
-                  {ev}
-                </label>
-              ))}
-            </fieldset>
-            <div style={{ marginTop: "1rem" }}>
-              <button onClick={() => void register()}>Save Endpoint</button>
-              <button className="secondary" onClick={() => setShowAdd(false)}>Cancel</button>
-            </div>
+            {error && <p className="notice error" role="alert">{error}</p>}
+            <form onSubmit={(e) => void register(e)}>
+              <label>Endpoint URL (must begin with https://)
+                <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.myshop.com/webhooks/elepay" required />
+              </label>
+              <label>Environment
+                <select value={env} onChange={(e) => setEnv(e.target.value as "live" | "test")}>
+                  <option value="live">Live (Production)</option>
+                  <option value="test">Test / Sandbox</option>
+                </select>
+              </label>
+              <label>Description / Name
+                <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="e.g. Primary ERP webhook" />
+              </label>
+              <fieldset>
+                <legend>Subscribed Events</legend>
+                {["checkout.paid", "payment.failed", "payout.completed", "refund.created", "mandate.active"].map((ev) => (
+                  <label key={ev} className="choice">
+                    <input
+                      type="checkbox"
+                      checked={selectedEvents.includes(ev)}
+                      onChange={(e) => {
+                        if (e.target.checked) setSelectedEvents([...selectedEvents, ev]);
+                        else setSelectedEvents(selectedEvents.filter((x) => x !== ev));
+                      }}
+                    />
+                    {ev}
+                  </label>
+                ))}
+              </fieldset>
+              <div style={{ marginTop: "1rem" }}>
+                <button type="submit" disabled={busy}>{busy ? "Saving…" : "Save Endpoint"}</button>
+                <button type="button" className="secondary" disabled={busy} onClick={() => setShowAdd(false)}>Cancel</button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -468,6 +528,7 @@ function DeliveryLogsView({ merchantId }: { merchantId: string }) {
   const [inspectLog, setInspectLog] = useState<WebhookLog | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const load = () => {
     const q = statusFilter === "all" ? "" : `?status=${statusFilter}`;
@@ -479,8 +540,10 @@ function DeliveryLogsView({ merchantId }: { merchantId: string }) {
   useEffect(() => { load(); }, [merchantId, statusFilter]);
 
   async function replay(id: string) {
+    if (busy) return;
     setError(null);
     setMsg(null);
+    setBusy(true);
     try {
       const res = await api<{ success: boolean; statusCode: number; durationMs: number }>(
         `/v1/developer/merchants/${merchantId}/webhooks/deliveries/${id}/replay`,
@@ -491,6 +554,8 @@ function DeliveryLogsView({ merchantId }: { merchantId: string }) {
       if (inspectLog && inspectLog.id === id) setInspectLog(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -544,7 +609,7 @@ function DeliveryLogsView({ merchantId }: { merchantId: string }) {
               </td>
               <td>
                 <button className="small secondary" onClick={() => setInspectLog(l)}>Inspect</button>
-                <button className="small" onClick={() => replay(l.id)}>Replay</button>
+                <button className="small" disabled={busy} onClick={() => void replay(l.id)}>Replay</button>
               </td>
             </tr>
           ))}
@@ -562,7 +627,7 @@ function DeliveryLogsView({ merchantId }: { merchantId: string }) {
               <button className="small secondary" onClick={() => setInspectLog(null)}>✕ Close</button>
             </div>
             <p><strong>Endpoint URL:</strong> <code className="mono">{inspectLog.requestUrl}</code></p>
-            <p><strong>Status:</strong> <span className={`tag ${inspectLog.status === "DELIVERED" ? "active" : "failed"}`}>{inspectLog.status}</span> (HTTP {inspectLog.responseCode}) in {inspectLog.durationMs}ms</p>
+            <p><strong>Status:</strong> <span className={`tag ${inspectLog.status === "DELIVERED" ? "active" : "failed"}`}>{inspectLog.status}</span> (HTTP {inspectLog.responseCode ?? "ERR"}) in {inspectLog.durationMs}ms</p>
 
             <h4>Request Headers</h4>
             <div className="code-box">{inspectLog.requestHeaders}</div>
@@ -574,8 +639,8 @@ function DeliveryLogsView({ merchantId }: { merchantId: string }) {
             <div className="code-box">{inspectLog.responseBody || "No response body received."}</div>
 
             <div style={{ marginTop: "1rem" }}>
-              <button onClick={() => replay(inspectLog.id)}>Replay Delivery Now</button>
-              <button className="secondary" onClick={() => setInspectLog(null)}>Close</button>
+              <button disabled={busy} onClick={() => void replay(inspectLog.id)}>{busy ? "Replaying…" : "Replay Delivery Now"}</button>
+              <button className="secondary" disabled={busy} onClick={() => setInspectLog(null)}>Close</button>
             </div>
           </div>
         </div>

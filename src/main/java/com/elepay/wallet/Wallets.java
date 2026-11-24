@@ -78,7 +78,7 @@ public class Wallets {
     @Transactional
     public Wallet enroll(@Valid @RequestBody Enrollment request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireOnboarding();
         UUID id = UUID.randomUUID();
         int inserted = db.sql("""
                 INSERT INTO customer (id, subject, phone, display_name)

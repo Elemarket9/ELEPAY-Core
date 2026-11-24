@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { api, ApiError, newKey } from "./api";
-import { getToken, signIn } from "./auth";
+import { getToken, oidcEnabled, signIn } from "./auth";
 import { formatMoney, normalizeGhanaPhone, parseMoney } from "./money";
 
 interface Line { merchant: string; kind: string; description: string | null; amount: number }
@@ -16,6 +16,23 @@ interface PaymentStatus {
 }
 
 const NETWORKS = [["mtn", "MTN MoMo"], ["telecel", "Telecel Cash"], ["airteltigo", "AT Money"]];
+
+export function resolveInitialMethod(methods: Pick<MethodTotal, "method">[], currentMethod?: string): string {
+  if (currentMethod && methods.some((m) => m.method === currentMethod)) {
+    return currentMethod;
+  }
+  return methods[0]?.method ?? "momo";
+}
+
+export function checkoutMethodLabel(method: string): string {
+  switch (method) {
+    case "momo": return "Mobile money";
+    case "card": return "Card";
+    case "ghqr": return "GhQR";
+    case "wallet": return "ELEPAY wallet";
+    default: return method;
+  }
+}
 
 export function safeRedirectUrl(url: string | null | undefined): string | null {
   if (!url) return null;
@@ -61,7 +78,7 @@ Thank you for your payment!
 export function Checkout({ reference }: { reference: string }) {
   const [checkout, setCheckout] = useState<PublicCheckout | null>(null);
   const [status, setStatus] = useState<PaymentStatus | null>(null);
-  const [method, setMethod] = useState("momo");
+  const [method, setMethod] = useState("");
   const [phone, setPhone] = useState("");
   const [network, setNetwork] = useState("mtn");
   const [showQr, setShowQr] = useState(false);
@@ -77,6 +94,7 @@ export function Checkout({ reference }: { reference: string }) {
         api<PaymentStatus>(`/v1/public/checkouts/${reference}/status`, { anonymous: true }),
       ]);
       setCheckout(c);
+      setMethod((prev) => resolveInitialMethod(c.methods, prev));
       setStatus(s);
       setError(null);
     } catch (e) {
@@ -111,7 +129,13 @@ export function Checkout({ reference }: { reference: string }) {
     localStorage.setItem(keyName, key);
     try {
       if (method === "wallet") {
-        if (!(await getToken())) await signIn(prompt("Sign in (development subject)") ?? undefined);
+        if (!(await getToken())) {
+          if (oidcEnabled) {
+            await signIn();
+          } else {
+            await signIn(prompt("Sign in (development subject)") ?? undefined);
+          }
+        }
         await api(`/v1/checkouts/${reference}/pay/wallet`, { method: "POST", idempotencyKey: key });
       } else {
         const msisdn = normalizeGhanaPhone(phone);
@@ -234,7 +258,7 @@ export function Checkout({ reference }: { reference: string }) {
             {checkout.methods.map((m) => (
               <label key={m.method} className="choice">
                 <input type="radio" name="method" checked={method === m.method} onChange={() => setMethod(m.method)} />
-                {m.method === "momo" ? "Mobile money" : m.method === "card" ? "Card" : "ELEPAY wallet"} — {formatMoney(m.total)}
+                {checkoutMethodLabel(m.method)} — {formatMoney(m.total)}
               </label>
             ))}
           </fieldset>
@@ -259,6 +283,7 @@ export function StartFromLink({ slug, code }: { slug?: string; code?: string }) 
   const [info, setInfo] = useState<{ title?: string; merchant: string; amount?: number | string } | null>(null);
   const [amount, setAmount] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (slug) api<{ title: string; merchant: string; amount: number | string }>(`/v1/public/links/${slug}`, { anonymous: true })
@@ -267,7 +292,10 @@ export function StartFromLink({ slug, code }: { slug?: string; code?: string }) 
   }, [slug, code]);
 
   async function start() {
+    if (busy) return;
     const pesewas = parseMoney(amount);
+    setBusy(true);
+    setError(null);
     try {
       if (!(info?.amount && info.amount !== "open") && !pesewas) throw new Error("Enter an amount, e.g. 10 or 12.50");
       const body = info?.amount && info.amount !== "open" ? {} : { amount: pesewas };
@@ -276,6 +304,8 @@ export function StartFromLink({ slug, code }: { slug?: string; code?: string }) 
       window.location.assign(`/pay/${r.reference}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -287,7 +317,7 @@ export function StartFromLink({ slug, code }: { slug?: string; code?: string }) 
       <p>{info.merchant}</p>
       {fixed ? <p className="big">{formatMoney(info.amount as number)}</p>
         : <label>Amount (GH₵)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></label>}
-      <button onClick={() => void start()}>Continue</button>
+      <button disabled={busy} onClick={() => void start()}>{busy ? "Starting…" : "Continue"}</button>
       {error && <p className="error">{error}</p>}
     </main>
   );

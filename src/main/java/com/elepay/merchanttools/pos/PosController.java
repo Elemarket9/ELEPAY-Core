@@ -150,10 +150,16 @@ public class PosController {
     public record AuthenticateCashierRequest(UUID merchantId, String badgeNumber, String pin) {}
 
     @PostMapping("/cashiers/auth")
-    public ResponseEntity<Void> authenticateCashier(@RequestBody AuthenticateCashierRequest req) {
+    public ResponseEntity<PosCashierService.Cashier> authenticateCashier(@RequestBody AuthenticateCashierRequest req) {
         access.manage(req.merchantId());
         boolean valid = cashierService.authenticateCashier(req.merchantId(), req.badgeNumber(), req.pin());
-        return valid ? ResponseEntity.ok().build() : ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        if (!valid) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        PosCashierService.Cashier cashier = cashierService.findByBadge(req.merchantId(), req.badgeNumber())
+                .map(PosCashierService.Cashier::withoutSecret)
+                .orElseThrow(() -> new com.elepay.common.ApiException(HttpStatus.NOT_FOUND, "not_found", "Cashier not found"));
+        return ResponseEntity.ok(cashier);
     }
 
     public record OpenShiftRequest(UUID terminalId, UUID cashierId, UUID merchantId, long openingBalancePesewas, String notes) {}

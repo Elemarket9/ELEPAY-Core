@@ -26,7 +26,7 @@ class RailCallbacks {
 
     @PostMapping("/v1/ops/rails/recover")
     public Map<String, Integer> recover() {
-        Actor.current().requireOps();
+        Actor.current().requireFinance();
         int count = rails.recover(200, true);
         return Map.of("resolved", count, "recovered", count);
     }

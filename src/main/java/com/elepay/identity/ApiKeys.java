@@ -1,5 +1,6 @@
 package com.elepay.identity;
 
+import com.elepay.common.Audit;
 import com.elepay.common.Idempotency;
 import com.elepay.common.RedisBreaker;
 import com.elepay.common.SecretProtector;
@@ -35,6 +36,7 @@ public class ApiKeys {
     private final StringRedisTemplate redis;
     private final RedisBreaker redisBreaker;
     private final SecretProtector secretProtector;
+    private final Audit audit;
     private final BoundedTtlCache<UUID> revokedKeyIds = new BoundedTtlCache<>(REVOKED_CACHE_MAX_ENTRIES, REVOKED_CACHE_TTL_MS);
     private final BoundedTtlCache<String> revokedKeyHashes = new BoundedTtlCache<>(REVOKED_CACHE_MAX_ENTRIES, REVOKED_CACHE_TTL_MS);
 
@@ -42,20 +44,26 @@ public class ApiKeys {
     private boolean testEnvironment;
 
     public ApiKeys(JdbcClient db) {
-        this(db, null, null);
+        this(db, null, null, null);
     }
 
     public ApiKeys(JdbcClient db, StringRedisTemplate redis) {
-        this(db, redis, null);
+        this(db, redis, null, null);
+    }
+
+    public ApiKeys(JdbcClient db, StringRedisTemplate redis, SecretProtector secretProtector) {
+        this(db, redis, secretProtector, null);
     }
 
     @Autowired
     public ApiKeys(JdbcClient db,
                    @Autowired(required = false) StringRedisTemplate redis,
-                   @Autowired(required = false) SecretProtector secretProtector) {
+                   @Autowired(required = false) SecretProtector secretProtector,
+                   @Autowired(required = false) Audit audit) {
         this.db = db;
         this.redis = redis;
         this.secretProtector = secretProtector;
+        this.audit = audit;
         this.redisBreaker = new RedisBreaker(5_000L);
     }
 
@@ -442,8 +450,15 @@ public class ApiKeys {
                 .param("id", id).query(String.class).optional();
         int updated = db.sql("UPDATE api_credential SET revoked_at = now() WHERE id = :id AND revoked_at IS NULL")
                 .param("id", id).update();
-        cacheRevocation(id, rowOpt.orElse(null));
-        return updated == 1;
+        if (updated == 1) {
+            cacheRevocation(id, rowOpt.orElse(null));
+            if (audit != null) {
+                audit.record(actor != null ? actor : "system", "api_key.emergency_revoked",
+                        "api_key:" + id, Map.of("keyId", id.toString()));
+            }
+            return true;
+        }
+        return false;
     }
 
     private void cacheRevocation(UUID id, String secretHash) {

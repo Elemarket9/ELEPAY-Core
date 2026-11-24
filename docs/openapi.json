@@ -13911,6 +13911,13 @@
         },
         "responses" : {
           "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Cashier"
+                }
+              }
+            },
             "description" : "OK"
           }
         },

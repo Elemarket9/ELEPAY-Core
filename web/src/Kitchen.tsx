@@ -195,6 +195,7 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
     let stopped = false;
     let failures = 0;
     let timer: number | undefined;
+    const freshTimers = new Set<number>();
     const run = async () => {
       try {
         let more = true;
@@ -204,7 +205,20 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
           learnServerTime(result.serverTime);
           let arrived: string[] = [];
           update((s) => { const r = applySync(s, result); arrived = r.arrived; return r.state; });
-          if (arrived.length) { beep(); setFresh((f) => new Set([...f, ...arrived])); window.setTimeout(() => setFresh(new Set()), 8000); }
+          if (arrived.length) {
+            beep();
+            setFresh((f) => new Set([...f, ...arrived]));
+            const arrivedSet = new Set(arrived);
+            const ft = window.setTimeout(() => {
+              freshTimers.delete(ft);
+              setFresh((f) => {
+                const next = new Set(f);
+                for (const id of arrivedSet) next.delete(id);
+                return next;
+              });
+            }, 8000);
+            freshTimers.add(ft);
+          }
           more = result.hasMore;
         }
         failures = 0; setOnline(true); setSignedOut(false);
@@ -235,7 +249,13 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
     const kick = () => { window.clearTimeout(timer); void run(); };
     void run();
     window.addEventListener("online", kick);
-    return () => { stopped = true; window.clearTimeout(timer); window.removeEventListener("online", kick); };
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      for (const ft of freshTimers) window.clearTimeout(ft);
+      freshTimers.clear();
+      window.removeEventListener("online", kick);
+    };
   }, [setup.merchantId, setup.stationId, update, client]);
 
   useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(t); }, []);

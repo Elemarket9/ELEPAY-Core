@@ -36,7 +36,7 @@ class CustomerAdmin {
     @Transactional
     public Map<String, String> changePhone(@PathVariable UUID id, @Valid @RequestBody PhoneChange request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireSupport();
         dualControl.hold("PHONE_CHANGE", "customer", id.toString(), null,
                 Map.of("customerId", id.toString(), "phone", request.phone(), "reason", request.reason()),
                 request.reason(), actor);
@@ -58,7 +58,7 @@ class CustomerAdmin {
     @Transactional
     public Map<String, String> resetUssdPin(@PathVariable UUID id) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireSupport();
         dualControl.hold("PHONE_CHANGE", "customer", id.toString(), null,
                 Map.of("customerId", id.toString(), "resetUssdPin", true), "reset ussd pin", actor);
         int updated = db.sql("""
@@ -74,7 +74,7 @@ class CustomerAdmin {
     @Transactional
     public Map<String, String> changeStatus(@PathVariable UUID id, @Valid @RequestBody StatusChange request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFreezeRisk();
         if (!Set.of("active", "frozen", "closed").contains(request.status())) {
             throw ApiException.badRequest("invalid_status", "Use active, frozen or closed");
         }

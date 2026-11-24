@@ -38,12 +38,21 @@ function useLoad<T>(path: string | null, initial: T): [T, () => Promise<void>, s
   const [data, setData] = useState<T>(initial);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!path) return;
     setLoading(true);
     try { setData(await api<T>(path)); setError(null); } catch (e) { setError(message(e)); } finally { setLoading(false); }
-  };
-  useEffect(() => { void load(); }, [path]);
+  }, [path]);
+  useEffect(() => {
+    if (!path) { setLoading(false); return; }
+    let cancelled = false;
+    setLoading(true);
+    api<T>(path)
+      .then((res) => { if (!cancelled) { setData(res); setError(null); } })
+      .catch((e) => { if (!cancelled) setError(message(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [path]);
   return [data, load, error, loading];
 }
 
@@ -993,8 +1002,11 @@ export function PayrollAndEmployees({ merchantId }: { merchantId: string }) {
 
   async function step(path: "submit" | "approve") {
     if (!open) return; setError(null); setBusy(true);
-    try { await api(`/v1/payroll/runs/${open.id}/${path}`, { method: "POST" }); await reloadRuns();
-      setOpen({ ...open, status: path === "submit" ? "SUBMITTED" : "APPROVED" }); }
+    try {
+      const updated = await api<PayrollRun>(`/v1/payroll/runs/${open.id}/${path}`, { method: "POST" });
+      await reloadRuns();
+      setOpen(updated);
+    }
     catch (err) { setError(message(err)); } finally { setBusy(false); }
   }
 

@@ -14,17 +14,56 @@ import "./styles.css";
 function SignedIn({ children, roles = [] }: { children: React.ReactNode; roles?: string[] }) {
   const [ready, setReady] = useState<boolean | null>(null);
   const [subject, setSubject] = useState("");
-  useEffect(() => { getToken().then((t) => setReady(!!t)); }, []);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getToken()
+      .then((t) => setReady(!!t))
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : String(e));
+        setReady(false);
+      });
+  }, []);
+
   if (ready === null) return null;
   if (!ready) {
     return (
       <main className="narrow">
         <h1>Sign in</h1>
-        {oidcEnabled ? <button onClick={() => void signIn()}>Sign in with ELEPAY</button> : (
-          <form onSubmit={async (e) => { e.preventDefault(); await signIn(subject, roles); setReady(true); }}>
+        {error && <p className="error">{error}</p>}
+        {oidcEnabled ? (
+          <button
+            disabled={busy}
+            onClick={() => {
+              setError(null);
+              setBusy(true);
+              void signIn()
+                .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+                .finally(() => setBusy(false));
+            }}
+          >
+            {busy ? "Signing in…" : "Sign in with ELEPAY"}
+          </button>
+        ) : (
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setError(null);
+              setBusy(true);
+              try {
+                await signIn(subject, roles);
+                setReady(true);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
             <p className="muted small">Development sign-in (dev and test profiles only).</p>
             <label>Subject<input value={subject} onChange={(e) => setSubject(e.target.value)} required /></label>
-            <button type="submit">Continue</button>
+            <button type="submit" disabled={busy}>{busy ? "Signing in…" : "Continue"}</button>
           </form>
         )}
       </main>
@@ -36,9 +75,28 @@ function SignedIn({ children, roles = [] }: { children: React.ReactNode; roles?:
 function App() {
   const path = window.location.pathname;
   const [callbackDone, setCallbackDone] = useState(false);
+  const [callbackError, setCallbackError] = useState<string | null>(null);
   useEffect(() => {
-    if (path === "/app/callback") completeSignIn().then((to) => { window.history.replaceState(null, "", to); setCallbackDone(true); });
+    if (path === "/app/callback") {
+      completeSignIn()
+        .then((to) => {
+          window.history.replaceState(null, "", to);
+          setCallbackDone(true);
+        })
+        .catch((err) => {
+          setCallbackError(err instanceof Error ? err.message : String(err));
+        });
+    }
   }, [path]);
+  if (path === "/app/callback" && callbackError) {
+    return (
+      <main className="narrow">
+        <h1>Sign-in failed</h1>
+        <p className="error">{callbackError}</p>
+        <a href="/">Return home</a>
+      </main>
+    );
+  }
   if (path === "/app/callback" && !callbackDone) return <p>Signing in…</p>;
 
   let m: RegExpMatchArray | null;

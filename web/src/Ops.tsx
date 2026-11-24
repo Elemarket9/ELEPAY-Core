@@ -6,7 +6,7 @@ interface Item { id: string; kind: string; severity: string; subject: string; de
 interface MerchantView { id: string; legalName: string; tradingName: string; kind: string; status: string }
 interface Integrity { accountsWithDrift: number; netByCurrency: Record<string, number>; unbalancedTransactions: number }
 
-interface OpsPermissions {
+export interface OpsPermissions {
   canApproveMakerChecker: boolean;
   canFreezeRisk: boolean;
   canManageFinance: boolean;
@@ -24,10 +24,10 @@ const ALL_TABS = [
   "Overview", "Merchant Controls", "Maker-Checker", "Kill Switches", "Custodian Trust",
   "Onboarding", "Disputes", "Reconciliation", "Exceptions", "System Health"
 ] as const;
-type OpsTab = (typeof ALL_TABS)[number];
+export type OpsTab = (typeof ALL_TABS)[number];
 
-function visibleTabsFor(perms: OpsPermissions | null): OpsTab[] {
-  if (!perms) return [...ALL_TABS];
+export function visibleTabsFor(perms: OpsPermissions | null): OpsTab[] {
+  if (!perms) return [];
   return ALL_TABS.filter((t) => {
     if (t === "Overview" || t === "Merchant Controls" || t === "Exceptions" || t === "Disputes" || t === "System Health") return true;
     if (t === "Maker-Checker") return perms.canApproveMakerChecker || perms.canFreezeRisk || perms.canManageFinance;
@@ -42,19 +42,40 @@ function visibleTabsFor(perms: OpsPermissions | null): OpsTab[] {
 export function OpsConsole() {
   const [tab, setTab] = useState<OpsTab>("Overview");
   const [me, setMe] = useState<OpsMe | null>(null);
+  const [meLoading, setMeLoading] = useState<boolean>(true);
+  const [meError, setMeError] = useState<string | null>(null);
   const [globalFrozen, setGlobalFrozen] = useState<boolean>(false);
+  const [killSwitchError, setKillSwitchError] = useState<string | null>(null);
   const [bannerMsg, setBannerMsg] = useState<string | null>(null);
+  const [bannerError, setBannerError] = useState<string | null>(null);
+  const [freezingGlobal, setFreezingGlobal] = useState<boolean>(false);
 
   useEffect(() => {
-    api<OpsMe>("/v1/ops/me").then(setMe).catch(() => {});
-    api<KillSwitchStatus>("/v1/ops/kill-switch/status").then((s) => setGlobalFrozen(s.globalFrozen)).catch(() => {});
+    setMeLoading(true);
+    setMeError(null);
+    api<OpsMe>("/v1/ops/me")
+      .then((res) => { setMe(res); setMeError(null); })
+      .catch((e) => { setMe(null); setMeError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => setMeLoading(false));
+
+    api<KillSwitchStatus>("/v1/ops/kill-switch/status")
+      .then((s) => { setGlobalFrozen(s.globalFrozen); setKillSwitchError(null); })
+      .catch((e) => setKillSwitchError(e instanceof Error ? e.message : String(e)));
   }, []);
 
   const tabs = visibleTabsFor(me?.permissions ?? null);
 
   async function quickEmergencyFreeze() {
-    const reason = prompt("Reason for emergency global payout freeze:");
-    if (!reason) return;
+    const rawReason = prompt("Reason for emergency global payout freeze:");
+    if (rawReason === null) return;
+    const reason = rawReason.trim();
+    if (!reason) {
+      setBannerError("A non-empty reason is required for emergency global payout freeze.");
+      return;
+    }
+    setFreezingGlobal(true);
+    setBannerMsg(null);
+    setBannerError(null);
     try {
       const res = await api<Record<string, unknown>>("/v1/ops/kill-switch/global", {
         body: { frozen: true, reason },
@@ -62,7 +83,9 @@ export function OpsConsole() {
       setGlobalFrozen(true);
       setBannerMsg(formatDualControlOutcome(res, "Global payout freeze activated."));
     } catch (e) {
-      setBannerMsg(e instanceof Error ? e.message : String(e));
+      setBannerError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFreezingGlobal(false);
     }
   }
 
@@ -77,44 +100,53 @@ export function OpsConsole() {
             </p>
           )}
         </div>
-        {(me?.permissions.canFreezeRisk ?? true) && !globalFrozen && (
-          <button style={{ background: "#b91c1c", color: "#fff" }} onClick={() => void quickEmergencyFreeze()}>
-            Emergency Freeze All Payouts
+        {(me?.permissions.canFreezeRisk ?? false) && !globalFrozen && (
+          <button
+            style={{ background: "#b91c1c", color: "#fff" }}
+            disabled={freezingGlobal}
+            onClick={() => void quickEmergencyFreeze()}
+          >
+            {freezingGlobal ? "Freezing…" : "Emergency Freeze All Payouts"}
           </button>
         )}
       </div>
 
+      {killSwitchError && <p className="error">Kill switch status error: {killSwitchError}</p>}
       {globalFrozen && (
         <p className="notice warn" style={{ marginTop: "0.75rem" }}>
           <strong>GLOBAL PAYOUT FREEZE ACTIVE</strong> — All merchant payouts are paused. Unfreezing requires Maker-Checker dual approval.
         </p>
       )}
+      {bannerError && <p className="error">{bannerError}</p>}
       {bannerMsg && <p className="notice ok">{bannerMsg}</p>}
 
-      <nav className="tabs" style={{ marginTop: "1rem" }}>
-        {tabs.map((t) => <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}
-      </nav>
+      {meLoading && <p className="muted">Loading operator permissions…</p>}
+      {meError && <p className="error">Failed to load operator permissions: {meError}</p>}
 
-      {tab === "Overview" && <Overview />}
-      {tab === "Merchant Controls" && <MerchantControls perms={me?.permissions ?? null} />}
-      {tab === "Maker-Checker" && <MakerChecker canApprove={me?.permissions.canApproveMakerChecker ?? true} />}
-      {tab === "Kill Switches" && <KillSwitches />}
-      {tab === "Custodian Trust" && <CustodianTrust />}
-      {tab === "System Health" && <SystemHealth />}
-      {tab === "Exceptions" && <Exceptions />}
-      {tab === "Onboarding" && <Onboarding />}
-      {tab === "Disputes" && <Disputes />}
-      {tab === "Reconciliation" && <Reconciliation />}
+      {!meLoading && !meError && me && (
+        <>
+          <nav className="tabs" style={{ marginTop: "1rem" }}>
+            {tabs.map((t) => <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}
+          </nav>
+
+          {tabs.includes(tab) && (
+            <>
+              {tab === "Overview" && <Overview />}
+              {tab === "Merchant Controls" && <MerchantControls perms={me.permissions} />}
+              {tab === "Maker-Checker" && <MakerChecker canApprove={me.permissions.canApproveMakerChecker ?? false} />}
+              {tab === "Kill Switches" && <KillSwitches />}
+              {tab === "Custodian Trust" && <CustodianTrust />}
+              {tab === "System Health" && <SystemHealth />}
+              {tab === "Exceptions" && <Exceptions />}
+              {tab === "Onboarding" && <Onboarding />}
+              {tab === "Disputes" && <Disputes />}
+              {tab === "Reconciliation" && <Reconciliation />}
+            </>
+          )}
+        </>
+      )}
     </main>
   );
-}
-
-function useAction() {
-  const [msg, setMsg] = useState<string | null>(null);
-  const run = async (fn: () => Promise<unknown>, ok: string) => {
-    try { await fn(); setMsg(ok); } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
-  };
-  return { msg, run };
 }
 
 
@@ -139,12 +171,50 @@ function SystemHealth() {
 function Overview() {
   const [o, setO] = useState<Record<string, number> | null>(null);
   const [integrity, setIntegrity] = useState<Integrity | null>(null);
-  const { msg, run } = useAction();
-  const load = () => Promise.all([api<Record<string, number>>("/v1/ops/overview").then(setO),
-    api<Integrity>("/v1/ops/ledger/integrity").then(setIntegrity)]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState<boolean>(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [overviewData, integrityData] = await Promise.all([
+        api<Record<string, number>>("/v1/ops/overview"),
+        api<Integrity>("/v1/ops/ledger/integrity"),
+      ]);
+      setO(overviewData);
+      setIntegrity(integrityData);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => { void load(); }, []);
+
+  const runAction = async (path: string, body: unknown, okMessage: string) => {
+    setBusy(true);
+    setMsg(null);
+    setError(null);
+    try {
+      await api(path, body === undefined ? { method: "POST" } : { body });
+      setMsg(okMessage);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
+      {error && <p className="error">{error}</p>}
+      {msg && <p className="notice ok">{msg}</p>}
+      {loading && !o && <p className="muted">Loading overview…</p>}
       {o && (
         <div className="cards">
           <div className="card"><div className="muted">Paid last 24h</div><div className="big">{formatMoney(Number(o.paid_24h))}</div>
@@ -161,31 +231,86 @@ function Overview() {
           net by currency {Object.entries(integrity.netByCurrency).map(([c, v]) => `${c} ${v}`).join(", ")}
         </p>
       )}
-      <button onClick={() => void run(() => api("/v1/ops/rails/recover", { method: "POST" }).then(load), "Rail recovery run")}>Recover pending rail results</button>
-      <button onClick={() => void run(() => api("/v1/ops/settlements/run", { body: {} }).then(load), "Settlement run complete")}>Run due settlements</button>
-      {msg && <p className="small">{msg}</p>}
+      <button disabled={busy} onClick={() => void runAction("/v1/ops/rails/recover", undefined, "Rail recovery run")}>
+        {busy ? "Running…" : "Recover pending rail results"}
+      </button>
+      <button disabled={busy} onClick={() => void runAction("/v1/ops/settlements/run", {}, "Settlement run complete")}>
+        {busy ? "Running…" : "Run due settlements"}
+      </button>
     </>
   );
 }
 
 function Exceptions() {
   const [items, setItems] = useState<Item[]>([]);
-  const { msg, run } = useAction();
-  const load = () => api<Item[]>("/v1/ops/queue").then(setItems);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await api<Item[]>("/v1/ops/queue");
+      setItems(res);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => { void load(); }, []);
+
+  async function resolveItem(id: string) {
+    const raw = prompt("Resolution note");
+    if (raw === null) return;
+    const resolution = raw.trim();
+    if (!resolution) {
+      setError("A non-empty resolution note is required.");
+      return;
+    }
+    setBusyId(id);
+    setMsg(null);
+    setError(null);
+    try {
+      await api(`/v1/ops/queue/${id}/resolve`, { body: { resolution } });
+      setMsg("Exception resolved.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <>
-      {msg && <p className="small">{msg}</p>}
+      {error && <p className="error">{error}</p>}
+      {msg && <p className="notice ok">{msg}</p>}
+      {loading && items.length === 0 && <p className="muted">Loading exceptions…</p>}
       <table className="grid">
         <thead><tr><th>Severity</th><th>Kind</th><th>Subject</th><th>Details</th><th>Opened</th><th /></tr></thead>
-        <tbody>{items.map((i) => (
-          <tr key={i.id}><td className={`sev-${i.severity}`}>{i.severity}</td><td>{i.kind}</td><td>{i.subject}</td>
-            <td className="small mono">{i.details}</td><td className="small">{new Date(i.createdAt).toLocaleString()}</td>
-            <td><button className="small" onClick={() => {
-              const resolution = prompt("Resolution note");
-              if (resolution) void run(() => api(`/v1/ops/queue/${i.id}/resolve`, { body: { resolution } }).then(load), "Resolved");
-            }}>Resolve</button></td></tr>
-        ))}</tbody>
+        <tbody>
+          {items.map((i) => (
+            <tr key={i.id}>
+              <td className={`sev-${i.severity}`}>{i.severity}</td>
+              <td>{i.kind}</td>
+              <td>{i.subject}</td>
+              <td className="small mono">{i.details}</td>
+              <td className="small">{new Date(i.createdAt).toLocaleString()}</td>
+              <td>
+                <button className="small" disabled={busyId === i.id} onClick={() => void resolveItem(i.id)}>
+                  {busyId === i.id ? "Resolving…" : "Resolve"}
+                </button>
+              </td>
+            </tr>
+          ))}
+          {!loading && items.length === 0 && (
+            <tr><td colSpan={6} className="muted">No open exceptions.</td></tr>
+          )}
+        </tbody>
       </table>
     </>
   );
@@ -193,24 +318,86 @@ function Exceptions() {
 
 function Onboarding() {
   const [merchants, setMerchants] = useState<MerchantView[]>([]);
-  const { msg, run } = useAction();
-  const load = () => api<MerchantView[]>("/v1/ops/merchants").then(setMerchants);
-  useEffect(() => { void load(); }, []);
-  const review = (m: MerchantView, decision: string) => {
-    const feeBps = decision === "approve" ? Number(prompt("Agreed fee in basis points (100 = 1%)", "100")) : undefined;
-    void run(() => api(`/v1/ops/merchants/${m.id}/review`, { body: { decision, feeBps, note: "Reviewed in console" } }).then(load),
-      `${m.tradingName}: ${decision}`);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await api<MerchantView[]>("/v1/ops/merchants");
+      setMerchants(res);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   };
+
+  useEffect(() => { void load(); }, []);
+
+  async function review(m: MerchantView, decision: "approve" | "reject") {
+    let feeBps: number | undefined;
+    if (decision === "approve") {
+      const rawFee = prompt("Agreed fee in basis points (100 = 1%)", "100");
+      if (rawFee === null) return;
+      const trimmed = rawFee.trim();
+      if (!trimmed) {
+        setError("Fee in basis points is required.");
+        return;
+      }
+      feeBps = Number(trimmed);
+      if (!Number.isFinite(feeBps) || feeBps < 0 || !Number.isInteger(feeBps)) {
+        setError("Fee must be a non-negative integer in basis points.");
+        return;
+      }
+    }
+    setBusyId(m.id);
+    setMsg(null);
+    setError(null);
+    try {
+      const res = await api<Record<string, unknown>>(`/v1/ops/merchants/${m.id}/review`, {
+        body: { decision, feeBps, note: "Reviewed in console" },
+      });
+      setMsg(formatDualControlOutcome(res, `${m.tradingName}: ${decision}`));
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <>
-      {msg && <p className="small">{msg}</p>}
+      {error && <p className="error">{error}</p>}
+      {msg && <p className="notice ok">{msg}</p>}
+      {loading && merchants.length === 0 && <p className="muted">Loading merchants…</p>}
       <table className="grid">
-        <thead><tr><th>Trading name</th><th>Legal name</th><th>Type</th><th /></tr></thead>
-        <tbody>{merchants.map((m) => (
-          <tr key={m.id}><td>{m.tradingName}</td><td>{m.legalName}</td><td>{m.kind}</td>
-            <td><button className="small" onClick={() => review(m, "approve")}>Approve</button>
-              <button className="small secondary" onClick={() => review(m, "reject")}>Reject</button></td></tr>
-        ))}</tbody>
+        <thead><tr><th>Trading name</th><th>Legal name</th><th>Type</th><th>Status</th><th /></tr></thead>
+        <tbody>
+          {merchants.map((m) => {
+            const canReview = m.status === "pending_review";
+            const busy = busyId === m.id;
+            return (
+              <tr key={m.id}>
+                <td>{m.tradingName}</td>
+                <td>{m.legalName}</td>
+                <td>{m.kind}</td>
+                <td><span className={`tag ${m.status === "active" ? "active" : m.status === "pending_review" ? "pending" : "failed"}`}>{m.status}</span></td>
+                <td>
+                  <button className="small" disabled={!canReview || busy} onClick={() => void review(m, "approve")}>Approve</button>
+                  <button className="small secondary" disabled={!canReview || busy} onClick={() => void review(m, "reject")}>Reject</button>
+                </td>
+              </tr>
+            );
+          })}
+          {!loading && merchants.length === 0 && (
+            <tr><td colSpan={5} className="muted">No merchants found for onboarding review.</td></tr>
+          )}
+        </tbody>
       </table>
     </>
   );
@@ -231,11 +418,28 @@ export function formatDualControlOutcome(res: unknown, completedMessage: string)
 
 function Disputes() {
   const [rows, setRows] = useState<Record<string, string | number>[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const load = () => api<Record<string, string | number>[]>("/v1/ops/disputes").then(setRows);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await api<Record<string, string | number>[]>("/v1/ops/disputes");
+      setRows(res);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => { void load(); }, []);
+
   async function resolve(id: string, outcome: string) {
+    setBusyId(id);
     setMsg(null);
     setError(null);
     try {
@@ -246,19 +450,39 @@ function Disputes() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
     }
   }
+
   return (
     <>
       {error && <p className="error">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
+      {loading && rows.length === 0 && <p className="muted">Loading disputes…</p>}
       <table className="grid">
         <thead><tr><th>Checkout</th><th>Merchant</th><th className="num">Amount</th><th>Reason</th><th /></tr></thead>
-        <tbody>{rows.map((d) => (
-          <tr key={String(d.id)}><td>{d.checkout} #{d.line}</td><td>{d.merchant}</td><td className="num">{formatMoney(Number(d.amount))}</td>
-            <td>{d.reason}</td><td><button className="small" onClick={() => void resolve(String(d.id), "merchant_won")}>Merchant won</button>
-              <button className="small secondary" onClick={() => void resolve(String(d.id), "customer_won")}>Customer won</button></td></tr>
-        ))}</tbody>
+        <tbody>
+          {rows.map((d) => {
+            const id = String(d.id);
+            const busy = busyId === id;
+            return (
+              <tr key={id}>
+                <td>{d.checkout} #{d.line}</td>
+                <td>{d.merchant}</td>
+                <td className="num">{formatMoney(Number(d.amount))}</td>
+                <td>{d.reason}</td>
+                <td>
+                  <button className="small" disabled={busy} onClick={() => void resolve(id, "merchant_won")}>Merchant won</button>
+                  <button className="small secondary" disabled={busy} onClick={() => void resolve(id, "customer_won")}>Customer won</button>
+                </td>
+              </tr>
+            );
+          })}
+          {!loading && rows.length === 0 && (
+            <tr><td colSpan={5} className="muted">No open disputes.</td></tr>
+          )}
+        </tbody>
       </table>
     </>
   );
@@ -266,13 +490,39 @@ function Disputes() {
 
 function Reconciliation() {
   const [runs, setRuns] = useState<Record<string, string>[]>([]);
-  useEffect(() => { api<Record<string, string>[]>("/v1/ops/reconciliation/runs").then(setRuns).catch(() => setRuns([])); }, []);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    api<Record<string, string>[]>("/v1/ops/reconciliation/runs")
+      .then((res) => { setRuns(res); setError(null); })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, []);
+
   return (
-    <table className="grid">
-      <thead><tr><th>Source</th><th>Period</th><th>Summary</th><th>By</th><th>When</th></tr></thead>
-      <tbody>{runs.map((r) => <tr key={r.id}><td>{r.rail}</td><td>{r.period}</td><td className="mono small">{r.summary}</td>
-        <td>{r.imported_by}</td><td className="small">{new Date(r.created_at).toLocaleString()}</td></tr>)}</tbody>
-    </table>
+    <>
+      {error && <p className="error">{error}</p>}
+      {loading && runs.length === 0 && <p className="muted">Loading reconciliation runs…</p>}
+      <table className="grid">
+        <thead><tr><th>Source</th><th>Period</th><th>Summary</th><th>By</th><th>When</th></tr></thead>
+        <tbody>
+          {runs.map((r) => (
+            <tr key={r.id}>
+              <td>{r.rail}</td>
+              <td>{r.period}</td>
+              <td className="mono small">{r.summary}</td>
+              <td>{r.imported_by}</td>
+              <td className="small">{new Date(r.created_at).toLocaleString()}</td>
+            </tr>
+          ))}
+          {!loading && !error && runs.length === 0 && (
+            <tr><td colSpan={5} className="muted">No reconciliation runs found.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </>
   );
 }
 
@@ -292,30 +542,55 @@ interface MakerCheckerProposal {
   expiresAt: string;
 }
 
-const ACTION_LABELS: Record<string, string> = {
-  "kill_switch.global_unfreeze": "Lift Global Payout Freeze",
-  "kill_switch.merchant_unfreeze": "Unfreeze Merchant Payouts",
-  "kill_switch.module_enable": "Enable Platform Module",
-  "suspense.write_off": "Approve Suspense Write-Off",
+export const ACTION_LABELS: Record<string, string> = {
+  KILL_SWITCH_CHANGE: "Global Kill Switch Change",
+  MERCHANT_UNFREEZE: "Unfreeze Merchant Payouts",
+  MODULE_ENABLE: "Platform Module Toggle",
+  DISPUTE_RESOLUTION: "Dispute Resolution",
+  FEE_SCHEDULE_CHANGE: "Merchant Fee Schedule Change",
+  CUSTODIAN_CONFIG: "Custodian Trust Configuration",
+  LARGE_PAYOUT: "Large Payout Approval",
+  ESCROW_RELEASE: "Escrow Release",
+  FORCE_SETTLEMENT: "Force Settlement",
+  SETTLEMENT_RULE_CHANGE: "Settlement Rule Change",
+  DESTINATION_OPS_VERIFY: "Destination Ops Verification",
+  VELOCITY_CEILING_CHANGE: "Velocity Ceiling Change",
+  PHONE_CHANGE: "Phone Number Change",
 };
 
 function MakerChecker({ canApprove }: { canApprove: boolean }) {
   const [proposals, setProposals] = useState<MakerCheckerProposal[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>("PENDING");
+  const [loading, setLoading] = useState<boolean>(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () => {
+  const load = async () => {
+    setLoading(true);
     const q = statusFilter === "ALL" ? "" : `?status=${encodeURIComponent(statusFilter)}`;
-    api<MakerCheckerProposal[]>(`/v1/ops/maker-checker/proposals${q}`)
-      .then((res) => { setProposals(res); setError(null); })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    try {
+      const res = await api<MakerCheckerProposal[]>(`/v1/ops/maker-checker/proposals${q}`);
+      setProposals(res);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(() => { load(); }, [statusFilter]);
+  useEffect(() => { void load(); }, [statusFilter]);
 
   async function review(id: string, action: "approve" | "reject") {
-    const note = prompt(action === "approve" ? "Approval note (optional)" : "Rejection reason") ?? "";
+    const rawNote = prompt(action === "approve" ? "Approval note (optional)" : "Rejection reason");
+    if (rawNote === null) return;
+    const note = rawNote.trim();
+    if (action === "reject" && !note) {
+      setError("A non-empty rejection reason is required.");
+      return;
+    }
+    setBusyId(id);
     setMsg(null);
     setError(null);
     try {
@@ -323,9 +598,11 @@ function MakerChecker({ canApprove }: { canApprove: boolean }) {
         body: { note },
       });
       setMsg(`Proposal ${res.id} ${res.status.toLowerCase()}.`);
-      load();
+      await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -346,6 +623,7 @@ function MakerChecker({ canApprove }: { canApprove: boolean }) {
       {!canApprove && <p className="notice warn">View-only: Only an Operations Administrator (ops_admin) can approve dual-control proposals.</p>}
       {error && <p className="error">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
+      {loading && proposals.length === 0 && <p className="muted">Loading proposals…</p>}
       <table className="grid" style={{ marginTop: "1rem" }}>
         <thead>
           <tr><th>Action</th><th>Resource</th><th>Reason</th><th>Proposed By</th><th>Status</th><th>Actions</th></tr>
@@ -362,8 +640,8 @@ function MakerChecker({ canApprove }: { canApprove: boolean }) {
                 {p.status === "PENDING" ? (
                   canApprove ? (
                     <>
-                      <button className="small" onClick={() => void review(p.id, "approve")}>Approve</button>
-                      <button className="small secondary" onClick={() => void review(p.id, "reject")}>Reject</button>
+                      <button className="small" disabled={busyId === p.id} onClick={() => void review(p.id, "approve")}>Approve</button>
+                      <button className="small secondary" disabled={busyId === p.id} onClick={() => void review(p.id, "reject")}>Reject</button>
                     </>
                   ) : (
                     <span className="small muted">Awaiting ops_admin</span>
@@ -374,7 +652,7 @@ function MakerChecker({ canApprove }: { canApprove: boolean }) {
               </td>
             </tr>
           ))}
-          {proposals.length === 0 && (
+          {!loading && proposals.length === 0 && (
             <tr><td colSpan={6} className="muted">No maker-checker proposals found.</td></tr>
           )}
         </tbody>
@@ -392,61 +670,81 @@ interface KillSwitchStatus {
 
 function KillSwitches() {
   const [status, setStatus] = useState<KillSwitchStatus | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [busy, setBusy] = useState<boolean>(false);
   const [merchantId, setMerchantId] = useState("");
   const [reason, setReason] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () => {
-    api<KillSwitchStatus>("/v1/ops/kill-switch/status")
-      .then((res) => { setStatus(res); setError(null); })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await api<KillSwitchStatus>("/v1/ops/kill-switch/status");
+      setStatus(res);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, []);
 
   async function toggleGlobal(frozen: boolean) {
+    setBusy(true);
     setMsg(null);
     setError(null);
     try {
       const res = await api<Record<string, unknown>>("/v1/ops/kill-switch/global", {
-        body: { frozen, reason: reason || undefined },
+        body: { frozen, reason: reason.trim() || undefined },
       });
       setMsg(formatDualControlOutcome(res, frozen ? "Global payout freeze activated." : "Global payout freeze lifted."));
-      load();
+      await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
   async function toggleMerchant(id: string, frozen: boolean) {
     if (!id.trim()) { setError("Enter a merchant UUID."); return; }
+    setBusy(true);
     setMsg(null);
     setError(null);
     try {
       const res = await api<Record<string, unknown>>(`/v1/ops/kill-switch/merchants/${id.trim()}`, {
-        body: { frozen, reason: reason || undefined },
+        body: { frozen, reason: reason.trim() || undefined },
       });
       setMsg(formatDualControlOutcome(res, `Merchant ${id.trim()} ${frozen ? "frozen" : "unfrozen"}.`));
-      load();
+      await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
   async function toggleModule(moduleKey: string, enabled: boolean) {
+    setBusy(true);
     setMsg(null);
     setError(null);
     try {
       const res = await api<Record<string, unknown>>(`/v1/ops/kill-switch/modules/${moduleKey}`, {
-        body: { enabled, reason: reason || undefined },
+        body: { enabled, reason: reason.trim() || undefined },
       });
       setMsg(formatDualControlOutcome(res, `Module ${moduleKey} ${enabled ? "enabled" : "disabled"}.`));
-      load();
+      await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
+
+  const moduleEntries = status ? Object.entries(status.modules) : [];
 
   return (
     <div>
@@ -457,6 +755,8 @@ function KillSwitches() {
       <label>Reason / Audit Note
         <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Incident or maintenance reason" />
       </label>
+
+      {loading && !status && <p className="muted">Loading kill switch status…</p>}
 
       {status && (
         <>
@@ -469,7 +769,7 @@ function KillSwitches() {
               </span>
               {status.globalFreezeReason && <span className="small muted"> — {status.globalFreezeReason}</span>}
             </p>
-            <button onClick={() => void toggleGlobal(!status.globalFrozen)}>
+            <button disabled={busy} onClick={() => void toggleGlobal(!status.globalFrozen)}>
               {status.globalFrozen ? "Unfreeze Global Payouts" : "Freeze Global Payouts"}
             </button>
           </section>
@@ -478,8 +778,8 @@ function KillSwitches() {
             <h4>Merchant Payout Kill Switch</h4>
             <div className="flex-row">
               <input value={merchantId} onChange={(e) => setMerchantId(e.target.value)} placeholder="Merchant UUID" />
-              <button onClick={() => void toggleMerchant(merchantId, true)}>Freeze Merchant</button>
-              <button className="secondary" onClick={() => void toggleMerchant(merchantId, false)}>Unfreeze Merchant</button>
+              <button disabled={busy} onClick={() => void toggleMerchant(merchantId, true)}>Freeze Merchant</button>
+              <button className="secondary" disabled={busy} onClick={() => void toggleMerchant(merchantId, false)}>Unfreeze Merchant</button>
             </div>
             {status.frozenMerchants.length > 0 && (
               <p className="small muted" style={{ marginTop: ".5rem" }}>
@@ -493,17 +793,20 @@ function KillSwitches() {
             <table className="grid">
               <thead><tr><th>Module</th><th>State</th><th>Action</th></tr></thead>
               <tbody>
-                {Object.entries(status.modules).map(([mod, enabled]) => (
+                {moduleEntries.map(([mod, enabled]) => (
                   <tr key={mod}>
                     <td className="mono small">{mod}</td>
                     <td><span className={`tag ${enabled ? "active" : "failed"}`}>{enabled ? "ENABLED" : "DISABLED"}</span></td>
                     <td>
-                      <button className="small secondary" onClick={() => void toggleModule(mod, !enabled)}>
+                      <button className="small secondary" disabled={busy} onClick={() => void toggleModule(mod, !enabled)}>
                         {enabled ? "Disable" : "Enable"}
                       </button>
                     </td>
                   </tr>
                 ))}
+                {moduleEntries.length === 0 && (
+                  <tr><td colSpan={3} className="muted">No module switches configured.</td></tr>
+                )}
               </tbody>
             </table>
           </section>
@@ -544,21 +847,25 @@ interface TrustAccountConfig {
 function CustodianTrust() {
   const [report, setReport] = useState<CustodianSafeguardReport | null>(null);
   const [config, setConfig] = useState<TrustAccountConfig | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setLoading(true);
     Promise.all([
       api<CustodianSafeguardReport>("/v1/ops/custodian/safeguard-report"),
       api<TrustAccountConfig>("/v1/ops/custodian/config"),
     ])
       .then(([r, c]) => { setReport(r); setConfig(c); setError(null); })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
   }, []);
 
   return (
     <div>
       <h3>Custodian Trust Safeguarding</h3>
       {error && <p className="error">{error}</p>}
+      {loading && !report && <p className="muted">Loading custodian safeguarding report…</p>}
       {report && (
         <>
           <p className={report.safeguardingSatisfied ? "notice ok" : "notice warn"}>
@@ -611,27 +918,50 @@ interface MerchantControlsData {
 function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MerchantSearchRow[]>([]);
+  const [searching, setSearching] = useState<boolean>(true);
   const [selected, setSelected] = useState<MerchantControlsData | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState<boolean>(false);
+  const [busy, setBusy] = useState<boolean>(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const search = (q: string) => {
-    api<MerchantSearchRow[]>(`/v1/ops/merchants/search?q=${encodeURIComponent(q)}`)
-      .then((res) => { setResults(res); setError(null); })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  const search = async (q: string) => {
+    setSearching(true);
+    try {
+      const res = await api<MerchantSearchRow[]>(`/v1/ops/merchants/search?q=${encodeURIComponent(q)}`);
+      setResults(res);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSearching(false);
+    }
   };
 
-  useEffect(() => { search(""); }, []);
+  useEffect(() => { void search(""); }, []);
 
-  const openMerchant = (id: string) => {
-    api<MerchantControlsData>(`/v1/ops/merchants/${id}/controls`)
-      .then((res) => { setSelected(res); setError(null); })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  const openMerchant = async (id: string) => {
+    setLoadingDetail(true);
+    try {
+      const res = await api<MerchantControlsData>(`/v1/ops/merchants/${id}/controls`);
+      setSelected(res);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingDetail(false);
+    }
   };
 
   async function toggleFreeze(id: string, frozen: boolean) {
-    const reason = prompt(frozen ? "Reason for freezing merchant payouts:" : "Reason for unfreezing merchant payouts:");
-    if (!reason) return;
+    const rawReason = prompt(frozen ? "Reason for freezing merchant payouts:" : "Reason for unfreezing merchant payouts:");
+    if (rawReason === null) return;
+    const reason = rawReason.trim();
+    if (!reason) {
+      setError("A non-empty reason is required.");
+      return;
+    }
+    setBusy(true);
     setMsg(null);
     setError(null);
     try {
@@ -639,38 +969,58 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
         body: { frozen, reason },
       });
       setMsg(formatDualControlOutcome(res, frozen ? "Merchant payouts frozen." : "Merchant payouts unfrozen."));
-      openMerchant(id);
-      search(query);
+      await openMerchant(id);
+      await search(query);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
   async function revokeKey(keyId: string, merchantId: string) {
-    const reason = prompt("Reason for revoking this API key:");
-    if (!reason) return;
+    const rawReason = prompt("Reason for revoking this API key:");
+    if (rawReason === null) return;
+    const reason = rawReason.trim();
+    if (!reason) {
+      setError("A non-empty reason is required.");
+      return;
+    }
+    setBusy(true);
     setMsg(null);
     setError(null);
     try {
       await api(`/v1/ops/kill-switch/api-keys/${keyId}`, { body: { active: false, reason } });
       setMsg(`API key ${keyId} revoked immediately.`);
-      openMerchant(merchantId);
+      await openMerchant(merchantId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
+
+  const canFreeze = perms?.canFreezeRisk ?? false;
 
   return (
     <div>
       <h3>Merchant Controls &amp; Overrides</h3>
-      <div className="flex-row" style={{ marginBottom: "1rem" }}>
+      <form
+        className="flex-row"
+        style={{ marginBottom: "1rem" }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void search(query);
+        }}
+      >
         <input
+          aria-label="Search merchants by name, ID, email, or phone"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search merchant by name, phone, code, or UUID"
         />
-        <button onClick={() => search(query)}>Search</button>
-      </div>
+        <button type="submit" disabled={searching}>{searching ? "Searching…" : "Search"}</button>
+      </form>
       {error && <p className="error">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
 
@@ -683,23 +1033,26 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
             <tr key={m.id}>
               <td><strong>{m.trading_name}</strong><div className="small muted">{m.legal_name}</div></td>
               <td className="small">{m.contact_phone ?? "—"}</td>
-              <td><span className={`tag ${m.status === "approved" ? "active" : "pending"}`}>{m.status}</span></td>
+              <td><span className={`tag ${m.status === "active" ? "active" : "pending"}`}>{m.status}</span></td>
               <td><span className={`tag ${m.frozen ? "failed" : "active"}`}>{m.frozen ? "FROZEN" : "ACTIVE"}</span></td>
               <td className="small">{(m.fee_bps / 100).toFixed(2)}%</td>
-              <td><button className="small" onClick={() => openMerchant(m.id)}>Inspect</button></td>
+              <td><button className="small" disabled={loadingDetail} onClick={() => void openMerchant(m.id)}>Inspect</button></td>
             </tr>
           ))}
-          {results.length === 0 && <tr><td colSpan={6} className="muted">No merchants matched.</td></tr>}
+          {!searching && results.length === 0 && <tr><td colSpan={6} className="muted">No merchants matched.</td></tr>}
         </tbody>
       </table>
+
+      {loadingDetail && <p className="muted">Loading merchant controls…</p>}
 
       {selected && (
         <section className="panel" style={{ marginTop: "1.25rem" }}>
           <div className="flex-between">
             <h4>{selected.merchant.trading_name} ({selected.merchant.status})</h4>
-            {(perms?.canFreezeRisk ?? true) && (
+            {canFreeze && (
               <button
                 className={selected.merchant.frozen ? "secondary" : ""}
+                disabled={busy}
                 onClick={() => void toggleFreeze(selected.merchant.id, !selected.merchant.frozen)}
               >
                 {selected.merchant.frozen ? "Unfreeze Merchant Payouts" : "Freeze Merchant Payouts"}
@@ -728,8 +1081,8 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
                   <td className="small">{k.label ?? "—"}</td>
                   <td><span className={`tag ${k.status === "active" ? "active" : "failed"}`}>{k.status}</span></td>
                   <td>
-                    {k.status === "active" && (perms?.canFreezeRisk ?? true) && (
-                      <button className="small secondary" onClick={() => void revokeKey(k.id, selected.merchant.id)}>
+                    {k.status === "active" && canFreeze && (
+                      <button className="small secondary" disabled={busy} onClick={() => void revokeKey(k.id, selected.merchant.id)}>
                         Revoke Key
                       </button>
                     )}

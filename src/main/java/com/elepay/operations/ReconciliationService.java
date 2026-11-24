@@ -139,7 +139,7 @@ public class ReconciliationService {
     @Transactional
     public UploadResult uploadAndReconcile(@Valid @RequestBody StatementUploadRequest request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFinance();
         UUID actorUuid = resolveActorUuid(actor.subject());
 
         // Duplicate statement ingestion protection (content SHA-256)
@@ -983,7 +983,7 @@ public class ReconciliationService {
     @Transactional
     public Map<String, Object> approveFuzzyMatch(@PathVariable UUID matchId) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFinance();
 
         var matchOpt = db.sql("""
                 SELECT rm.id, rm.statement_line_id, rm.internal_reference, rm.match_type,
@@ -1142,7 +1142,7 @@ public class ReconciliationService {
     @Transactional
     public SuspenseItem proposeClearing(@Valid @RequestBody SuspenseProposalRequest request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFinance();
         validateSuspenseTargetAccount(request.targetAccount());
 
         var itemOpt = db.sql("SELECT id, status FROM suspense_item WHERE id = :id FOR UPDATE")

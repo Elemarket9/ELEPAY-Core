@@ -191,10 +191,10 @@ class Merchants {
     public List<MerchantView> queue(@RequestParam(required = false) String status) {
         Actor.current().requireOps();
         if (status == null || status.isBlank() || "all".equalsIgnoreCase(status)) {
-            return db.sql("SELECT id FROM merchant ORDER BY created_at")
+            return db.sql("SELECT id FROM merchant ORDER BY created_at DESC LIMIT 200")
                     .query(UUID.class).list().stream().map(id -> view(id, "ops")).toList();
         }
-        return db.sql("SELECT id FROM merchant WHERE status = :s ORDER BY created_at").param("s", status)
+        return db.sql("SELECT id FROM merchant WHERE status = :s ORDER BY created_at DESC LIMIT 200").param("s", status)
                 .query(UUID.class).list().stream().map(id -> view(id, "ops")).toList();
     }
 
@@ -202,7 +202,7 @@ class Merchants {
     @Transactional
     public MerchantView review(@PathVariable UUID id, @Valid @RequestBody Review request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireOnboarding();
         String createdBy = db.sql("SELECT created_by FROM merchant WHERE id = :id").param("id", id)
                 .query(String.class).optional().orElseThrow(() -> ApiException.notFound("Merchant not found"));
         if (createdBy.equals(actor.subject())) {
@@ -492,7 +492,7 @@ class Merchants {
     @Transactional
     public Map<String, String> verifyDestination(@PathVariable UUID id, @PathVariable UUID destination) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireOnboarding();
         dualControl.hold("DESTINATION_OPS_VERIFY", "settlement_destination", destination.toString(), id,
                 Map.of("merchantId", id.toString(), "destinationId", destination.toString()),
                 "verify settlement destination", actor);

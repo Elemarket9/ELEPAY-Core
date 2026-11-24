@@ -36,7 +36,7 @@ class CheckoutOperations {
     @PostMapping("/disputes")
     public CheckoutService.Dispute open(@Valid @RequestBody OpenDispute request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireSupport();
         return checkouts.openDispute(actor.subject(), request.checkout(), request.line(), request.amount(),
                 request.reason(), request.caseReference());
     }
@@ -44,7 +44,7 @@ class CheckoutOperations {
     @PostMapping("/disputes/{id}/resolve")
     public CheckoutService.Dispute resolve(@PathVariable UUID id, @Valid @RequestBody Resolve request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFinance();
         dualControl.hold("DISPUTE_RESOLUTION", "dispute", id.toString(), null,
                 Map.of("disputeId", id.toString(), "outcome", request.outcome(), "note", String.valueOf(request.note())),
                 request.note(), actor);
@@ -56,7 +56,7 @@ class CheckoutOperations {
 
     @PostMapping("/settlements/run")
     public List<CheckoutService.SettlementBatch> settle(@RequestBody(required = false) SettlementRun request) {
-        Actor.current().requireOps();
+        Actor.current().requireFinance();
         boolean force = request != null && Boolean.TRUE.equals(request.ignoreDelay());
         return checkouts.settleDue(force, request == null ? null : request.merchantId());
     }

@@ -358,53 +358,162 @@ function Overview({ id }: { id: string }) {
   );
 }
 
+export function validateRefundInput(
+  amountInput: string,
+  reason: string,
+  maxPesewas: number,
+): { pesewas: number } | { error: string } {
+  const pesewas = parseMoney(amountInput);
+  if (pesewas === null || pesewas <= 0) {
+    return { error: "Enter a valid refund amount, e.g. 10.00." };
+  }
+  if (pesewas > maxPesewas) {
+    return { error: `Refund amount exceeds available balance (${formatMoney(maxPesewas)}).` };
+  }
+  if (!reason.trim()) {
+    return { error: "Enter a refund reason." };
+  }
+  return { pesewas };
+}
+
 function Transactions({ id }: { id: string }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
-  const load = () => api<Line[]>(`/v1/merchants/${id}/transactions`).then(setLines).catch((e) => setMsg(e.message));
+  const [error, setError] = useState<string | null>(null);
+  const [refundTarget, setRefundTarget] = useState<Line | null>(null);
+  const [refundAmount, setRefundAmount] = useState("");
+  const [refundReason, setRefundReason] = useState("");
+  const [refundError, setRefundError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api<Line[]>(`/v1/merchants/${id}/transactions`)
+    .then((res) => { setLines(res); setError(null); })
+    .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   useEffect(() => { void load(); }, [id]);
 
-  async function refund(l: Line) {
-    const input = prompt(`Refund amount in GH₵ (max ${formatMoney(l.amount - l.refunded - l.disputed)})`);
-    const amount = input ? parseMoney(input) : null;
-    const reason = amount ? prompt("Reason") : null;
-    if (!amount || !reason) return;
+  function openRefundModal(l: Line) {
+    setRefundTarget(l);
+    setRefundAmount("");
+    setRefundReason("");
+    setRefundError(null);
+  }
+
+  async function submitRefund(e: React.FormEvent) {
+    e.preventDefault();
+    if (!refundTarget || busy) return;
+    const maxPesewas = refundTarget.amount - refundTarget.refunded - refundTarget.disputed;
+    const validated = validateRefundInput(refundAmount, refundReason, maxPesewas);
+    if ("error" in validated) {
+      setRefundError(validated.error);
+      return;
+    }
+    setRefundError(null);
+    setMsg(null);
+    setBusy(true);
     try {
-      await api(`/v1/merchants/${id}/checkouts/${l.reference}/allocations/${l.line}/refunds`,
-        { idempotencyKey: newKey(), body: { amount, reason } });
+      await api(`/v1/merchants/${id}/checkouts/${refundTarget.reference}/allocations/${refundTarget.line}/refunds`,
+        { idempotencyKey: newKey(), body: { amount: validated.pesewas, reason: refundReason.trim() } });
       setMsg("Refund recorded");
+      setRefundTarget(null);
       await load();
-    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+    } catch (err) {
+      setRefundError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <>
-      {msg && <p className="small">{msg}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+      {msg && <p className="notice ok">{msg}</p>}
       <table className="grid">
         <thead><tr><th>Receipt</th><th>Line</th><th>From</th><th className="num">Amount</th><th className="num">Fee</th>
           <th className="num">Refunded</th><th>Status</th><th /></tr></thead>
-        <tbody>{lines.map((l) => (
-          <tr key={l.reference + l.line}><td>{l.reference}</td><td>{l.kind} {l.description ?? ""}</td><td>{l.collector}</td>
-            <td className="num">{formatMoney(l.amount)}</td><td className="num">{formatMoney(l.fee)}</td>
-            <td className="num">{formatMoney(l.refunded)}</td><td>{l.status}</td>
-            <td>{l.refunded + l.disputed < l.amount && <button className="small" onClick={() => void refund(l)}>Refund</button>}</td></tr>
-        ))}</tbody>
+        <tbody>
+          {lines.map((l) => (
+            <tr key={l.reference + l.line}><td>{l.reference}</td><td>{l.kind} {l.description ?? ""}</td><td>{l.collector}</td>
+              <td className="num">{formatMoney(l.amount)}</td><td className="num">{formatMoney(l.fee)}</td>
+              <td className="num">{formatMoney(l.refunded)}</td><td>{l.status}</td>
+              <td>{l.refunded + l.disputed < l.amount && <button className="small" onClick={() => openRefundModal(l)}>Refund</button>}</td></tr>
+          ))}
+          {lines.length === 0 && (
+            <tr><td colSpan={8} className="muted">No transactions found.</td></tr>
+          )}
+        </tbody>
       </table>
+
+      {refundTarget && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: "460px" }}>
+            <div className="flex-between">
+              <h3>Issue Refund</h3>
+              <button type="button" className="small secondary" disabled={busy} onClick={() => setRefundTarget(null)}>✕</button>
+            </div>
+            <p className="small muted">
+              Receipt <code className="mono">{refundTarget.reference}</code> · Max refundable:{" "}
+              <strong>{formatMoney(refundTarget.amount - refundTarget.refunded - refundTarget.disputed)}</strong>
+            </p>
+            {refundError && <p className="notice error" role="alert">{refundError}</p>}
+            <form onSubmit={(e) => void submitRefund(e)}>
+              <label>Refund Amount (GH₵)
+                <input
+                  inputMode="decimal"
+                  value={refundAmount}
+                  onChange={(e) => setRefundAmount(e.target.value)}
+                  placeholder="0.00"
+                  required
+                />
+              </label>
+              <label>Reason
+                <input
+                  value={refundReason}
+                  onChange={(e) => setRefundReason(e.target.value)}
+                  placeholder="e.g. Customer returned item"
+                  required
+                />
+              </label>
+              <div style={{ marginTop: "1rem" }}>
+                <button type="submit" disabled={busy}>{busy ? "Recording…" : "Submit Refund"}</button>
+                <button type="button" className="secondary" disabled={busy} onClick={() => setRefundTarget(null)}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 }
 
 function Rows({ id, path, columns }: { id: string; path: string; columns: string[] }) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api<Record<string, unknown>[]>(`/v1/merchants/${id}/${path}`).then(setRows).catch((e) => setErr(e.message)); }, [id, path]);
-  if (err) return <p className="muted">{err}</p>;
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    api<Record<string, unknown>[]>(`/v1/merchants/${id}/${path}`)
+      .then((res) => { if (!cancelled) setRows(res); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [id, path]);
+  if (err) return <p className="error" role="alert">{err}</p>;
   return (
     <table className="grid">
       <thead><tr>{columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
-      <tbody>{rows.map((r, i) => <tr key={i}>{columns.map((c) => (
-        <td key={c} className={c === "amount" ? "num" : ""}>{c === "amount" ? formatMoney(Number(r[c])) : String(r[c] ?? "")}</td>
-      ))}</tr>)}</tbody>
+      <tbody>
+        {loading && (
+          <tr><td colSpan={columns.length} className="muted">Loading {path}…</td></tr>
+        )}
+        {!loading && rows.length === 0 && (
+          <tr><td colSpan={columns.length} className="muted">No {path} found.</td></tr>
+        )}
+        {!loading && rows.map((r, i) => <tr key={i}>{columns.map((c) => (
+          <td key={c} className={c === "amount" ? "num" : ""}>{c === "amount" ? formatMoney(Number(r[c])) : String(r[c] ?? "")}</td>
+        ))}</tr>)}
+      </tbody>
     </table>
   );
 }
@@ -415,22 +524,43 @@ function Payouts({ id }: { id: string }) {
   const [amount, setAmount] = useState("");
   const [destination, setDestination] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
   const load = async () => {
     setPayouts(await api<Payout[]>(`/v1/merchants/${id}/payouts`));
     const d = await api<Destination[]>(`/v1/merchants/${id}/settlement-destinations`);
     setDestinations(d);
-    setDestination(d.find((x) => x.verification === "verified")?.id ?? "");
+    setDestination((prev) => prev && d.some((x) => x.id === prev && x.verification === "verified")
+      ? prev
+      : (d.find((x) => x.verification === "verified")?.id ?? ""));
   };
-  useEffect(() => { load().catch((e) => setMsg(e.message)); }, [id]);
+  useEffect(() => { load().catch((e) => setError(e instanceof Error ? e.message : String(e))); }, [id]);
 
   async function withdraw() {
+    if (busy) return;
+    setError(null);
+    setMsg(null);
+    if (!destination) {
+      setError("Select a verified settlement destination before withdrawing.");
+      return;
+    }
     const pesewas = parseMoney(amount);
-    if (!pesewas || !destination) return;
+    if (!pesewas || pesewas <= 0) {
+      setError("Enter a valid withdrawal amount, e.g. 50.00.");
+      return;
+    }
+    setBusy(true);
     try {
       await api(`/v1/merchants/${id}/withdrawals`, { idempotencyKey: newKey(), body: { amount: pesewas, destinationId: destination } });
       setMsg("Withdrawal requested");
+      setAmount("");
       await load();
-    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -438,17 +568,24 @@ function Payouts({ id }: { id: string }) {
       <section className="panel">
         <h3>Withdraw</h3>
         <label>Destination<select value={destination} onChange={(e) => setDestination(e.target.value)}>
+          <option value="">-- Select verified destination --</option>
           {destinations.map((d) => <option key={d.id} value={d.id} disabled={d.verification !== "verified"}>
             {d.type} {d.network} {d.accountNumber} — {d.accountName} ({d.verification})</option>)}
         </select></label>
-        <label>Amount (GH₵)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
-        <button onClick={() => void withdraw()}>Withdraw</button>
-        {msg && <p className="small">{msg}</p>}
+        <label>Amount (GH₵)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="50.00" /></label>
+        <button disabled={busy} onClick={() => void withdraw()}>{busy ? "Submitting…" : "Withdraw"}</button>
+        {error && <p className="error" role="alert">{error}</p>}
+        {msg && <p className="notice ok">{msg}</p>}
       </section>
       <table className="grid">
         <thead><tr><th>Reference</th><th>Item</th><th className="num">Amount</th><th>Status</th><th>Reason</th></tr></thead>
-        <tbody>{payouts.map((p) => <tr key={p.reference}><td>{p.reference}</td><td>{p.clientReference}</td>
-          <td className="num">{formatMoney(p.amount)}</td><td>{p.status}</td><td>{p.failureReason}</td></tr>)}</tbody>
+        <tbody>
+          {payouts.map((p) => <tr key={p.reference}><td>{p.reference}</td><td>{p.clientReference}</td>
+            <td className="num">{formatMoney(p.amount)}</td><td>{p.status}</td><td>{p.failureReason}</td></tr>)}
+          {payouts.length === 0 && (
+            <tr><td colSpan={5} className="muted">No payouts recorded yet.</td></tr>
+          )}
+        </tbody>
       </table>
     </>
   );
@@ -459,6 +596,7 @@ function Collect({ merchant }: { merchant: MerchantView }) {
   const [link, setLink] = useState<string | null>(null);
   const [qr, setQr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     api<{ payload: string }>(`/v1/merchants/${merchant.id}/qr`).then((r) => QRCode.toDataURL(r.payload, { margin: 1, width: 220 }))
@@ -466,22 +604,32 @@ function Collect({ merchant }: { merchant: MerchantView }) {
   }, [merchant.id]);
 
   async function create() {
+    if (busy) return;
+    setMsg(null);
     const pesewas = parseMoney(amount);
-    if (!pesewas) return;
+    if (!pesewas || pesewas <= 0) {
+      setMsg("Enter a valid payment amount, e.g. 25.00.");
+      return;
+    }
+    setBusy(true);
     try {
       const r = await api<{ payUrl: string }>(`/v1/merchants/${merchant.id}/checkouts`, { idempotencyKey: newKey(), body: { amount: pesewas } });
       setLink(r.payUrl);
-    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <div className="cards">
       <section className="panel">
         <h3>Request a payment</h3>
-        <label>Amount (GH₵)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
-        <button onClick={() => void create()}>Create payment link</button>
+        <label>Amount (GH₵)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="25.00" /></label>
+        <button disabled={busy} onClick={() => void create()}>{busy ? "Creating…" : "Create payment link"}</button>
         {link && <p><a href={link}>{link}</a></p>}
-        {msg && <p className="error">{msg}</p>}
+        {msg && <p className="error" role="alert">{msg}</p>}
       </section>
       <section className="panel">
         <h3>Shop QR · code {merchant.merchantCode}</h3>

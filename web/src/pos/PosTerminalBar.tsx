@@ -12,6 +12,10 @@ interface PosTerminalBarProps {
   onModuleDisabled: () => void;
 }
 
+export function upsertKnownCashier(list: PosCashier[], cashier: PosCashier): PosCashier[] {
+  return [cashier, ...list.filter((c) => c.id !== cashier.id)];
+}
+
 export function PosTerminalBar({
   merchantId,
   terminalId,
@@ -165,7 +169,7 @@ export function PosTerminalBar({
           badgeNumber: cashierBadge.trim(),
         },
       });
-      setKnownCashiers((prev) => [created, ...prev.filter((c) => c.id !== created.id)]);
+      setKnownCashiers((prev) => upsertKnownCashier(prev, created));
       onSelectCashier({ id: created.id, badgeNumber: created.badgeNumber, name: created.name });
       setAuthBadgeLabel(`${created.name} (${created.badgeNumber})`);
       setCashierPin("");
@@ -186,23 +190,27 @@ export function PosTerminalBar({
     setStatusMsg(null);
     setBusy(true);
     try {
-      await api<void>("/v1/pos/cashiers/auth", {
+      const cashier = await api<PosCashier>("/v1/pos/cashiers/auth", {
         body: {
           merchantId,
           badgeNumber: cashierBadge.trim(),
           pin: cashierPin,
         },
       });
-      const matched = knownCashiers.find((c) => c.badgeNumber === cashierBadge.trim());
-      if (matched) {
-        onSelectCashier({ id: matched.id, badgeNumber: matched.badgeNumber, name: matched.name });
-        setAuthBadgeLabel(`${matched.name} (${matched.badgeNumber})`);
+      const resolved = cashier?.id
+        ? cashier
+        : knownCashiers.find((c) => c.badgeNumber === cashierBadge.trim()) ?? null;
+      if (resolved) {
+        setKnownCashiers((prev) => upsertKnownCashier(prev, resolved));
+        onSelectCashier({ id: resolved.id, badgeNumber: resolved.badgeNumber, name: resolved.name });
+        setAuthBadgeLabel(`${resolved.name} (${resolved.badgeNumber})`);
+        setStatusMsg(`Cashier ${resolved.name} (${resolved.badgeNumber}) verified & active.`);
       } else {
         setAuthBadgeLabel(`Badge ${cashierBadge.trim()} (PIN verified)`);
+        setStatusMsg(`Cashier PIN verified for badge ${cashierBadge.trim()}.`);
       }
       setCashierPin("");
       setPanel("none");
-      setStatusMsg(`Cashier PIN verified for badge ${cashierBadge.trim()}.`);
     } catch (err) {
       if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
       setError(err instanceof ApiError && err.status === 401 ? "Invalid cashier badge or PIN." : (err instanceof ApiError ? err.message : String(err)));

@@ -84,6 +84,22 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
         if (!isOpsAdmin()) throw ApiException.forbidden("Operations administrator role required");
     }
 
+    public void requireFreezeRisk() {
+        if (!canFreezeRisk()) throw ApiException.forbidden("Risk and compliance role required");
+    }
+
+    public void requireFinance() {
+        if (!canManageFinance()) throw ApiException.forbidden("Finance operations role required");
+    }
+
+    public void requireOnboarding() {
+        if (!canOnboardMerchants()) throw ApiException.forbidden("Merchant onboarding role required");
+    }
+
+    public void requireSupport() {
+        if (!canManageSupport()) throw ApiException.forbidden("Support role required");
+    }
+
     public void requireUser() {
         if (isApiKey()) throw ApiException.forbidden("This operation requires a signed-in user");
     }

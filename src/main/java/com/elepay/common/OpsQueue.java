@@ -104,7 +104,8 @@ public class OpsQueue {
         return db.sql("""
                 SELECT id, kind, severity, subject, details::text, status, created_at, resolved_by, resolution
                 FROM ops_item WHERE status = :status ORDER BY
-                  CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at""")
+                  CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at
+                LIMIT 200""")
                 .param("status", status)
                 .query((rs, i) -> new Item(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
                         rs.getString(4), rs.getString(5), rs.getString(6),

@@ -145,7 +145,7 @@ public class RailEndpoints {
             @RequestBody CustodianConfigRequest request
     ) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFinance();
         dualControl.hold("CUSTODIAN_CONFIG", "custodian", "primary", null, Map.of(
                 "dailyOutflowCapPesewas", String.valueOf(request.dailyOutflowCapPesewas()),
                 "perPayoutCapPesewas", String.valueOf(request.perPayoutCapPesewas()),

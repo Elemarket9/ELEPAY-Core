@@ -84,7 +84,7 @@ class FxApi {
     @PutMapping("/v1/ops/fx/corridors/{code}")
     public FxService.Corridor upsert(@PathVariable String code, @Valid @RequestBody CorridorInput c) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFinance();
         fx.upsertCorridor(new FxService.Corridor(code, c.direction(), c.sendingCountry(), c.receivingCountry(),
                 c.sourceCurrency(), c.destinationCurrency(), c.fundingMethod(), c.deliveryMethod(), c.partner(),
                 c.feeFixed(), c.feeBps(), c.minAmount(), c.maxAmount(), c.quoteTtlSeconds(), c.estDeliveryMinutes(),
@@ -101,13 +101,13 @@ class FxApi {
     @PostMapping("/v1/ops/fx/reconcile/{partner}")
     public List<FxService.ReconLine> reconcile(@PathVariable String partner, @Valid @RequestBody ReconRequest request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFinance();
         return fx.reconcile(partner, request.period(), request.lines(), actor.subject());
     }
 
     @PostMapping("/v1/ops/fx/recover")
     public Map<String, Integer> recover() {
-        Actor.current().requireOps();
+        Actor.current().requireFinance();
         return Map.of("checked", fx.recover());
     }
 
@@ -115,14 +115,14 @@ class FxApi {
 
     @PostMapping("/v1/ops/fx/rates/sources")
     public FxRateService.RateSource ingestRate(@Valid @RequestBody IngestRateRequest req) {
-        Actor.current().requireOps();
+        Actor.current().requireFinance();
         return fx.ingestRate(req.source(), req.sourceCurrency(), req.destinationCurrency(),
                 req.bidRate(), req.askRate(), req.weight());
     }
 
     @PostMapping("/v1/ops/fx/rates/synthesize")
     public FxRateService.BlendedRate synthesizeRate(@Valid @RequestBody SynthesizeRateRequest req) {
-        Actor.current().requireOps();
+        Actor.current().requireFinance();
         java.time.Duration age = req.maxAgeMinutes() != null ? java.time.Duration.ofMinutes(req.maxAgeMinutes()) : null;
         return fx.synthesizeRate(req.sourceCurrency(), req.destinationCurrency(), age);
     }
@@ -164,7 +164,7 @@ class FxApi {
     public FxDualReconciliationService.DualReconReport reconcileDual(@PathVariable String partner,
                                                                      @Valid @RequestBody DualReconRequest req) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFinance();
         return fx.reconcileDual(partner, req.period(), req.sourceCurrency(), req.destinationCurrency(),
                 req.statedClosingBalance(), req.lines(), actor.subject());
     }

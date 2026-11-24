@@ -96,7 +96,7 @@ class PayoutPolicyApi {
     /** Operations: run automatic withdrawals now (they also run every minute). */
     @PostMapping("/ops/payouts/automatic/run")
     public Map<String, Object> run() {
-        Actor.current().requireOps();
+        Actor.current().requireFinance();
         List<Payouts.Batch> batches = policies.runAutomatic();
         return Map.of("batches", batches.size(), "total", batches.stream().mapToLong(Payouts.Batch::total).sum(),
                 "items", batches);

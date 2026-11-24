@@ -74,7 +74,7 @@ public class MakerCheckerController {
             @RequestBody(required = false) ReviewRequest request
     ) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireOpsAdmin();
         return service.reject(id, actor.subject(), request != null ? request.note() : null);
     }
 }

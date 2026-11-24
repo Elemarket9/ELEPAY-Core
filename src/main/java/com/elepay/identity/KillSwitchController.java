@@ -95,7 +95,7 @@ public class KillSwitchController {
     @PostMapping({"/admin/kill-switch/global", "/v1/ops/kill-switch/global", "/v1/ops/kill-switches/payouts/freeze"})
     public Map<String, Object> toggleGlobal(@RequestBody(required = false) GlobalKillSwitchRequest request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFreezeRisk();
         boolean freeze = request == null || request.isFreezeAction();
         String reason = (request != null && request.reason() != null)
                 ? request.reason()
@@ -129,7 +129,7 @@ public class KillSwitchController {
             @RequestBody(required = false) MerchantKillSwitchRequest request
     ) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFreezeRisk();
         boolean freeze = request == null || request.isFreezeAction();
         String reason = (request != null && request.reason() != null)
                 ? request.reason()
@@ -162,7 +162,7 @@ public class KillSwitchController {
             @RequestBody(required = false) ModuleKillSwitchRequest request
     ) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFreezeRisk();
         boolean enabled = request != null && request.isEnabledAction();
         String reason = (request != null && request.reason() != null)
                 ? request.reason()
@@ -184,12 +184,24 @@ public class KillSwitchController {
     @PostMapping({"/admin/kill-switch/api-keys/{keyId}", "/v1/ops/kill-switch/api-keys/{keyId}"})
     public Map<String, Object> emergencyRevokeApiKey(@PathVariable UUID keyId) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFreezeRisk();
         boolean revoked = apiKeys.emergencyRevokeById(keyId, actor.subject());
+        if (!revoked) {
+            boolean exists = Boolean.TRUE.equals(db.sql("SELECT EXISTS(SELECT 1 FROM api_credential WHERE id = :id)")
+                    .param("id", keyId).query(Boolean.class).single());
+            if (!exists) {
+                throw ApiException.notFound("API key not found");
+            }
+            return Map.of(
+                    "keyId", keyId,
+                    "revoked", false,
+                    "status", "ALREADY_REVOKED"
+            );
+        }
         return Map.of(
                 "keyId", keyId,
-                "revoked", revoked,
-                "status", revoked ? "REVOKED" : "NOT_FOUND"
+                "revoked", true,
+                "status", "REVOKED"
         );
     }
 

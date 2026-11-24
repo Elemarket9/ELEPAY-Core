@@ -20,12 +20,14 @@ export function Wallet() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [operations, setOperations] = useState<Operation[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [moduleDisabled, setModuleDisabled] = useState(false);
   const [activeTab, setActiveTab] = useState<(typeof WALLET_TABS)[number]>("Send Money");
 
   async function load() {
     setError(null);
     setModuleDisabled(false);
+    setLoading(true);
     try {
       const w = await api<{ accounts: Account[] }>("/v1/wallet");
       setAccounts(w.accounts);
@@ -38,11 +40,14 @@ export function Wallet() {
       } else {
         setError(e instanceof ApiError && e.status === 404 ? "No ELEPAY wallet is linked to this sign-in yet." : String(e));
       }
+    } finally {
+      setLoading(false);
     }
   }
   useEffect(() => { void load(); }, []);
 
   const bal = (bucket: string): string => {
+    if (loading) return "Loading…";
     const account = accounts.find((a) => a.bucket === bucket);
     return account ? formatMoney(account.balance) : "Unavailable";
   };
@@ -106,7 +111,7 @@ export function Wallet() {
             </tr>
           ))}
           {operations.length === 0 && (
-            <tr><td colSpan={6} className="muted">No transactions found.</td></tr>
+            <tr><td colSpan={6} className="muted">{loading ? "Loading…" : "No transactions found."}</td></tr>
           )}
         </tbody>
       </table>
@@ -126,6 +131,7 @@ function SendMoney({ onSent }: { onSent: () => void }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [key, setKey] = useState(newKey());
   const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   function edit(next: string) {
     setPhone(next);
@@ -134,25 +140,33 @@ function SendMoney({ onSent }: { onSent: () => void }) {
   }
 
   async function check() {
+    if (busy) return;
     const msisdn = normalizeGhanaPhone(phone);
     if (!msisdn) { setMessage("Enter the full number, e.g. 024 123 4567 or +233 24 123 4567"); return; }
+    setBusy(true);
     try {
       setLookup(await api<Lookup>("/v1/wallet/recipients/lookup", { body: { rail, phone: msisdn, network } }));
       setMessage(null);
     } catch (e) { setMessage(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
   }
 
   async function review() {
+    if (busy) return;
     const pesewas = parseMoney(amount);
     if (!lookup?.confirmationId || !pesewas) { setMessage("Enter an amount"); return; }
+    setBusy(true);
     try {
       setPreview(await api<Preview>("/v1/wallet/transfers/preview", { body: { confirmationId: lookup.confirmationId, amount: pesewas } }));
       setKey(newKey());
+      setMessage(null);
     } catch (e) { setMessage(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
   }
 
   async function confirm() {
-    if (!preview || !lookup?.confirmationId) return;
+    if (busy || !preview || !lookup?.confirmationId) return;
+    setBusy(true);
     try {
       const r = await api<{ reference: string; status: string }>("/v1/wallet/transfers/confirmed", {
         idempotencyKey: key, body: { confirmationId: lookup.confirmationId, amount: preview.amount },
@@ -163,6 +177,8 @@ function SendMoney({ onSent }: { onSent: () => void }) {
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.code.startsWith("confirmation_")) { setLookup(null); setPreview(null); }
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -176,13 +192,13 @@ function SendMoney({ onSent }: { onSent: () => void }) {
       {rail === "momo" && <label>Network<select value={network} onChange={(e) => { setNetwork(e.target.value); setLookup(null); }}>
         <option value="mtn">MTN</option><option value="telecel">Telecel</option><option value="airteltigo">AirtelTigo</option>
       </select></label>}
-      {!lookup && <button onClick={() => void check()}>Check recipient</button>}
+      {!lookup && <button disabled={busy} onClick={() => void check()}>{busy ? "Checking…" : "Check recipient"}</button>}
       {lookup && lookup.status !== "verified" && <p className="notice warn">{lookup.message}</p>}
       {lookup?.status === "verified" && !preview && (
         <>
           <p className="notice ok">Recipient: <strong>{lookup.verifiedName}</strong> ({lookup.destination})</p>
           <label>Amount (GH₵)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
-          <button onClick={() => void review()}>Review</button>
+          <button disabled={busy} onClick={() => void review()}>{busy ? "Reviewing…" : "Review"}</button>
         </>
       )}
       {preview && (
@@ -195,8 +211,8 @@ function SendMoney({ onSent }: { onSent: () => void }) {
             <dt>Fee</dt><dd>{formatMoney(preview.fee)}</dd>
             <dt>Total</dt><dd><strong>{formatMoney(preview.total)}</strong></dd>
           </dl>
-          <button onClick={() => void confirm()}>Send {formatMoney(preview.total)}</button>
-          <button className="secondary" onClick={() => setPreview(null)}>Back</button>
+          <button disabled={busy} onClick={() => void confirm()}>{busy ? "Sending…" : `Send ${formatMoney(preview.total)}`}</button>
+          <button className="secondary" disabled={busy} onClick={() => setPreview(null)}>Back</button>
         </div>
       )}
       {message && <p className="small">{message}</p>}
@@ -261,12 +277,39 @@ export function sanitizeCsvCell(value: string | number | null | undefined): stri
   return `"${safe.replace(/"/g, '""')}"`;
 }
 
+export type StatementRange = "all" | "30d" | "90d" | "ytd";
+
+export function filterOperationsByRange<T extends { createdAt: string }>(
+  operations: T[],
+  range: StatementRange | string,
+  now: Date = new Date(),
+): T[] {
+  if (range === "all") return operations;
+  const nowMs = now.getTime();
+  let cutoffMs: number;
+  if (range === "30d") {
+    cutoffMs = nowMs - 30 * 24 * 60 * 60 * 1000;
+  } else if (range === "90d") {
+    cutoffMs = nowMs - 90 * 24 * 60 * 60 * 1000;
+  } else if (range === "ytd") {
+    cutoffMs = new Date(now.getFullYear(), 0, 1).getTime();
+  } else {
+    return operations;
+  }
+  return operations.filter((op) => {
+    const t = Date.parse(op.createdAt);
+    return Number.isFinite(t) && t >= cutoffMs;
+  });
+}
+
 function ExportStatements({ operations }: { operations: Operation[] }) {
-  const [range, setRange] = useState("all");
+  const [range, setRange] = useState<StatementRange>("all");
+  const currentYear = new Date().getFullYear();
 
   function exportCsv() {
+    const filtered = filterOperationsByRange(operations, range);
     const headers = "Reference,Type,Counterparty,Amount (Pesewas),Amount (GHS),Status,CreatedAt\n";
-    const rows = operations.map((o) =>
+    const rows = filtered.map((o) =>
       [
         o.reference,
         o.kind,
@@ -296,11 +339,11 @@ function ExportStatements({ operations }: { operations: Operation[] }) {
 
       <div className="flex-row" style={{ margin: "1rem 0" }}>
         <label className="choice">Date Range:
-          <select value={range} onChange={(e) => setRange(e.target.value)} style={{ width: "auto" }}>
+          <select value={range} onChange={(e) => setRange(e.target.value as StatementRange)} style={{ width: "auto" }}>
             <option value="all">All Available Records</option>
             <option value="30d">Last 30 Days</option>
             <option value="90d">Last 90 Days</option>
-            <option value="ytd">Year-to-Date 2026</option>
+            <option value="ytd">Year-to-Date {currentYear}</option>
           </select>
         </label>
       </div>
