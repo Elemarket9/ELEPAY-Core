@@ -36,13 +36,19 @@ class EnterpriseCheckoutSplitTest extends PostgresTestBase {
     @Autowired
     private EnterpriseCheckoutService checkoutService;
 
+    @Autowired
+    private com.elepay.enterprise.accounts.EnterpriseManagedAccountService enterpriseService;
+
     private UUID enterpriseMarketplaceId;
     private UUID deliveryPartnerId;
     private List<UUID> merchantIds;
 
     @BeforeEach
     void setup() {
-        enterpriseMarketplaceId = UUID.randomUUID();
+        String code = "SPLIT-ENT-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        var ent = enterpriseService.registerEnterprise(
+                code, "Split Test Enterprise " + code, "ops@splittest.gh", "+233302000111", "https://example.com/hook");
+        enterpriseMarketplaceId = ent.id();
         deliveryPartnerId = UUID.randomUUID();
         merchantIds = new ArrayList<>();
         for (int i = 0; i < 10; i++) {

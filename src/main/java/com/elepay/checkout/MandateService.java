@@ -125,12 +125,12 @@ public class MandateService {
     public Mandate createMandate(
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             @Valid @RequestBody CreateMandateRequest request) {
-        UUID customerId = customers.currentCustomer();
-        if (key != null && !key.isBlank()) {
-            return idempotency.execute("mandate-create:" + customerId, key, request, Mandate.class,
-                    () -> doCreateMandate(customerId, request, key));
+        if (key == null || key.isBlank()) {
+            throw ApiException.badRequest("missing_idempotency_key", "Idempotency-Key header is required");
         }
-        return doCreateMandate(customerId, request, key);
+        UUID customerId = customers.currentCustomer();
+        return idempotency.execute("mandate-create:" + customerId, key, request, Mandate.class,
+                () -> doCreateMandate(customerId, request, key));
     }
 
     private Mandate doCreateMandate(UUID customerId, CreateMandateRequest request, String key) {

@@ -36,7 +36,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service("cardsCardTokenVault")
 public class CardTokenVault {
     private static final Logger log = LoggerFactory.getLogger(CardTokenVault.class);
-    private static final String DEFAULT_MASTER_KEY = "elepay-default-secret-card-vault-key-32b!";
     private static final String KEY_ID = "elepay-kms-card-vault";
     private static final int KEY_VERSION = 1;
 
@@ -61,12 +60,18 @@ public class CardTokenVault {
     }
 
     private static byte[] deriveMasterKey(String configured) {
-        String key = (configured == null || configured.isBlank()) ? DEFAULT_MASTER_KEY : configured.trim();
+        if (configured == null || configured.isBlank()) {
+            throw new IllegalStateException("elepay.vault.master-key (or elepay.cards.master-key) is required");
+        }
+        String key = configured.trim();
         try {
             byte[] decoded = Base64.getDecoder().decode(key);
             if (decoded.length == 32) return decoded;
         } catch (IllegalArgumentException ignored) {
             // fall back to string hashing
+        }
+        if (key.length() < 32) {
+            throw new IllegalStateException("elepay.vault.master-key must be base64 of 32 bytes or at least 32 characters");
         }
         try {
             return MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8));
@@ -114,7 +119,6 @@ public class CardTokenVault {
             int expiryMonth,
             int expiryYear,
             String cardholderName,
-            String encryptedEnvelope,
             String status,
             OffsetDateTime createdAt
     ) {}
@@ -131,11 +135,9 @@ public class CardTokenVault {
     public record TokenizedNetworkCard(
             UUID id,
             UUID cardId,
-            String tokenPan,
             String maskedTokenPan,
             String tokenRequesterId,
             String deviceId,
-            String encryptedEnvelope,
             String status,
             OffsetDateTime createdAt
     ) {}
@@ -186,28 +188,24 @@ public class CardTokenVault {
         String serializedEnvelope = encryptedField.serialize();
 
         if (db != null) {
-            try {
-                db.sql("""
-                    INSERT INTO card_token (id, token, customer_id, masked_pan, fingerprint, scheme, card_type,
-                                            issuer_bank, expiry_month, expiry_year, cardholder_name,
-                                            encrypted_pan, status, owner_subject, fingerprint_version)
-                    VALUES (:id, :tok, :cust, :masked, :fp, :scheme, :ctype, :bank, :month, :year,
-                            :name, :enc, 'active', :owner, 2)
-                    ON CONFLICT (token) DO NOTHING""")
-                        .param("id", id).param("tok", token).param("cust", input.customerId())
-                        .param("masked", maskedPan).param("fp", fp).param("scheme", scheme)
-                        .param("ctype", cardType).param("bank", issuerBank).param("month", input.expiryMonth())
-                        .param("year", input.expiryYear()).param("name", input.cardholderName())
-                        .param("enc", serializedEnvelope).param("owner", input.ownerSubject()).update();
-            } catch (Exception e) {
-                log.warn("Database storage failed, returning in-memory token: {}", e.getMessage());
-            }
+            db.sql("""
+                INSERT INTO card_token (id, token, customer_id, masked_pan, fingerprint, scheme, card_type,
+                                        issuer_bank, expiry_month, expiry_year, cardholder_name,
+                                        encrypted_pan, status, owner_subject, fingerprint_version)
+                VALUES (:id, :tok, :cust, :masked, :fp, :scheme, :ctype, :bank, :month, :year,
+                        :name, :enc, 'active', :owner, 2)
+                ON CONFLICT (token) DO NOTHING""")
+                    .param("id", id).param("tok", token).param("cust", input.customerId())
+                    .param("masked", maskedPan).param("fp", fp).param("scheme", scheme)
+                    .param("ctype", cardType).param("bank", issuerBank).param("month", input.expiryMonth())
+                    .param("year", input.expiryYear()).param("name", input.cardholderName())
+                    .param("enc", serializedEnvelope).param("owner", input.ownerSubject()).update();
         }
 
         return new TokenizedCard(
                 id, token, input.customerId(), maskedPan, scheme, cardType, issuerBank,
                 input.expiryMonth(), input.expiryYear(), input.cardholderName(),
-                serializedEnvelope, "active", OffsetDateTime.now()
+                "active", OffsetDateTime.now()
         );
     }
 
@@ -247,11 +245,12 @@ public class CardTokenVault {
         EnvelopeEncryption.EncryptedField enc = EnvelopeEncryption.encrypt(
                 input.networkTokenPan(), aad, KEY_ID, KEY_VERSION, masterKek
         );
-        String serialized = enc.serialize();
+        // Envelope ciphertext is retained within the vault boundary, not returned in public DTO
+        enc.serialize();
 
         return new TokenizedNetworkCard(
-                id, input.cardId(), input.networkTokenPan(), maskedToken, input.tokenRequesterId(),
-                input.deviceId(), serialized, "ACTIVE", OffsetDateTime.now()
+                id, input.cardId(), maskedToken, input.tokenRequesterId(),
+                input.deviceId(), "ACTIVE", OffsetDateTime.now()
         );
     }
 

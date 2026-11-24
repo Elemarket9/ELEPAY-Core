@@ -20,15 +20,24 @@ export function Wallet() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [operations, setOperations] = useState<Operation[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [moduleDisabled, setModuleDisabled] = useState(false);
   const [activeTab, setActiveTab] = useState<(typeof WALLET_TABS)[number]>("Send Money");
 
   async function load() {
+    setError(null);
+    setModuleDisabled(false);
     try {
       const w = await api<{ accounts: Account[] }>("/v1/wallet");
       setAccounts(w.accounts);
       setOperations(await api<Operation[]>("/v1/wallet/operations"));
     } catch (e) {
-      setError(e instanceof ApiError && e.status === 404 ? "No ELEPAY wallet is linked to this sign-in yet." : String(e));
+      if (e instanceof ApiError && e.code === "FEATURE_NOT_ENABLED") {
+        setModuleDisabled(true);
+        setAccounts([]);
+        setOperations([]);
+      } else {
+        setError(e instanceof ApiError && e.status === 404 ? "No ELEPAY wallet is linked to this sign-in yet." : String(e));
+      }
     }
   }
   useEffect(() => { void load(); }, []);
@@ -41,6 +50,9 @@ export function Wallet() {
   return (
     <main>
       <h1>My wallet</h1>
+      {moduleDisabled && (
+        <p className="notice warn">Consumer wallet module is disabled in this environment (Stage 1).</p>
+      )}
       {error && <p className="error">{error}</p>}
       <div className="cards">
         <div className="card"><div className="muted">Available</div><div className="big">{bal("available")}</div></div>
@@ -56,7 +68,7 @@ export function Wallet() {
         ))}
       </nav>
 
-      {activeTab === "Send Money" && <SendMoney onSent={() => void load()} />}
+      {!moduleDisabled && activeTab === "Send Money" && <SendMoney onSent={() => void load()} />}
       {activeTab === "Airtime & Data" && <AirtimeAndData />}
       {activeTab === "Pay Bills" && <PayBills />}
       {activeTab === "Virtual Cards" && <VirtualCards />}
@@ -243,13 +255,27 @@ function SavingsGoals() {
 // -------------------------------------------------------------------------------------------------
 // 6. Export Receipts & Statements (CSV & PDF)
 // -------------------------------------------------------------------------------------------------
+export function sanitizeCsvCell(value: string | number | null | undefined): string {
+  const raw = value === null || value === undefined ? "" : String(value);
+  const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
 function ExportStatements({ operations }: { operations: Operation[] }) {
   const [range, setRange] = useState("all");
 
   function exportCsv() {
     const headers = "Reference,Type,Counterparty,Amount (Pesewas),Amount (GHS),Status,CreatedAt\n";
     const rows = operations.map((o) =>
-      `"${o.reference}","${o.kind}","${o.counterparty ?? ""}","${o.amount}","${(o.amount / 100).toFixed(2)}","${o.status}","${o.createdAt}"`
+      [
+        o.reference,
+        o.kind,
+        o.counterparty ?? "",
+        o.amount,
+        (o.amount / 100).toFixed(2),
+        o.status,
+        o.createdAt,
+      ].map(sanitizeCsvCell).join(",")
     ).join("\n");
 
     const blob = new Blob([headers + rows], { type: "text/csv;charset=utf-8;" });
@@ -260,6 +286,7 @@ function ExportStatements({ operations }: { operations: Operation[] }) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -307,4 +334,5 @@ Verify payment completion using the transaction reference and authoritative back
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }

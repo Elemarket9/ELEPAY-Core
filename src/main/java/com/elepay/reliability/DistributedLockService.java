@@ -61,7 +61,7 @@ public class DistributedLockService {
         long waitMillis = waitTime.toMillis();
 
         do {
-            // 1. Try Redis
+            // 1. Authoritative Redis store when configured (never fall back to DB per-request to prevent split-brain)
             if (redisTemplate != null) {
                 try {
                     Boolean acquired = redisTemplate.opsForValue()
@@ -71,16 +71,13 @@ public class DistributedLockService {
                         return true;
                     }
                 } catch (Exception ignored) {
-                    // Redis unreachable: fallback to DB / local
+                    // Fail closed when Redis is configured but unreachable
                 }
-            }
-
-            // 2. Try DB distributed_lock fallback
-            if (db != null) {
+            } else if (db != null) {
+                // 2. Authoritative PostgreSQL distributed_lock store when Redis is not configured
                 try {
                     Instant now = Instant.now();
                     Instant expires = now.plus(leaseTime);
-                    // Clear expired locks for this key first
                     db.sql("DELETE FROM distributed_lock WHERE lock_key = :k AND expires_at <= now()")
                             .param("k", lockKey).update();
 
@@ -99,14 +96,14 @@ public class DistributedLockService {
                         threadOwners.get().put(lockKey, owner);
                         return true;
                     }
-                } catch (Exception ignored) {}
-            }
-
-            // 3. Fallback to Local JVM lock if both Redis and DB are unavailable/failed
-            if (redisTemplate == null && db == null) {
+                } catch (Exception ignored) {
+                    // Fail closed when DB is configured but unreachable
+                }
+            } else {
+                // 3. Local JVM lock only when neither Redis nor DB is configured
                 ReentrantLock lock = localLocks.computeIfAbsent(lockKey, k -> new ReentrantLock());
                 try {
-                    if (lock.tryLock(Math.min(50, waitMillis), TimeUnit.MILLISECONDS)) {
+                    if (lock.tryLock(Math.max(0, Math.min(50, waitMillis)), TimeUnit.MILLISECONDS)) {
                         threadOwners.get().put(lockKey, owner);
                         return true;
                     }
@@ -134,25 +131,20 @@ public class DistributedLockService {
         String owner = threadOwners.get().remove(lockKey);
         if (owner == null) return;
 
-        // 1. Release in Redis
         if (redisTemplate != null) {
             try {
                 redisTemplate.execute(UNLOCK_SCRIPT, Collections.singletonList(REDIS_LOCK_PREFIX + lockKey), owner);
             } catch (Exception ignored) {}
-        }
-
-        // 2. Release in DB
-        if (db != null) {
+        } else if (db != null) {
             try {
                 db.sql("DELETE FROM distributed_lock WHERE lock_key = :k AND lock_owner = :o")
                         .param("k", lockKey).param("o", owner).update();
             } catch (Exception ignored) {}
-        }
-
-        // 3. Release local lock if held
-        ReentrantLock local = localLocks.get(lockKey);
-        if (local != null && local.isHeldByCurrentThread()) {
-            local.unlock();
+        } else {
+            ReentrantLock local = localLocks.get(lockKey);
+            if (local != null && local.isHeldByCurrentThread()) {
+                local.unlock();
+            }
         }
     }
 

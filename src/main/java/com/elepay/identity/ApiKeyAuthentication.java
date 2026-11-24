@@ -24,14 +24,27 @@ public final class ApiKeyAuthentication extends AbstractAuthenticationToken {
 
     public ApiKeyAuthentication(UUID credentialId, UUID merchantId, java.util.Set<String> scopes, String signingSecret,
                                 String keyType, List<String> allowedIps) {
-        super(List.of(new SimpleGrantedAuthority("ROLE_merchant_api")));
+        super(buildAuthorities(scopes));
         this.credentialId = credentialId;
         this.merchantId = merchantId;
-        this.scopes = java.util.Set.copyOf(scopes);
+        this.scopes = scopes != null ? java.util.Set.copyOf(scopes) : java.util.Set.of();
         this.signingSecret = signingSecret;
         this.keyType = keyType != null ? keyType : "secret";
         this.allowedIps = allowedIps != null ? List.copyOf(allowedIps) : List.of();
         setAuthenticated(true);
+    }
+
+    private static List<SimpleGrantedAuthority> buildAuthorities(java.util.Set<String> scopes) {
+        var authorities = new java.util.ArrayList<SimpleGrantedAuthority>();
+        authorities.add(new SimpleGrantedAuthority("ROLE_merchant_api"));
+        if (scopes != null) {
+            for (String scope : scopes) {
+                if (scope != null && !scope.isBlank()) {
+                    authorities.add(new SimpleGrantedAuthority("SCOPE_" + scope.trim()));
+                }
+            }
+        }
+        return List.copyOf(authorities);
     }
 
     public UUID credentialId() { return credentialId; }

@@ -86,7 +86,7 @@ public class EmtechClient {
             return new SendResult(Outcome.REJECTED, 0, "validation", e.getMessage());
         }
         String path = path(resource);
-        guard.validate(endpoint(path));
+        guard.validatePartnerEgress(endpoint(path));
         String body = json.writeValueAsString(payload);
         String bearer = token(false);
         boolean refreshed = false;
@@ -155,7 +155,7 @@ public class EmtechClient {
         synchronized (this) {
             if (!force && token != null && Instant.now().isBefore(tokenDeadline)) return token;
             String url = endpoint("/v1/auth/token");
-            guard.validate(url);
+            guard.validatePartnerEgress(url);
             String request = json.writeValueAsString(java.util.Map.of(
                     "clientId", settings.clientId(), "clientSecret", settings.clientSecret()));
             String response;

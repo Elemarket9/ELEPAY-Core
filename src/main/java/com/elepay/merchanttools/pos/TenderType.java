@@ -4,5 +4,6 @@ public enum TenderType {
     CASH,
     MOMO,
     CARD,
-    WALLET
+    WALLET,
+    GHQR
 }

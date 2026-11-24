@@ -1,0 +1,337 @@
+import { ApiError } from "../api";
+
+export type OrderType = "RETAIL" | "DINE_IN" | "TAKEAWAY" | "DELIVERY";
+export type MomoNetwork = "mtn" | "telecel" | "airteltigo";
+export type TenderMode = "CASH" | "MOMO" | "GHQR" | "NFC_CARD";
+
+export const ORDER_TYPES: { value: OrderType; label: string }[] = [
+  { value: "RETAIL", label: "Retail" },
+  { value: "DINE_IN", label: "Dine-In" },
+  { value: "TAKEAWAY", label: "Takeaway" },
+  { value: "DELIVERY", label: "Delivery" },
+];
+
+export const MOMO_NETWORKS: { value: MomoNetwork; label: string }[] = [
+  { value: "mtn", label: "MTN MoMo" },
+  { value: "telecel", label: "Telecel Cash" },
+  { value: "airteltigo", label: "AirtelTigo Money" },
+];
+
+export interface PosTerminal {
+  id: string;
+  merchantId: string;
+  branchId: string | null;
+  serialNumber: string;
+  model: string;
+  hardwareFingerprint: string | null;
+  status: string;
+  pairedAt: string | null;
+  createdAt: string;
+}
+
+export interface PosCashier {
+  id: string;
+  merchantId: string;
+  name: string;
+  badgeNumber: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface PosShift {
+  id: string;
+  terminalId: string;
+  cashierId: string;
+  merchantId: string;
+  openingBalancePesewas: number;
+  closingBalancePesewas: number | null;
+  expectedCashPesewas: number;
+  cashDiscrepancyPesewas: number | null;
+  status: string;
+  shiftStart: string;
+  shiftEnd: string | null;
+  notes: string | null;
+}
+
+export interface HeldCart {
+  id: string;
+  terminalId: string;
+  cashierId: string;
+  merchantId: string;
+  customerName: string | null;
+  cartPayloadJson: string;
+  totalPesewas: number;
+  heldAt: string;
+}
+
+export interface DiningTable {
+  id: string;
+  sectionId: string;
+  tableNumber: string;
+  capacity: number;
+  status: "AVAILABLE" | "OCCUPIED" | "RESERVED" | "DIRTY";
+}
+
+export interface PosOrder {
+  id: string;
+  orderNumber: string;
+  totalPesewas: number;
+  paidPesewas: number;
+  changePesewas: number;
+  status: string;
+  orderType?: string;
+}
+
+export interface PosReceipt {
+  receiptNumber: string;
+  escposFormattedText: string;
+}
+
+export interface EvenSplitPortion {
+  portionIndex: number;
+  amountPesewas: number;
+}
+
+export interface EvenSplitResult {
+  orderId: string;
+  totalPesewas: number;
+  splitCount: number;
+  portions: EvenSplitPortion[];
+}
+
+export interface SeatSplitGroup {
+  seatNumber: number;
+  subtotalPesewas: number;
+  items: { id: string; itemName: string; quantity: number; lineTotalPesewas: number }[];
+}
+
+export interface SeatSplitResult {
+  orderId: string;
+  totalPesewas: number;
+  seatGroups: SeatSplitGroup[];
+}
+
+export type BackendTenderType = TenderMode | "CARD" | "WALLET";
+
+export interface TenderInitiation {
+  orderId?: string;
+  orderStatus?: string | null;
+  tenderType: BackendTenderType;
+  amountPesewas: number;
+  linkId?: string | null;
+  checkoutRef?: string | null;
+  checkoutReference?: string | null;
+  reference?: string | null;
+  attemptId?: string | null;
+  paymentStatus?: string | null;
+  status?: string | null;
+  payUrl?: string | null;
+  qrPayload?: string | null;
+  qrReference?: string | null;
+  prompt?: string | null;
+  message?: string | null;
+  order?: PosOrder | null;
+}
+
+export interface NormalizedTenderResult {
+  checkoutRef: string | null;
+  paymentStatus: string | null;
+  orderStatus: string | null;
+  qrPayload: string | null;
+  qrReference: string | null;
+  payUrl: string | null;
+  prompt: string | null;
+  order: PosOrder | null;
+}
+
+export interface NfcTapResult {
+  authorizationId?: string;
+  orderId: string;
+  terminalId?: string;
+  ksn?: string;
+  ksnCounter?: number;
+  cardScheme?: string | null;
+  cvmMethod?: string | null;
+  authCode?: string | null;
+  checkoutRef?: string | null;
+  payUrl?: string | null;
+  amountPesewas?: number;
+  status: string;
+  reference?: string | null;
+  authorizationCode?: string | null;
+  maskedPan?: string | null;
+  cardBrand?: string | null;
+  message?: string | null;
+  order?: PosOrder | null;
+}
+
+export interface NormalizedNfcTapResult {
+  authorizationId: string | null;
+  checkoutRef: string | null;
+  authCode: string | null;
+  cardScheme: string | null;
+  cvmMethod: string | null;
+  payUrl: string | null;
+  status: string;
+  message: string | null;
+  order: PosOrder | null;
+}
+
+export function normalizeTenderResult(res: TenderInitiation): NormalizedTenderResult {
+  return {
+    checkoutRef: res.checkoutRef ?? res.checkoutReference ?? res.reference ?? null,
+    paymentStatus: res.paymentStatus ?? res.status ?? null,
+    orderStatus: res.orderStatus ?? res.status ?? null,
+    qrPayload: res.qrPayload ?? null,
+    qrReference: res.qrReference ?? null,
+    payUrl: res.payUrl ?? null,
+    prompt: res.prompt ?? res.message ?? null,
+    order: res.order ?? null,
+  };
+}
+
+export function normalizeNfcTapResult(res: NfcTapResult): NormalizedNfcTapResult {
+  return {
+    authorizationId: res.authorizationId ?? null,
+    checkoutRef: res.checkoutRef ?? res.reference ?? null,
+    authCode: res.authCode ?? res.authorizationCode ?? null,
+    cardScheme: res.cardScheme ?? res.cardBrand ?? null,
+    cvmMethod: res.cvmMethod ?? null,
+    payUrl: res.payUrl ?? null,
+    status: res.status,
+    message: res.message ?? null,
+    order: res.order ?? null,
+  };
+}
+
+export interface KdsTicketSummary {
+  id: string;
+  ticketNumber?: string;
+  status: string;
+  stationName?: string | null;
+}
+
+export interface PosCartLine {
+  variantId: string;
+  label: string;
+  unitPricePesewas: number;
+  qty: number;
+  seatNumber: number | null;
+}
+
+export interface HeldCartPayload {
+  items: PosCartLine[];
+  discount: string;
+  taxPercent: string;
+  orderType: OrderType;
+  tableId: string | null;
+}
+
+export function isFeatureNotEnabled(err: unknown): boolean {
+  return err instanceof ApiError && err.code === "FEATURE_NOT_ENABLED";
+}
+
+export function computeCartTotals(
+  lines: Pick<PosCartLine, "unitPricePesewas" | "qty">[],
+  discountPesewas: number | null,
+  taxRatePercent: number,
+): { subtotal: number; effectiveDiscount: number; tax: number; total: number } {
+  const subtotal = lines.reduce((sum, l) => sum + l.unitPricePesewas * l.qty, 0);
+  const clampedDiscount = discountPesewas !== null && discountPesewas > 0
+    ? Math.min(discountPesewas, subtotal)
+    : 0;
+  const taxValid = Number.isFinite(taxRatePercent) && taxRatePercent >= 0 && taxRatePercent <= 100;
+  const tax = taxValid ? Math.round(((subtotal - clampedDiscount) * taxRatePercent) / 100) : 0;
+  return {
+    subtotal,
+    effectiveDiscount: clampedDiscount,
+    tax,
+    total: subtotal - clampedDiscount + tax,
+  };
+}
+
+export function buildPosOrderPayload(params: {
+  merchantId: string;
+  branchId?: string | null;
+  terminalId: string | null;
+  cashierId: string | null;
+  orderType: OrderType;
+  tableId?: string | null;
+  lines: PosCartLine[];
+  discountPesewas: number;
+  taxPesewas: number;
+}) {
+  return {
+    merchantId: params.merchantId,
+    branchId: params.branchId ?? null,
+    terminalId: params.terminalId,
+    cashierId: params.cashierId,
+    customerId: null,
+    tableId: params.orderType === "DINE_IN" ? (params.tableId ?? null) : null,
+    items: params.lines.map((l) => ({
+      variantId: l.variantId,
+      itemName: l.label,
+      quantity: l.qty,
+      unitPricePesewas: l.unitPricePesewas,
+      discountPesewas: 0,
+      taxPesewas: 0,
+      modifiersJson: "[]",
+      seatNumber: params.orderType === "DINE_IN" ? l.seatNumber : null,
+      course: null,
+      notes: null,
+    })),
+    discountPesewas: params.discountPesewas,
+    taxPesewas: params.taxPesewas,
+    tipPesewas: 0,
+    orderType: params.orderType,
+  };
+}
+
+export function isTerminalStatusPaid(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const norm = status.trim().toUpperCase();
+  return norm === "PAID" || norm === "SUCCEEDED" || norm === "CAPTURED" || norm === "COMPLETED";
+}
+
+export function isTerminalStatusFailed(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const norm = status.trim().toUpperCase();
+  return norm === "FAILED" || norm === "DECLINED" || norm === "CANCELLED" || norm === "EXPIRED";
+}
+
+export function formatKdsStatusLabel(status: string | null | undefined): string {
+  if (!status) return "Not sent";
+  const norm = status.trim().toUpperCase();
+  switch (norm) {
+    case "NEW":
+    case "QUEUED":
+      return "Kitchen: Queued";
+    case "IN_PROGRESS":
+    case "PREPARING":
+      return "Kitchen: Preparing";
+    case "READY":
+    case "BUMPED":
+      return "Kitchen: Ready";
+    case "COMPLETED":
+    case "SERVED":
+      return "Kitchen: Served";
+    default:
+      return `Kitchen: ${norm}`;
+  }
+}
+
+export function parseHeldCartPayload(json: string): HeldCartPayload | null {
+  try {
+    const parsed = JSON.parse(json) as Partial<HeldCartPayload>;
+    if (!Array.isArray(parsed.items)) return null;
+    return {
+      items: parsed.items,
+      discount: typeof parsed.discount === "string" ? parsed.discount : "",
+      taxPercent: typeof parsed.taxPercent === "string" ? parsed.taxPercent : "0",
+      orderType: parsed.orderType ?? "RETAIL",
+      tableId: parsed.tableId ?? null,
+    };
+  } catch {
+    return null;
+  }
+}

@@ -429,4 +429,62 @@ class ExternalWalletWithdrawalTest {
         assertThat(dailyTotal).isEqualTo(withdrawalPerThread);
         assertThat(dailyTotal).isLessThanOrEqualTo(EnterpriseWithdrawalComplianceService.BOG_TIER_1_DAILY_LIMIT);
     }
+
+    @Test
+    @DisplayName("Cross-Tenant Idempotency Isolation: Different enterprises using the same idempotencyKey do not collide or leak")
+    void testCrossTenantSameIdempotencyKeyIsolation() {
+        UUID enterpriseA = UUID.randomUUID();
+        UUID enterpriseB = UUID.randomUUID();
+        String sharedKey = "shared-idem-key-" + UUID.randomUUID();
+
+        var reqA = new EnterpriseWithdrawalRequest(
+                sharedKey,
+                enterpriseA,
+                PARTNER_ID,
+                "cust_a_1",
+                null,
+                "Ama Boateng",
+                "GHA-111111111-1",
+                2,
+                25_000L,
+                "GHS",
+                WithdrawalDestinationType.MOMO,
+                "mtn",
+                "0241111111",
+                Map.of()
+        );
+
+        var reqB = new EnterpriseWithdrawalRequest(
+                sharedKey,
+                enterpriseB,
+                PARTNER_ID,
+                "cust_b_1",
+                null,
+                "Yaw Mensah",
+                "GHA-222222222-2",
+                2,
+                40_000L,
+                "GHS",
+                WithdrawalDestinationType.MOMO,
+                "mtn",
+                "0242222222",
+                Map.of()
+        );
+
+        var resA = withdrawalEngine.requestWithdrawal(reqA);
+        var resB = withdrawalEngine.requestWithdrawal(reqB);
+
+        assertThat(resA.enterpriseId()).isEqualTo(enterpriseA);
+        assertThat(resB.enterpriseId()).isEqualTo(enterpriseB);
+        assertThat(resA.withdrawalId()).isNotEqualTo(resB.withdrawalId());
+        assertThat(resA.replayed()).isFalse();
+        assertThat(resB.replayed()).isFalse();
+        assertThat(resB.amountPesewas()).isEqualTo(40_000L);
+        assertThat(resB.externalCustomerId()).isEqualTo("cust_b_1");
+
+        // Same enterprise retrying same key replays its own result
+        var replayA = withdrawalEngine.requestWithdrawal(reqA);
+        assertThat(replayA.replayed()).isTrue();
+        assertThat(replayA.withdrawalId()).isEqualTo(resA.withdrawalId());
+    }
 }

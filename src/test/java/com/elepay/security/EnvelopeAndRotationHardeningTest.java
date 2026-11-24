@@ -113,4 +113,20 @@ class EnvelopeAndRotationHardeningTest {
         assertThat(batch.failedCount()).isEqualTo(0);
         assertThat(batch.results()).allMatch(f -> f.keyVersion() == 2);
     }
+
+    @Test
+    @DisplayName("KmsSecretProvider.unwrapSecret enforces expectedAad binding")
+    void testKmsSecretProviderRejectsAadMismatch() {
+        KmsSecretProvider provider = new KmsSecretProvider(new KmsSecretProvider.KeyManagementBackend() {
+            @Override public SecretKey loadKek() { return kekV1; }
+            @Override public String description() { return "test-kek"; }
+        });
+
+        String wrapped = provider.wrapSecret("sk_live_partner_12345", "merchant:A");
+        assertThat(provider.unwrapSecret(wrapped, "merchant:A")).isEqualTo("sk_live_partner_12345");
+
+        assertThatThrownBy(() -> provider.unwrapSecret(wrapped, "merchant:B"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("AAD mismatch");
+    }
 }

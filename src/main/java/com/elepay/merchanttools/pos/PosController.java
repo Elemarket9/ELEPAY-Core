@@ -3,6 +3,7 @@ package com.elepay.merchanttools.pos;
 import com.elepay.common.ApiException;
 import com.elepay.emtech.DeviceEvents;
 import com.elepay.common.Idempotency;
+import com.elepay.merchant.MerchantAccess;
 import com.elepay.merchanttools.MerchantToolAccess;
 import static com.elepay.merchanttools.MerchantToolAccess.Resource.*;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +26,7 @@ public class PosController {
     private final PosReceiptService receiptService;
     private final PosOfflineSyncService syncService;
     private final DeviceEvents deviceEvents;
+    private final MerchantAccess merchants;
 
     public PosController(
             MerchantToolAccess access,
@@ -36,7 +38,8 @@ public class PosController {
             PosSplitBillService splitBillService,
             PosReceiptService receiptService,
             PosOfflineSyncService syncService,
-            DeviceEvents deviceEvents
+            DeviceEvents deviceEvents,
+            MerchantAccess merchants
     ) {
         this.access = access;
         this.idempotency = idempotency;
@@ -48,6 +51,7 @@ public class PosController {
         this.receiptService = receiptService;
         this.syncService = syncService;
         this.deviceEvents = deviceEvents;
+        this.merchants = merchants;
     }
 
     // Terminal endpoints
@@ -83,12 +87,48 @@ public class PosController {
         return terminalService.saveRegulatory(terminalId, profile);
     }
 
-    public record PairTerminalRequest(String serialNumber, String pairingCode, String hardwareFingerprint) {}
+    public record PairTerminalRequest(
+            String serialNumber,
+            String pairingCode,
+            String hardwareFingerprint,
+            String merchantCode,
+            String attestationPublicKey,
+            String attestationChallenge,
+            String attestationSignature,
+            String keyAlgorithm
+    ) {
+        public PairTerminalRequest(String serialNumber, String pairingCode, String hardwareFingerprint) {
+            this(serialNumber, pairingCode, hardwareFingerprint, null, null, null, null, null);
+        }
+    }
 
     @PostMapping("/terminals/pair")
     public PosTerminalService.PairingResult pairTerminal(@RequestBody PairTerminalRequest req) {
         var terminal = terminalService.findBySerialNumber(req.serialNumber()).orElseThrow(() -> ApiException.notFound("Terminal not found"));
         access.manage(terminal.merchantId());
+        boolean hasAttestation = (req.attestationPublicKey() != null && !req.attestationPublicKey().isBlank())
+                || (req.attestationSignature() != null && !req.attestationSignature().isBlank())
+                || (req.attestationChallenge() != null && !req.attestationChallenge().isBlank())
+                || (req.keyAlgorithm() != null && !req.keyAlgorithm().isBlank());
+        if (hasAttestation) {
+            String merchantCode = (req.merchantCode() != null && !req.merchantCode().isBlank())
+                    ? req.merchantCode().trim()
+                    : merchants.find(terminal.merchantId()).map(MerchantAccess.Merchant::merchantCode).orElse(null);
+            String expectedChallenge = "pos-pair:" + merchantCode + ":" + req.serialNumber() + ":" + (req.pairingCode() == null ? "" : req.pairingCode());
+            if (req.attestationChallenge() != null && !req.attestationChallenge().isBlank()
+                    && !expectedChallenge.equals(req.attestationChallenge())) {
+                throw ApiException.badRequest("invalid_attestation_challenge", "Attestation challenge does not match expected pairing payload");
+            }
+            return terminalService.pairTerminal(
+                    merchantCode,
+                    req.serialNumber(),
+                    req.pairingCode(),
+                    req.hardwareFingerprint(),
+                    req.attestationPublicKey(),
+                    req.keyAlgorithm(),
+                    req.attestationSignature()
+            );
+        }
         return terminalService.pairTerminal(req.serialNumber(), req.pairingCode(), req.hardwareFingerprint());
     }
 
@@ -147,21 +187,32 @@ public class PosController {
 
     @PostMapping("/carts/hold")
     public PosCartService.HeldCart holdCart(@RequestBody HoldCartRequest req) {
-        access.manage(req.merchantId());
+        var caller = access.operateAccess(req.merchantId());
         access.belongs(req.merchantId(), TERMINAL, req.terminalId());
         access.belongs(req.merchantId(), CASHIER, req.cashierId());
+        var terminal = terminalService.getTerminal(req.terminalId())
+                .orElseThrow(() -> ApiException.notFound("Terminal not found"));
+        access.requireBranch(caller, terminal.branchId());
         return cartService.holdCart(req.terminalId(), req.cashierId(), req.merchantId(), req.customerName(), req.cartPayloadJson(), req.totalPesewas());
     }
 
     @GetMapping("/carts/held/{terminalId}")
     public List<PosCartService.HeldCart> listHeldCarts(@PathVariable UUID terminalId) {
-        access.manage(TERMINAL, terminalId);
+        var caller = access.viewAccess(TERMINAL, terminalId);
+        var terminal = terminalService.getTerminal(terminalId)
+                .orElseThrow(() -> ApiException.notFound("Terminal not found"));
+        access.requireBranch(caller, terminal.branchId());
         return cartService.listHeldCarts(terminalId);
     }
 
     @PostMapping("/carts/held/{cartId}/recall")
     public PosCartService.HeldCart recallHeldCart(@PathVariable UUID cartId) {
-        access.manage(CART, cartId);
+        var caller = access.operateAccess(CART, cartId);
+        var cart = cartService.getHeldCart(cartId)
+                .orElseThrow(() -> ApiException.notFound("Held cart not found"));
+        var terminal = terminalService.getTerminal(cart.terminalId())
+                .orElseThrow(() -> ApiException.notFound("Terminal not found"));
+        access.requireBranch(caller, terminal.branchId());
         return cartService.recallHeldCart(cartId);
     }
 
@@ -173,13 +224,18 @@ public class PosController {
     ) {}
 
     @PostMapping("/orders")
-    public PosOrderService.PosOrder createOrder(@RequestBody CreateOrderRequest req) {
-        access.operate(req.merchantId());
+    public PosOrderService.PosOrder createOrder(
+            @RequestHeader("Idempotency-Key") String key,
+            @RequestBody CreateOrderRequest req) {
+        var caller = access.operateAccess(req.merchantId());
+        access.requireBranch(caller, req.branchId());
         verifyOrderInputs(req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(), req.items());
-        return orderService.createOrder(
-                req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(),
-                req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType()
-        );
+        return idempotency.execute("pos-order:" + req.merchantId(), key, req,
+                PosOrderService.PosOrder.class,
+                () -> orderService.createOrder(
+                        req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(),
+                        req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType()
+                ));
     }
 
     @GetMapping("/orders/{orderId}")
@@ -202,6 +258,18 @@ public class PosController {
         return idempotency.execute("pos-cash:" + order.merchantId() + ":" + orderId, key, req,
                 PosOrderService.PosOrder.class,
                 () -> orderService.addTenderPayment(orderId, req.tenderType(), req.amountPesewas(), req.reference()));
+    }
+
+    @PostMapping("/orders/{orderId}/tenders")
+    public PosOrderService.TenderResult initiateTender(
+            @PathVariable UUID orderId,
+            @RequestHeader("Idempotency-Key") String key,
+            @RequestBody PosOrderService.TenderRequest req) {
+        var order = verifyOrder(orderId);
+        String actor = com.elepay.identity.Actor.current().subject();
+        return idempotency.execute("pos-tender:" + order.merchantId() + ":" + orderId, key, req,
+                PosOrderService.TenderResult.class,
+                () -> orderService.initiateTender(orderId, req, actor));
     }
 
     @PostMapping("/orders/{orderId}/digital-checkout")
@@ -275,8 +343,9 @@ public class PosController {
     }
 
     private PosOrderService.PosOrder verifyOrder(UUID id) {
-        access.operate(ORDER, id);
+        var caller = access.operateAccess(ORDER, id);
         var order = orderService.getOrder(id).orElseThrow(() -> ApiException.notFound("Order not found"));
+        access.requireBranch(caller, order.branchId());
         access.branch(order.merchantId(), order.branchId());
         if (order.terminalId() != null) access.belongs(order.merchantId(), TERMINAL, order.terminalId());
         if (order.cashierId() != null) access.belongs(order.merchantId(), CASHIER, order.cashierId());

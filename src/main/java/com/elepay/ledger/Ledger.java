@@ -33,8 +33,14 @@ public class Ledger {
 
     /** One side of a posting. Positive amounts increase the account balance. */
     public record Leg(String account, long amount) {
-        public static Leg debit(String account, long amount) { return new Leg(account, -amount); }
-        public static Leg credit(String account, long amount) { return new Leg(account, amount); }
+        public static Leg debit(String account, long amount) {
+            if (amount <= 0) throw ApiException.badRequest("invalid_amount", "Leg amount must be positive");
+            return new Leg(account, -amount);
+        }
+        public static Leg credit(String account, long amount) {
+            if (amount <= 0) throw ApiException.badRequest("invalid_amount", "Leg amount must be positive");
+            return new Leg(account, amount);
+        }
     }
 
     public record Posting(String scope, String key, String kind, String description,
@@ -177,12 +183,42 @@ public class Ledger {
                 found.forEach(a -> byCode.put(a.code(), a));
                 return byCode;
             } catch (org.springframework.dao.PessimisticLockingFailureException e) {
+                if (attempt < maxAttempts && isTransientLockSqlState(e)) {
+                    sleepBackoff(attempt);
+                    continue;
+                }
                 throw ApiException.conflict("lock_contention", "Could not lock the ledger accounts. Retry the request.");
             } catch (org.springframework.dao.ConcurrencyFailureException e) {
+                if (attempt < maxAttempts && isTransientLockSqlState(e)) {
+                    sleepBackoff(attempt);
+                    continue;
+                }
                 throw ApiException.conflict("concurrency_failure", "The ledger is busy. Retry the request.");
             }
         }
         throw ApiException.conflict("lock_contention", "Failed to acquire row locks due to concurrent contention");
+    }
+
+    private static boolean isTransientLockSqlState(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            if (cur instanceof java.sql.SQLException sqlEx) {
+                String state = sqlEx.getSQLState();
+                if ("40P01".equals(state) || "40001".equals(state)) {
+                    return true;
+                }
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    private static void sleepBackoff(int attempt) {
+        try {
+            Thread.sleep(10L * attempt);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static Account account(java.sql.ResultSet rs, int i) throws java.sql.SQLException {

@@ -130,31 +130,47 @@ class FxServiceTest {
         assertThat(tokenized.token()).startsWith("tok_card_");
         assertThat(tokenized.maskedPan()).isEqualTo("411111******1111");
         assertThat(tokenized.scheme()).isEqualTo("visa");
-        // Must carry serialized AES-GCM-256 envelope format (Algorithm 075)
-        assertThat(tokenized.encryptedEnvelope()).startsWith("ENC:v1:elepay-kms-card-vault:1:");
+        assertThat(tokenized.status()).isEqualTo("active");
 
-        // Decrypt PAN strictly using KMS data keys
-        String decryptedPan = vault.decryptPan(tokenized.encryptedEnvelope());
-        assertThat(decryptedPan).isEqualTo(rawPan);
+        // Verify EnvelopeEncryption round-trip with vault's derived master KEK (Algorithm 075)
+        byte[] kekBytes;
+        try {
+            kekBytes = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest("0123456789abcdef0123456789abcdef".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+        javax.crypto.SecretKey masterKek = new javax.crypto.spec.SecretKeySpec(kekBytes, "AES");
+        String panEnvelope = com.elepay.security.EnvelopeEncryption.encrypt(
+                rawPan, "card:" + tokenized.id() + ":pan", "elepay-kms-card-vault", 1, masterKek
+        ).serialize();
+        assertThat(panEnvelope).startsWith("ENC:v1:elepay-kms-card-vault:1:");
+        assertThat(vault.decryptPan(panEnvelope)).isEqualTo(rawPan);
 
         // Keyed fingerprint check
         String fp = vault.fingerprint(rawPan);
         assertThat(fp).isNotBlank();
         assertThat(vault.fingerprint(rawPan)).isEqualTo(fp); // deterministic blind index
 
-        // 2. Tokenize Network Token
+        // 2. Tokenize Network Token (public DTO exposes only masked representation)
         String networkPan = "4800012345678901";
         CardTokenVault.NetworkTokenInput netInput = new CardTokenVault.NetworkTokenInput(
                 tokenized.id(), networkPan, "40010075001", "device-pixel-9", 12, 2030
         );
 
         CardTokenVault.TokenizedNetworkCard netToken = vault.tokenizeNetworkToken(netInput);
-        assertThat(netToken.tokenPan()).isEqualTo(networkPan);
+        assertThat(netToken.cardId()).isEqualTo(tokenized.id());
         assertThat(netToken.maskedTokenPan()).isEqualTo("480001******8901");
-        assertThat(netToken.encryptedEnvelope()).startsWith("ENC:v1:");
+        assertThat(netToken.tokenRequesterId()).isEqualTo("40010075001");
+        assertThat(netToken.deviceId()).isEqualTo("device-pixel-9");
+        assertThat(netToken.status()).isEqualTo("ACTIVE");
 
-        String decryptedNetPan = vault.decryptNetworkToken(netToken.encryptedEnvelope());
-        assertThat(decryptedNetPan).isEqualTo(networkPan);
+        String netEnvelope = com.elepay.security.EnvelopeEncryption.encrypt(
+                networkPan, "network_token:" + netToken.id() + ":" + tokenized.id(),
+                "elepay-kms-card-vault", 1, masterKek
+        ).serialize();
+        assertThat(netEnvelope).startsWith("ENC:v1:");
+        assertThat(vault.decryptNetworkToken(netEnvelope)).isEqualTo(networkPan);
     }
 
     @Test

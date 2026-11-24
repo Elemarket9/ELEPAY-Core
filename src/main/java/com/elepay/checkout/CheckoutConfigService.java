@@ -107,7 +107,11 @@ public class CheckoutConfigService {
                 bps = getIntConfig(KEY_FEE_CARD_BPS, 0);
                 fixed = getLongConfig(KEY_FEE_CARD_FIXED, 0L);
             }
-            default -> throw ApiException.badRequest("invalid_method", "Choose wallet, momo or card");
+            case "ghqr" -> {
+                bps = getIntConfig("checkout.fee.customer.ghqr_bps", 0);
+                fixed = getLongConfig("checkout.fee.customer.ghqr_fixed", 0L);
+            }
+            default -> throw ApiException.badRequest("invalid_method", "Choose wallet, momo, card or ghqr");
         }
 
         return Math.addExact(Math.multiplyExact(subtotal, bps) / 10_000L, fixed);

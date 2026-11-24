@@ -36,7 +36,7 @@ class MandateAndReconciliationIT extends PostgresTestBase {
         String s = UUID.randomUUID().toString().substring(0, 8);
         opsToken = api.token("ops-" + s, "ops");
         makerOpsToken = api.token("maker-ops-" + s, "ops");
-        checkerOpsToken = api.token("checker-ops-" + s, "ops");
+        checkerOpsToken = api.token("checker-ops-" + s, "ops_admin");
 
         merchantOwnerToken = api.token("merch-owner-" + s);
         var created = api.call("POST", "/v1/merchants", merchantOwnerToken, null,

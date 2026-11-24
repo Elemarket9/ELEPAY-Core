@@ -3698,6 +3698,86 @@
         },
         "type" : "object"
       },
+      "NfcTapRequest" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "cardScheme" : {
+            "type" : "string"
+          },
+          "cardToken" : {
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "emvTlvHex" : {
+            "type" : "string"
+          },
+          "encryptedPinBlock" : {
+            "type" : "string"
+          },
+          "ksn" : {
+            "type" : "string"
+          },
+          "maskedPan" : {
+            "type" : "string"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "NfcTapResult" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "authCode" : {
+            "type" : "string"
+          },
+          "authorizationId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "cardScheme" : {
+            "type" : "string"
+          },
+          "checkoutRef" : {
+            "type" : "string"
+          },
+          "cvmMethod" : {
+            "type" : "string"
+          },
+          "ksn" : {
+            "type" : "string"
+          },
+          "ksnCounter" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "payUrl" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "terminalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "OfflineOrderPayload" : {
         "properties" : {
           "branchId" : {
@@ -3770,7 +3850,7 @@
             "type" : "string"
           },
           "tenderType" : {
-            "enum" : [ "CASH", "MOMO", "CARD", "WALLET" ],
+            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR" ],
             "type" : "string"
           }
         },
@@ -3963,7 +4043,22 @@
       },
       "PairTerminalRequest" : {
         "properties" : {
+          "attestationChallenge" : {
+            "type" : "string"
+          },
+          "attestationPublicKey" : {
+            "type" : "string"
+          },
+          "attestationSignature" : {
+            "type" : "string"
+          },
           "hardwareFingerprint" : {
+            "type" : "string"
+          },
+          "keyAlgorithm" : {
+            "type" : "string"
+          },
+          "merchantCode" : {
             "type" : "string"
           },
           "pairingCode" : {
@@ -4038,10 +4133,23 @@
       },
       "PairingResult" : {
         "properties" : {
+          "apiKey" : {
+            "type" : "string"
+          },
           "authToken" : {
             "type" : "string"
           },
+          "credentialId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "initialKsn" : {
+            "type" : "string"
+          },
           "serialNumber" : {
+            "type" : "string"
+          },
+          "signingSecret" : {
             "type" : "string"
           },
           "status" : {
@@ -5048,6 +5156,14 @@
         "required" : [ "actionType", "resourceId", "resourceType" ],
         "type" : "object"
       },
+      "ProvisionDukptRequest" : {
+        "properties" : {
+          "bdkId" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "PublicCheckout" : {
         "properties" : {
           "collector" : {
@@ -5271,7 +5387,7 @@
           },
           "method" : {
             "minLength" : 1,
-            "pattern" : "momo|card",
+            "pattern" : "momo|card|ghqr",
             "type" : "string"
           },
           "network" : {
@@ -6610,8 +6726,121 @@
             "type" : "string"
           },
           "tenderType" : {
-            "enum" : [ "CASH", "MOMO", "CARD", "WALLET" ],
+            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR" ],
             "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "TenderRequest" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "network" : {
+            "type" : "string"
+          },
+          "phone" : {
+            "type" : "string"
+          },
+          "reference" : {
+            "type" : "string"
+          },
+          "splitKey" : {
+            "type" : "string"
+          },
+          "tenderType" : {
+            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR" ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "TenderResult" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "attemptId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "checkoutRef" : {
+            "type" : "string"
+          },
+          "linkId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "order" : {
+            "$ref" : "#/components/schemas/PosOrder"
+          },
+          "orderId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "orderStatus" : {
+            "type" : "string"
+          },
+          "payUrl" : {
+            "type" : "string"
+          },
+          "paymentStatus" : {
+            "type" : "string"
+          },
+          "prompt" : {
+            "type" : "string"
+          },
+          "qrPayload" : {
+            "type" : "string"
+          },
+          "qrReference" : {
+            "type" : "string"
+          },
+          "tenderType" : {
+            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR" ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "TerminalDukptProfile" : {
+        "properties" : {
+          "bdkId" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "currentKsn" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "initialKsn" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "terminalId" : {
+            "type" : "string"
+          },
+          "transactionCounter" : {
+            "format" : "int64",
+            "type" : "integer"
           }
         },
         "type" : "object"
@@ -13177,6 +13406,15 @@
             "default" : "OPEN",
             "type" : "string"
           }
+        }, {
+          "in" : "query",
+          "name" : "limit",
+          "required" : false,
+          "schema" : {
+            "default" : 500,
+            "format" : "int32",
+            "type" : "integer"
+          }
         } ],
         "responses" : {
           "200" : {
@@ -13632,6 +13870,14 @@
     "/v1/pos/orders" : {
       "post" : {
         "operationId" : "createOrder",
+        "parameters" : [ {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
         "requestBody" : {
           "content" : {
             "application/json" : {
@@ -13756,6 +14002,50 @@
           }
         },
         "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/orders/{orderId}/nfc-tap" : {
+      "post" : {
+        "operationId" : "nfcTap",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/NfcTapRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/NfcTapResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-nfc-controller" ]
       }
     },
     "/v1/pos/orders/{orderId}/payments" : {
@@ -13907,6 +14197,50 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/SeatSplitResult"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/orders/{orderId}/tenders" : {
+      "post" : {
+        "operationId" : "initiateTender",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/TenderRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TenderResult"
                 }
               }
             },
@@ -14120,6 +14454,42 @@
           }
         },
         "tags" : [ "pos-controller" ]
+      }
+    },
+    "/v1/pos/terminals/{terminalId}/dukpt/provision" : {
+      "post" : {
+        "operationId" : "provisionDukpt",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "terminalId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ProvisionDukptRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TerminalDukptProfile"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-nfc-controller" ]
       }
     },
     "/v1/pos/terminals/{terminalId}/events" : {
@@ -14915,7 +15285,7 @@
         }, {
           "in" : "query",
           "name" : "deviceId",
-          "required" : true,
+          "required" : false,
           "schema" : {
             "type" : "string"
           }

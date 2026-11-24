@@ -23,6 +23,8 @@ public class PosOfflineTransactionEngine {
 
     public static final long DEFAULT_OFFLINE_FLOOR_LIMIT_PESEWAS = 5_000L; // 50.00 GHS
     public static final String POS_OFFLINE_CLEARING_ACCOUNT = "system:clearing:pos_offline:GHS";
+    private static final java.util.regex.Pattern MASKED_PAN_PATTERN =
+            java.util.regex.Pattern.compile("^\\d{6}\\*{4,9}\\d{4}$");
 
     private final JdbcClient db;
     private final Ledger ledger;
@@ -74,9 +76,17 @@ public class PosOfflineTransactionEngine {
 
     @Transactional
     public OfflineAuthorizationResult processOfflineTransaction(OfflineTransactionRequest req) {
+        if (req == null || req.merchantId() == null || req.terminalId() == null || req.terminalId().isBlank()) {
+            throw ApiException.badRequest("invalid_terminal_or_merchant", "terminalId and merchantId are required");
+        }
         if (req.amountPesewas() <= 0) {
             throw ApiException.badRequest("invalid_amount", "Amount must be positive minor units");
         }
+        if (req.maskedPan() == null || !MASKED_PAN_PATTERN.matcher(req.maskedPan().trim()).matches()) {
+            throw ApiException.badRequest("invalid_masked_pan",
+                    "maskedPan must match 6 digits + 4-9 asterisks + 4 digits (raw PANs are forbidden)");
+        }
+        verifyTerminalOwnership(req.merchantId(), req.terminalId());
 
         // 1. Verify offline floor limit
         if (req.amountPesewas() > DEFAULT_OFFLINE_FLOOR_LIMIT_PESEWAS) {
@@ -123,7 +133,7 @@ public class PosOfflineTransactionEngine {
                 .param("amt", req.amountPesewas())
                 .param("curr", req.currency() != null ? req.currency() : "GHS")
                 .param("mcc", req.mcc() != null ? req.mcc() : "5411")
-                .param("pan", req.maskedPan() != null ? req.maskedPan() : "402234******1234")
+                .param("pan", req.maskedPan().trim())
                 .param("entry", req.entryMode() != null ? req.entryMode() : "051")
                 .param("storedAt", storedTime)
                 .update();
@@ -132,6 +142,28 @@ public class PosOfflineTransactionEngine {
                 true, queueId, req.terminalId(), req.offlineStan(), authCode,
                 req.amountPesewas(), "STORED", null
         );
+    }
+
+    @Transactional
+    public TerminalSyncResult syncTerminalBatch(UUID merchantId, String terminalId) {
+        if (merchantId == null || terminalId == null || terminalId.isBlank()) {
+            throw ApiException.badRequest("invalid_terminal_or_merchant", "terminalId and merchantId are required");
+        }
+        verifyTerminalOwnership(merchantId, terminalId);
+        var pendingList = db.sql("""
+            SELECT id, terminal_id, merchant_id, offline_stan, amount_pesewas, currency, sync_status
+            FROM pos_offline_transaction_queue
+            WHERE terminal_id = :tid AND merchant_id = :mid AND sync_status = 'PENDING_SYNC'
+            ORDER BY stored_at ASC
+            FOR UPDATE
+        """).param("tid", terminalId).param("mid", merchantId).query((rs, rowNum) -> new Object[] {
+                rs.getObject("id", UUID.class),
+                rs.getObject("merchant_id", UUID.class),
+                rs.getString("offline_stan"),
+                rs.getLong("amount_pesewas"),
+                rs.getString("currency")
+        }).list();
+        return syncPendingRows(terminalId, pendingList);
     }
 
     @Transactional
@@ -149,7 +181,36 @@ public class PosOfflineTransactionEngine {
                 rs.getLong("amount_pesewas"),
                 rs.getString("currency")
         }).list();
+        return syncPendingRows(terminalId, pendingList);
+    }
 
+    private void verifyTerminalOwnership(UUID merchantId, String terminalId) {
+        try {
+            UUID terminalUuid = UUID.fromString(terminalId.trim());
+            db.sql("SELECT merchant_id FROM pos_terminal WHERE id = :id")
+                    .param("id", terminalUuid)
+                    .query(UUID.class)
+                    .optional()
+                    .ifPresent(owner -> {
+                        if (!merchantId.equals(owner)) {
+                            throw ApiException.notFound("Terminal not found");
+                        }
+                    });
+        } catch (IllegalArgumentException ignored) {
+            // Non-UUID terminal identifiers (e.g., TID-...) are checked against DUKPT provisioning below
+        }
+        db.sql("SELECT merchant_id FROM pos_terminal_dukpt_key WHERE terminal_id = :tid")
+                .param("tid", terminalId)
+                .query(UUID.class)
+                .optional()
+                .ifPresent(owner -> {
+                    if (!merchantId.equals(owner)) {
+                        throw ApiException.notFound("Terminal not found");
+                    }
+                });
+    }
+
+    private TerminalSyncResult syncPendingRows(String terminalId, List<Object[]> pendingList) {
         List<BatchSyncOutcome> outcomes = new ArrayList<>();
         int synced = 0;
         int rejected = 0;

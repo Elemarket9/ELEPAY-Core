@@ -146,12 +146,40 @@ public class JwksService {
             if (expectedIssuer != null && !expectedIssuer.equals(payload.path("iss").asText())) {
                 return false;
             }
-            if (expectedAudience != null && !expectedAudience.equals(payload.path("aud").asText())) {
+            if (expectedAudience != null) {
+                JsonNode audNode = payload.get("aud");
+                boolean audMatched = false;
+                if (audNode != null) {
+                    if (audNode.isTextual()) {
+                        audMatched = expectedAudience.equals(audNode.asText());
+                    } else if (audNode.isArray()) {
+                        for (JsonNode item : audNode) {
+                            if (item.isTextual() && expectedAudience.equals(item.asText())) {
+                                audMatched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!audMatched) {
+                    return false;
+                }
+            }
+            if (!payload.has("exp") || !payload.get("exp").canConvertToLong()) {
                 return false;
             }
-            long exp = payload.path("exp").asLong(0);
-            if (exp > 0 && Instant.ofEpochSecond(exp).isBefore(Instant.now())) {
-                return false; // Expired
+            long exp = payload.get("exp").asLong();
+            if (exp <= 0 || Instant.ofEpochSecond(exp).isBefore(Instant.now())) {
+                return false; // Missing or expired
+            }
+            if (payload.has("nbf") && !payload.get("nbf").isNull()) {
+                if (!payload.get("nbf").canConvertToLong()) {
+                    return false;
+                }
+                long nbf = payload.get("nbf").asLong();
+                if (Instant.ofEpochSecond(nbf).isAfter(Instant.now().plusSeconds(60))) {
+                    return false; // Not yet valid beyond 60s skew
+                }
             }
 
             // Verify RSA signature

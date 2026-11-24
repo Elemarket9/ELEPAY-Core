@@ -10,12 +10,15 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 
 /**
@@ -34,14 +37,22 @@ public class Webhooks implements OutboxConsumer {
     private final RestClient http;
     private final org.apache.hc.client5.http.impl.classic.CloseableHttpClient transport;
     private final boolean enabled;
+    private final TransactionTemplate tx;
 
     private final com.elepay.common.OutboundUrlGuard guard;
 
+    Webhooks(JdbcClient db, boolean enabled, com.elepay.common.OutboundUrlGuard guard) {
+        this(db, enabled, guard, null);
+    }
+
+    @Autowired
     Webhooks(JdbcClient db, @Value("${elepay.outbox.enabled:true}") boolean enabled,
-             com.elepay.common.OutboundUrlGuard guard) {
+             com.elepay.common.OutboundUrlGuard guard,
+             @Autowired(required = false) PlatformTransactionManager tm) {
         this.db = db;
         this.enabled = enabled;
         this.guard = guard;
+        this.tx = tm != null ? new TransactionTemplate(tm) : null;
         var dns = new org.apache.hc.client5.http.DnsResolver() {
             @Override public java.net.InetAddress[] resolve(String host) throws java.net.UnknownHostException {
                 return guard.resolveForConnection(host);
@@ -199,19 +210,42 @@ public class Webhooks implements OutboxConsumer {
         if (enabled) sendBatch(50);
     }
 
-    @Transactional
+    private <T> T inTx(java.util.function.Supplier<T> action) {
+        return tx != null ? tx.execute(s -> action.get()) : action.get();
+    }
+
+    private void inTxVoid(Runnable action) {
+        if (tx != null) {
+            tx.executeWithoutResult(s -> action.run());
+        } else {
+            action.run();
+        }
+    }
+
     public int sendBatch(int limit) {
         record Pending(UUID event, UUID endpoint, String url, String secret, String body, int attempts) {}
-        List<Pending> batch = db.sql("""
-                SELECT d.event_id, d.endpoint_id, w.url, w.secret, e.payload::text, d.attempts
-                FROM webhook_delivery d JOIN webhook_endpoint w ON w.id = d.endpoint_id
-                JOIN outbox_event e ON e.id = d.event_id
-                WHERE d.status = 'pending' AND w.active AND w.environment = 'live' AND d.next_attempt_at <= now()
-                ORDER BY d.next_attempt_at LIMIT :limit FOR UPDATE OF d SKIP LOCKED""")
-                .param("limit", limit)
-                .query((rs, i) -> new Pending(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class),
-                        rs.getString(3), rs.getString(4), rs.getString(5), rs.getInt(6)))
-                .list();
+        List<Pending> batch = inTx(() -> {
+            List<Pending> claimed = db.sql("""
+                    SELECT d.event_id, d.endpoint_id, w.url, w.secret, e.payload::text, d.attempts
+                    FROM webhook_delivery d JOIN webhook_endpoint w ON w.id = d.endpoint_id
+                    JOIN outbox_event e ON e.id = d.event_id
+                    WHERE d.status = 'pending' AND w.active AND w.environment = 'live' AND d.next_attempt_at <= now()
+                    ORDER BY d.next_attempt_at LIMIT :limit FOR UPDATE OF d SKIP LOCKED""")
+                    .param("limit", limit)
+                    .query((rs, i) -> new Pending(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class),
+                            rs.getString(3), rs.getString(4), rs.getString(5), rs.getInt(6)))
+                    .list();
+            for (Pending p : claimed) {
+                db.sql("""
+                        UPDATE webhook_delivery
+                        SET next_attempt_at = now() + interval '60 seconds'
+                        WHERE event_id = :e AND endpoint_id = :w""")
+                        .param("e", p.event()).param("w", p.endpoint()).update();
+            }
+            return claimed;
+        });
+        if (batch == null || batch.isEmpty()) return 0;
+
         int delivered = 0;
         for (Pending p : batch) {
             Integer status = null;
@@ -236,13 +270,15 @@ public class Webhooks implements OutboxConsumer {
             boolean ok = status != null && status >= 200 && status < 300;
             if (ok) delivered++;
             String next = ok ? "delivered" : (p.attempts() + 1 >= MAX_ATTEMPTS ? "dead" : "pending");
-            db.sql("""
+            Integer finalStatus = status;
+            String finalError = error;
+            inTxVoid(() -> db.sql("""
                     UPDATE webhook_delivery SET status = :status, attempts = attempts + 1, last_status = :code,
                            last_error = :err, delivered_at = CASE WHEN :ok THEN now() END,
                            next_attempt_at = now() + make_interval(secs => least(3600, 5 * power(2, attempts)))
                     WHERE event_id = :e AND endpoint_id = :w""")
-                    .param("status", next).param("code", status).param("err", error).param("ok", ok)
-                    .param("e", p.event()).param("w", p.endpoint()).update();
+                    .param("status", next).param("code", finalStatus).param("err", finalError).param("ok", ok)
+                    .param("e", p.event()).param("w", p.endpoint()).update());
             if (!ok) log.info("Webhook {} endpoint {} failed: {} {}", p.event(), p.endpoint(), status, error);
         }
         return delivered;

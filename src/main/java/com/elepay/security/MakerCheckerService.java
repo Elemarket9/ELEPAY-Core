@@ -12,7 +12,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -49,6 +52,18 @@ public class MakerCheckerService {
     private final KillSwitchService killSwitchService;
     private final java.util.List<ApprovedActionHandler> handlers;
     private final AdminAnomalyDetector anomalyDetector;
+    private final TransactionTemplate requiresNewTx;
+
+    public MakerCheckerService(
+            JdbcClient db,
+            Audit audit,
+            OpsQueue ops,
+            ObjectMapper json,
+            KillSwitchService killSwitchService,
+            java.util.List<ApprovedActionHandler> handlers
+    ) {
+        this(db, audit, ops, json, killSwitchService, handlers, null);
+    }
 
     @Autowired
     public MakerCheckerService(
@@ -57,7 +72,8 @@ public class MakerCheckerService {
             OpsQueue ops,
             ObjectMapper json,
             @Autowired(required = false) KillSwitchService killSwitchService,
-            @Autowired(required = false) java.util.List<ApprovedActionHandler> handlers
+            @Autowired(required = false) java.util.List<ApprovedActionHandler> handlers,
+            @Autowired(required = false) PlatformTransactionManager txManager
     ) {
         this.db = db;
         this.audit = audit;
@@ -66,6 +82,13 @@ public class MakerCheckerService {
         this.killSwitchService = killSwitchService;
         this.handlers = handlers == null ? java.util.List.of() : handlers;
         this.anomalyDetector = new AdminAnomalyDetector(db);
+        if (txManager != null) {
+            TransactionTemplate template = new TransactionTemplate(txManager);
+            template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            this.requiresNewTx = template;
+        } else {
+            this.requiresNewTx = null;
+        }
     }
 
     public record Proposal(
@@ -102,8 +125,10 @@ public class MakerCheckerService {
             throw ApiException.badRequest("missing_proposer", "Proposer subject is required");
         }
         String normalizedType = actionType.toUpperCase(Locale.ROOT);
+        Map<String, Object> safePayload = payload != null ? payload : Map.of();
+        validateProposalPayload(normalizedType, resourceId, merchantId, safePayload);
         UUID id = UUID.randomUUID();
-        String payloadJson = json.writeValueAsString(payload != null ? payload : Map.of());
+        String payloadJson = json.writeValueAsString(safePayload);
 
         db.sql("""
                 INSERT INTO maker_checker_proposal (
@@ -133,7 +158,7 @@ public class MakerCheckerService {
         return getProposal(id);
     }
 
-    @Transactional(noRollbackFor = ApiException.class)
+    @Transactional
     public Proposal approve(UUID proposalId, String approverSubject, String note) {
         Proposal existing = lockProposal(proposalId);
         if (!"PENDING".equals(existing.status())) {
@@ -148,30 +173,7 @@ public class MakerCheckerService {
 
         // Core Invariant: proposed_by != approved_by
         if (existing.proposedBy().equals(approverSubject)) {
-            UUID operatorUuid = toUuid(approverSubject);
-            anomalyDetector.detectAnomalies(new AdminAnomalyDetector.AdminActionEvent(
-                    UUID.randomUUID(),
-                    operatorUuid,
-                    "ops_admin",
-                    "APPROVE_" + existing.actionType(),
-                    existing.resourceType(),
-                    existing.resourceId(),
-                    "127.0.0.1",
-                    "MakerCheckerService",
-                    null,
-                    null,
-                    operatorUuid,
-                    Instant.now()
-            ));
-            if (audit != null) {
-                audit.record(approverSubject, "maker_checker.self_approval_blocked",
-                        "proposal:" + proposalId,
-                        Map.of("actionType", existing.actionType(), "anomaly", AdminAnomalyDetector.AnomalyType.SELF_APPROVAL.name()));
-            }
-            if (ops != null) {
-                ops.raise("maker_checker_self_approval_attempt", "critical", "proposal:" + proposalId,
-                        Map.of("actor", approverSubject, "actionType", existing.actionType()));
-            }
+            runInNewTransaction(() -> recordSelfApprovalAttempt(proposalId, existing, approverSubject));
             throw new ApiException(HttpStatus.FORBIDDEN,
                     "maker_checker_self_approval",
                     "Dual control violation: Maker (" + existing.proposedBy() + ") cannot approve their own proposal");
@@ -191,26 +193,6 @@ public class MakerCheckerService {
                 .update();
 
         Proposal approved = getProposal(proposalId);
-        if ("KILL_SWITCH_CHANGE".equals(approved.actionType()) && killSwitchService != null) {
-            Object target = approved.payload().get("target");
-            Object frozenObj = approved.payload().get("frozen");
-            boolean frozen = frozenObj instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(frozenObj));
-            if ("global".equalsIgnoreCase(String.valueOf(target))) {
-                killSwitchService.setGlobalFrozen(frozen, approved.reason(), approverSubject);
-            } else if ("merchant".equalsIgnoreCase(String.valueOf(target)) && approved.merchantId() != null) {
-                killSwitchService.setMerchantFrozen(approved.merchantId(), frozen, approved.reason(), approverSubject);
-            } else if ("module".equalsIgnoreCase(String.valueOf(target))) {
-                killSwitchService.setModuleEnabled(String.valueOf(approved.payload().get("module")), !frozen,
-                        approved.reason(), approverSubject);
-            }
-        }
-        if (killSwitchService != null && "MERCHANT_UNFREEZE".equals(approved.actionType()) && approved.merchantId() != null) {
-            killSwitchService.setMerchantFrozen(approved.merchantId(), false, approved.reason(), approverSubject);
-        }
-        if (killSwitchService != null && "MODULE_ENABLE".equals(approved.actionType())) {
-            killSwitchService.setModuleEnabled(String.valueOf(approved.payload().get("module")), true,
-                    approved.reason(), approverSubject);
-        }
         for (ApprovedActionHandler handler : handlers) {
             if (handler.supports(approved.actionType())) handler.execute(approved);
         }
@@ -223,7 +205,85 @@ public class MakerCheckerService {
                             "checker", approverSubject));
         }
 
+        runAfterCommit(() -> applyKillSwitchMutation(approved, approverSubject));
+
         return getProposal(proposalId);
+    }
+
+    private void applyKillSwitchMutation(Proposal approved, String approverSubject) {
+        if (killSwitchService == null) return;
+        if ("KILL_SWITCH_CHANGE".equals(approved.actionType())) {
+            Object target = approved.payload().get("target");
+            Object frozenObj = approved.payload().get("frozen");
+            boolean frozen = frozenObj instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(frozenObj));
+            if ("global".equalsIgnoreCase(String.valueOf(target))) {
+                killSwitchService.setGlobalFrozen(frozen, approved.reason(), approverSubject);
+            } else if ("merchant".equalsIgnoreCase(String.valueOf(target)) && approved.merchantId() != null) {
+                killSwitchService.setMerchantFrozen(approved.merchantId(), frozen, approved.reason(), approverSubject);
+            } else if ("module".equalsIgnoreCase(String.valueOf(target))) {
+                killSwitchService.setModuleEnabled(String.valueOf(approved.payload().get("module")), !frozen,
+                        approved.reason(), approverSubject);
+            }
+        } else if ("MERCHANT_UNFREEZE".equals(approved.actionType()) && approved.merchantId() != null) {
+            killSwitchService.setMerchantFrozen(approved.merchantId(), false, approved.reason(), approverSubject);
+        } else if ("MODULE_ENABLE".equals(approved.actionType())) {
+            killSwitchService.setModuleEnabled(String.valueOf(approved.payload().get("module")), true,
+                    approved.reason(), approverSubject);
+        }
+    }
+
+    private static void runAfterCommit(Runnable action) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            action.run();
+                        }
+                    });
+        } else {
+            action.run();
+        }
+    }
+
+    private static void validateProposalPayload(String actionType, String resourceId, UUID merchantId, Map<String, Object> payload) {
+        switch (actionType) {
+            case "KILL_SWITCH_CHANGE" -> {
+                Object targetObj = payload.get("target");
+                String target = targetObj == null ? "" : String.valueOf(targetObj).trim();
+                if (!Set.of("global", "merchant", "module").contains(target.toLowerCase(Locale.ROOT))) {
+                    throw ApiException.badRequest("invalid_proposal_payload", "KILL_SWITCH_CHANGE requires payload.target in {global, merchant, module}");
+                }
+                if (!(payload.get("frozen") instanceof Boolean)) {
+                    throw ApiException.badRequest("invalid_proposal_payload", "KILL_SWITCH_CHANGE requires boolean payload.frozen");
+                }
+                if ("merchant".equalsIgnoreCase(target) && merchantId == null) {
+                    throw ApiException.badRequest("invalid_proposal_payload", "KILL_SWITCH_CHANGE target=merchant requires merchantId");
+                }
+                if ("module".equalsIgnoreCase(target)) {
+                    Object mod = payload.get("module");
+                    if (mod == null || String.valueOf(mod).isBlank()) {
+                        throw ApiException.badRequest("invalid_proposal_payload", "KILL_SWITCH_CHANGE target=module requires non-blank payload.module");
+                    }
+                }
+            }
+            case "MODULE_ENABLE" -> {
+                Object mod = payload.get("module");
+                if (mod == null || String.valueOf(mod).isBlank()) {
+                    throw ApiException.badRequest("invalid_proposal_payload", "MODULE_ENABLE requires non-blank payload.module");
+                }
+            }
+            case "MERCHANT_UNFREEZE" -> {
+                if (merchantId == null) {
+                    throw ApiException.badRequest("invalid_proposal_payload", "MERCHANT_UNFREEZE requires merchantId");
+                }
+            }
+            default -> {
+                if ((resourceId == null || resourceId.isBlank()) && payload.isEmpty()) {
+                    throw ApiException.badRequest("invalid_proposal_payload", actionType + " requires a resourceId or non-empty payload");
+                }
+            }
+        }
     }
 
     @Transactional
@@ -313,6 +373,41 @@ public class MakerCheckerService {
                 rs.getString(13),
                 rs.getObject(14, OffsetDateTime.class)
         );
+    }
+
+    private void runInNewTransaction(Runnable action) {
+        if (requiresNewTx != null) {
+            requiresNewTx.executeWithoutResult(status -> action.run());
+        } else {
+            action.run();
+        }
+    }
+
+    private void recordSelfApprovalAttempt(UUID proposalId, Proposal existing, String approverSubject) {
+        UUID operatorUuid = toUuid(approverSubject);
+        anomalyDetector.detectAnomalies(new AdminAnomalyDetector.AdminActionEvent(
+                UUID.randomUUID(),
+                operatorUuid,
+                "ops_admin",
+                "APPROVE_" + existing.actionType(),
+                existing.resourceType(),
+                existing.resourceId(),
+                "127.0.0.1",
+                "MakerCheckerService",
+                null,
+                null,
+                operatorUuid,
+                Instant.now()
+        ));
+        if (audit != null) {
+            audit.record(approverSubject, "maker_checker.self_approval_blocked",
+                    "proposal:" + proposalId,
+                    Map.of("actionType", existing.actionType(), "anomaly", AdminAnomalyDetector.AnomalyType.SELF_APPROVAL.name()));
+        }
+        if (ops != null) {
+            ops.raise("maker_checker_self_approval_attempt", "critical", "proposal:" + proposalId,
+                    Map.of("actor", approverSubject, "actionType", existing.actionType()));
+        }
     }
 
     private static UUID toUuid(String subject) {

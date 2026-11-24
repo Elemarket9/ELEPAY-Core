@@ -125,8 +125,9 @@ public class RestaurantController {
 
     @PostMapping("/kds/tickets")
     public KdsService.KdsTicket createTicket(@RequestBody CreateTicketRequest req) {
-        access.operate(req.merchantId());
+        var caller = access.operateAccess(req.merchantId());
         access.belongs(req.merchantId(), ORDER, req.orderId());
+        access.requireOrderBranch(caller, req.orderId());
         if (req.tableId() != null) access.belongs(req.merchantId(), TABLE, req.tableId());
         if (req.items() == null || req.items().isEmpty())
             throw com.elepay.common.ApiException.badRequest("items_required", "A kitchen ticket needs at least one item");
@@ -139,13 +140,14 @@ public class RestaurantController {
 
     @GetMapping("/kds/tickets/active/{merchantId}")
     public List<KdsService.KdsTicket> getActiveTickets(@PathVariable UUID merchantId) {
-        access.view(merchantId);
-        return kdsService.getActiveTickets(merchantId);
+        var caller = access.viewAccess(merchantId);
+        return kdsService.getActiveTickets(merchantId, caller.branchId());
     }
 
     @PostMapping("/kds/tickets/{ticketId}/bump")
     public KdsService.KdsTicket bumpTicket(@PathVariable UUID ticketId) {
-        access.operate(KDS_TICKET, ticketId);
+        var caller = access.operateAccess(KDS_TICKET, ticketId);
+        access.requireTicketBranch(caller, ticketId);
         return kdsService.bumpTicket(ticketId);
     }
 
@@ -154,24 +156,26 @@ public class RestaurantController {
     @GetMapping("/kds/sync")
     public KdsService.SyncResult sync(@RequestParam UUID merchantId, @RequestParam(defaultValue = "0") long since,
                                       @RequestParam(required = false) UUID stationId) {
-        access.view(merchantId);
+        var caller = access.viewAccess(merchantId);
         if (stationId != null) access.belongs(merchantId, STATION, stationId);
-        return kdsService.sync(merchantId, since, stationId);
+        return kdsService.sync(merchantId, since, stationId, caller.branchId());
     }
 
     public record AdvanceRequest(String from, String actionId) {}
 
     @PostMapping("/kds/tickets/{ticketId}/advance")
     public KdsService.BumpResult advanceTicket(@PathVariable UUID ticketId, @RequestBody AdvanceRequest req) {
-        access.operate(KDS_TICKET, ticketId);
+        var caller = access.operateAccess(KDS_TICKET, ticketId);
+        access.requireTicketBranch(caller, ticketId);
         return kdsService.advanceTicket(ticketId, req.from(), req.actionId());
     }
 
     @PostMapping("/kds/tickets/{ticketId}/stations/{stationId}/advance")
     public KdsService.BumpResult advanceStation(@PathVariable UUID ticketId, @PathVariable UUID stationId,
                                                 @RequestBody AdvanceRequest req) {
-        UUID merchantId = access.operate(KDS_TICKET, ticketId);
-        access.belongs(merchantId, STATION, stationId);
+        var caller = access.operateAccess(KDS_TICKET, ticketId);
+        access.requireTicketBranch(caller, ticketId);
+        access.belongs(caller.merchantId(), STATION, stationId);
         return kdsService.advanceStation(ticketId, stationId, req.from(), req.actionId());
     }
 
@@ -179,14 +183,16 @@ public class RestaurantController {
 
     @PostMapping("/kds/tickets/{ticketId}/cancel")
     public KdsService.BumpResult cancelTicket(@PathVariable UUID ticketId, @RequestBody CancelRequest req) {
-        access.operate(KDS_TICKET, ticketId);
+        var caller = access.operateAccess(KDS_TICKET, ticketId);
+        access.requireTicketBranch(caller, ticketId);
         return kdsService.cancel(ticketId, req.actionId(), req.reason());
     }
 
     @PostMapping("/kds/tickets/{ticketId}/reprint")
     public KdsPrintService.PrintJob reprint(@PathVariable UUID ticketId, @RequestParam UUID stationId) {
-        UUID merchantId = access.operate(KDS_TICKET, ticketId);
-        access.belongs(merchantId, STATION, stationId);
+        var caller = access.operateAccess(KDS_TICKET, ticketId);
+        access.requireTicketBranch(caller, ticketId);
+        access.belongs(caller.merchantId(), STATION, stationId);
         return printService.reprint(ticketId, stationId);
     }
 
@@ -227,9 +233,10 @@ public class RestaurantController {
 
     @PostMapping("/kds/print-jobs/claim")
     public ResponseEntity<KdsPrintService.PrintJob> claimPrintJob(@RequestParam UUID merchantId,
-                                                                  @RequestParam String deviceId) {
+                                                                  @RequestParam(required = false) String deviceId) {
         access.operate(merchantId);
-        return printService.claimNext(merchantId, deviceId).map(ResponseEntity::ok)
+        String effectiveDeviceId = resolveKitchenDeviceId(deviceId);
+        return printService.claimNext(merchantId, effectiveDeviceId).map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
@@ -238,7 +245,16 @@ public class RestaurantController {
     @PostMapping("/kds/print-jobs/{jobId}/result")
     public KdsPrintService.PrintJob reportPrintResult(@PathVariable UUID jobId, @RequestBody PrintResultRequest req) {
         access.operate(PRINT_JOB, jobId);
-        return printService.report(jobId, req.deviceId(), Boolean.TRUE.equals(req.printed()), req.error());
+        String effectiveDeviceId = resolveKitchenDeviceId(req.deviceId());
+        return printService.report(jobId, effectiveDeviceId, Boolean.TRUE.equals(req.printed()), req.error());
+    }
+
+    private static String resolveKitchenDeviceId(String requestedDeviceId) {
+        var actor = com.elepay.identity.Actor.current();
+        if ("kitchen".equalsIgnoreCase(actor.keyType())) {
+            return actor.subject();
+        }
+        return requestedDeviceId;
     }
 
     // Kitchen devices: pair once with a code, list, revoke
@@ -267,14 +283,16 @@ public class RestaurantController {
 
     @PostMapping("/kds/items/{itemId}/bump")
     public ResponseEntity<Void> bumpItem(@PathVariable UUID itemId) {
-        access.operate(KDS_ITEM, itemId);
+        var caller = access.operateAccess(KDS_ITEM, itemId);
+        access.requireKdsItemBranch(caller, itemId);
         kdsService.bumpItem(itemId);
         return ResponseEntity.ok().build();
     }
 
     @PostMapping("/kds/orders/{orderId}/fire-course")
     public ResponseEntity<Void> fireCourse(@PathVariable UUID orderId, @RequestParam Course course) {
-        access.operate(ORDER, orderId);
+        var caller = access.operateAccess(ORDER, orderId);
+        access.requireOrderBranch(caller, orderId);
         kdsService.fireCourse(orderId, course);
         return ResponseEntity.ok().build();
     }
@@ -318,7 +336,8 @@ public class RestaurantController {
     // Restaurant Split Bill
     @PostMapping("/orders/{orderId}/split-by-seat")
     public RestaurantSplitBillService.RestaurantSplitResult splitBySeat(@PathVariable UUID orderId) {
-        access.view(ORDER, orderId);
+        var caller = access.viewAccess(ORDER, orderId);
+        access.requireOrderBranch(caller, orderId);
         return splitBillService.splitBySeat(orderId);
     }
 }

@@ -49,19 +49,33 @@ class AuditIntegrityIT extends PostgresTestBase {
         String forgedDetails = "{\"daily\": 99999999}";
         String forged = Audit.computeHash(target.prevHash(), target.id(), target.action(), target.actor(),
                 forgedDetails, target.createdAt().toString());
-        // Gate 3: By default, PostgreSQL EVENT TRIGGER blocks ALTER TABLE ... DISABLE TRIGGER with 42501.
+        // Gate 3 (V57): Even if elepay.test_allow_insider_simulation is set, ALTER TABLE ... DISABLE TRIGGER is blocked with 42501.
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update())
+                tx.executeWithoutResult(s -> {
+                    db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
+                    db.sql("ALTER TABLE journal_entry DISABLE TRIGGER journal_entry_immutable").update();
+                }))
+                .satisfies(ex -> {
+                    Throwable cur = ex;
+                    boolean found42501 = false;
+                    while (cur != null) {
+                        if (cur instanceof java.sql.SQLException sqlEx && "42501".equals(sqlEx.getSQLState())) {
+                            found42501 = true;
+                            break;
+                        }
+                        cur = cur.getCause();
+                    }
+                    assertThat(found42501).as("Expected SQLSTATE 42501 from V57 event trigger").isTrue();
+                })
                 .rootCause()
                 .hasMessageContaining("Disabling immutability triggers on financial ledger or audit tables is strictly forbidden");
 
-        tx.executeWithoutResult(s -> {
-            db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
-            db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
-        });
         try {
-            db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb), entry_hash = :h WHERE id = :id")
-                    .param("d", forgedDetails).param("h", forged).param("id", target.id()).update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb), entry_hash = :h WHERE id = :id")
+                        .param("d", forgedDetails).param("h", forged).param("id", target.id()).update();
+            });
             var tamperedResponse = api.call("GET", "/v1/ops/audit/verify", ops, null, null);
             var tampered = tamperedResponse.body();
             assertThat(tamperedResponse.status()).as(String.valueOf(tampered)).isEqualTo(200);
@@ -69,15 +83,17 @@ class AuditIntegrityIT extends PostgresTestBase {
             assertThat(tampered.get("failure").asString()).contains("tampered at id " + target.id());
 
             // Even changing only the subject, which the old chain did not cover, is caught.
-            db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb), entry_hash = :h, subject = 'customer:C2' WHERE id = :id")
-                    .param("d", target.payload()).param("h", target.entryHash()).param("id", target.id()).update();
+            tx.executeWithoutResult(s -> {
+                db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb), entry_hash = :h, subject = 'customer:C2' WHERE id = :id")
+                        .param("d", target.payload()).param("h", target.entryHash()).param("id", target.id()).update();
+            });
             assertThat(api.call("GET", "/v1/ops/audit/verify", ops, null, null).body().get("valid").asBoolean()).isFalse();
         } finally {
-            db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb), entry_hash = :h, subject = 'customer:C1' WHERE id = :id")
-                    .param("d", target.payload()).param("h", target.entryHash()).param("id", target.id()).update();
             tx.executeWithoutResult(s -> {
-                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
-                db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+                db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb), entry_hash = :h, subject = 'customer:C1' WHERE id = :id")
+                        .param("d", target.payload()).param("h", target.entryHash()).param("id", target.id()).update();
             });
         }
         assertThat(api.call("GET", "/v1/ops/audit/verify", ops, null, null).body().get("valid").asBoolean()).isTrue();

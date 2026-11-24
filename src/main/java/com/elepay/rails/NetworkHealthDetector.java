@@ -2,9 +2,13 @@ package com.elepay.rails;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -52,7 +56,8 @@ public class NetworkHealthDetector {
         final Deque<RequestMetric> metrics = new ConcurrentLinkedDeque<>();
         volatile CircuitState state = CircuitState.CLOSED;
         volatile Instant lastStateChange = Instant.now();
-        volatile int consecutiveTimeouts = 0;
+        final AtomicInteger consecutiveTimeouts = new AtomicInteger(0);
+        final AtomicBoolean probing = new AtomicBoolean(false);
     }
 
     private final JdbcClient db;
@@ -78,9 +83,9 @@ public class NetworkHealthDetector {
         }
 
         if (timeout) {
-            rs.consecutiveTimeouts++;
+            rs.consecutiveTimeouts.incrementAndGet();
         } else if (success) {
-            rs.consecutiveTimeouts = 0;
+            rs.consecutiveTimeouts.set(0);
         }
 
         evaluateCircuit(rail, rs, success);
@@ -93,11 +98,13 @@ public class NetworkHealthDetector {
             if (lastSuccess) {
                 rs.state = CircuitState.CLOSED;
                 rs.lastStateChange = now;
-                rs.consecutiveTimeouts = 0;
+                rs.consecutiveTimeouts.set(0);
+                rs.probing.set(false);
                 log.info("Rail {} probe succeeded -> Circuit transitioned from HALF_OPEN to CLOSED", rail);
             } else {
                 rs.state = CircuitState.OPEN;
                 rs.lastStateChange = now;
+                rs.probing.set(false);
                 log.warn("Rail {} probe failed -> Circuit transitioned back to OPEN", rail);
             }
             return;
@@ -107,16 +114,18 @@ public class NetworkHealthDetector {
             if (now.isAfter(rs.lastStateChange.plus(OPEN_COOLDOWN))) {
                 rs.state = CircuitState.HALF_OPEN;
                 rs.lastStateChange = now;
+                rs.probing.set(false);
                 log.info("Rail {} cooldown elapsed -> Circuit transitioned from OPEN to HALF_OPEN (probing)", rail);
             }
             return;
         }
 
         // Circuit is CLOSED: check if trip threshold exceeded
-        if (rs.consecutiveTimeouts >= CONSECUTIVE_TIMEOUTS_THRESHOLD) {
+        int timeouts = rs.consecutiveTimeouts.get();
+        if (timeouts >= CONSECUTIVE_TIMEOUTS_THRESHOLD) {
             rs.state = CircuitState.OPEN;
             rs.lastStateChange = now;
-            log.warn("Rail {} tripped circuit to OPEN due to {} consecutive timeouts", rail, rs.consecutiveTimeouts);
+            log.warn("Rail {} tripped circuit to OPEN due to {} consecutive timeouts", rail, timeouts);
             return;
         }
 
@@ -146,6 +155,7 @@ public class NetworkHealthDetector {
                     if (rs.state == CircuitState.OPEN && Instant.now().isAfter(rs.lastStateChange.plus(OPEN_COOLDOWN))) {
                         rs.state = CircuitState.HALF_OPEN;
                         rs.lastStateChange = Instant.now();
+                        rs.probing.set(true);
                         log.info("Rail {} transitioned to HALF_OPEN for recovery probe", rail);
                         return true;
                     }
@@ -153,8 +163,8 @@ public class NetworkHealthDetector {
             }
             return false;
         }
-        // In HALF_OPEN, allows single probe
-        return true;
+        // In HALF_OPEN, allow only a single concurrent probe
+        return rs.probing.compareAndSet(false, true);
     }
 
     /**
@@ -190,6 +200,7 @@ public class NetworkHealthDetector {
         RailState rs = getOrCreate(rail);
         rs.state = CircuitState.OPEN;
         rs.lastStateChange = Instant.now();
+        rs.probing.set(false);
         log.warn("Circuit for rail {} manually tripped to OPEN", rail);
     }
 
@@ -200,7 +211,8 @@ public class NetworkHealthDetector {
         RailState rs = getOrCreate(rail);
         rs.state = CircuitState.CLOSED;
         rs.lastStateChange = Instant.now();
-        rs.consecutiveTimeouts = 0;
+        rs.consecutiveTimeouts.set(0);
+        rs.probing.set(false);
         rs.metrics.clear();
         log.info("Circuit for rail {} reset to CLOSED", rail);
     }
@@ -212,6 +224,8 @@ public class NetworkHealthDetector {
     public void persistHealthWindows() {
         Instant now = Instant.now();
         Instant windowStart = now.minusSeconds(60);
+        OffsetDateTime startTs = OffsetDateTime.ofInstant(windowStart, ZoneOffset.UTC);
+        OffsetDateTime endTs = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
         for (Map.Entry<String, RailState> entry : railStates.entrySet()) {
             String rail = entry.getKey();
             RailHealth h = getHealth(rail);
@@ -223,8 +237,8 @@ public class NetworkHealthDetector {
                         VALUES (:id, :rail, :start, :end, :tot, :succ, :fail, :to, :avg, :p95, :st)""")
                         .param("id", UUID.randomUUID())
                         .param("rail", rail)
-                        .param("start", windowStart.toString())
-                        .param("end", now.toString())
+                        .param("start", startTs)
+                        .param("end", endTs)
                         .param("tot", h.totalRequests())
                         .param("succ", h.successfulRequests())
                         .param("fail", h.failedRequests())

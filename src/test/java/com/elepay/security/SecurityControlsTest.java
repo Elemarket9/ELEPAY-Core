@@ -127,7 +127,8 @@ class SecurityControlsTest {
 
         // Create valid JWT signed with keyPairOld
         String header = Base64.getUrlEncoder().withoutPadding().encodeToString("{\"alg\":\"RS256\",\"typ\":\"JWT\",\"kid\":\"key-2025\"}".getBytes(StandardCharsets.UTF_8));
-        String payload = Base64.getUrlEncoder().withoutPadding().encodeToString("{\"iss\":\"https://auth.elepay.com\",\"aud\":\"elepay-core\",\"sub\":\"user-1\"}".getBytes(StandardCharsets.UTF_8));
+        long exp = Instant.now().plusSeconds(3600).getEpochSecond();
+        String payload = Base64.getUrlEncoder().withoutPadding().encodeToString(("{\"iss\":\"https://auth.elepay.com\",\"aud\":\"elepay-core\",\"sub\":\"user-1\",\"exp\":" + exp + "}").getBytes(StandardCharsets.UTF_8));
         Signature sig = Signature.getInstance("SHA256withRSA");
         sig.initSign(keyPairOld.getPrivate());
         sig.update((header + "." + payload).getBytes(StandardCharsets.US_ASCII));

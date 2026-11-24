@@ -115,6 +115,7 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [envFilter, setEnvFilter] = useState<string>("all");
   const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [newKeyPlaintext, setNewKeyPlaintext] = useState<string | null>(null);
 
@@ -128,13 +129,15 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
   const load = () => {
     const q = envFilter === "all" ? "" : `?environment=${envFilter}`;
     api<ApiKey[]>(`/v1/developer/merchants/${merchantId}/keys${q}`)
-      .then(setKeys)
-      .catch((e) => setMsg(e.message));
+      .then((res) => { setKeys(res); setError(null); })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   };
 
   useEffect(() => { load(); }, [merchantId, envFilter]);
 
   async function createKey() {
+    setError(null);
+    setMsg(null);
     try {
       const ips = allowedIps.split(",").map((s) => s.trim()).filter(Boolean);
       const res = await api<{ apiKey: string }>(`/v1/developer/merchants/${merchantId}/keys`, {
@@ -145,23 +148,27 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
       setLabel("");
       load();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
   async function revoke(id: string) {
     if (!confirm("Are you sure you want to revoke this API key? This cannot be undone.")) return;
+    setError(null);
+    setMsg(null);
     try {
       await api(`/v1/developer/merchants/${merchantId}/keys/${id}`, { method: "DELETE" });
       setMsg("API key revoked");
       load();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
   async function rotate(id: string) {
     if (!confirm("Rotate this API key? The old key will be revoked immediately and a new key generated.")) return;
+    setError(null);
+    setMsg(null);
     try {
       const res = await api<{ apiKey: string }>(`/v1/developer/merchants/${merchantId}/keys/${id}/rotate`, {
         body: { label: "Rotated Key" },
@@ -170,7 +177,7 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
       setMsg("API key rotated successfully.");
       load();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -190,6 +197,7 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
         <button onClick={() => setShowModal(true)}>+ Generate New API Key</button>
       </div>
 
+      {error && <p className="error">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
 
       {newKeyPlaintext && (
@@ -459,17 +467,20 @@ function DeliveryLogsView({ merchantId }: { merchantId: string }) {
   const [statusFilter, setStatusFilter] = useState("all");
   const [inspectLog, setInspectLog] = useState<WebhookLog | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const load = () => {
     const q = statusFilter === "all" ? "" : `?status=${statusFilter}`;
     api<WebhookLog[]>(`/v1/developer/merchants/${merchantId}/webhooks/deliveries${q}`)
-      .then(setLogs)
-      .catch((e) => setMsg(e.message));
+      .then((res) => { setLogs(res); setError(null); })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   };
 
   useEffect(() => { load(); }, [merchantId, statusFilter]);
 
   async function replay(id: string) {
+    setError(null);
+    setMsg(null);
     try {
       const res = await api<{ success: boolean; statusCode: number; durationMs: number }>(
         `/v1/developer/merchants/${merchantId}/webhooks/deliveries/${id}/replay`,
@@ -479,7 +490,7 @@ function DeliveryLogsView({ merchantId }: { merchantId: string }) {
       load();
       if (inspectLog && inspectLog.id === id) setInspectLog(null);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -500,6 +511,7 @@ function DeliveryLogsView({ merchantId }: { merchantId: string }) {
         <button className="small secondary" onClick={() => load()}>Refresh Logs</button>
       </div>
 
+      {error && <p className="error">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
 
       <table className="grid" style={{ marginTop: "1rem" }}>
@@ -587,7 +599,7 @@ function ApiExplorerView({ merchantId }: { merchantId: string }) {
   const [loading, setLoading] = useState(false);
 
   const ENDPOINTS = [
-    { id: "create_checkout", method: "POST", path: "/v1/checkouts", label: "Create Checkout Session" },
+    { id: "create_checkout", method: "POST", path: `/v1/merchants/${merchantId}/checkouts`, label: "Create Checkout Session" },
     { id: "get_checkout_status", method: "GET", path: "/v1/public/checkouts/YOUR_REF/status", label: "Get Checkout Status" },
     { id: "get_balances", method: "GET", path: `/v1/merchants/${merchantId}/balances`, label: "Get Merchant Balances" },
     { id: "list_transactions", method: "GET", path: `/v1/merchants/${merchantId}/transactions`, label: "List Transactions" },

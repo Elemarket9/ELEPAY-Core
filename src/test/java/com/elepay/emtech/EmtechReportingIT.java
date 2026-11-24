@@ -53,6 +53,7 @@ class EmtechReportingIT extends PostgresTestBase {
         registry.add("elepay.emtech.poll-ms", () -> "3600000");
         registry.add("elepay.emtech.emoney-account-type", () -> "BANK");
         registry.add("elepay.emtech.coarse-ip-cities", () -> "192.0.2.10=Kumasi|GH-AH|GH");
+        registry.add("elepay.outbound.partner-egress.allowed-hosts", () -> "127.0.0.1,localhost");
     }
 
     @Autowired EmtechOutbox outbox;

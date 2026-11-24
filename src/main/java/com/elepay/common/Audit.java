@@ -58,6 +58,10 @@ public class Audit {
 
     @Transactional(propagation = Propagation.REQUIRED)
     public Entry recordEntry(String actor, String action, String subject, Map<String, ?> details) {
+        db.sql("SELECT pg_advisory_xact_lock(hashtext('elepay_audit_log_chain'))")
+                .query((rs, i) -> (Object) null)
+                .optional();
+
         long nextId = db.sql("SELECT nextval('audit_log_id_seq')").query(Long.class).single();
 
         String prevHash = db.sql("""

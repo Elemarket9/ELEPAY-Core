@@ -19,7 +19,13 @@ import org.springframework.stereotype.Service;
  * against international (UN, OFAC) and domestic (FIC Ghana) sanctions lists with versioning and analyst review.
  */
 @Service
-public class SanctionsScreeningService {
+public class SanctionsScreeningService implements com.elepay.common.SanctionsScreener {
+
+    @Override
+    public boolean isSanctionedName(String candidateName) {
+        return screenName(candidateName).stream().anyMatch(m ->
+                m.matchType() == MatchType.EXACT || m.similarityScore() >= 0.95);
+    }
 
     public enum MatchType {
         EXACT,
@@ -77,15 +83,22 @@ public class SanctionsScreeningService {
     public void addSanctionEntry(SanctionEntry entry) {
         sanctionsRegistry.put(entry.id(), entry);
         if (db != null) {
-            try {
-                db.sql("""
-                    INSERT INTO sanctions_list
-                    (id, list_code, version, entity_name, entity_type, soundex_code, nationality, remarks, active, published_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
-                    """)
-                    .params(entry.id(), entry.listCode(), entry.version(), entry.entityName(), entry.entityType(), entry.soundexCode(), entry.nationality(), entry.remarks(), entry.active())
-                    .update();
-            } catch (Exception ignored) {}
+            db.sql("""
+                INSERT INTO sanctions_list
+                (id, list_code, version, entity_name, entity_type, soundex_code, nationality, remarks, active, published_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+                ON CONFLICT (id) DO UPDATE SET
+                    list_code = EXCLUDED.list_code,
+                    version = EXCLUDED.version,
+                    entity_name = EXCLUDED.entity_name,
+                    entity_type = EXCLUDED.entity_type,
+                    soundex_code = EXCLUDED.soundex_code,
+                    nationality = EXCLUDED.nationality,
+                    remarks = EXCLUDED.remarks,
+                    active = EXCLUDED.active
+                """)
+                .params(entry.id(), entry.listCode(), entry.version(), entry.entityName(), entry.entityType(), entry.soundexCode(), entry.nationality(), entry.remarks(), entry.active())
+                .update();
         }
     }
 
@@ -98,7 +111,31 @@ public class SanctionsScreeningService {
         String candidateSoundex = computeSoundex(normCandidate);
         List<ScreeningMatch> matches = new ArrayList<>();
 
-        for (SanctionEntry entry : sanctionsRegistry.values()) {
+        Map<UUID, SanctionEntry> activeEntries = new java.util.LinkedHashMap<>();
+        if (db != null) {
+            db.sql("""
+                    SELECT id, list_code, version, entity_name, entity_type, soundex_code, nationality, remarks, active
+                    FROM sanctions_list
+                    WHERE active = true""")
+                    .query((rs, i) -> new SanctionEntry(
+                            rs.getObject("id", UUID.class),
+                            rs.getString("list_code"),
+                            rs.getString("version"),
+                            rs.getString("entity_name"),
+                            rs.getString("entity_type"),
+                            rs.getString("soundex_code"),
+                            rs.getString("nationality"),
+                            rs.getString("remarks"),
+                            rs.getBoolean("active")
+                    ))
+                    .list()
+                    .forEach(e -> activeEntries.put(e.id(), e));
+        }
+        sanctionsRegistry.values().stream()
+                .filter(SanctionEntry::active)
+                .forEach(e -> activeEntries.putIfAbsent(e.id(), e));
+
+        for (SanctionEntry entry : activeEntries.values()) {
             if (!entry.active()) continue;
 
             String normEntry = normalize(entry.entityName());
@@ -158,15 +195,13 @@ public class SanctionsScreeningService {
         alertRegistry.put(alertId, alert);
 
         if (db != null) {
-            try {
-                db.sql("""
-                    INSERT INTO sanctions_screening_alert
-                    (id, customer_id, query_name, matched_list_id, match_type, similarity_score, disposition, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """)
-                    .params(alert.alertId(), alert.customerId(), alert.queryName(), alert.matchedListId(), alert.matchType().name(), alert.similarityScore(), alert.disposition().name(), alert.createdAt())
-                    .update();
-            } catch (Exception ignored) {}
+            db.sql("""
+                INSERT INTO sanctions_screening_alert
+                (id, customer_id, query_name, matched_list_id, match_type, similarity_score, disposition, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """)
+                .params(alert.alertId(), alert.customerId(), alert.queryName(), alert.matchedListId(), alert.matchType().name(), alert.similarityScore(), alert.disposition().name(), java.sql.Timestamp.from(alert.createdAt()))
+                .update();
         }
 
         return alert;
@@ -174,6 +209,29 @@ public class SanctionsScreeningService {
 
     public ScreeningAlert resolveAlert(UUID alertId, UUID reviewerId, AlertDisposition disposition, String notes) {
         ScreeningAlert existing = alertRegistry.get(alertId);
+        if (existing == null && db != null) {
+            existing = db.sql("""
+                    SELECT id, customer_id, query_name, matched_list_id, match_type, similarity_score,
+                           disposition, reviewer_id, disposition_notes, created_at, resolved_at
+                    FROM sanctions_screening_alert
+                    WHERE id = :id""")
+                    .param("id", alertId)
+                    .query((rs, i) -> new ScreeningAlert(
+                            rs.getObject("id", UUID.class),
+                            rs.getObject("customer_id", UUID.class),
+                            rs.getString("query_name"),
+                            rs.getObject("matched_list_id", UUID.class),
+                            MatchType.valueOf(rs.getString("match_type")),
+                            rs.getDouble("similarity_score"),
+                            AlertDisposition.valueOf(rs.getString("disposition")),
+                            rs.getObject("reviewer_id", UUID.class),
+                            rs.getString("disposition_notes"),
+                            rs.getTimestamp("created_at").toInstant(),
+                            rs.getTimestamp("resolved_at") != null ? rs.getTimestamp("resolved_at").toInstant() : null
+                    ))
+                    .optional()
+                    .orElse(null);
+        }
         if (existing == null) {
             throw ApiException.notFound("Sanctions alert not found: " + alertId);
         }
@@ -196,20 +254,17 @@ public class SanctionsScreeningService {
                 now
         );
 
-        alertRegistry.put(alertId, resolved);
-
         if (db != null) {
-            try {
-                db.sql("""
-                    UPDATE sanctions_screening_alert
-                    SET disposition = ?, reviewer_id = ?, disposition_notes = ?, resolved_at = ?
-                    WHERE id = ?
-                    """)
-                    .params(disposition.name(), reviewerId, notes, now, alertId)
-                    .update();
-            } catch (Exception ignored) {}
+            db.sql("""
+                UPDATE sanctions_screening_alert
+                SET disposition = ?, reviewer_id = ?, disposition_notes = ?, resolved_at = ?
+                WHERE id = ?
+                """)
+                .params(disposition.name(), reviewerId, notes, java.sql.Timestamp.from(now), alertId)
+                .update();
         }
 
+        alertRegistry.put(alertId, resolved);
         return resolved;
     }
 

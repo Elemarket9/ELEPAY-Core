@@ -17,17 +17,46 @@ interface PaymentStatus {
 
 const NETWORKS = [["mtn", "MTN MoMo"], ["telecel", "Telecel Cash"], ["airteltigo", "AT Money"]];
 
-// Multi-currency FX conversion rates (relative to GHS)
-const FX_RATES: Record<string, { symbol: string; rate: number; label: string }> = {
-  GHS: { symbol: "GH₵", rate: 1.0, label: "Ghana Cedi (GHS)" },
-  USD: { symbol: "$", rate: 0.065, label: "US Dollar (USD)" },
-  EUR: { symbol: "€", rate: 0.059, label: "Euro (EUR)" },
-  GBP: { symbol: "£", rate: 0.051, label: "British Pound (GBP)" },
-};
+export function safeRedirectUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      return parsed.toString();
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function formatSplitReceipt(checkout: PublicCheckout, fee: number, total: number): string {
+  const linesText = checkout.lines.map((l) =>
+    `  • ${l.merchant}: ${l.kind} (${l.description ?? "Item"}) - ${formatMoney(l.amount)}`
+  ).join("\n");
+
+  return `ELEPAY SPLIT-ORDER RECEIPT
+===================================================
+Receipt Reference: ${checkout.reference}
+Collector: ${checkout.collector}
+Date: ${checkout.paidAt ? new Date(checkout.paidAt).toLocaleString() : new Date().toLocaleString()}
+Status: ${checkout.status.toUpperCase()}
+
+ITEMIZED ALLOCATIONS:
+${linesText}
+
+Subtotal: ${formatMoney(checkout.subtotal)}
+Processing Fee: ${formatMoney(fee)}
+Total Paid: ${formatMoney(total)}
+
+Authorized by Bank of Ghana National Payment Systems
+===================================================
+Thank you for your payment!
+`;
+}
 
 /**
- * Universal Checkout with dynamic QR code presentation, multi-currency display,
- * and itemized split-order receipts.
+ * Universal Checkout with QR code presentation and itemized split-order receipts.
  */
 export function Checkout({ reference }: { reference: string }) {
   const [checkout, setCheckout] = useState<PublicCheckout | null>(null);
@@ -35,10 +64,8 @@ export function Checkout({ reference }: { reference: string }) {
   const [method, setMethod] = useState("momo");
   const [phone, setPhone] = useState("");
   const [network, setNetwork] = useState("mtn");
-  const [currency, setCurrency] = useState("GHS");
   const [showQr, setShowQr] = useState(false);
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
-  const [qrTimer, setQrTimer] = useState(60);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const keyName = `elepay.pay.${reference}`;
@@ -65,30 +92,17 @@ export function Checkout({ reference }: { reference: string }) {
     return () => clearInterval(timer);
   }, [status?.status, refresh]);
 
-  // Dynamic QR generator
+  // Static payment-link QR generator
   useEffect(() => {
     if (showQr) {
       const payLink = window.location.href;
       QRCode.toDataURL(payLink, { margin: 1, width: 220 })
         .then(setQrCodeUrl)
         .catch(() => setQrCodeUrl(null));
-      setQrTimer(60);
-      const timer = setInterval(() => {
-        setQrTimer((prev) => (prev > 1 ? prev - 1 : 60));
-      }, 1000);
-      return () => clearInterval(timer);
     }
   }, [showQr]);
 
   const selected = checkout?.methods.find((m) => m.method === method);
-
-  function formatForeignCurrency(pesewas: number, cur: string) {
-    if (cur === "GHS") return formatMoney(pesewas);
-    const fx = FX_RATES[cur];
-    if (!fx) return formatMoney(pesewas);
-    const converted = (pesewas / 100) * fx.rate;
-    return `${fx.symbol}${converted.toFixed(2)} ${cur}`;
-  }
 
   async function pay() {
     setBusy(true);
@@ -106,7 +120,8 @@ export function Checkout({ reference }: { reference: string }) {
           method: "POST", anonymous: true, idempotencyKey: key,
           body: method === "momo" ? { method, phone: msisdn, network } : { method },
         });
-        if (result.redirectUrl) window.location.assign(result.redirectUrl);
+        const safeUrl = safeRedirectUrl(result.redirectUrl);
+        if (safeUrl) window.location.assign(safeUrl);
       }
       await refresh();
     } catch (e) {
@@ -122,29 +137,7 @@ export function Checkout({ reference }: { reference: string }) {
 
   function downloadSplitReceipt() {
     if (!checkout) return;
-    const linesText = checkout.lines.map((l) =>
-      `  • ${l.merchant}: ${l.kind} (${l.description ?? "Item"}) - ${formatMoney(l.amount)}`
-    ).join("\n");
-
-    const content = `ELEPAY SPLIT-ORDER TAX RECEIPT
-===================================================
-Receipt Reference: ${checkout.reference}
-Collector: ${checkout.collector}
-Date: ${checkout.paidAt ? new Date(checkout.paidAt).toLocaleString() : new Date().toLocaleString()}
-Status: ${checkout.status.toUpperCase()}
-
-ITEMIZED ALLOCATIONS:
-${linesText}
-
-Subtotal: ${formatMoney(checkout.subtotal)}
-Processing Fee: ${formatMoney(selected?.fee ?? 0)}
-Total Paid: ${formatMoney(selected?.total ?? checkout.subtotal)}
-
-Ghana Revenue Authority (GRA) e-VAT Compliant
-Authorized by Bank of Ghana National Payment Systems
-===================================================
-Thank you for your payment!
-`;
+    const content = formatSplitReceipt(checkout, selected?.fee ?? 0, selected?.total ?? checkout.subtotal);
     const blob = new Blob([content], { type: "text/plain;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -153,34 +146,22 @@ Thank you for your payment!
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   if (!checkout) {
     return <main className="narrow"><p>{error ?? "Loading…"}</p><p className="muted">Reference {reference}</p></main>;
   }
 
+  const safeStatusRedirect = safeRedirectUrl(status?.redirectUrl);
+
   return (
     <main className="narrow">
       <div className="flex-between">
         <h1>Pay {checkout.collector}</h1>
-        <select
-          value={currency}
-          onChange={(e) => setCurrency(e.target.value)}
-          style={{ width: "auto", padding: ".25rem .5rem", fontSize: ".85rem" }}
-        >
-          {Object.entries(FX_RATES).map(([code, fx]) => (
-            <option key={code} value={code}>{code} ({fx.symbol})</option>
-          ))}
-        </select>
       </div>
 
       {checkout.description && <p className="muted">{checkout.description}</p>}
-
-      {currency !== "GHS" && (
-        <p className="notice ok small" style={{ margin: ".5rem 0" }}>
-          Converted at live mid-market rate: 1 GHS ≈ {FX_RATES[currency].rate} {currency}
-        </p>
-      )}
 
       {/* Itemized Split-Order Breakdown */}
       <table className="lines">
@@ -193,9 +174,6 @@ Thank you for your payment!
               </td>
               <td className="num">
                 {formatMoney(l.amount)}
-                {currency !== "GHS" && (
-                  <div className="small muted">{formatForeignCurrency(l.amount, currency)}</div>
-                )}
               </td>
             </tr>
           ))}
@@ -207,17 +185,12 @@ Thank you for your payment!
             <td>Total</td>
             <td className="num">
               <div>{formatMoney(selected?.total ?? checkout.subtotal)}</div>
-              {currency !== "GHS" && (
-                <div className="small" style={{ color: "#0b5d3b" }}>
-                  ≈ {formatForeignCurrency(selected?.total ?? checkout.subtotal, currency)}
-                </div>
-              )}
             </td>
           </tr>
         </tbody>
       </table>
 
-      {/* Dynamic QR Toggle */}
+      {/* QR Toggle */}
       <div style={{ margin: "1rem 0" }}>
         <button className="small secondary" onClick={() => setShowQr(!showQr)}>
           {showQr ? "📱 Pay on this device" : "📷 Scan QR code to pay"}
@@ -228,12 +201,11 @@ Thank you for your payment!
         <div style={{ textAlign: "center", background: "#fff", padding: "1.2rem", borderRadius: "8px", border: "1px solid var(--line)", margin: "1rem 0" }}>
           <h3>Scan to Pay with ELEPAY / GhQR</h3>
           {qrCodeUrl ? (
-            <img src={qrCodeUrl} alt="Dynamic Payment QR Code" width={220} height={220} style={{ margin: ".5rem auto" }} />
+            <img src={qrCodeUrl} alt="Payment QR Code" width={220} height={220} style={{ margin: ".5rem auto" }} />
           ) : (
-            <p>Generating dynamic QR…</p>
+            <p>Generating QR…</p>
           )}
           <p className="small muted">Scan with ELEPAY Wallet, MTN MoMo App, or any GhQR banking app.</p>
-          <div className="small mono">Dynamic code expires in {qrTimer}s</div>
         </div>
       )}
 
@@ -250,7 +222,7 @@ Thank you for your payment!
         <div className="notice">
           <strong>Waiting for confirmation…</strong>
           <p>{status.message}</p>
-          {status.redirectUrl && <p><a href={status.redirectUrl}>Continue to approve the payment</a></p>}
+          {safeStatusRedirect && <p><a href={safeStatusRedirect}>Continue to approve the payment</a></p>}
           <p className="small">You can close this page and reopen the same link. Reference {checkout.reference}.</p>
         </div>
       ) : checkout.status !== "open" ? (

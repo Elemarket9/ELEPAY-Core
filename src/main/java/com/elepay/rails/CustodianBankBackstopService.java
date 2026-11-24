@@ -6,7 +6,9 @@ import com.elepay.ledger.Ledger;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -199,6 +201,11 @@ public class CustodianBankBackstopService {
         if (!"payout".equalsIgnoreCase(direction) && !"refund".equalsIgnoreCase(direction)) {
             return BackstopDecision.permit();
         }
+        String cur = (currency == null || currency.isBlank()) ? Ledger.GHS : currency.toUpperCase(Locale.ROOT);
+        if (!Ledger.GHS.equals(cur)) {
+            return BackstopDecision.blocked("custodian_unsupported_currency",
+                    "Custodian Bank primary trust account only supports GHS, got: " + cur);
+        }
         ensurePrimaryTrustAccount();
         LocalDate today = LocalDate.now(ACCRA_ZONE);
         ensureTodayAccumulator(today);
@@ -242,7 +249,9 @@ public class CustodianBankBackstopService {
                     "Custodian Bank per-payout cap exceeded (" + amountPesewas + " > " + trust.perPayoutCapPesewas() + ")");
         }
 
-        long projectedOutflow = acc.reservedOutflowPesewas() + acc.settledOutflowPesewas() + amountPesewas;
+        long projectedOutflow = Math.addExact(
+                Math.addExact(acc.reservedOutflowPesewas(), acc.settledOutflowPesewas()),
+                amountPesewas);
         if (projectedOutflow > trust.dailyOutflowCapPesewas()) {
             incrementRejected(today);
             if (ops != null) {
@@ -254,7 +263,17 @@ public class CustodianBankBackstopService {
                     "Custodian Bank daily outflow cap exceeded (" + projectedOutflow + " > " + trust.dailyOutflowCapPesewas() + ")");
         }
 
-        if (trust.lastReconciledBankBalancePesewas() != null) {
+        if (trust.lastReconciledBankBalancePesewas() == null) {
+            if (trust.minReserveFloorPesewas() > 0) {
+                incrementRejected(today);
+                if (ops != null) {
+                    ops.raise("custodian_trust_balance_unreconciled", "critical", "rail_tx:" + reference,
+                            Map.of("amount", amountPesewas, "minReserveFloor", trust.minReserveFloorPesewas()));
+                }
+                return BackstopDecision.blocked("custodian_trust_balance_unreconciled",
+                        "Custodian Bank trust balance is unreconciled while minReserveFloorPesewas > 0");
+            }
+        } else {
             long remainingTrustBalance = trust.lastReconciledBankBalancePesewas() - projectedOutflow;
             if (remainingTrustBalance < trust.minReserveFloorPesewas()) {
                 incrementRejected(today);
@@ -275,32 +294,60 @@ public class CustodianBankBackstopService {
                 WHERE trust_account_code = :code AND business_date = :d""")
                 .param("amt", amountPesewas).param("code", PRIMARY_TRUST_CODE).param("d", today).update();
 
+        if (txId != null) {
+            db.sql("UPDATE rail_transaction SET reservation_date = :d WHERE id = :id")
+                    .param("d", today).param("id", txId).update();
+        }
         return BackstopDecision.permit();
     }
 
     @Transactional
     public void onOutboundSucceeded(long amountPesewas, String currency) {
-        LocalDate today = LocalDate.now(ACCRA_ZONE);
-        ensureTodayAccumulator(today);
+        onOutboundSucceeded(null, amountPesewas, currency, LocalDate.now(ACCRA_ZONE));
+    }
+
+    @Transactional
+    public void onOutboundSucceeded(UUID txId, long amountPesewas, String currency, LocalDate fallbackDate) {
+        LocalDate bizDate = resolveReservationDate(txId, fallbackDate);
+        ensureTodayAccumulator(bizDate);
         db.sql("""
                 UPDATE custodian_daily_outflow
                 SET reserved_outflow_pesewas = GREATEST(0, reserved_outflow_pesewas - :amt),
                     settled_outflow_pesewas = settled_outflow_pesewas + :amt,
                     updated_at = now()
                 WHERE trust_account_code = :code AND business_date = :d""")
-                .param("amt", amountPesewas).param("code", PRIMARY_TRUST_CODE).param("d", today).update();
+                .param("amt", amountPesewas).param("code", PRIMARY_TRUST_CODE).param("d", bizDate).update();
     }
 
     @Transactional
     public void onOutboundReleased(long amountPesewas, String currency) {
-        LocalDate today = LocalDate.now(ACCRA_ZONE);
-        ensureTodayAccumulator(today);
+        onOutboundReleased(null, amountPesewas, currency, LocalDate.now(ACCRA_ZONE));
+    }
+
+    @Transactional
+    public void onOutboundReleased(UUID txId, long amountPesewas, String currency, LocalDate fallbackDate) {
+        LocalDate bizDate = resolveReservationDate(txId, fallbackDate);
+        ensureTodayAccumulator(bizDate);
         db.sql("""
                 UPDATE custodian_daily_outflow
                 SET reserved_outflow_pesewas = GREATEST(0, reserved_outflow_pesewas - :amt),
                     updated_at = now()
                 WHERE trust_account_code = :code AND business_date = :d""")
-                .param("amt", amountPesewas).param("code", PRIMARY_TRUST_CODE).param("d", today).update();
+                .param("amt", amountPesewas).param("code", PRIMARY_TRUST_CODE).param("d", bizDate).update();
+    }
+
+    private LocalDate resolveReservationDate(UUID txId, LocalDate fallbackDate) {
+        if (txId != null) {
+            Optional<LocalDate> recorded = db.sql("SELECT reservation_date FROM rail_transaction WHERE id = :id")
+                    .param("id", txId)
+                    .query((rs, i) -> Optional.ofNullable(rs.getObject(1, LocalDate.class)))
+                    .optional()
+                    .flatMap(o -> o);
+            if (recorded.isPresent()) {
+                return recorded.get();
+            }
+        }
+        return fallbackDate != null ? fallbackDate : LocalDate.now(ACCRA_ZONE);
     }
 
     /**
@@ -308,7 +355,10 @@ public class CustodianBankBackstopService {
      * delivery partner, and escrow ledger liabilities via the {@link Ledger} API.
      */
     public CustodianSafeguardReport verifyTrustSafeguarding(String currency) {
-        String cur = (currency == null || currency.isBlank()) ? Ledger.GHS : currency.toUpperCase();
+        String cur = (currency == null || currency.isBlank()) ? Ledger.GHS : currency.toUpperCase(Locale.ROOT);
+        if (!Ledger.GHS.equals(cur)) {
+            throw new IllegalArgumentException("Custodian Bank primary trust account only supports GHS, got: " + cur);
+        }
         TrustAccountConfig trust = getPrimaryConfig();
         LocalDate today = LocalDate.now(ACCRA_ZONE);
         ensureTodayAccumulator(today);
@@ -348,10 +398,13 @@ public class CustodianBankBackstopService {
         }
 
         long totalTrustAssets = trust.lastReconciledBankBalancePesewas() != null
-                ? Math.max(trust.lastReconciledBankBalancePesewas(), clearingReceivables)
-                : Math.max(totalLiabilities, clearingReceivables);
+                ? trust.lastReconciledBankBalancePesewas()
+                : clearingReceivables;
 
-        boolean satisfied = !trust.outflowFrozen() && totalTrustAssets >= totalLiabilities && ledger.integrity().ok();
+        boolean satisfied = !trust.outflowFrozen()
+                && trust.lastReconciledBankBalancePesewas() != null
+                && totalTrustAssets >= totalLiabilities
+                && ledger.integrity().ok();
 
         return new CustodianSafeguardReport(
                 trust.accountCode(),

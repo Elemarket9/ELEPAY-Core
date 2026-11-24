@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
 public class CustomerDirectory {
     private final JdbcClient db;
 
-    CustomerDirectory(JdbcClient db) {
+    public CustomerDirectory(JdbcClient db) {
         this.db = db;
     }
 
@@ -50,6 +50,20 @@ public class CustomerDirectory {
                 .param("id", UUID.randomUUID()).param("ref", reference).param("cust", customer).param("kind", kind)
                 .param("amount", amount).param("status", status).param("cp", counterparty).param("tx", journalTx)
                 .param("related", relatedId).update();
+    }
+
+    public void redactPii(UUID customerId) {
+        String anonymizedPhone = "233" + String.format("%09d", Math.floorMod(customerId.hashCode(), 1_000_000_000L));
+        db.sql("""
+                UPDATE customer
+                SET display_name = 'REDACTED',
+                    email = NULL,
+                    phone = :phone,
+                    status = 'closed'
+                WHERE id = :id""")
+                .param("phone", anonymizedPhone)
+                .param("id", customerId)
+                .update();
     }
 
     public static String available(UUID customer) {

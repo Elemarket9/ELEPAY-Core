@@ -156,11 +156,13 @@ public class PayoutVelocityService {
                 WHERE window_type = 'DAILY' AND window_start = :ws FOR UPDATE""")
                 .param("ws", dayStart).query(Long.class).single();
 
-        if (currentHourly + totalBatchPesewas > cfg.hourlyCeilingPesewas()
-                || currentDaily + totalBatchPesewas > cfg.dailyCeilingPesewas()) {
-            String breachReason = (currentHourly + totalBatchPesewas > cfg.hourlyCeilingPesewas())
-                    ? "Hourly global payout cedi ceiling breached (" + (currentHourly + totalBatchPesewas) + " > " + cfg.hourlyCeilingPesewas() + ")"
-                    : "Daily global payout cedi ceiling breached (" + (currentDaily + totalBatchPesewas) + " > " + cfg.dailyCeilingPesewas() + ")";
+        long projectedHourly = Math.addExact(currentHourly, totalBatchPesewas);
+        long projectedDaily = Math.addExact(currentDaily, totalBatchPesewas);
+        if (projectedHourly > cfg.hourlyCeilingPesewas()
+                || projectedDaily > cfg.dailyCeilingPesewas()) {
+            String breachReason = (projectedHourly > cfg.hourlyCeilingPesewas())
+                    ? "Hourly global payout cedi ceiling breached (" + projectedHourly + " > " + cfg.hourlyCeilingPesewas() + ")"
+                    : "Daily global payout cedi ceiling breached (" + projectedDaily + " > " + cfg.dailyCeilingPesewas() + ")";
             if (cfg.autoFreezeOnCeilingBreach()) {
                 autoFreeze(breachReason, totalBatchPesewas, actor);
             }

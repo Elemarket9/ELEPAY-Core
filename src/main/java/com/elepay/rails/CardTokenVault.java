@@ -43,10 +43,20 @@ public class CardTokenVault {
     private final byte[] vaultKey;
     private final byte[] fingerprintKey;
     private final byte[] legacyKey;
+    private final org.springframework.transaction.support.TransactionTemplate tx;
     private final SecureRandom rng = new SecureRandom();
 
     public CardTokenVault(JdbcClient db, CardBinLookupService binLookup, String masterKey) {
-        this(db, binLookup, masterKey, "");
+        this(db, binLookup, masterKey, "", null);
+    }
+
+    public CardTokenVault(
+            JdbcClient db,
+            CardBinLookupService binLookup,
+            String masterKey,
+            String legacyMasterKey
+    ) {
+        this(db, binLookup, masterKey, legacyMasterKey, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -54,7 +64,9 @@ public class CardTokenVault {
             JdbcClient db,
             CardBinLookupService binLookup,
             @Value("${elepay.vault.master-key:}") String masterKey,
-            @Value("${elepay.vault.legacy-master-key:}") String legacyMasterKey
+            @Value("${elepay.vault.legacy-master-key:}") String legacyMasterKey,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            org.springframework.transaction.PlatformTransactionManager tm
     ) {
         this.db = db;
         this.binLookup = binLookup;
@@ -65,6 +77,7 @@ public class CardTokenVault {
         // A hardcoded fallback would allow anyone with the source to decrypt historic PANs.
         this.legacyKey = legacyMasterKey == null || legacyMasterKey.isBlank()
                 ? null : Arrays.copyOf(legacyMasterKey.getBytes(StandardCharsets.UTF_8), 32);
+        this.tx = tm != null ? new org.springframework.transaction.support.TransactionTemplate(tm) : null;
     }
 
     /**
@@ -300,7 +313,11 @@ public class CardTokenVault {
 
     @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
     void upgradeOnStartup() {
-        upgradeLegacyRows();
+        if (tx != null) {
+            tx.executeWithoutResult(s -> upgradeLegacyRows());
+        } else {
+            upgradeLegacyRows();
+        }
     }
 
     public static boolean passesLuhn(String pan) {

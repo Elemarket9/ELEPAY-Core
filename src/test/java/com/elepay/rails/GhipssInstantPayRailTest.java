@@ -197,7 +197,7 @@ class GhipssInstantPayRailTest {
                 json, health, URI.create("https://gip.ghipss.com"), creds, null
         );
 
-        String body = "{\"event\":\"payout.success\",\"data\":{\"reference\":\"GIP-REF-77\",\"status\":\"00\",\"amount\":10000,\"currency\":\"GHS\"}}";
+        String body = "{\"event\":\"payout.success\",\"data\":{\"reference\":\"GIP-REF-77\",\"status\":\"00\",\"amount\":\"100.00\",\"currency\":\"GHS\"}}";
         String timestamp = String.valueOf(java.time.Instant.now().getEpochSecond());
         String nonce = "gip-nonce-1";
         String validSig = GhipssInstantPayRail.computeHmac("ghipss-webhook-secret", timestamp + "." + nonce + "." + body);

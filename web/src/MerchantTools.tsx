@@ -1,7 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
-import QRCode from "qrcode";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
+import {
+  buildPosOrderPayload,
+  computeCartTotals,
+  DiningTable as PosDiningTable,
+  EvenSplitResult,
+  formatKdsStatusLabel,
+  HeldCart,
+  isFeatureNotEnabled,
+  KdsTicketSummary,
+  ORDER_TYPES,
+  OrderType,
+  parseHeldCartPayload,
+  PosCartLine,
+  PosOrder,
+  PosReceipt,
+  PosTerminal,
+  SeatSplitResult,
+} from "./pos/posHelpers";
+import { PosTerminalBar } from "./pos/PosTerminalBar";
+import { PosTenderPanel } from "./pos/PosTenderPanel";
 
 /*
  * Merchant tools backed by the ELEPAY server. Nothing here is sample data or kept only in the browser:
@@ -175,97 +194,251 @@ export function InventoryAndStock({ merchantId }: { merchantId: string }) {
 
 // =============================================================================================== POS register
 
-interface PosOrder { id: string; orderNumber: string; totalPesewas: number; paidPesewas: number; changePesewas: number; status: string }
-interface DigitalCheckout { id: string; reference: string; amount: number; status: string; payUrl: string | null }
-interface PosReceipt { receiptNumber: string; escposFormattedText: string }
-
 const TAX_KEY = (merchantId: string) => `elepay.pos.taxPercent.${merchantId}`;
 
 export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [catalog, reloadCatalog, loadError] = useLoad<CatalogRow[]>(`/v1/inventory/catalog/merchant/${merchant.id}`, []);
+  const [tables] = useLoad<PosDiningTable[]>(`/v1/restaurant/tables/merchant/${merchant.id}`, []);
+  const [moduleDisabled, setModuleDisabled] = useState(false);
+
+  const [terminal, setTerminal] = useState<PosTerminal | null>(null);
+  const [cashier, setCashier] = useState<{ id: string; badgeNumber: string; name?: string } | null>(null);
+
   const [search, setSearch] = useState("");
-  const [cart, setCart] = useState<{ row: CatalogRow; qty: number }[]>([]);
+  const [cart, setCart] = useState<PosCartLine[]>([]);
+  const [orderType, setOrderType] = useState<OrderType>("RETAIL");
+  const [tableId, setTableId] = useState<string>("");
   const [discount, setDiscount] = useState("");
   const [taxPercent, setTaxPercent] = useState(() => { try { return localStorage.getItem(TAX_KEY(merchant.id)) ?? "0"; } catch { return "0"; } });
-  const [tendered, setTendered] = useState("");
+
   const [order, setOrder] = useState<PosOrder | null>(null);
-  const [digital, setDigital] = useState<DigitalCheckout | null>(null);
-  const [qr, setQr] = useState<string | null>(null);
+  const [orderKey, setOrderKey] = useState<string>(() => newKey());
   const [receipt, setReceipt] = useState<{ receipt: PosReceipt; order: PosOrder } | null>(null);
+
+  const [heldCarts, setHeldCarts] = useState<HeldCart[]>([]);
+  const [holdCustomer, setHoldCustomer] = useState("");
+  const [splitCount, setSplitCount] = useState("2");
+  const [evenSplit, setEvenSplit] = useState<EvenSplitResult | null>(null);
+  const [seatSplit, setSeatSplit] = useState<SeatSplitResult | null>(null);
+  const [kdsTicket, setKdsTicket] = useState<KdsTicketSummary | null>(null);
+
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const subtotal = cart.reduce((s, c) => s + c.row.retailPricePesewas * c.qty, 0);
   const discountP = discount.trim() ? money(discount) : 0;
   const taxRate = Number(taxPercent);
   const taxValid = Number.isFinite(taxRate) && taxRate >= 0 && taxRate <= 100;
-  const tax = discountP !== null && taxValid ? Math.round((subtotal - Math.min(discountP, subtotal)) * taxRate / 100) : 0;
-  const total = discountP !== null ? subtotal - Math.min(discountP, subtotal) + tax : subtotal;
+  const { subtotal, effectiveDiscount, tax, total } = computeCartTotals(cart, discountP, taxRate);
   const shown = catalog.filter((r) => `${itemLabel(r)} ${r.sku} ${r.barcode ?? ""}`.toLowerCase().includes(search.toLowerCase()));
 
   useEffect(() => { try { localStorage.setItem(TAX_KEY(merchant.id), taxPercent); } catch { /* ignore */ } }, [taxPercent, merchant.id]);
-  useEffect(() => { if (digital?.payUrl) void QRCode.toDataURL(digital.payUrl, { margin: 1, width: 220 }).then(setQr); else setQr(null); }, [digital]);
 
-  const add = (row: CatalogRow) => setCart((c) => c.some((x) => x.row.variantId === row.variantId)
-    ? c.map((x) => x.row.variantId === row.variantId ? { ...x, qty: x.qty + 1 } : x) : [...c, { row, qty: 1 }]);
-  const setQty = (id: string, qty: number) => setCart((c) => qty <= 0 ? c.filter((x) => x.row.variantId !== id) : c.map((x) => x.row.variantId === id ? { ...x, qty } : x));
+  const loadHeldCarts = useCallback(async (tid: string | null) => {
+    if (!tid || moduleDisabled) {
+      setHeldCarts([]);
+      return;
+    }
+    try {
+      setHeldCarts(await api<HeldCart[]>(`/v1/pos/carts/held/${tid}`));
+    } catch (e) {
+      if (isFeatureNotEnabled(e)) setModuleDisabled(true);
+    }
+  }, [moduleDisabled]);
+
+  useEffect(() => {
+    void loadHeldCarts(terminal?.id ?? null);
+  }, [terminal?.id, loadHeldCarts]);
+
+  const add = (row: CatalogRow) => setCart((c) => c.some((x) => x.variantId === row.variantId)
+    ? c.map((x) => x.variantId === row.variantId ? { ...x, qty: x.qty + 1 } : x)
+    : [...c, { variantId: row.variantId, label: itemLabel(row), unitPricePesewas: row.retailPricePesewas, qty: 1, seatNumber: null }]);
+
+  const setQty = (id: string, qty: number) => setCart((c) => qty <= 0
+    ? c.filter((x) => x.variantId !== id)
+    : c.map((x) => x.variantId === id ? { ...x, qty } : x));
+
+  const setSeat = (id: string, seatNumber: number | null) => setCart((c) =>
+    c.map((x) => x.variantId === id ? { ...x, seatNumber } : x));
 
   async function ensureOrder(): Promise<PosOrder> {
     if (order) return order;
     if (discountP === null) throw new Error("Enter the discount like 5.00");
     if (!taxValid) throw new Error("Tax must be between 0 and 100%");
-    const created = await api<PosOrder>("/v1/pos/orders", { body: { merchantId: merchant.id, branchId: null, terminalId: null, cashierId: null, customerId: null,
-      items: cart.map((c) => ({ variantId: c.row.variantId, itemName: itemLabel(c.row), quantity: c.qty, unitPricePesewas: c.row.retailPricePesewas,
-        discountPesewas: 0, taxPesewas: 0, modifiersJson: "[]", seatNumber: null, course: null, notes: null })),
-      discountPesewas: Math.min(discountP, subtotal), taxPesewas: tax, tipPesewas: 0, orderType: "RETAIL" } });
-    setOrder(created);
-    return created;
+    try {
+      const payload = buildPosOrderPayload({
+        merchantId: merchant.id,
+        branchId: terminal?.branchId ?? null,
+        terminalId: terminal?.id ?? null,
+        cashierId: cashier?.id ?? null,
+        orderType,
+        tableId: tableId || null,
+        lines: cart,
+        discountPesewas: effectiveDiscount,
+        taxPesewas: tax,
+      });
+      const created = await api<PosOrder>("/v1/pos/orders", {
+        body: payload,
+        idempotencyKey: orderKey,
+      });
+      setOrder(created);
+      return created;
+    } catch (e) {
+      if (isFeatureNotEnabled(e)) setModuleDisabled(true);
+      throw e;
+    }
   }
 
-  async function finish(o: PosOrder) {
-    const r = await api<PosReceipt>(`/v1/pos/orders/${o.id}/receipt`, { method: "POST" });
-    const latest = await api<PosOrder>(`/v1/pos/orders/${o.id}`);
+  async function sendToKitchen(targetOrder: PosOrder) {
+    if (kdsTicket || orderType === "RETAIL") return;
+    try {
+      const selectedTable = tables.find((t) => t.id === tableId);
+      const created = await api<KdsTicketSummary>("/v1/restaurant/kds/tickets", {
+        body: {
+          merchantId: merchant.id,
+          orderId: targetOrder.id,
+          orderNumber: targetOrder.orderNumber,
+          tableNumber: selectedTable?.tableNumber ?? null,
+          serverName: cashier?.name ?? cashier?.badgeNumber ?? null,
+          course: "MAIN",
+          items: cart.map((c) => ({
+            orderItemId: c.variantId,
+            itemName: c.label,
+            quantity: c.qty,
+            modifiersJson: "[]",
+            notes: c.seatNumber ? `Seat ${c.seatNumber}` : null,
+          })),
+          notes: orderType,
+          stationId: null,
+        },
+      });
+      setKdsTicket(created);
+    } catch {
+      // KDS routing is non-blocking if restaurant stations are not yet configured
+    }
+  }
+
+  async function finish(paidOrder: PosOrder) {
+    const r = await api<PosReceipt>(`/v1/pos/orders/${paidOrder.id}/receipt`, { method: "POST" });
+    const latest = await api<PosOrder>(`/v1/pos/orders/${paidOrder.id}`);
+    if (orderType !== "RETAIL" && !kdsTicket) {
+      await sendToKitchen(latest);
+    }
     setReceipt({ receipt: r, order: latest });
-    setCart([]); setDiscount(""); setTendered(""); setOrder(null); setDigital(null);
+    setCart([]);
+    setDiscount("");
+    setOrder(null);
+    setOrderKey(newKey());
+    setEvenSplit(null);
+    setSeatSplit(null);
     void reloadCatalog();
   }
 
-  async function payCash() {
+  async function holdCurrentCart() {
+    if (!terminal || !cashier) {
+      setError("Select a terminal and authenticate a cashier before holding a cart.");
+      return;
+    }
+    if (cart.length === 0) return;
     setError(null);
-    const cash = money(tendered);
-    if (cash === null || cash <= 0) { setError("Enter the cash received, like 50.00"); return; }
-    if (cash < total) { setError(`Cash received is less than ${formatMoney(total)}`); return; }
     setBusy(true);
     try {
-      const o = await ensureOrder();
-      const paid = await api<PosOrder>(`/v1/pos/orders/${o.id}/payments`, { body: { tenderType: "CASH", amountPesewas: cash, reference: null }, idempotencyKey: newKey() });
-      if (paid.status !== "PAID") { setOrder(paid); setError("The sale is not fully paid yet."); return; }
-      await finish(paid);
-    } catch (e) { setError(`Sale not recorded: ${message(e)}`); } finally { setBusy(false); }
+      const payloadJson = JSON.stringify({
+        items: cart,
+        discount,
+        taxPercent,
+        orderType,
+        tableId: tableId || null,
+      });
+      await api<HeldCart>("/v1/pos/carts/hold", {
+        body: {
+          terminalId: terminal.id,
+          cashierId: cashier.id,
+          merchantId: merchant.id,
+          customerName: holdCustomer.trim() || null,
+          cartPayloadJson: payloadJson,
+          totalPesewas: total,
+        },
+      });
+      setCart([]);
+      setDiscount("");
+      setHoldCustomer("");
+      await loadHeldCarts(terminal.id);
+    } catch (e) {
+      if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
+      setError(`Could not hold cart: ${message(e)}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function startDigital() {
-    setError(null); setBusy(true);
-    try {
-      const o = await ensureOrder();
-      setDigital(await api<DigitalCheckout>(`/v1/pos/orders/${o.id}/digital-checkout`, { method: "POST" }));
-    } catch (e) { setError(`Could not start MoMo/card payment: ${message(e)}`); } finally { setBusy(false); }
-  }
-
-  async function checkDigital() {
-    if (!order) return;
-    setError(null); setBusy(true);
-    try {
-      const paid = await api<PosOrder>(`/v1/pos/orders/${order.id}/digital-checkout/confirm`, { method: "POST" });
-      await finish(paid);
-    } catch (e) { setError(`Not paid yet: ${message(e)}`); } finally { setBusy(false); }
-  }
-
-  async function cancelDigital() {
-    if (!order) return;
+  async function recallCart(hc: HeldCart) {
+    setError(null);
     setBusy(true);
-    try { await api(`/v1/pos/orders/${order.id}/digital-checkout/cancel`, { method: "POST" }); setDigital(null); }
-    catch (e) { setError(message(e)); } finally { setBusy(false); }
+    try {
+      const recalled = await api<HeldCart>(`/v1/pos/carts/held/${hc.id}/recall`, { method: "POST" });
+      const parsed = parseHeldCartPayload(recalled.cartPayloadJson);
+      if (parsed) {
+        setCart(parsed.items);
+        setDiscount(parsed.discount);
+        setTaxPercent(parsed.taxPercent);
+        setOrderType(parsed.orderType);
+        setTableId(parsed.tableId ?? "");
+        setOrder(null);
+        setOrderKey(newKey());
+      } else {
+        setError("Held cart payload could not be parsed.");
+      }
+      await loadHeldCarts(terminal?.id ?? null);
+    } catch (e) {
+      if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
+      setError(`Could not recall cart: ${message(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runEvenSplit() {
+    setError(null);
+    const count = Number(splitCount);
+    if (!Number.isInteger(count) || count < 2) {
+      setError("Split count must be at least 2.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const ord = await ensureOrder();
+      setSeatSplit(null);
+      setEvenSplit(await api<EvenSplitResult>(`/v1/pos/orders/${ord.id}/split/even?count=${count}`, { method: "POST" }));
+    } catch (e) {
+      if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
+      setError(`Split failed: ${message(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runSeatSplit() {
+    setError(null);
+    setBusy(true);
+    try {
+      const ord = await ensureOrder();
+      setEvenSplit(null);
+      setSeatSplit(await api<SeatSplitResult>(`/v1/pos/orders/${ord.id}/split/seats`, { method: "POST" }));
+    } catch (e) {
+      if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
+      setError(`Seat split failed: ${message(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (moduleDisabled) {
+    return (
+      <div className="panel">
+        <h3>POS Register</h3>
+        <p className="notice warn">POS module is disabled in this environment (Stage 1).</p>
+      </div>
+    );
   }
 
   if (receipt) {
@@ -273,77 +446,204 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
       <div className="panel">
         <h3>Sale complete</h3>
         <p>Order {receipt.order.orderNumber} · {formatMoney(receipt.order.totalPesewas)}
-          {receipt.order.changePesewas > 0 && <> · <strong>Change {formatMoney(receipt.order.changePesewas)}</strong></>}</p>
+          {receipt.order.changePesewas > 0 && <> · <strong>Change {formatMoney(receipt.order.changePesewas)}</strong></>}
+          {kdsTicket && <> · <span className="tag active">{formatKdsStatusLabel(kdsTicket.status)}</span></>}</p>
         <pre className="receipt">{receipt.receipt.escposFormattedText}</pre>
-        <button onClick={() => setReceipt(null)}>New sale</button>
+        <button onClick={() => { setReceipt(null); setKdsTicket(null); }}>New sale</button>
       </div>
     );
   }
 
   return (
-    <div className="pos-layout">
-      <div>
-        <h3>Products</h3>
-        {loadError && <p className="error">{loadError}</p>}
-        <input placeholder="Search or scan barcode" value={search} onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { const hit = catalog.find((r) => r.barcode === search.trim() || r.sku === search.trim()); if (hit) { add(hit); setSearch(""); } } }} />
-        {catalog.length === 0 && !loadError && <p className="muted">No products yet. Add them in <strong>Inventory &amp; Stock</strong>.</p>}
-        <div className="pos-items">
-          {shown.map((r) => (
-            <button key={r.variantId} className="secondary pos-item" disabled={!!order} onClick={() => add(r)}>
-              <span>{itemLabel(r)}</span><strong>{formatMoney(r.retailPricePesewas)}</strong>
-              {r.trackInventory && <span className="small muted">{Number(r.onHand)} in stock</span>}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="panel">
-        <h3>Sale</h3>
-        {cart.length === 0 ? <p className="muted">Tap products to add them.</p> : (
-          <table className="grid">
-            <tbody>
-              {cart.map((c) => (
-                <tr key={c.row.variantId}>
-                  <td>{itemLabel(c.row)}</td>
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    <button className="secondary small" disabled={!!order} onClick={() => setQty(c.row.variantId, c.qty - 1)}>−</button>
-                    {c.qty}
-                    <button className="secondary small" disabled={!!order} onClick={() => setQty(c.row.variantId, c.qty + 1)}>+</button>
-                  </td>
-                  <td>{formatMoney(c.row.retailPricePesewas * c.qty)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <div className="grid-2">
-          <label>Discount (GH₵)<input inputMode="decimal" value={discount} disabled={!!order} onChange={(e) => setDiscount(e.target.value)} placeholder="0.00" /></label>
-          <label>Tax %<input inputMode="decimal" value={taxPercent} disabled={!!order} onChange={(e) => setTaxPercent(e.target.value)} /></label>
-        </div>
-        <dl className="confirm">
-          <dt>Subtotal</dt><dd>{formatMoney(subtotal)}</dd>
-          {tax > 0 && <><dt>Tax</dt><dd>{formatMoney(tax)}</dd></>}
-          <dt><strong>Total</strong></dt><dd><strong>{formatMoney(total)}</strong></dd>
-        </dl>
-        {error && <p className="error">{error}</p>}
-        {digital ? (
-          <div className="notice">
-            <p>Customer pays <strong>{formatMoney(digital.amount)}</strong> with MoMo or card:</p>
-            {qr && <img src={qr} alt="Payment QR code" width={220} height={220} />}
-            {digital.payUrl && <p className="small mono">{digital.payUrl}</p>}
-            <button onClick={() => void checkDigital()} disabled={busy}>Check payment</button>
-            <button className="secondary" onClick={() => void cancelDigital()} disabled={busy}>Cancel payment</button>
+    <div>
+      <PosTerminalBar
+        merchantId={merchant.id}
+        terminalId={terminal?.id ?? null}
+        cashierId={cashier?.id ?? null}
+        onSelectTerminal={setTerminal}
+        onSelectCashier={setCashier}
+        onModuleDisabled={() => setModuleDisabled(true)}
+      />
+
+      <div className="pos-layout">
+        <div>
+          <h3>Products</h3>
+          {loadError && <p className="error">{loadError}</p>}
+          <input placeholder="Search or scan barcode" value={search} onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { const hit = catalog.find((r) => r.barcode === search.trim() || r.sku === search.trim()); if (hit) { add(hit); setSearch(""); } } }} />
+          {catalog.length === 0 && !loadError && <p className="muted">No products yet. Add them in <strong>Inventory &amp; Stock</strong>.</p>}
+          <div className="pos-items">
+            {shown.map((r) => (
+              <button key={r.variantId} className="secondary pos-item" disabled={!!order} onClick={() => add(r)}>
+                <span>{itemLabel(r)}</span><strong>{formatMoney(r.retailPricePesewas)}</strong>
+                {r.trackInventory && <span className="small muted">{Number(r.onHand)} in stock</span>}
+              </button>
+            ))}
           </div>
-        ) : cart.length > 0 && (
-          <>
-            <label>Cash received (GH₵)<input inputMode="decimal" value={tendered} onChange={(e) => setTendered(e.target.value)} placeholder={(total / 100).toFixed(2)} /></label>
-            <div className="flex-row">
-              <button onClick={() => void payCash()} disabled={busy}>Cash</button>
-              <button className="secondary" onClick={() => void startDigital()} disabled={busy}>MoMo / card</button>
-              {!order && <button className="secondary" onClick={() => setCart([])}>Clear</button>}
+
+          {heldCarts.length > 0 && (
+            <div className="panel" style={{ marginTop: "1rem" }}>
+              <h4>Held Carts ({heldCarts.length})</h4>
+              <table className="grid">
+                <tbody>
+                  {heldCarts.map((hc) => (
+                    <tr key={hc.id}>
+                      <td>{hc.customerName ?? "Walk-in"}</td>
+                      <td>{formatMoney(hc.totalPesewas)}</td>
+                      <td>
+                        <button type="button" className="secondary small" disabled={busy} onClick={() => void recallCart(hc)}>
+                          Recall
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </>
-        )}
+          )}
+        </div>
+
+        <div className="panel">
+          <div className="flex-between">
+            <h3>Sale</h3>
+            {kdsTicket && <span className="tag active">{formatKdsStatusLabel(kdsTicket.status)}</span>}
+          </div>
+
+          <div className="grid-2" style={{ marginBottom: ".6rem" }}>
+            <label>Order Type
+              <select value={orderType} disabled={!!order} onChange={(e) => setOrderType(e.target.value as OrderType)}>
+                {ORDER_TYPES.map((ot) => <option key={ot.value} value={ot.value}>{ot.label}</option>)}
+              </select>
+            </label>
+            {orderType === "DINE_IN" && (
+              <label>Table
+                <select value={tableId} disabled={!!order} onChange={(e) => setTableId(e.target.value)}>
+                  <option value="">-- Select table --</option>
+                  {tables.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      Table {t.tableNumber} ({t.capacity} seats · {t.status})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+
+          {cart.length === 0 ? <p className="muted">Tap products to add them.</p> : (
+            <table className="grid">
+              <tbody>
+                {cart.map((c) => (
+                  <tr key={c.variantId}>
+                    <td>
+                      {c.label}
+                      {orderType === "DINE_IN" && (
+                        <input
+                          type="number"
+                          min={1}
+                          placeholder="Seat #"
+                          value={c.seatNumber ?? ""}
+                          disabled={!!order}
+                          onChange={(e) => setSeat(c.variantId, e.target.value ? Number(e.target.value) : null)}
+                          style={{ width: "4.5rem", marginLeft: ".4rem" }}
+                        />
+                      )}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <button className="secondary small" disabled={!!order} onClick={() => setQty(c.variantId, c.qty - 1)}>−</button>
+                      {c.qty}
+                      <button className="secondary small" disabled={!!order} onClick={() => setQty(c.variantId, c.qty + 1)}>+</button>
+                    </td>
+                    <td>{formatMoney(c.unitPricePesewas * c.qty)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div className="grid-2">
+            <label>Discount (GH₵)<input inputMode="decimal" value={discount} disabled={!!order} onChange={(e) => setDiscount(e.target.value)} placeholder="0.00" /></label>
+            <label>Tax %<input inputMode="decimal" value={taxPercent} disabled={!!order} onChange={(e) => setTaxPercent(e.target.value)} /></label>
+          </div>
+          <dl className="confirm">
+            <dt>Subtotal</dt><dd>{formatMoney(subtotal)}</dd>
+            {tax > 0 && <><dt>Tax</dt><dd>{formatMoney(tax)}</dd></>}
+            <dt><strong>Total</strong></dt><dd><strong>{formatMoney(total)}</strong></dd>
+          </dl>
+
+          {error && <p className="error">{error}</p>}
+
+          {cart.length > 0 && !order && (
+            <div className="flex-row" style={{ marginBottom: ".6rem", flexWrap: "wrap" }}>
+              <input
+                placeholder="Hold name / table"
+                value={holdCustomer}
+                onChange={(e) => setHoldCustomer(e.target.value)}
+                style={{ width: "auto", flex: "1 1 120px" }}
+              />
+              <button type="button" className="secondary small" disabled={busy} onClick={() => void holdCurrentCart()}>
+                Hold Cart
+              </button>
+              {orderType !== "RETAIL" && (
+                <button
+                  type="button"
+                  className="secondary small"
+                  disabled={busy}
+                  onClick={() => void ensureOrder().then(sendToKitchen).catch((e) => setError(message(e)))}
+                >
+                  Send to Kitchen
+                </button>
+              )}
+            </div>
+          )}
+
+          {cart.length > 0 && (
+            <details style={{ marginBottom: ".6rem" }}>
+              <summary className="small muted">Split Bill</summary>
+              <div className="flex-row" style={{ marginTop: ".4rem", flexWrap: "wrap" }}>
+                <input
+                  type="number"
+                  min={2}
+                  value={splitCount}
+                  onChange={(e) => setSplitCount(e.target.value)}
+                  style={{ width: "4rem" }}
+                />
+                <button type="button" className="secondary small" disabled={busy} onClick={() => void runEvenSplit()}>
+                  Split Evenly
+                </button>
+                <button type="button" className="secondary small" disabled={busy} onClick={() => void runSeatSplit()}>
+                  Split by Seat
+                </button>
+              </div>
+              {evenSplit && (
+                <ul className="small" style={{ marginTop: ".4rem" }}>
+                  {evenSplit.portions.map((p) => (
+                    <li key={p.portionIndex}>Portion {p.portionIndex}: <strong>{formatMoney(p.amountPesewas)}</strong></li>
+                  ))}
+                </ul>
+              )}
+              {seatSplit && (
+                <ul className="small" style={{ marginTop: ".4rem" }}>
+                  {seatSplit.seatGroups.map((g) => (
+                    <li key={g.seatNumber}>Seat {g.seatNumber}: <strong>{formatMoney(g.subtotalPesewas)}</strong> ({g.items.length} items)</li>
+                  ))}
+                </ul>
+              )}
+            </details>
+          )}
+
+          {cart.length > 0 && (
+            <PosTenderPanel
+              merchantId={merchant.id}
+              terminalId={terminal?.id ?? null}
+              totalPesewas={total}
+              ensureOrder={ensureOrder}
+              onOrderPaid={finish}
+              onModuleDisabled={() => setModuleDisabled(true)}
+              onClearCart={() => { setCart([]); setOrder(null); setOrderKey(newKey()); }}
+              hasOrder={!!order}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

@@ -139,6 +139,7 @@ public class StepUpAuthService {
         return verifyChallenge(challengeToken, secretCode, submittedPayload, null);
     }
 
+    @Transactional
     public VerificationResult verifyChallenge(String challengeToken, String secretCode, ActionPayload submittedPayload,
                                               String callerSubject) {
         OffsetDateTime now = OffsetDateTime.now();

@@ -187,7 +187,7 @@ class TelecelCashProductionRailTest {
                 json, health, URI.create("https://api.telecel.com.gh"), creds, null
         );
 
-        String body = "{\"event\":\"charge.success\",\"data\":{\"reference\":\"TEL-100\",\"status\":\"SUCCESSFUL\",\"amount\":5000,\"currency\":\"GHS\"}}";
+        String body = "{\"event\":\"charge.success\",\"data\":{\"reference\":\"TEL-100\",\"status\":\"SUCCESSFUL\",\"amount\":\"50.00\",\"currency\":\"GHS\"}}";
         String timestamp = String.valueOf(java.time.Instant.now().getEpochSecond());
         String nonce = "telecel-nonce-1";
         String validSig = TelecelCashProductionRail.computeHmac("test-secret", timestamp + "." + nonce + "." + body);

@@ -21,7 +21,8 @@ class FxTreasuryRevaluationTest extends PostgresTestBase {
     @Test
     @DisplayName("Pillar 1: Multi-currency treasury mark-to-market revaluation against BoG benchmark rates and gain/loss ledger balancing")
     void testTreasuryFxRevaluationLifecycle() {
-        LocalDate valDate = LocalDate.now();
+        LocalDate valDate = LocalDate.of(2030, 1, 1)
+                .plusDays(java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 20_000));
         String usdRevalAccount = "system:fx:position_reval_USD:GHS";
         String eurRevalAccount = "system:fx:position_reval_EUR:GHS";
         String unrealizedGainLossAccount = "system:fx:unrealized_gain_loss:GHS";
@@ -78,5 +79,24 @@ class FxTreasuryRevaluationTest extends PostgresTestBase {
         var allSnapshots = revalService.listSnapshotsForDate(valDate);
         assertThat(allSnapshots).hasSize(2);
         assertThat(allSnapshots).extracting("currency").containsExactly("EUR", "USD");
+    }
+
+    @Test
+    @DisplayName("Regression: Repeated recordDailyPositionSnapshot for same date and currency does not post duplicate ledger entries")
+    void testRepeatedSnapshotSameDateCurrencyIsIdempotent() {
+        LocalDate valDate = LocalDate.of(2090, 1, 1)
+                .plusDays(java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 20_000));
+        String gbpRevalAccount = "system:fx:position_reval_GBP:GHS";
+        long baseGbp = ledger.balance(gbpRevalAccount);
+
+        var first = revalService.recordDailyPositionSnapshot(valDate, "GBP", 100_00L, 195_000L, 180_000L);
+        assertThat(first.unrealizedGainLoss()).isEqualTo(15_000L);
+        assertThat(ledger.balance(gbpRevalAccount)).isEqualTo(baseGbp + 15_000L);
+
+        // Re-run with identical parameters: must be idempotent (no second posting)
+        var second = revalService.recordDailyPositionSnapshot(valDate, "GBP", 100_00L, 195_000L, 180_000L);
+        assertThat(second.unrealizedGainLoss()).isEqualTo(15_000L);
+        assertThat(ledger.balance(gbpRevalAccount)).isEqualTo(baseGbp + 15_000L);
+        assertThat(ledger.integrity().ok()).isTrue();
     }
 }

@@ -1,5 +1,7 @@
 package com.elepay.security;
 
+import com.elepay.common.ApiException;
+import com.elepay.common.SecretProtector;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.List;
@@ -36,7 +38,7 @@ import org.springframework.stereotype.Service;
  * ever producing a predictable or shared key.
  */
 @Service
-public class KmsSecretProvider {
+public class KmsSecretProvider implements SecretProtector {
     private static final List<String> FORBIDDEN_DISK_PREFIXES = List.of(
             "file:", "/etc/", "/tmp/", "/var/", "/home/", "/root/"
     );
@@ -182,8 +184,22 @@ public class KmsSecretProvider {
             return configuredOrStoredValue;
         }
         EnvelopeEncryption.EncryptedField field = EnvelopeEncryption.EncryptedField.deserialize(configuredOrStoredValue);
+        if (expectedAad != null && !expectedAad.equals(field.aad())) {
+            throw ApiException.badRequest("aad_mismatch", "AAD mismatch: ciphertext is bound to a different context");
+        }
         var keyMeta = keyRotationService.getKey(field.keyId(), field.keyVersion());
         return EnvelopeEncryption.decrypt(field, keyMeta.secretKey());
+    }
+
+    public String unwrapSecretStrict(String configuredOrStoredValue, String expectedAad) {
+        if (configuredOrStoredValue == null) return null;
+        if (isDiskFileSecret(configuredOrStoredValue)) {
+            throw new IllegalArgumentException("Disk secret file paths are forbidden by KmsSecretProvider: " + configuredOrStoredValue);
+        }
+        if (!configuredOrStoredValue.startsWith("ENC:v1:")) {
+            throw ApiException.badRequest("plaintext_secret_forbidden", "Plaintext secrets are forbidden; expected ENC:v1: envelope");
+        }
+        return unwrapSecret(configuredOrStoredValue, expectedAad);
     }
 
     public void rotateMasterKey(String newKeyId, int newVersion, SecretKey newKek) {

@@ -3,6 +3,7 @@ package com.elepay.wallet;
 import com.elepay.common.ApiException;
 import com.elepay.common.Idempotency;
 import com.elepay.common.References;
+import com.elepay.common.OpsQueue;
 import com.elepay.ledger.Ledger;
 import com.elepay.operations.EmtechCapture;
 import com.elepay.outbox.Outbox;
@@ -18,6 +19,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
 
@@ -40,12 +42,14 @@ class WalletFunding {
     private final TransactionTemplate tx;
     private final EmtechCapture regulatory;
     private final TransferLimits limits;
+    private final OpsQueue ops;
 
     @org.springframework.beans.factory.annotation.Value("${elepay.wallet.topup-own-msisdn-only:true}")
     private boolean ownMsisdnOnly = true;
 
     WalletFunding(JdbcClient db, Wallets wallets, RailTransactions rails, Idempotency idempotency, Ledger ledger,
-                  Outbox outbox, PlatformTransactionManager tm, EmtechCapture regulatory, TransferLimits limits) {
+                  Outbox outbox, PlatformTransactionManager tm, EmtechCapture regulatory, TransferLimits limits,
+                  OpsQueue ops) {
         this.db = db;
         this.wallets = wallets;
         this.rails = rails;
@@ -55,6 +59,7 @@ class WalletFunding {
         this.tx = new TransactionTemplate(tm);
         this.regulatory = regulatory;
         this.limits = limits;
+        this.ops = ops;
     }
 
     record TopUp(@Positive @Max(1_000_000_00L) long amount, @NotBlank @Pattern(regexp = "momo|card") String method,
@@ -159,6 +164,7 @@ class WalletFunding {
     }
 
     @EventListener
+    @Transactional
     void onSucceeded(RailEvents.Succeeded event) {
         if (!event.purpose().equals("wallet_topup")) return;
         var op = db.sql("SELECT customer_id, reference FROM wallet_operation WHERE id = :id AND status = 'pending' FOR UPDATE")
@@ -166,21 +172,33 @@ class WalletFunding {
                 .optional();
         if (op.isEmpty()) return;
         UUID customer = (UUID) op.get()[0];
+        String reference = (String) op.get()[1];
         try {
             limits.checkCredit(customer, event.amount());
         } catch (ApiException e) {
-            db.sql("UPDATE wallet_operation SET status = 'failed', updated_at = now() WHERE id = :id")
-                    .param("id", event.purposeId()).update();
+            var suspensePosted = ledger.post(Ledger.Posting.of("wallet-topup-suspense", event.purposeId().toString(),
+                    "suspense", List.of(
+                            Ledger.Leg.debit(Ledger.clearing(event.rail()), event.amount()),
+                            Ledger.Leg.credit(Ledger.SUSPENSE, event.amount())))
+                    .describedAs(reference + " tier limit exceeded"));
+            db.sql("UPDATE wallet_operation SET status = 'failed', journal_tx = :tx, updated_at = now() WHERE id = :id")
+                    .param("tx", suspensePosted.transactionId()).param("id", event.purposeId()).update();
+            ops.raise("topup_exceeded_tier_limit", "high", "wallet_operation:" + reference, Map.of(
+                    "customerId", customer.toString(),
+                    "amount", event.amount(),
+                    "rail", event.rail(),
+                    "reason", e.getMessage(),
+                    "journalTx", suspensePosted.transactionId().toString()));
             return;
         }
         var posted = ledger.post(Ledger.Posting.of("wallet-topup", event.purposeId().toString(), "wallet_topup", List.of(
                 Ledger.Leg.debit(Ledger.clearing(event.rail()), event.amount()),
-                Ledger.Leg.credit(CustomerDirectory.available(customer), event.amount()))).describedAs((String) op.get()[1]));
+                Ledger.Leg.credit(CustomerDirectory.available(customer), event.amount()))).describedAs(reference));
         db.sql("UPDATE wallet_operation SET status = 'completed', journal_tx = :tx, updated_at = now() WHERE id = :id")
                 .param("tx", posted.transactionId()).param("id", event.purposeId()).update();
         regulatory.walletTopup(event.purposeId(), null);
-        outbox.publish("wallet", op.get()[1], "wallet.topup.completed",
-                Map.of("reference", op.get()[1], "amount", event.amount()), Set.of());
+        outbox.publish("wallet", reference, "wallet.topup.completed",
+                Map.of("reference", reference, "amount", event.amount()), Set.of());
     }
 
     @EventListener

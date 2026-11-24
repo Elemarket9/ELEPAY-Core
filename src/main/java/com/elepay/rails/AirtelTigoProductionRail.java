@@ -413,7 +413,14 @@ public class AirtelTigoProductionRail implements PaymentRail {
             JsonNode data = root.path("data").isMissingNode() ? root : root.path("data");
             String reference = data.path("reference").asString();
             String status = data.path("status").asString();
-            long amount = data.path("amount").asLong();
+            String rawAmount = data.path("amount").asString("").trim();
+            if (rawAmount.isEmpty()) {
+                throw new InvalidCallbackException("AirtelTigo callback amount is missing");
+            }
+            long amount = new BigDecimal(rawAmount).movePointRight(2).longValueExact();
+            if (amount <= 0) {
+                throw new InvalidCallbackException("AirtelTigo callback amount must be positive");
+            }
             String currency = data.path("currency").asString("GHS");
             String railRef = data.path("railReference").asString("AT-" + reference);
 
@@ -425,6 +432,8 @@ public class AirtelTigoProductionRail implements PaymentRail {
 
             Result result = new Result(outcome, railRef, amount, currency, calculateFee(amount), null, "AirtelTigo callback processed");
             return new Callback("airteltigo:" + reference + ":" + status, event, "charge", reference, railRef, result);
+        } catch (InvalidCallbackException e) {
+            throw e;
         } catch (Exception e) {
             throw new InvalidCallbackException("Failed to parse AirtelTigo callback payload: " + e.getMessage());
         }

@@ -11,11 +11,12 @@ import com.elepay.wallet.CustomerDirectory;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import java.time.OffsetDateTime;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,6 +34,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 class PublicCheckouts {
     private static final Set<String> NETWORKS = Set.of("mtn", "telecel", "airteltigo");
+    private static final int MAX_PAY_ATTEMPT_ENTRIES = 10_000;
 
     private final CheckoutService checkouts;
     private final MerchantAccess merchants;
@@ -41,7 +43,13 @@ class PublicCheckouts {
     private final Idempotency idempotency;
     private final JdbcClient db;
     private final TransactionTemplate tx;
-    private final ConcurrentHashMap<String, AtomicInteger> payAttempts = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> payAttempts = Collections.synchronizedMap(
+            new LinkedHashMap<>(1024, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, AtomicInteger> eldest) {
+                    return size() > MAX_PAY_ATTEMPT_ENTRIES;
+                }
+            });
     private final String publicBaseUrl;
     private final com.elepay.identity.KillSwitchService killSwitchService;
     private final EmtechCapture regulatory;
@@ -71,7 +79,7 @@ class PublicCheckouts {
                           List<PublicLine> lines, long subtotal, List<MethodTotal> methods, OffsetDateTime expiresAt,
                           OffsetDateTime paidAt, String supportReference) {}
 
-    record RailPay(@NotBlank @Pattern(regexp = "momo|card") String method, @Size(max = 40) String phone,
+    record RailPay(@NotBlank @Pattern(regexp = "momo|card|ghqr") String method, @Size(max = 40) String phone,
                    @Size(max = 20) String network, @Email @Size(max = 200) String email) {}
 
     record AmountRequest(@Positive Long amount, @Size(max = 200) String description) {}
@@ -80,9 +88,14 @@ class PublicCheckouts {
     public PublicCheckout view(@PathVariable String reference) {
         var c = checkouts.load(reference, false);
         boolean walletEnabled = killSwitchService == null || killSwitchService.isConsumerWalletEnabled();
-        List<MethodTotal> methods = List.of("wallet", "momo", "card").stream()
-                .filter(m -> m.equals("wallet") ? walletEnabled : (m.equals("card") ? rails.available("charge","card", "card")
-                        : List.of("mtn","telecel","airteltigo").stream().anyMatch(n -> rails.available("charge","momo",n))))
+        List<MethodTotal> methods = List.of("wallet", "momo", "card", "ghqr").stream()
+                .filter(m -> switch (m) {
+                    case "wallet" -> walletEnabled;
+                    case "card" -> rails.available("charge", "card", "card");
+                    case "ghqr" -> rails.available("charge", "ghqr", null);
+                    default -> List.of("mtn", "telecel", "airteltigo").stream()
+                            .anyMatch(n -> rails.available("charge", "momo", n));
+                })
                 .map(m -> {
             long fee = checkouts.customerFee(m, c.subtotal());
             return new MethodTotal(m, fee, c.subtotal() + fee);
@@ -127,7 +140,7 @@ class PublicCheckouts {
         String caller = httpRequest.getRemoteAddr() == null ? "unknown" : httpRequest.getRemoteAddr();
         String payChannel = payChannel(channel);
         String coarseIp = "unknown".equals(caller) ? null : caller;
-        var started = tx.execute(s -> idempotency.execute("checkout-pay:" + reference + ":" + caller, key, request,
+        var started = tx.execute(s -> idempotency.execute("checkout-pay:" + reference, key, request,
                 CheckoutService.PaymentResult.class, () -> {
                     checkouts.noteChannel(reference, payChannel);
                     regulatory.rememberCheckout(checkouts.load(reference, false).id(), coarseIp);

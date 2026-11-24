@@ -50,11 +50,17 @@ public class EnvelopeEncryption {
                 throw ApiException.badRequest("invalid_ciphertext", "Malformed serialized ciphertext envelope");
             }
             String keyId = parts[2];
-            int keyVersion = Integer.parseInt(parts[3]);
+            int keyVersion;
             String ivBase64 = parts[4];
             String wrappedDekBase64 = parts[5];
             String ciphertextBase64 = parts[6];
-            String aad = new String(Base64.getDecoder().decode(parts[7]), StandardCharsets.UTF_8);
+            String aad;
+            try {
+                keyVersion = Integer.parseInt(parts[3]);
+                aad = new String(Base64.getDecoder().decode(parts[7]), StandardCharsets.UTF_8);
+            } catch (IllegalArgumentException e) {
+                throw ApiException.badRequest("invalid_ciphertext", "Malformed serialized ciphertext envelope");
+            }
             return new EncryptedField(keyId, keyVersion, ivBase64, wrappedDekBase64, ciphertextBase64, aad);
         }
     }
@@ -143,7 +149,7 @@ public class EnvelopeEncryption {
             byte[] plaintextBytes = dataCipher.doFinal(ciphertext);
             return new String(plaintextBytes, StandardCharsets.UTF_8);
         } catch (Exception e) {
-            throw ApiException.badRequest("decryption_failed", "Failed to decrypt envelope ciphertext: " + e.getMessage());
+            throw ApiException.badRequest("decryption_failed", "Failed to decrypt envelope ciphertext");
         }
     }
 }

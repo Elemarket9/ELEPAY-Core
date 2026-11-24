@@ -44,9 +44,21 @@ public class Payouts {
     private final ObjectMapper json;
     private final com.elepay.identity.KillSwitchService killSwitchService;
     private final PayoutVelocityService velocityService;
+    private com.elepay.common.SanctionsScreener sanctionsScreening;
+    private com.elepay.risk.RiskEngineService riskEngine;
 
     private final org.springframework.context.ApplicationEventPublisher events;
     private final EmtechCapture regulatory;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setSanctionsScreening(com.elepay.common.SanctionsScreener sanctionsScreening) {
+        this.sanctionsScreening = sanctionsScreening;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setRiskEngine(com.elepay.risk.RiskEngineService riskEngine) {
+        this.riskEngine = riskEngine;
+    }
 
     Payouts(JdbcClient db, Ledger ledger, RailTransactions rails, NameVerifications verifications, Outbox outbox,
             Audit audit, OpsQueue ops, ObjectMapper json, org.springframework.context.ApplicationEventPublisher events,
@@ -122,18 +134,34 @@ public class Payouts {
             }
             total = Math.addExact(total, item.amount());
         }
-        if (velocityService != null) {
-            velocityService.checkAndRecordOutflow(ownerType, owner, total, items.size(), actor);
-        } else if (killSwitchService != null) {
+        if (killSwitchService != null) {
             killSwitchService.requirePayoutsAllowed("merchant".equalsIgnoreCase(ownerType) ? owner : null);
         }
         UUID batchId = UUID.randomUUID();
+        if (riskEngine != null && !"merchant".equalsIgnoreCase(ownerType)) {
+            var assessment = riskEngine.assessTransaction(new com.elepay.risk.RiskEngineService.AssessmentRequest(
+                    actor != null ? actor : ownerType + ":" + owner, batchId.toString(), "PAYOUT", total, Ledger.GHS,
+                    owner.toString(), null, null, null, null, null, false, false, false, false, false, null));
+            if (assessment.decision() == com.elepay.risk.RiskDecision.REJECT) {
+                throw ApiException.conflict("risk_blocked", "Payout blocked by risk engine: " + assessment.explanation());
+            }
+        }
         db.sql("""
                 INSERT INTO payout_batch (id, reference, owner_type, owner_id, item_count, total, description, created_by)
                 VALUES (:id, :ref, :ot, :o, :n, :t, :d, :by)""")
                 .param("id", batchId).param("ref", References.next("PB")).param("ot", ownerType).param("o", owner)
                 .param("n", items.size()).param("t", total).param("d", batchDescription).param("by", actor).update();
-        for (Item item : items) createItem(ownerType, owner, batchId, item, null, actor);
+        long acceptedTotal = 0L;
+        int acceptedCount = 0;
+        for (Item item : items) {
+            if (createItem(ownerType, owner, batchId, item, null, actor) != null) {
+                acceptedTotal = Math.addExact(acceptedTotal, item.amount());
+                acceptedCount++;
+            }
+        }
+        if (velocityService != null && acceptedCount > 0) {
+            velocityService.checkAndRecordOutflow(ownerType, owner, acceptedTotal, acceptedCount, actor);
+        }
         audit.record(actor, "payout.batch_created", ownerType + ":" + owner, Map.of("batch", batchId.toString(),
                 "items", items.size(), "total", total));
         return batch(batchId);
@@ -141,6 +169,10 @@ public class Payouts {
 
     private UUID createItem(String ownerType, UUID owner, UUID batchId, Item item, UUID retryOf, String actor) {
         Destination d = normalize(item.destination());
+        if (sanctionsScreening != null && sanctionsScreening.isSanctionedName(d.accountName())) {
+            throw ApiException.conflict("sanctions_match",
+                    "Payout destination failed sanctions screening: " + d.accountName());
+        }
         String verification;
         String verifiedName = null;
         if (item.confirmedName() != null) {
@@ -169,7 +201,7 @@ public class Payouts {
                     .param("amount", item.amount()).param("rail", rail).param("by", actor).param("batch", batchId)
                     .param("cref", item.clientReference()).param("platform", item.platform())
                     .param("reason", "The receiving network did not find this account").param("retry", retryOf).update();
-            return id;
+            return null;
         }
         var reserved = ledger.post(Ledger.Posting.of("payout-reserve", id.toString(), "payout_reservation", List.of(
                 Leg.debit(bucket(ownerType, owner, "available"), item.amount()),
@@ -256,9 +288,7 @@ public class Payouts {
         long already = db.sql("SELECT count(*) FROM payout WHERE retry_of = :id").param("id", original[0])
                 .query(Long.class).single();
         if (already > 0) throw ApiException.conflict("already_retried", "This payout was already retried");
-        if (velocityService != null) {
-            velocityService.checkAndRecordOutflow(ownerType, owner, (long) original[2], 1, actor);
-        } else if (killSwitchService != null) {
+        if (killSwitchService != null) {
             killSwitchService.requirePayoutsAllowed("merchant".equalsIgnoreCase(ownerType) ? owner : null);
         }
         Destination d = json.readValue((String) original[3], Destination.class);
@@ -268,8 +298,11 @@ public class Payouts {
                 VALUES (:id, :ref, :ot, :o, 1, :t, :d, :by)""")
                 .param("id", batchId).param("ref", References.next("PB")).param("ot", ownerType).param("o", owner)
                 .param("t", original[2]).param("d", "Retry of " + reference).param("by", actor).update();
-        createItem(ownerType, owner, batchId, new Item((String) original[4], (long) original[2], d,
+        UUID createdId = createItem(ownerType, owner, batchId, new Item((String) original[4], (long) original[2], d,
                 (String) original[5], null), (UUID) original[0], actor);
+        if (velocityService != null && createdId != null) {
+            velocityService.checkAndRecordOutflow(ownerType, owner, (long) original[2], 1, actor);
+        }
         audit.record(actor, "payout.retried", ownerType + ":" + owner, Map.of("original", reference));
         return batch(batchId);
     }
@@ -286,6 +319,7 @@ public class Payouts {
     }
 
     @EventListener
+    @Transactional
     void onSucceeded(RailEvents.Succeeded event) {
         if (!event.purpose().equals("payout")) return;
         var p = lock(event.purposeId()).orElseThrow();
@@ -300,6 +334,7 @@ public class Payouts {
     }
 
     @EventListener
+    @Transactional
     void onFailed(RailEvents.Failed event) {
         if (!event.purpose().equals("payout")) return;
         var p = lock(event.purposeId()).orElseThrow();
@@ -314,6 +349,7 @@ public class Payouts {
     }
 
     @EventListener
+    @Transactional
     void onReturned(RailEvents.Returned event) {
         if (!event.purpose().equals("payout")) return;
         var p = lock(event.purposeId()).orElseThrow();

@@ -78,7 +78,7 @@ public class FxTreasuryRevaluationService {
         }
 
         long revaluedGhsAmount = Math.multiplyExact(positionBalance, bogMidRateE4) / 10_000L;
-        long unrealizedGainLoss = revaluedGhsAmount - historicalCostGhs;
+        long unrealizedGainLoss = Math.subtractExact(revaluedGhsAmount, historicalCostGhs);
 
         UUID id = UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now();
@@ -116,11 +116,12 @@ public class FxTreasuryRevaluationService {
             ledger.openSystem(positionRevalAccount, "holding", Ledger.GHS, true);
             ledger.openSystem(unrealizedGainLossAccount, "operating", Ledger.GHS, true);
 
+            String idempotencyKey = "FX-REVAL-" + currency + "-" + snapshotDate;
             if (unrealizedGainLoss > 0) {
                 // Gain: credit position revaluation asset (+), debit unrealized gain equity (-)
                 var posting = Ledger.Posting.of(
-                        "fx_reval_gain",
-                        "GAIN-" + currency + "-" + snapshotDate + "-" + UUID.randomUUID().toString().substring(0, 8),
+                        "fx_reval",
+                        idempotencyKey,
                         "FX_UNREALIZED_GAIN",
                         List.of(
                                 Ledger.Leg.credit(positionRevalAccount, unrealizedGainLoss),
@@ -131,10 +132,10 @@ public class FxTreasuryRevaluationService {
                 ledger.post(posting);
             } else {
                 // Loss: debit position revaluation asset (-), credit unrealized loss equity (+)
-                long absLoss = Math.abs(unrealizedGainLoss);
+                long absLoss = Math.negateExact(unrealizedGainLoss);
                 var posting = Ledger.Posting.of(
-                        "fx_reval_loss",
-                        "LOSS-" + currency + "-" + snapshotDate + "-" + UUID.randomUUID().toString().substring(0, 8),
+                        "fx_reval",
+                        idempotencyKey,
                         "FX_UNREALIZED_LOSS",
                         List.of(
                                 Ledger.Leg.debit(positionRevalAccount, absLoss),

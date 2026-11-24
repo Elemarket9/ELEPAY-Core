@@ -50,6 +50,9 @@ public class PosCashierService {
 
     @Transactional
     public Cashier registerCashier(UUID merchantId, String name, String pin, String badgeNumber) {
+        if (pin == null || !pin.matches("\\d{4,8}")) {
+            throw com.elepay.common.ApiException.badRequest("invalid_pin", "Cashier PIN must be 4 to 8 digits");
+        }
         UUID id = UUID.randomUUID();
         String pinHash = encoder.encode(pin);
 

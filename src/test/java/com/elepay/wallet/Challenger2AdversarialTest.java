@@ -550,13 +550,9 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
 
         private void cleanAuditTable() {
             tx.executeWithoutResult(s -> {
-                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
-                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
-                db.sql("ALTER TABLE audit_checkpoint DISABLE TRIGGER audit_checkpoint_immutable").update();
+                db.sql("SET LOCAL session_replication_role = 'replica'").update();
                 db.sql("TRUNCATE audit_log, audit_checkpoint").update();
                 db.sql("ALTER SEQUENCE audit_log_id_seq RESTART WITH 1").update();
-                db.sql("ALTER TABLE audit_checkpoint ENABLE TRIGGER audit_checkpoint_immutable").update();
-                db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
             });
         }
 
@@ -576,23 +572,21 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
             assertTrue(audit.verifyChain().valid());
 
             String originalDetails = e2.payload();
-            tx.executeWithoutResult(s -> {
-                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
-                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
-            });
             try {
-                db.sql("UPDATE audit_log SET details = CAST('{\"pesewas\": 99999999}' AS jsonb) WHERE id = :id")
-                        .param("id", e2.id()).update();
+                tx.executeWithoutResult(s -> {
+                    db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                    db.sql("UPDATE audit_log SET details = CAST('{\"pesewas\": 99999999}' AS jsonb) WHERE id = :id")
+                            .param("id", e2.id()).update();
+                });
 
                 Audit.AuditTamperedException ex = assertThrows(Audit.AuditTamperedException.class,
                         () -> audit.verifyChain());
                 assertThat(ex.getMessage()).contains("Audit entry tampered at id " + e2.id());
             } finally {
-                db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb) WHERE id = :id")
-                        .param("d", originalDetails).param("id", e2.id()).update();
                 tx.executeWithoutResult(s -> {
-                    db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
-                    db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+                    db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                    db.sql("UPDATE audit_log SET details = CAST(:d AS jsonb) WHERE id = :id")
+                            .param("d", originalDetails).param("id", e2.id()).update();
                 });
             }
         }
@@ -606,32 +600,33 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
 
             assertTrue(audit.verifyChain().valid());
 
-            tx.executeWithoutResult(s -> {
-                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
-                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
-            });
             try {
                 // Tamper actor
-                db.sql("UPDATE audit_log SET actor = 'rogue-attacker' WHERE id = :id")
-                        .param("id", e2.id()).update();
+                tx.executeWithoutResult(s -> {
+                    db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                    db.sql("UPDATE audit_log SET actor = 'rogue-attacker' WHERE id = :id")
+                            .param("id", e2.id()).update();
+                });
 
                 Audit.AuditTamperedException exActor = assertThrows(Audit.AuditTamperedException.class,
                         () -> audit.verifyChain());
                 assertThat(exActor.getMessage()).contains("Audit entry tampered at id " + e2.id());
 
                 // Restore actor, tamper action
-                db.sql("UPDATE audit_log SET actor = 'risk-officer', action = 'aml.approve_all' WHERE id = :id")
-                        .param("id", e2.id()).update();
+                tx.executeWithoutResult(s -> {
+                    db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                    db.sql("UPDATE audit_log SET actor = 'risk-officer', action = 'aml.approve_all' WHERE id = :id")
+                            .param("id", e2.id()).update();
+                });
 
                 Audit.AuditTamperedException exAction = assertThrows(Audit.AuditTamperedException.class,
                         () -> audit.verifyChain());
                 assertThat(exAction.getMessage()).contains("Audit entry tampered at id " + e2.id());
             } finally {
-                db.sql("UPDATE audit_log SET action = 'aml.dismiss' WHERE id = :id")
-                        .param("id", e2.id()).update();
                 tx.executeWithoutResult(s -> {
-                    db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
-                    db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+                    db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                    db.sql("UPDATE audit_log SET action = 'aml.dismiss' WHERE id = :id")
+                            .param("id", e2.id()).update();
                 });
             }
         }
@@ -646,13 +641,12 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
 
             assertTrue(audit.verifyChain().valid());
 
-            tx.executeWithoutResult(s -> {
-                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
-                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
-            });
             try {
                 // Delete middle entry e2
-                db.sql("DELETE FROM audit_log WHERE id = :id").param("id", e2.id()).update();
+                tx.executeWithoutResult(s -> {
+                    db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                    db.sql("DELETE FROM audit_log WHERE id = :id").param("id", e2.id()).update();
+                });
 
                 // e3.prevHash points to e2, but preceding entry is now e1 -> chain broken!
                 Audit.AuditTamperedException ex = assertThrows(Audit.AuditTamperedException.class,
@@ -671,23 +665,21 @@ public class Challenger2AdversarialTest extends PostgresTestBase {
 
             String originalHash = e1.entryHash();
             String fakeHash = "bad0" + "0".repeat(60); // Exactly 64 chars
-            tx.executeWithoutResult(s -> {
-                db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
-                db.sql("ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable").update();
-            });
             try {
-                db.sql("UPDATE audit_log SET entry_hash = :hash WHERE id = :id")
-                        .param("hash", fakeHash).param("id", e1.id()).update();
+                tx.executeWithoutResult(s -> {
+                    db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                    db.sql("UPDATE audit_log SET entry_hash = :hash WHERE id = :id")
+                            .param("hash", fakeHash).param("id", e1.id()).update();
+                });
 
                 Audit.AuditTamperedException ex = assertThrows(Audit.AuditTamperedException.class,
                         () -> audit.verifyChain());
                 assertThat(ex.getMessage()).contains("Audit entry tampered at id " + e1.id());
             } finally {
-                db.sql("UPDATE audit_log SET entry_hash = :hash WHERE id = :id")
-                        .param("hash", originalHash).param("id", e1.id()).update();
                 tx.executeWithoutResult(s -> {
-                    db.sql("SET LOCAL elepay.test_allow_insider_simulation = 'true'").update();
-                    db.sql("ALTER TABLE audit_log ENABLE TRIGGER audit_log_immutable").update();
+                    db.sql("SET LOCAL session_replication_role = 'replica'").update();
+                    db.sql("UPDATE audit_log SET entry_hash = :hash WHERE id = :id")
+                            .param("hash", originalHash).param("id", e1.id()).update();
                 });
             }
         }

@@ -233,12 +233,29 @@ public class KdsService {
     }
 
     public List<KdsTicket> getActiveTickets(UUID merchantId) {
-        return db.sql("SELECT " + TICKET_COLS + """
-             FROM restaurant_kds_ticket
-             WHERE merchant_id = :merchantId AND status IN ('NEW', 'PREPARING', 'READY')
-             ORDER BY created_at ASC
+        return getActiveTickets(merchantId, null);
+    }
+
+    public List<KdsTicket> getActiveTickets(UUID merchantId, UUID branchId) {
+        if (branchId == null) {
+            return db.sql("SELECT " + TICKET_COLS + """
+                 FROM restaurant_kds_ticket
+                 WHERE merchant_id = :merchantId AND status IN ('NEW', 'PREPARING', 'READY')
+                 ORDER BY created_at ASC
+                """)
+                .param("merchantId", merchantId)
+                .query(KdsTicket.class)
+                .list();
+        }
+        return db.sql("SELECT " + TICKET_COLS_T + """
+             FROM restaurant_kds_ticket t
+             JOIN pos_order o ON o.id = t.order_id
+             WHERE t.merchant_id = :merchantId AND o.branch_id = :branchId
+               AND t.status IN ('NEW', 'PREPARING', 'READY')
+             ORDER BY t.created_at ASC
             """)
             .param("merchantId", merchantId)
+            .param("branchId", branchId)
             .query(KdsTicket.class)
             .list();
     }
@@ -250,19 +267,28 @@ public class KdsService {
      */
     @Transactional
     public SyncResult sync(UUID merchantId, long since, UUID stationId) {
+        return sync(merchantId, since, stationId, null);
+    }
+
+    @Transactional
+    public SyncResult sync(UUID merchantId, long since, UUID stationId, UUID branchId) {
         if (since < 0) throw ApiException.badRequest("cursor_invalid", "Cursor must not be negative");
         if (stationId != null) stations.heartbeat(stationId);
         String stationFilter = stationId == null ? "" : """
              AND EXISTS (SELECT 1 FROM restaurant_kds_item i
                          WHERE i.ticket_id = t.id AND (i.station_id = :station OR i.station_id IS NULL))
             """;
+        String branchJoin = branchId == null ? "" : " JOIN pos_order o ON o.id = t.order_id";
+        String branchFilter = branchId == null ? "" : " AND o.branch_id = :branchId";
         String window = since == 0
                 ? " AND t.status IN ('NEW', 'PREPARING', 'READY')"
                 : " AND (t.change_seq > :since OR t.updated_at > now() - make_interval(secs => :overlap))";
         var query = db.sql("SELECT " + TICKET_COLS_T
-                        + " FROM restaurant_kds_ticket t WHERE t.merchant_id = :m" + window + stationFilter
+                        + " FROM restaurant_kds_ticket t" + branchJoin
+                        + " WHERE t.merchant_id = :m" + branchFilter + window + stationFilter
                         + " ORDER BY t.change_seq LIMIT " + (SYNC_PAGE + 1))
                 .param("m", merchantId);
+        if (branchId != null) query = query.param("branchId", branchId);
         if (since != 0) query = query.param("since", since).param("overlap", SYNC_OVERLAP_SECONDS);
         if (stationId != null) query = query.param("station", stationId);
         List<KdsTicket> tickets = new ArrayList<>(query.query(KdsTicket.class).list());

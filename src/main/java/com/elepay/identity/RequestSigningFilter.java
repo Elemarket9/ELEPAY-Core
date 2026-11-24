@@ -72,13 +72,21 @@ public class RequestSigningFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
 
-        String path = request.getRequestURI();
+        String path = RequestPaths.normalized(request);
+        if (path == null) {
+            sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "invalid_path", "The request path is not allowed");
+            return;
+        }
         String method = request.getMethod().toUpperCase();
         boolean isMutation = MUTATION_METHODS.contains(method);
         boolean isPublic = isPublicPath(path);
         boolean enforceHeader = "true".equalsIgnoreCase(request.getHeader(HEADER_ENFORCE));
         boolean apiCredential = request.getHeader(HEADER_API_KEY) != null;
-        boolean requireSignature = (enforceHeader || (enforceSigning && (!requireV2 || apiCredential))) && isMutation && !isPublic;
+        boolean isPrivilegedOpsOrAdmin = path.startsWith("/v1/ops/") || path.equals("/v1/ops")
+                || path.startsWith("/admin/") || path.equals("/admin");
+        boolean requireSignature = (enforceHeader
+                || (enforceSigning && (!requireV2 || apiCredential || isPrivilegedOpsOrAdmin)))
+                && isMutation && !isPublic;
 
         String signature = request.getHeader(HEADER_SIGNATURE);
         if (signature == null || signature.isBlank()) {
