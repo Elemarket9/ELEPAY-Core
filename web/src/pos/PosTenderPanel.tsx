@@ -36,18 +36,22 @@ export function PosTenderPanel({ merchantId, terminalId, totalPesewas, order, en
   callbacks.current={onOrderPaid,onModuleDisabled};
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   const save=useCallback((a:PosTenderRecovery)=>{
+    const saved=decodePosTender(sessionStorage.getItem(storageKey));
+    if(saved&&(saved.key!==a.key||saved.orderId!==a.orderId))throw new Error("Another saved tender requires resolution.");
     sessionStorage.setItem(storageKey,JSON.stringify(a));current.current=a;
     if(alive.current)setRecovery({attempt:a,blocked:false});
   },[storageKey]);
   const clear=useCallback(()=>{
+    const saved=decodePosTender(sessionStorage.getItem(storageKey));
+    if(saved&&(!current.current||saved.key!==current.current.key||saved.orderId!==current.current.orderId))throw new Error("Another tender requires recovery.");
     sessionStorage.removeItem(storageKey);current.current=null;
     if(alive.current)setRecovery({attempt:null,blocked:false});
   },[storageKey]);
   const finish=useCallback(async (ord:PosOrder)=>{
     if(!isPaidPosOrder(ord))throw new Error("Order is not fully paid. No receipt was issued.");
-    // Parent persists the order until receipt generation succeeds.
-    clear();
+    // Keep the tender recoverable until the paid receipt has been retrieved.
     await callbacks.current.onOrderPaid(ord);
+    clear();
   },[clear]);
   const verify=useCallback(async (a:PosTenderRecovery, allowConfirm:boolean)=>{
     const ord=await api<PosOrder>("/v1/pos/orders/"+a.orderId,{signal:timeout()});
@@ -90,8 +94,10 @@ export function PosTenderPanel({ merchantId, terminalId, totalPesewas, order, en
     lock.current=true;setBusy(true);setError(null);
     try{
       if(retry&&retry.checkoutRef){await verify(retry,true);return;}
-      const ord=retry?await api<PosOrder>("/v1/pos/orders/"+retry.orderId,{signal:timeout()}):await ensureOrder();
-      if(retry&&ord.id!==retry.orderId)throw new Error("Order identity mismatch");
+      const original=retry?retry.orderId:(await ensureOrder()).id;
+      const ord=await api<PosOrder>("/v1/pos/orders/"+original,{signal:timeout()});
+      if(ord.id!==original)throw new Error("Order identity mismatch");
+      if(retry&&order&&order.id!==retry.orderId)throw new Error("Saved tender belongs to a different order. Contact support.");
       if(isPaidPosOrder(ord)){await finish(ord);return;}
       const remaining=remainingPosBalance(ord);
       if(!retry&&remaining!==totalPesewas)throw new Error("The server total changed. Review the updated outstanding amount before confirming again.");

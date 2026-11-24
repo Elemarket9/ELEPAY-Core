@@ -164,6 +164,7 @@ export function PosTerminalBar({
   async function authenticateCashier(e: React.FormEvent) {
     e.preventDefault();
     if(locked||actionLock.current)return;
+    onSelectCashier(null);setAuthBadgeLabel(null);
     setError(null);
     setStatusMsg(null);
     actionLock.current=true;setBusy(true);
@@ -340,7 +341,7 @@ export function PosTerminalBar({
             <form onSubmit={registerCashier} className="grid-2" style={{ marginTop: ".5rem" }}>
               <label>Cashier Name<input value={cashierName} onChange={(e) => setCashierName(e.target.value)} required /></label>
               <label>Badge Number<input value={cashierBadge} onChange={(e) => setCashierBadge(e.target.value)} required /></label>
-              <label>PIN (4-6 digits)<input type="password" inputMode="numeric" value={cashierPin} onChange={(e) => setCashierPin(e.target.value)} required minLength={4} /></label>
+              <label>PIN (4-8 digits)<input type="password" inputMode="numeric" value={cashierPin} onChange={(e) => setCashierPin(e.target.value)} required minLength={4} maxLength={8} autoComplete="off" /></label>
               <div className="flex-row" style={{ alignItems: "end" }}>
                 <button type="submit" className="secondary" disabled={busy||locked}>Register Cashier</button>
               </div>

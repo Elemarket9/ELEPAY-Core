@@ -81,6 +81,10 @@ export interface PosOrder {
   changePesewas: number;
   status: string;
   orderType?: string;
+  merchantId?: string;
+  subtotalPesewas?: number;
+  discountPesewas?: number;
+  taxPesewas?: number;
 }
 
 export interface PosReceipt {
