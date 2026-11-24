@@ -48,6 +48,11 @@ public class MtnProductionRail implements PaymentRail {
 
     private record Response(int status, String body, String contentType) {}
 
+    /** Fixed diagnostic for upstream HTML authentication blocks, never raw response content. */
+    private static final class AuthenticationWafException extends IllegalStateException {
+        AuthenticationWafException() { super("MTN authentication rejected by upstream WAF"); }
+    }
+
     private static class CachedToken {
         final String token;
         final Instant expiresAt;
@@ -244,7 +249,8 @@ public class MtnProductionRail implements PaymentRail {
             return Result.unknown("MTN refund network timeout; verify status with query");
         } catch (Exception e) {
             health.record(name(), false, false, System.currentTimeMillis() - start);
-            return Result.unknown("MTN refund communication unavailable");
+            return Result.unknown(e instanceof AuthenticationWafException
+                    ? "MTN refund authentication rejected by upstream WAF" : "MTN refund communication unavailable");
         }
     }
 
@@ -317,7 +323,8 @@ public class MtnProductionRail implements PaymentRail {
             return Result.unknown("MTN network timeout during submission; verify status with query");
         } catch (Exception e) {
             health.record(name(), false, false, System.currentTimeMillis() - start);
-            return Result.unknown("MTN network or communication unavailable");
+            return Result.unknown(e instanceof AuthenticationWafException
+                    ? "MTN authentication rejected by upstream WAF" : "MTN network or communication unavailable");
         }
     }
 
@@ -374,7 +381,8 @@ public class MtnProductionRail implements PaymentRail {
             return Result.unknown("MTN status request timed out");
         } catch (Exception e) {
             health.record(name(), false, false, System.currentTimeMillis() - start);
-            return Result.unknown("MTN status unavailable");
+            return Result.unknown(e instanceof AuthenticationWafException
+                    ? "MTN status authentication rejected by upstream WAF" : "MTN status unavailable");
         }
     }
 
@@ -428,7 +436,7 @@ public class MtnProductionRail implements PaymentRail {
                 .header("Authorization", "Basic " + basic).header("Ocp-Apim-Subscription-Key", c.subscription())
                 .POST(HttpRequest.BodyPublishers.noBody()).build());
         if (isNonJsonWafResponse(response)) {
-            throw new IllegalStateException("MTN authentication rejected by upstream WAF (non-JSON HTML response)");
+            throw new AuthenticationWafException();
         }
         if (response.status() != 200) throw new IllegalStateException("MTN authentication rejected with status " + response.status());
         JsonNode root;
