@@ -74,6 +74,7 @@ public class GhipssInstantPayRail implements PaymentRail {
     private final NetworkHealthDetector health;
     private final HttpClient client;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public GhipssInstantPayRail(
             ObjectMapper json,
             NetworkHealthDetector health,

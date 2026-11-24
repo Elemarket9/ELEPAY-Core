@@ -73,6 +73,7 @@ public class TelecelCashProductionRail implements PaymentRail {
     private final HttpClient client;
     private final Map<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired
     public TelecelCashProductionRail(
             ObjectMapper json,
             NetworkHealthDetector health,

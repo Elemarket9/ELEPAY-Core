@@ -73,6 +73,7 @@ public class AirtelTigoProductionRail implements PaymentRail {
     private final HttpClient client;
     private final Map<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired
     public AirtelTigoProductionRail(
             ObjectMapper json,
             NetworkHealthDetector health,

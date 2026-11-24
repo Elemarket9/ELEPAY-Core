@@ -69,6 +69,7 @@ public class MtnProductionRail implements PaymentRail {
     private final HttpClient client;
     private final Map<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired
     public MtnProductionRail(ObjectMapper json, NetworkHealthDetector health,
             @Value("${elepay.rails.mtn.base-url:}") String baseUrl,
             @Value("${elepay.rails.mtn.collection-user:}") String collectionUser,
