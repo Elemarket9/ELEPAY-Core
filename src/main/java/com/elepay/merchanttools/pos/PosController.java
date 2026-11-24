@@ -224,6 +224,7 @@ public class PosController {
     ) {}
 
     @PostMapping("/orders")
+    @Transactional
     public PosOrderService.PosOrder createOrder(
             @RequestHeader("Idempotency-Key") String key,
             @RequestBody CreateOrderRequest req) {
@@ -261,6 +262,7 @@ public class PosController {
     }
 
     @PostMapping("/orders/{orderId}/tenders")
+    @Transactional
     public PosOrderService.TenderResult initiateTender(
             @PathVariable UUID orderId,
             @RequestHeader("Idempotency-Key") String key,

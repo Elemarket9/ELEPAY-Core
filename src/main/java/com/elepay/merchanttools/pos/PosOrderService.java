@@ -526,7 +526,7 @@ public class PosOrderService {
                 String merchantName = merchants.find(order.merchantId())
                         .map(MerchantAccess.Merchant::tradingName)
                         .orElse("ELEPAY Merchant");
-                String terminalRef = order.terminalId() != null ? order.terminalId().toString() : "POS";
+                String terminalRef = order.terminalId() != null ? order.terminalId().toString().replace("-", "") : "POS";
                 var qr = checkout.createGhQrIntent(order.merchantId(), terminalRef, linkRecord.amount(), merchantName);
                 var railRes = checkout.startAndSubmitRail(linkRecord.checkoutRef(), "ghqr", null, null, req.email());
                 PosOrder latestOrder = getOrder(orderId).orElse(order);
