@@ -405,6 +405,9 @@ public class KillSwitchService {
         moduleStates.put("consumer-w2w", true);
         moduleStates.put("ussd", true);
         moduleStates.put("mandates", true);
+        for (var entry : moduleStates.entrySet()) {
+            writeRedis(REDIS_MODULE_PREFIX + entry.getKey(), Boolean.toString(entry.getValue()));
+        }
         if (db != null) {
             db.sql("UPDATE payout_safety_control SET emergency_frozen = false, freeze_reason = NULL, frozen_by = NULL WHERE id = 1").update();
             db.sql("DELETE FROM merchant_kill_switch").update();
