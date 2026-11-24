@@ -13,7 +13,7 @@ mvn -B verify                 # unit, Spring Modulith, PostgreSQL integration an
 cd web && npm ci && npm run typecheck && npm test && npm run build
 ```
 
-Run local isolated sandbox/test fixtures with: `docker compose up --build`. Alternatively, run `java -jar target/elepay-core-*.jar --spring.profiles.active=sandbox,dev` against a PostgreSQL 18 database, then `python3 scripts/smoke.py` and `python3 scripts/acceptance.py`.
+Run isolated local test fixtures using `mvn -B -Dspring-boot.run.profiles=sandbox,dev -Dspring-boot.run.main-class=com.elepay.SandboxApplication spring-boot:test-run` against a test PostgreSQL 18 database and Redis, then run `python3 scripts/smoke.py` and `python3 scripts/acceptance.py`. The production JAR excludes simulated payment implementations. For production deployment, use the `prod` profile and [production deployment configuration](deploy/docker-compose.prod.yml) with approved provider credentials and externally managed secrets.
 
 ## Documentation
 
@@ -23,7 +23,7 @@ Run local isolated sandbox/test fixtures with: `docker compose up --build`. Alte
 
 ## Connection status
 
-**Live bank, MoMo, card networks: NOT YET CONNECTED. Local testing uses sandbox/test fixtures only.** No real GRA submission integration exists; **GRA integration NOT IMPLEMENTED - manual submission required.** Historic e-Levy data is retained for audit only: e-Levy was repealed in April 2025 and must not be charged. International card acceptance and FX conversion remain within scope; recipient payouts and remittances abroad are excluded.
+**Bank and mobile-money API integration testing has been completed, as reported by the project owner on 24 November 2026.** This includes Ecobank banking and MTN MoMo integration testing. ELEPAY defaults to the production profile; local simulated rails remain isolated from the production artifact. Provider testing is distinct from live production activation: production credentials, provider onboarding/authorization, and live settlement and reconciliation evidence must be verified separately. Card-network production connectivity has not been confirmed. No real GRA submission integration exists; **GRA integration NOT IMPLEMENTED - manual submission required.** Historic e-Levy data is retained for audit only: e-Levy was repealed in April 2025 and must not be charged. International card acceptance and FX conversion remain within scope; recipient payouts and remittances abroad are excluded.
 
 
 ## Maintainer verification and operational handover
