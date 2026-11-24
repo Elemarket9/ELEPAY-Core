@@ -53,6 +53,10 @@ public class ProductionSafetyCheck {
         if (env.getProperty("elepay.rails.sandbox.enabled", Boolean.class, false)) {
             p.add("elepay.rails.sandbox.enabled must be false (simulated money)");
         }
+        if (env.getProperty("elepay.rails.card.enabled", Boolean.class, false)
+                && !"live".equalsIgnoreCase(env.getProperty("elepay.rails.card.mode", "live").trim())) {
+            p.add("elepay.rails.card.mode must be live when card acquiring is enabled in production");
+        }
         if (env.getProperty("elepay.emtech.enabled", Boolean.class, false)) {
             p.add("elepay.emtech.enabled must be false in production (EMTECH BoG Sandbox is for sandbox/test only)");
         }

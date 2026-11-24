@@ -6,7 +6,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
@@ -81,8 +80,7 @@ class SecurityConfig {
                             @Value("${management.server.port:0}") int managementPort,
                             @Value("${elepay.security.trusted-proxies:}") String trustedProxies)
             throws Exception {
-        boolean isProd = env != null && Arrays.stream(env.getActiveProfiles())
-                .anyMatch(p -> "prod".equalsIgnoreCase(p) || "production".equalsIgnoreCase(p));
+        boolean isProd = env != null && env.acceptsProfiles(org.springframework.core.env.Profiles.of("prod", "production"));
 
         CompositeFilter preAuthFilters = new CompositeFilter();
         preAuthFilters.setFilters(List.of(

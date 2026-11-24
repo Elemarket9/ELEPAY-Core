@@ -83,6 +83,18 @@ class ProductionSafetyCheckTest {
     }
 
     @Test
+    void nonLiveCardModesAreRefusedWhenAcquiringIsEnabledInProduction() {
+        for (String mode : java.util.List.of("sandbox", "partner-test", "partner_test", "invalid")) {
+            var env = safe().withProperty("elepay.rails.card.enabled", "true")
+                    .withProperty("elepay.rails.card.mode", mode);
+            assertThat(ProductionSafetyCheck.problems(env)).anyMatch(p -> p.contains("elepay.rails.card.mode"));
+        }
+        assertThat(ProductionSafetyCheck.problems(safe()
+                .withProperty("elepay.rails.card.enabled", "true")
+                .withProperty("elepay.rails.card.mode", "live"))).isEmpty();
+    }
+
+    @Test
     void emtechBogSandboxIsRefusedInProduction() {
         var env = safe().withProperty("elepay.emtech.enabled", "true");
         assertThat(ProductionSafetyCheck.problems(env))
