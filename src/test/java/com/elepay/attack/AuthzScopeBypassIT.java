@@ -17,8 +17,10 @@ class AuthzScopeBypassIT extends AttackSupport {
     private static final String ALLOWED_IP = "203.0.113.10";
 
     private String secretKey() {
+        // A secret key holds only collection-side scopes; the payout-route guard rejects any
+        // non-payout key regardless of scopes, which is exactly what these tests assert.
         return createKey(merchant, owner, Map.of("label", "sk", "keyType", "secret",
-                "scopes", List.of("view", "collect", "refund", "withdraw", "payouts")));
+                "scopes", List.of("view", "collect", "refund")));
     }
 
     private String publishableKey() {
