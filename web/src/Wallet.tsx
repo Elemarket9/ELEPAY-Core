@@ -38,7 +38,7 @@ export function searchWalletHistory<T extends Operation>(rows: T[], query: strin
   return rows.filter(o => (status === "all" || transactionStatusClass(o.status) === status) && (!q || [o.reference, o.kind, o.counterparty ?? "", o.status].some(v => v.toLowerCase().includes(q))));
 }
 
-const WALLET_TABS = ["Send Money", "Export Statements", "Other Services"] as const;
+const WALLET_TABS = ["Send Money", "Add Money", "Export Statements", "Other Services"] as const;
 
 /**
  * Customer web wallet with Send Money, Airtime/Data top-ups, Bill payments,
@@ -138,6 +138,7 @@ export function Wallet() {
       </nav>
 
       {customerId && !moduleDisabled && <div hidden={activeTab !== "Send Money"}><SendMoney key={customerId} customerId={customerId} onSent={() => void load()} /></div>}
+      {customerId && !moduleDisabled && <div hidden={activeTab !== "Add Money"}><AddMoney key={customerId} customerId={customerId} onUpdated={()=>void load()} /></div>}
       {activeTab === "Export Statements" && customerId && <ExportStatements key={customerId} />}
       {activeTab === "Other Services" && <section className="panel"><h2>Other services</h2><p className="muted">Airtime, bill payments, virtual cards and savings goals are not currently available through this wallet. No simulated financial actions are offered.</p></section>}
 
@@ -419,4 +420,51 @@ Verify payment completion using the transaction reference and authoritative back
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+type FundingAttempt={key:string;amount:number;phone:string;network:string;reference:string|null};
+const fundingNetworks=["mtn","telecel","airteltigo"];
+export function decodeFundingAttempt(raw:string|null):FundingAttempt|null{
+  if(raw===null)return null;
+  const v=JSON.parse(raw) as FundingAttempt;
+  if(!v||typeof v.key!=="string"||!v.key||v.key.length>200||!Number.isSafeInteger(v.amount)||v.amount<=0||v.amount>100000000||typeof v.phone!=="string"||normalizeGhanaPhone(v.phone)!==v.phone||!fundingNetworks.includes(v.network)||(v.reference!==null&&(typeof v.reference!=="string"||!/^[\w-]{1,120}$/.test(v.reference))))throw Error("Invalid saved funding request");
+  return v;
+}
+function AddMoney({customerId,onUpdated}:{customerId:string;onUpdated:()=>void}){
+  const key="elepay.wallet.funding."+customerId;
+  const [saved,setSaved]=useState<{attempt:FundingAttempt|null;blocked:boolean}>(()=>{try{return {attempt:decodeFundingAttempt(sessionStorage.getItem(key)),blocked:false};}catch{return {attempt:null,blocked:true};}});
+  const [amount,setAmount]=useState(""),[phone,setPhone]=useState(""),[network,setNetwork]=useState("mtn"),[review,setReview]=useState<FundingAttempt|null>(null),[busy,setBusy]=useState(false),[notice,setNotice]=useState<string|null>(null),[result,setResult]=useState<Operation|null>(null);
+  const lock=useRef(false),attemptRef=useRef(saved.attempt),callback=useRef(onUpdated);callback.current=onUpdated;
+  const persist=useCallback((a:FundingAttempt)=>{const old=decodeFundingAttempt(sessionStorage.getItem(key));if(old&&old.key!==a.key)throw Error("Another funding request requires recovery");sessionStorage.setItem(key,JSON.stringify(a));attemptRef.current=a;setSaved({attempt:a,blocked:false});},[key]);
+  const clear=useCallback(()=>{sessionStorage.removeItem(key);attemptRef.current=null;setSaved({attempt:null,blocked:false});},[key]);
+  const apply=useCallback((a:FundingAttempt,o:Operation)=>{
+    if(!o||o.kind!=="topup"||o.amount!==a.amount||typeof o.reference!=="string"||!/^[\w-]{1,120}$/.test(o.reference)||(a.reference&&o.reference!==a.reference))throw Error("Funding response does not match the original request.");
+    persist({...a,reference:o.reference});setResult(o);
+    if(["completed","failed","returned"].includes(o.status)){clear();setReview(null);callback.current();}
+  },[persist,clear]);
+  const check=useCallback(async()=>{
+    const a=attemptRef.current;if(!a?.reference||lock.current)return;
+    lock.current=true;setBusy(true);setNotice(null);
+    try{apply(a,await api<Operation>("/v1/wallet/receipts/"+encodeURIComponent(a.reference)));}catch(e){setNotice("Funding status could not be verified. "+(e instanceof Error?e.message:"Check connection."));}
+    finally{lock.current=false;setBusy(false);}
+  },[apply]);
+  useEffect(()=>{if(!saved.attempt?.reference)return;const t=setInterval(()=>{if(document.visibilityState==="visible")void check();},5000);return()=>clearInterval(t);},[saved.attempt?.reference,check]);
+  async function submit(a:FundingAttempt){
+    if(lock.current||saved.blocked)return;
+    lock.current=true;setBusy(true);setNotice(null);
+    try{
+      persist(a);
+      const o=await api<Operation>("/v1/wallet/topups",{idempotencyKey:a.key,body:{method:"momo",amount:a.amount,phone:a.phone,network:a.network}});
+      apply(a,o);
+    }catch(e){
+      if(e instanceof ApiError&&[400,422].includes(e.status)&&["invalid_network","invalid_phone","phone_not_on_file","rail_unavailable","rail_operation_unavailable"].includes(e.code)&&!a.reference){try{clear();setReview(null);}catch{}}
+      setNotice("Funding request not confirmed. "+(e instanceof Error?e.message:"Check connection.")+" Review the original request before paying again.");
+    }finally{lock.current=false;setBusy(false);}
+  }
+  function prepare(e:React.FormEvent){e.preventDefault();const n=parseMoney(amount),p=normalizeGhanaPhone(phone);if(!n||n>100000000||!p){setNotice("Enter a valid amount and Ghana mobile money number.");return;}setResult(null);setNotice(null);setReview({key:newKey(),amount:n,phone:p,network,reference:null});}
+  return <section className="panel wallet-transfer"><p className="eyebrow">WALLET FUNDING</p><h2>Add money by mobile money</h2><p className="muted">Use your verified wallet phone number. The wallet is credited only after the payment provider confirms receipt. Network availability is determined by the server.</p>
+    {notice&&<p className="notice warn" role="alert">{notice}</p>}
+    {saved.blocked?<p className="notice warn">Saved funding data is unavailable. Contact support before submitting another request.</p>:saved.attempt?<div className="notice"><h3>Original funding request</h3><p>{formatMoney(saved.attempt.amount)} · {saved.attempt.network}</p><p>{saved.attempt.reference??"Reference not received"}</p><p>Do not approve a second charge. {saved.attempt.reference?"Check the existing transaction.":"Recover the same request with its original idempotency key."}</p><button disabled={busy} onClick={()=>{if(saved.attempt?.reference)void check();else if(saved.attempt)void submit(saved.attempt);}}>{busy?"Checking…":saved.attempt.reference?"Refresh status":"Recover original request"}</button></div>:review?<div className="transfer-review"><h3>Review funding</h3><p>{formatMoney(review.amount)} · {review.network} · ending {review.phone.slice(-4)}</p><p>Approve only the corresponding provider prompt. Never enter your MoMo PIN here.</p><button disabled={busy} onClick={()=>void submit(review)}>Request {formatMoney(review.amount)}</button><button className="secondary" disabled={busy} onClick={()=>setReview(null)}>Back</button></div>:<form onSubmit={prepare}><label>Amount (GH₵)<input inputMode="decimal" required value={amount} onChange={e=>setAmount(e.target.value)}/></label><label>Verified mobile money phone<input type="tel" required value={phone} onChange={e=>setPhone(e.target.value)}/></label><label>Network<select value={network} onChange={e=>setNetwork(e.target.value)}><option value="mtn">MTN MoMo</option><option value="telecel">Telecel Cash</option><option value="airteltigo">AT Money</option></select></label><button disabled={busy} type="submit">Review funding</button></form>}
+    {result&&<div className="receipt-detail" role="status"><p>Reference: {result.reference}</p><p>Status: <strong>{result.status}</strong> · {formatMoney(result.amount)}</p>{result.status==="completed"&&<p>Funding confirmed by ELEPAY.</p>}</div>}
+  </section>;
 }
