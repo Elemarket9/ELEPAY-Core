@@ -16,3 +16,7 @@
 | `VITE_OIDC_ISSUER`, `VITE_OIDC_CLIENT_ID` | Docker build arguments for the web app's OIDC sign-in (authorization code with PKCE). |
 
 Production deployment: build with `docker build --build-arg VITE_OIDC_ISSUER=… --build-arg VITE_OIDC_CLIENT_ID=… -t elepay .`. Run at least two replicas behind TLS against one PostgreSQL primary. The outbox dispatcher, webhook sender, rail recovery and settlement jobs are safe to run on every replica because they claim rows with `SKIP LOCKED` and post idempotently.
+
+## Production deployment safeguards
+
+Production requires an explicit `ELEPAY_DB_URL` and `ELEPAY_DB_USER`; the local sandbox database is not a production fallback. The public API listens on `PORT` (default 8080); retain the separate private management port and use a TCP health probe or a reviewed public readiness route on managed hosting. Set `ELEPAY_PARTNER_EGRESS_HOSTS` to verified contracted provider hosts. The production Compose file forwards MTN, Telecel, AirtelTigo, GhIPSS and card-acquiring settings; the enable flags default to false. Set the matching credential variables only from approved production onboarding and keep secrets outside Git. Card acquiring (`ELEPAY_CARD_ENABLED=true`) requires `ELEPAY_CARD_MODE=live` in production. Provider test endpoints and development identities must stay isolated. A successful build does not certify provider connectivity or authorization to process money.
