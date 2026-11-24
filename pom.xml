@@ -133,6 +133,7 @@
             <version>13.0.0</version>
             <configuration>
               <failBuildOnCVSS>7</failBuildOnCVSS>
+              <suppressionFiles><suppressionFile>${project.basedir}/security/dependency-check-suppressions.xml</suppressionFile></suppressionFiles>
               <nvdDatafeedUrl>https://dependency-check.github.io/DependencyCheck_Builder/nvd_cache/</nvdDatafeedUrl>
               <ossIndexAnalyzerEnabled>false</ossIndexAnalyzerEnabled>
               <formats><format>HTML</format><format>SARIF</format></formats>

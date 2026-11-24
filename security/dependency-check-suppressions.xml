@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+  <!-- Reviewed 2026-11-24. Advisory scopes this CVE to npm @opentelemetry/core.
+       https://github.com/advisories/GHSA-8988-4f7v-96qf -->
+  <suppress until="2027-02-01Z">
+    <notes>False CPE match against Java API; CVE affects opentelemetry-js only.</notes>
+    <packageUrl regex="true">^pkg:maven/io\.opentelemetry/opentelemetry-api@1\.68\.0$</packageUrl>
+    <cve>CVE-2026-54285</cve>
+  </suppress>
+</suppressions>

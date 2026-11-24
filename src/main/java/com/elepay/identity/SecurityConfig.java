@@ -110,6 +110,7 @@ class SecurityConfig {
                 .authorizeHttpRequests(auth -> {
                     if (isProd) {
                         auth.requestMatchers("/sandbox/**", "/dev/token").denyAll();
+                        auth.requestMatchers(HttpMethod.GET, "/v3/api-docs", "/v3/api-docs/**").hasAnyRole("ops", "ops_admin");
                     } else {
                         auth.requestMatchers("/sandbox/**", "/dev/token").permitAll();
                     }

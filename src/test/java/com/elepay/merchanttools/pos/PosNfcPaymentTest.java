@@ -198,6 +198,7 @@ class PosNfcPaymentTest extends PostgresTestBase {
         var res = nfcPaymentService.processNfcTap(order.id(), "nfc-idem-1", tapReq, "cashier-1");
         assertThat(res.status()).isEqualTo("PENDING_SETTLEMENT");
         assertThat(res.checkoutRef()).isNotBlank();
+        assertThat(res.authCode()).isNull();
         assertThat(res.ksn()).isEqualTo(ksn1);
         assertThat(res.ksnCounter()).isEqualTo(1L);
         assertThat(res.cvmMethod()).isEqualTo("ONLINE_PIN");

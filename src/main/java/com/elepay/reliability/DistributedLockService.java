@@ -56,6 +56,11 @@ public class DistributedLockService {
         if (lockKey == null || lockKey.isBlank()) {
             throw new IllegalArgumentException("lockKey cannot be null or empty");
         }
+        if (leaseTime == null || leaseTime.isZero() || leaseTime.isNegative()
+                || waitTime == null || waitTime.isNegative()) {
+            throw new IllegalArgumentException("Positive lease and non-negative wait required");
+        }
+        if (threadOwners.get().containsKey(lockKey)) return false;
         String owner = UUID.randomUUID().toString() + ":" + Thread.currentThread().getId();
         long start = System.currentTimeMillis();
         long waitMillis = waitTime.toMillis();

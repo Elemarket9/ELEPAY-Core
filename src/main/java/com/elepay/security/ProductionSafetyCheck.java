@@ -56,6 +56,10 @@ public class ProductionSafetyCheck {
         if (env.getProperty("elepay.emtech.enabled", Boolean.class, false)) {
             p.add("elepay.emtech.enabled must be false in production (EMTECH BoG Sandbox is for sandbox/test only)");
         }
+        if (env.getProperty("elepay.rails.card.enabled", Boolean.class, false)
+                && !"live".equalsIgnoreCase(env.getProperty("elepay.rails.card.mode", "live"))) {
+            p.add("Production card acquiring must use live mode");
+        }
         if (has(env, "elepay.security.dev-jwt-secret")) {
             p.add("elepay.security.dev-jwt-secret must not be set (development tokens)");
         }

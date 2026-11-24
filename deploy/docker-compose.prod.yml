@@ -68,7 +68,7 @@ services:
       # (set in application-prod.properties) AND no sandbox/dev/test profile is active.
       SPRING_PROFILES_ACTIVE: prod
       ELEPAY_BIND_ADDRESS: 0.0.0.0
-      ELEPAY_DB_URL: jdbc:postgresql://postgres:5432/${ELEPAY_DB_NAME:?set me}
+      ELEPAY_DB_URL: ${ELEPAY_DB_URL:?set a TLS-verified PostgreSQL JDBC URL}
       ELEPAY_DB_USER: ${ELEPAY_DB_USER:?set me}
       ELEPAY_DB_PASSWORD: ${ELEPAY_DB_PASSWORD:?set me}
       ELEPAY_REDIS_HOST: redis
@@ -86,7 +86,7 @@ services:
       ELEPAY_POS_DUKPT_BDK: ${ELEPAY_POS_DUKPT_BDK:?set me}
       ELEPAY_TRUSTED_PROXIES: ${ELEPAY_TRUSTED_PROXIES:?set me}
       # Scoped partner egress allowlist (optional override; prod default lives in application-prod.properties).
-      ELEPAY_PARTNER_EGRESS_HOSTS: ${ELEPAY_PARTNER_EGRESS_HOSTS:-}
+      ELEPAY_PARTNER_EGRESS_HOSTS: ${ELEPAY_PARTNER_EGRESS_HOSTS:?set verified partner hosts}
       # Optional mobile TLS pins (empty = no-op). Format documented in application.properties.
       ELEPAY_MOBILE_CERT_PINS: ${ELEPAY_MOBILE_CERT_PINS:-}
       # Management port (:9090) binds to loopback (127.0.0.1) by default so only the container-local
@@ -95,7 +95,7 @@ services:
       ELEPAY_MANAGEMENT_ADDRESS: ${ELEPAY_MANAGEMENT_ADDRESS:-127.0.0.1}
     ports:
       # Public API only. Management port 9090 is never published externally.
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     networks:
       - internal_backend
       - edge_egress

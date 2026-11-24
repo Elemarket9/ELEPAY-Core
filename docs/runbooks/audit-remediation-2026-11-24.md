@@ -1,0 +1,5 @@
+# Audit remediation
+
+Require all CI checks on the exact commit before merge. Ledger contention must roll back the entire business transaction; retry with the same idempotency key. NFC is intentionally unavailable outside tests until certified acquiring is integrated; internal identifiers are not issuer authorization codes. Production compose binds 8080 to host loopback: terminate TLS at trusted ingress. Supply a TLS-enabled PostgreSQL endpoint with sslmode=verify-full and a trusted CA; the included local DB does not provision TLS. The exact Java OpenTelemetry suppression is time-limited and based on the published npm advisory. Do not suppress unrelated findings.
+
+Remaining: versioned partner fees, certified NFC acquiring, lease renewal and fencing at every lock consumer, TLS database provisioning and enforcement, branch protection and signed commits, image scanning, secure EMTECH and rail live testing, restore and disaster recovery, independent penetration testing. No certification or live payment success is implied.
