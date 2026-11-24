@@ -98,14 +98,16 @@ class MtnProductionRailTest {
 
     @Test
     void calculatesFeeAccurately() {
-        assertThat(MtnProductionRail.calculateFee(50_000L)).isEqualTo(500L); // 1%
-        assertThat(MtnProductionRail.calculateFee(200_000L)).isEqualTo(1000L); // capped at 1000 pesewas
+        assertThat(MtnProductionRail.calculateFee(50_000L, 100, 1000L)).isEqualTo(500L); // 1%
+        assertThat(MtnProductionRail.calculateFee(200_000L, 100, 1000L)).isEqualTo(1000L); // capped at 1000 pesewas
+        assertThat(MtnProductionRail.calculateFee(Long.MAX_VALUE, 10_000, Long.MAX_VALUE)).isEqualTo(Long.MAX_VALUE);
+        assertThat(MtnProductionRail.calculateFee(50_000L, 25, 1000L)).isEqualTo(125L);
     }
 
     @Test
     void unconfiguredCredentialsReturnsUnavailable() {
         MtnProductionRail unconfigured = new MtnProductionRail(
-                json, health, null, null, null, null, null, null, null
+                json, health, null, null, null, null, null, null, null, 100, 1000L
         );
 
         PaymentRail.Charge charge = new PaymentRail.Charge(
@@ -134,7 +136,7 @@ class MtnProductionRailTest {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
         MtnProductionRail.Credentials collCreds = new MtnProductionRail.Credentials("col-user", "col-key", "col-sub");
         MtnProductionRail.Credentials disbCreds = new MtnProductionRail.Credentials("disb-user", "disb-key", "disb-sub");
-        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client);
+        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client, 100, 1000L);
 
         PaymentRail.Charge charge = new PaymentRail.Charge(
                 "EPC123", 1025L, "GHS", "momo", "0241234567",
@@ -163,7 +165,7 @@ class MtnProductionRailTest {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
         MtnProductionRail.Credentials collCreds = new MtnProductionRail.Credentials("col-user", "col-key", "col-sub");
         MtnProductionRail.Credentials disbCreds = new MtnProductionRail.Credentials("disb-user", "disb-key", "disb-sub");
-        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client);
+        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client, 100, 1000L);
 
         PaymentRail.Result success = rail.query("charge", "EPC123", null);
         assertThat(success.status()).isEqualTo(PaymentRail.Status.SUCCEEDED);
@@ -177,26 +179,26 @@ class MtnProductionRailTest {
         var confirmed = json.readTree("""
                 {"externalId":"EPC123","status":"SUCCESSFUL","amount":"10.25","currency":"GHS","financialTransactionId":"F-123"}
                 """);
-        var result = MtnProductionRail.parseStatus(confirmed, "EPC123");
+        var result = MtnProductionRail.parseStatus(confirmed, "EPC123", 100, 1000L);
         assertThat(result.status()).isEqualTo(PaymentRail.Status.SUCCEEDED);
         assertThat(result.amount()).isEqualTo(1025L);
         assertThat(result.railReference()).isEqualTo("F-123");
-        assertThat(MtnProductionRail.parseStatus(confirmed, "other").status()).isEqualTo(PaymentRail.Status.UNKNOWN);
+        assertThat(MtnProductionRail.parseStatus(confirmed, "other", 100, 1000L).status()).isEqualTo(PaymentRail.Status.UNKNOWN);
 
         var missing = json.readTree("""
                 {"externalId":"EPC123","status":"SUCCESSFUL","amount":"10.25","currency":"GHS"}
                 """);
-        assertThat(MtnProductionRail.parseStatus(missing, "EPC123").status()).isEqualTo(PaymentRail.Status.UNKNOWN);
+        assertThat(MtnProductionRail.parseStatus(missing, "EPC123", 100, 1000L).status()).isEqualTo(PaymentRail.Status.UNKNOWN);
 
         var failed = json.readTree("""
                 {"externalId":"EPC123","status":"FAILED","reason":"Subscriber account inactive"}
                 """);
-        assertThat(MtnProductionRail.parseStatus(failed, "EPC123").status()).isEqualTo(PaymentRail.Status.FAILED);
+        assertThat(MtnProductionRail.parseStatus(failed, "EPC123", 100, 1000L).status()).isEqualTo(PaymentRail.Status.FAILED);
 
         var pending = json.readTree("""
                 {"externalId":"EPC123","status":"PENDING"}
                 """);
-        assertThat(MtnProductionRail.parseStatus(pending, "EPC123").status()).isEqualTo(PaymentRail.Status.PENDING);
+        assertThat(MtnProductionRail.parseStatus(pending, "EPC123", 100, 1000L).status()).isEqualTo(PaymentRail.Status.PENDING);
     }
 
     @Test
@@ -229,7 +231,7 @@ class MtnProductionRailTest {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
         MtnProductionRail.Credentials collCreds = new MtnProductionRail.Credentials("col-user", "col-key", "col-sub");
         MtnProductionRail.Credentials disbCreds = new MtnProductionRail.Credentials("disb-user", "disb-key", "disb-sub");
-        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client);
+        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client, 100, 1000L);
 
         PaymentRail.Charge charge = new PaymentRail.Charge(
                 "EPC-REFRESH-1", 2000L, "GHS", "momo", "0241234567",
@@ -278,7 +280,7 @@ class MtnProductionRailTest {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
         MtnProductionRail.Credentials collCreds = new MtnProductionRail.Credentials("col-user", "col-key", "col-sub");
         MtnProductionRail.Credentials disbCreds = new MtnProductionRail.Credentials("disb-user", "disb-key", "disb-sub");
-        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client);
+        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client, 100, 1000L);
 
         PaymentRail.Charge charge = new PaymentRail.Charge(
                 "EPC-WAF-1", 1500L, "GHS", "momo", "0241234567",
@@ -307,7 +309,7 @@ class MtnProductionRailTest {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
         MtnProductionRail.Credentials collCreds = new MtnProductionRail.Credentials("col-user", "col-key", "col-sub");
         MtnProductionRail.Credentials disbCreds = new MtnProductionRail.Credentials("disb-user", "disb-key", "disb-sub");
-        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client);
+        MtnProductionRail rail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client, 100, 1000L);
 
         PaymentRail.Charge charge = new PaymentRail.Charge(
                 "EPC-WAF-2", 1500L, "GHS", "momo", "0241234567",
@@ -324,7 +326,7 @@ class MtnProductionRailTest {
         // Also verify HTTP 200 HTML WAF page on /token/ endpoint
         testServer.stop(0);
         startServer(wafHtml, 202, "", 200, "{}");
-        MtnProductionRail freshRail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client);
+        MtnProductionRail freshRail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client, 100, 1000L);
         PaymentRail.Result tokenWafResult = freshRail.charge(charge);
         assertThat(tokenWafResult.status()).isEqualTo(PaymentRail.Status.UNKNOWN);
         assertThat(tokenWafResult.message()).containsIgnoringCase("WAF");

@@ -63,6 +63,10 @@ public class ProductionSafetyCheck {
         if (has(env, "elepay.security.dev-jwt-secret")) {
             p.add("elepay.security.dev-jwt-secret must not be set (development tokens)");
         }
+        String jdbcUrl = env.getProperty("spring.datasource.url", "");
+        if (!verifiedPostgresTls(jdbcUrl)) {
+            p.add("spring.datasource.url must use PostgreSQL TLS with sslmode=verify-full");
+        }
         if (!has(env, "spring.security.oauth2.resourceserver.jwt.issuer-uri")) {
             p.add("spring.security.oauth2.resourceserver.jwt.issuer-uri (ELEPAY_OIDC_ISSUER) is required");
         }
@@ -197,6 +201,30 @@ public class ProductionSafetyCheck {
             }
         }
         return p;
+    }
+
+    // Reject ambiguous duplicate sslmode parameters and custom verification overrides.
+    static boolean verifiedPostgresTls(String jdbcUrl) {
+        if (jdbcUrl == null || !jdbcUrl.startsWith("jdbc:postgresql://")) return false;
+        try {
+            java.net.URI uri = java.net.URI.create(jdbcUrl.substring(5));
+            if (uri.getRawAuthority() == null || uri.getRawQuery() == null) return false;
+            int modes = 0;
+            for (String pair : uri.getRawQuery().split("&")) {
+                String[] kv = pair.split("=", 2);
+                String key = java.net.URLDecoder.decode(kv[0], java.nio.charset.StandardCharsets.UTF_8);
+                String value = kv.length == 2
+                        ? java.net.URLDecoder.decode(kv[1], java.nio.charset.StandardCharsets.UTF_8) : "";
+                if (key.equalsIgnoreCase("sslmode")) {
+                    if (!key.equals("sslmode") || !"verify-full".equals(value) || ++modes != 1) return false;
+                }
+                if (key.equalsIgnoreCase("sslfactory") || key.equalsIgnoreCase("sslhostnameverifier")
+                        || (key.equalsIgnoreCase("ssl") && !"true".equalsIgnoreCase(value))) return false;
+            }
+            return modes == 1;
+        } catch (IllegalArgumentException invalidUrl) {
+            return false;
+        }
     }
 
     private static boolean has(Environment env, String key) {
