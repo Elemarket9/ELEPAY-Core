@@ -1,0 +1,32 @@
+name: ELEPAY Static Security Analysis
+on:
+  push:
+    branches: [main, 'audit/**']
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '25 3 * * 1'
+permissions:
+  contents: read
+jobs:
+  analyze:
+    name: CodeQL source analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [java-kotlin, javascript-typescript]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea
+        with:
+          category: /language:${{ matrix.language }}

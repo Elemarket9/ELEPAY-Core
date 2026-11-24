@@ -61,6 +61,8 @@ public class MtnProductionRail implements PaymentRail {
         }
     }
 
+    private final int feeBps;
+    private final long feeCapMinor;
     private final URI base;
     private final Credentials collection;
     private final Credentials disbursement;
@@ -77,17 +79,25 @@ public class MtnProductionRail implements PaymentRail {
             @Value("${elepay.rails.mtn.collection-subscription:}") String collectionSubscription,
             @Value("${elepay.rails.mtn.disbursement-user:}") String disbursementUser,
             @Value("${elepay.rails.mtn.disbursement-key:}") String disbursementKey,
-            @Value("${elepay.rails.mtn.disbursement-subscription:}") String disbursementSubscription) {
+            @Value("${elepay.rails.mtn.disbursement-subscription:}") String disbursementSubscription,
+            @Value("${elepay.rails.mtn.fee-bps:-1}") int feeBps,
+            @Value("${elepay.rails.mtn.fee-cap-minor:-1}") long feeCapMinor) {
         this(json, health,
                 (baseUrl == null || baseUrl.isBlank()) ? URI.create("https://proxy.momoapi.mtn.com") : productionBase(baseUrl),
                 new Credentials(collectionUser, collectionKey, collectionSubscription),
                 new Credentials(disbursementUser, disbursementKey, disbursementSubscription),
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
-                        .followRedirects(HttpClient.Redirect.NEVER).build());
+                        .followRedirects(HttpClient.Redirect.NEVER).build(), feeBps, feeCapMinor);
     }
 
     public MtnProductionRail(ObjectMapper json, NetworkHealthDetector health,
-            URI baseUri, Credentials collection, Credentials disbursement, HttpClient client) {
+            URI baseUri, Credentials collection, Credentials disbursement, HttpClient client,
+            int feeBps, long feeCapMinor) {
+        if (feeBps < 0 || feeBps > 10_000 || feeCapMinor < 0) {
+            throw new IllegalArgumentException("MTN fee basis points and cap must be explicitly configured");
+        }
+        this.feeBps = feeBps;
+        this.feeCapMinor = feeCapMinor;
         this.base = baseUri;
         this.collection = collection;
         this.disbursement = disbursement;
@@ -112,9 +122,14 @@ public class MtnProductionRail implements PaymentRail {
         return u;
     }
 
-    public static long calculateFee(long amount) {
-        long fee = (amount * 100L) / 10000L; // 1.00%
-        return Math.min(fee, 1000L); // Capped at 1000 pesewas (10 GHS)
+    public static long calculateFee(long amount, int feeBps, long feeCapMinor) {
+        if (amount < 0 || feeBps < 0 || feeBps > 10_000 || feeCapMinor < 0) {
+            throw new IllegalArgumentException("Invalid MTN fee schedule or amount");
+        }
+        return java.math.BigInteger.valueOf(amount)
+                .multiply(java.math.BigInteger.valueOf(feeBps))
+                .divide(java.math.BigInteger.valueOf(10_000))
+                .min(java.math.BigInteger.valueOf(feeCapMinor)).longValueExact();
     }
 
     /**
@@ -251,7 +266,7 @@ public class MtnProductionRail implements PaymentRail {
         if (amount <= 0 || !"GHS".equals(currency))
             return new Result(Status.FAILED, null, amount, currency, null, null, "Invalid Ghana currency or amount");
         long start = System.currentTimeMillis();
-        long fee = calculateFee(amount);
+        long fee = calculateFee(amount, feeBps, feeCapMinor);
         try {
             String msisdn = References.msisdn(phone);
             String product = product(direction);
@@ -364,7 +379,7 @@ public class MtnProductionRail implements PaymentRail {
             } catch (RuntimeException parseError) {
                 return Result.unknown("MTN status unavailable: invalid non-JSON response");
             }
-            return parseStatus(statusNode, reference);
+            return parseStatus(statusNode, reference, feeBps, feeCapMinor);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return Result.unknown("MTN status request interrupted");
@@ -377,7 +392,7 @@ public class MtnProductionRail implements PaymentRail {
         }
     }
 
-    public static Result parseStatus(JsonNode node, String reference) {
+    public static Result parseStatus(JsonNode node, String reference, int feeBps, long feeCapMinor) {
         if (!reference.equals(node.path("externalId").asString("")))
             return Result.unknown("MTN external reference mismatch");
         String status = node.path("status").asString("");
@@ -393,7 +408,7 @@ public class MtnProductionRail implements PaymentRail {
             String financialId = node.path("financialTransactionId").asString("");
             if (amount <= 0 || !"GHS".equals(currency) || financialId.isBlank())
                 return Result.unknown("MTN success lacks financial evidence");
-            long fee = calculateFee(amount);
+            long fee = calculateFee(amount, feeBps, feeCapMinor);
             return new Result(Status.SUCCEEDED, financialId, amount, currency, fee, null, "MTN authenticated status confirmed");
         } catch (RuntimeException e) { return Result.unknown("MTN amount evidence malformed"); }
     }

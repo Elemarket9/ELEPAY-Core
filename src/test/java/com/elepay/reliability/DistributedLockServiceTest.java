@@ -91,6 +91,15 @@ class DistributedLockServiceTest {
     }
 
     @Test
+    void rejectsReentrantAcquisitionAndAllowsOwnerRenewal() {
+        assertThat(lockService.tryLock("owner", Duration.ofSeconds(2))).isTrue();
+        assertThat(lockService.tryLock("owner", Duration.ofSeconds(2))).isFalse();
+        assertThat(lockService.renew("owner", Duration.ofSeconds(2))).isTrue();
+        lockService.unlock("owner");
+        assertThat(lockService.renew("owner", Duration.ofSeconds(2))).isFalse();
+    }
+
+    @Test
     @DisplayName("Invalid parameters throw IllegalArgumentException")
     void invalidParameters() {
         assertThrows(IllegalArgumentException.class, () -> lockService.tryLock(null, Duration.ofSeconds(1)));

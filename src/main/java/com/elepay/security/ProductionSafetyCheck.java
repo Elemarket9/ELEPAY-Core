@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Set;
-import org.springframework.context.annotation.Profile;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
@@ -14,7 +13,6 @@ import org.springframework.stereotype.Component;
  * outbound calls to private networks. Fail closed: a misconfigured production pod never serves traffic.
  */
 @Component
-@Profile("prod | (!test & !sandbox & !dev)")
 public class ProductionSafetyCheck {
     /** Secrets that have appeared in this repository and are therefore public. */
     static final Set<String> KNOWN_SECRETS = Set.of(
@@ -26,6 +24,12 @@ public class ProductionSafetyCheck {
             "ZGV2LW9ubHktaW50ZWdyaXR5LW1hYy1rZXktZm9yLWF1ZGl0LWNoYWluLTY0LWJ5dGVzLWxvbmctZGF0YSE=");
 
     public ProductionSafetyCheck(Environment env) {
+        // The production declaration itself activates this check, even if a
+        // misconfigured deployment enables a development profile.
+        String declared = env.getProperty("elepay.environment", "");
+        boolean production = "production".equalsIgnoreCase(declared) || "prod".equalsIgnoreCase(declared)
+                || env.matchesProfiles("prod | production");
+        if (!production && env.matchesProfiles("test | sandbox | dev")) return;
         List<String> problems = problems(env);
         if (!problems.isEmpty()) {
             throw new IllegalStateException("Unsafe production configuration:\n - " + String.join("\n - ", problems));
@@ -56,8 +60,16 @@ public class ProductionSafetyCheck {
         if (env.getProperty("elepay.emtech.enabled", Boolean.class, false)) {
             p.add("elepay.emtech.enabled must be false in production (EMTECH BoG Sandbox is for sandbox/test only)");
         }
+        if (env.getProperty("elepay.rails.card.enabled", Boolean.class, false)
+                && !"live".equalsIgnoreCase(env.getProperty("elepay.rails.card.mode", "live"))) {
+            p.add("Production card acquiring must use live mode");
+        }
         if (has(env, "elepay.security.dev-jwt-secret")) {
             p.add("elepay.security.dev-jwt-secret must not be set (development tokens)");
+        }
+        String jdbcUrl = env.getProperty("spring.datasource.url", "");
+        if (!verifiedPostgresTls(jdbcUrl)) {
+            p.add("spring.datasource.url must use PostgreSQL TLS with sslmode=verify-full");
         }
         if (!has(env, "spring.security.oauth2.resourceserver.jwt.issuer-uri")) {
             p.add("spring.security.oauth2.resourceserver.jwt.issuer-uri (ELEPAY_OIDC_ISSUER) is required");
@@ -193,6 +205,30 @@ public class ProductionSafetyCheck {
             }
         }
         return p;
+    }
+
+    // Reject ambiguous duplicate sslmode parameters and custom verification overrides.
+    static boolean verifiedPostgresTls(String jdbcUrl) {
+        if (jdbcUrl == null || !jdbcUrl.startsWith("jdbc:postgresql://")) return false;
+        try {
+            java.net.URI uri = java.net.URI.create(jdbcUrl.substring(5));
+            if (uri.getRawAuthority() == null || uri.getRawQuery() == null) return false;
+            int modes = 0;
+            for (String pair : uri.getRawQuery().split("&")) {
+                String[] kv = pair.split("=", 2);
+                String key = java.net.URLDecoder.decode(kv[0], java.nio.charset.StandardCharsets.UTF_8);
+                String value = kv.length == 2
+                        ? java.net.URLDecoder.decode(kv[1], java.nio.charset.StandardCharsets.UTF_8) : "";
+                if (key.equalsIgnoreCase("sslmode")) {
+                    if (!key.equals("sslmode") || !"verify-full".equals(value) || ++modes != 1) return false;
+                }
+                if (key.equalsIgnoreCase("sslfactory") || key.equalsIgnoreCase("sslhostnameverifier")
+                        || (key.equalsIgnoreCase("ssl") && !"true".equalsIgnoreCase(value))) return false;
+            }
+            return modes == 1;
+        } catch (IllegalArgumentException invalidUrl) {
+            return false;
+        }
     }
 
     private static boolean has(Environment env, String key) {

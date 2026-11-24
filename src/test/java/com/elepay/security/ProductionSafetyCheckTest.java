@@ -10,6 +10,7 @@ class ProductionSafetyCheckTest {
 
     MockEnvironment safe() {
         return new MockEnvironment()
+                .withProperty("spring.datasource.url", "jdbc:postgresql://db.example/elepay?sslmode=verify-full")
                 .withProperty("elepay.rails.sandbox.enabled", "false")
                 .withProperty("spring.security.oauth2.resourceserver.jwt.issuer-uri", "https://id.elepay.example/realms/elepay")
                 .withProperty("elepay.security.signing-secret", "Qm9kZ2V0LXJhbmRvbS1zZWNyZXQtdmFsdWUtNDJ4eXo=")
@@ -25,6 +26,30 @@ class ProductionSafetyCheckTest {
                 .withProperty("elepay.environment", "production")
                 .withProperty("elepay.security.trusted-proxies", "10.0.0.0/8")
                 .withProperty("elepay.outbound.partner-egress.allowed-hosts", "api.ghipss.com,proxy.momoapi.mtn.com");
+    }
+
+    @Test
+    void postgresMustVerifyTlsIdentity() {
+        assertThat(ProductionSafetyCheck.verifiedPostgresTls("jdbc:postgresql://db.example/elepay?sslmode=verify-full")).isTrue();
+        assertThat(ProductionSafetyCheck.verifiedPostgresTls("jdbc:postgresql://db.example/elepay?sslmode=require")).isFalse();
+        assertThat(ProductionSafetyCheck.verifiedPostgresTls("jdbc:postgresql://db.example/elepay?sslmode=verify-full&sslmode=disable")).isFalse();
+        assertThat(ProductionSafetyCheck.verifiedPostgresTls("jdbc:postgresql://db.example/elepay?sslmode=verify-full&sslfactory=custom")).isFalse();
+        assertThat(ProductionSafetyCheck.problems(safe().withProperty("spring.datasource.url", "jdbc:postgresql://db.example/elepay")))
+                .anyMatch(p -> p.contains("sslmode=verify-full"));
+    }
+
+    @Test
+    void nonLiveCardModeIsRefused() {
+        assertThat(ProductionSafetyCheck.problems(safe().withProperty("elepay.rails.card.enabled", "true")
+                .withProperty("elepay.rails.card.mode", "sandbox"))).anyMatch(p -> p.contains("card acquiring"));
+    }
+
+    @Test
+    void productionDeclarationCannotBeBypassedByTestProfile() {
+        var env = safe();
+        env.setActiveProfiles("test");
+        assertThatThrownBy(() -> new ProductionSafetyCheck(env)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("must not run with the 'test' profile");
     }
 
     @Test

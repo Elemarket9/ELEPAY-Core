@@ -35,6 +35,12 @@ public class DistributedLockService {
             end
             """;
     private static final RedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(UNLOCK_LUA, Long.class);
+    private static final RedisScript<Long> RENEW_SCRIPT = new DefaultRedisScript<>("""
+            if redis.call('get', KEYS[1]) == ARGV[1] then
+                return redis.call('pexpire', KEYS[1], ARGV[2])
+            end
+            return 0
+            """, Long.class);
 
     private final StringRedisTemplate redisTemplate;
     private final JdbcClient db;
@@ -56,6 +62,11 @@ public class DistributedLockService {
         if (lockKey == null || lockKey.isBlank()) {
             throw new IllegalArgumentException("lockKey cannot be null or empty");
         }
+        if (leaseTime == null || leaseTime.isZero() || leaseTime.isNegative()
+                || waitTime == null || waitTime.isNegative()) {
+            throw new IllegalArgumentException("Positive lease and non-negative wait required");
+        }
+        if (threadOwners.get().containsKey(lockKey)) return false;
         String owner = UUID.randomUUID().toString() + ":" + Thread.currentThread().getId();
         long start = System.currentTimeMillis();
         long waitMillis = waitTime.toMillis();
@@ -126,6 +137,36 @@ public class DistributedLockService {
         return false;
     }
 
+    /**
+     * Extend a still-owned lease only. A lost/expired lease must never be revived.
+     * Money-moving consumers additionally require a durable fencing/idempotency check
+     * at their write boundary; lease renewal alone cannot undo external side effects.
+     */
+    public boolean renew(String lockKey, Duration leaseTime) {
+        String owner = threadOwners.get().get(lockKey);
+        if (owner == null || leaseTime == null || leaseTime.toMillis() <= 0) return false;
+        return renewOwned(lockKey, owner, leaseTime);
+    }
+
+    private boolean renewOwned(String lockKey, String owner, Duration leaseTime) {
+        try {
+            if (redisTemplate != null) {
+                return Long.valueOf(1).equals(redisTemplate.execute(RENEW_SCRIPT,
+                        Collections.singletonList(REDIS_LOCK_PREFIX + lockKey), owner,
+                        Long.toString(leaseTime.toMillis())));
+            }
+            if (db != null) {
+                return db.sql("""
+                        UPDATE distributed_lock SET expires_at = now() + (:ms * interval '1 millisecond')
+                        WHERE lock_key = :k AND lock_owner = :o AND expires_at > now()
+                        """).param("ms", leaseTime.toMillis()).param("k", lockKey).param("o", owner).update() == 1;
+            }
+            return true; // local JVM locks do not expire
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
     public void unlock(String lockKey) {
         if (lockKey == null) return;
         String owner = threadOwners.get().remove(lockKey);
@@ -160,9 +201,28 @@ public class DistributedLockService {
         if (!acquired) {
             throw new IllegalStateException("Failed to acquire distributed lock for key: " + lockKey);
         }
+        // Renewable coordination lease. Never fall back to another store.
+        // A lost lease is surfaced to the caller; callers must reconcile any external
+        // action and use durable fencing for non-idempotent writes.
+        String owner = threadOwners.get().get(lockKey);
+        java.util.concurrent.atomic.AtomicBoolean lost = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.ScheduledExecutorService watchdog = null;
         try {
-            return supplier.get();
+            if (redisTemplate != null || db != null) {
+                watchdog = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+                        Thread.ofVirtual().name("elepay-lock-renewal").factory());
+                long interval = Math.max(1L, leaseTime.toMillis() / 3);
+                watchdog.scheduleWithFixedDelay(() -> {
+                    if (!lost.get() && !renewOwned(lockKey, owner, leaseTime)) lost.set(true);
+                }, interval, interval, TimeUnit.MILLISECONDS);
+            }
+            T result = supplier.get();
+            if (lost.get() || !renewOwned(lockKey, owner, leaseTime)) {
+                throw new IllegalStateException("Distributed lock lease lost; reconcile before retrying");
+            }
+            return result;
         } finally {
+            if (watchdog != null) watchdog.shutdownNow();
             unlock(lockKey);
         }
     }

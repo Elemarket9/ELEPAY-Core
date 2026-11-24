@@ -17,6 +17,9 @@ public class PosNfcPaymentService {
     private static final Pattern MASKED_PAN_PATTERN = Pattern.compile("^\\d{6}\\*{4,9}\\d{4}$");
     private static final String GHS_NUMERIC_CURRENCY = "0936";
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.core.env.Environment environment;
+
     private final JdbcClient db;
     private final MerchantToolAccess access;
     private final Idempotency idempotency;
@@ -74,6 +77,11 @@ public class PosNfcPaymentService {
 
     @Transactional
     public NfcTapResult processNfcTap(UUID orderId, String idempotencyKey, NfcTapRequest req, String actor) {
+        // A generic hosted checkout is not certified card-present authorization.
+        if (environment == null || !environment.matchesProfiles("test & !prod & !production")) {
+            throw ApiException.unprocessable("nfc_acquirer_not_configured",
+                    "Contactless card authorization is not configured.");
+        }
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw ApiException.badRequest("idempotency_key_required", "Idempotency-Key header is required");
         }
@@ -213,10 +221,8 @@ public class PosNfcPaymentService {
             throw ApiException.unprocessable("card_rail_declined",
                     railRes.message() != null ? railRes.message() : "Card acquiring rail declined NFC tap");
         }
-        String rawRef = (railRes != null && railRes.attemptId() != null)
-                ? railRes.attemptId().toString().replace("-", "").toUpperCase(Locale.ROOT)
-                : authId.toString().replace("-", "").toUpperCase(Locale.ROOT);
-        String authCode = rawRef.substring(0, Math.min(16, rawRef.length()));
+        // Internal attempt identifiers are not issuer authorization codes.
+        String authCode = null;
         String status = (railRes != null && "paid".equalsIgnoreCase(railRes.status()))
                 ? "SETTLED"
                 : "PENDING_SETTLEMENT";
