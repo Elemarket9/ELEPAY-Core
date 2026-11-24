@@ -5,6 +5,7 @@ import {
   buildPosOrderPayload,
   computeCartTotals,
   decodeSavedPosOrder,
+  decodePosTender,
   exactBarcodeMatch,
   isPaidPosOrder,
   remainingPosBalance,
@@ -227,6 +228,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [order, setOrder] = useState<PosOrder | null>(null);
   const orderStorage = "elepay.pos.order." + merchant.id;
   const [savedOrder,setSavedOrder] = useState<{draft:SavedPosOrder|null;blocked:boolean}>(()=>{try{return {draft:decodeSavedPosOrder(sessionStorage.getItem(orderStorage),merchant.id),blocked:false};}catch{return {draft:null,blocked:true};}});
+  const [orphanTender,setOrphanTender]=useState(()=>{try{return !savedOrder.draft&&Boolean(decodePosTender(sessionStorage.getItem('elepay.pos.tender.'+merchant.id)));}catch{return true;}});
   const draftRef = useRef(savedOrder.draft);
   const creatingOrder = useRef<Promise<PosOrder>|null>(null);
   const [orderKey, setOrderKey] = useState<string>(() => newKey());
@@ -265,13 +267,13 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     void loadHeldCarts(terminal?.id ?? null);
   }, [terminal?.id, loadHeldCarts]);
 
-  const cartLocked = Boolean(order || savedOrder.draft || savedOrder.blocked || busy);
+  const cartLocked = Boolean(order || savedOrder.draft || savedOrder.blocked || orphanTender || busy);
   const payableTotal = order ? remainingPosBalance(order) : total;
-  const add = (row: CatalogRow) => { if(draftRef.current||savedOrder.blocked||order||busy)return; if(!Number.isSafeInteger(row.retailPricePesewas)||row.retailPricePesewas<0)return; if(row.trackInventory && Number(row.onHand)<=(cart.find(x=>x.variantId===row.variantId)?.qty??0)){setError("Insufficient available stock.");return;} setError(null);setCart((c) => c.some((x) => x.variantId === row.variantId)
+  const add = (row: CatalogRow) => { if(draftRef.current||savedOrder.blocked||orphanTender||order||busy)return; if(!Number.isSafeInteger(row.retailPricePesewas)||row.retailPricePesewas<0)return; if(row.trackInventory && Number(row.onHand)<=(cart.find(x=>x.variantId===row.variantId)?.qty??0)){setError("Insufficient available stock.");return;} setError(null);setCart((c) => c.some((x) => x.variantId === row.variantId)
     ? c.map((x) => x.variantId === row.variantId ? { ...x, qty: x.qty + 1 } : x)
     : [...c, { variantId: row.variantId, label: itemLabel(row), unitPricePesewas: row.retailPricePesewas, qty: 1, seatNumber: null }]); };
 
-  const setQty = (id: string, qty: number) => { if(draftRef.current||order||busy||savedOrder.blocked||!Number.isSafeInteger(qty))return; const row=catalog.find(r=>r.variantId===id);if(row?.trackInventory&&qty>Number(row.onHand)){setError("Insufficient available stock.");return;}setCart((c) => qty <= 0
+  const setQty = (id: string, qty: number) => { if(draftRef.current||order||busy||savedOrder.blocked||orphanTender||!Number.isSafeInteger(qty))return; const row=catalog.find(r=>r.variantId===id);if(row?.trackInventory&&qty>Number(row.onHand)){setError("Insufficient available stock.");return;}setCart((c) => qty <= 0
     ? c.filter((x) => x.variantId !== id)
     : c.map((x) => x.variantId === id ? { ...x, qty } : x)); };
 
@@ -284,10 +286,10 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     sessionStorage.setItem(orderStorage,JSON.stringify(draft));draftRef.current=draft;setSavedOrder({draft,blocked:false});
   }
   function ensureOrder():Promise<PosOrder>{
-    if(order)return Promise.resolve(order);
+    if(order)return api<PosOrder>("/v1/pos/orders/"+order.id,{signal:AbortSignal.timeout(20000)}).then(v=>{if(!v||v.id!==order.id||v.merchantId!==merchant.id)throw new Error("Order mismatch");setOrder(v);return v;});
     if(creatingOrder.current)return creatingOrder.current;
     const task=(async()=>{
-      if(savedOrder.blocked)throw new Error("Saved order recovery is unavailable.");
+      if(savedOrder.blocked||orphanTender)throw new Error("Resolve the saved order or tender before starting another sale.");
       let draft=draftRef.current;
       if(!draft){
         if(discountP===null||!taxValid||!cart.length||!Number.isSafeInteger(total)||total<=0)throw new Error("Review valid cart amounts before creating an order.");
@@ -317,7 +319,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     // Paid restaurant orders are routed by the backend using the real order-item IDs.
     const stored=decodeSavedPosOrder(sessionStorage.getItem(orderStorage),merchant.id);
     if(stored&&stored.orderId!==latest.id)throw new Error("Another order requires recovery.");
-    sessionStorage.removeItem(orderStorage); draftRef.current=null;setSavedOrder({draft:null,blocked:false});
+    sessionStorage.removeItem(orderStorage); draftRef.current=null;setSavedOrder({draft:null,blocked:false});setOrphanTender(false);
     setReceipt({ receipt: r, order: latest });
     setCart([]);
     setDiscount("");
@@ -458,7 +460,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
       {savedOrder.draft&&!order&&<div className="notice warn"><p>A saved order must be recovered before a new sale.</p><button disabled={busy} onClick={()=>{setBusy(true);void ensureOrder().catch(e=>setError(message(e))).finally(()=>setBusy(false));}}>Recover original order</button></div>}
       <PosTerminalBar
         merchantId={merchant.id}
-        locked={Boolean(savedOrder.draft||order||busy)}
+        locked={Boolean(savedOrder.draft||order||orphanTender||busy)}
         terminalId={terminal?.id ?? null}
         cashierId={cashier?.id ?? null}
         onSelectTerminal={setTerminal}
@@ -624,7 +626,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
             </details>
           )}
 
-          {(cart.length > 0 || order) && !savedOrder.blocked && (
+          {(cart.length > 0 || order || orphanTender) && !savedOrder.blocked && (
             <PosTenderPanel
               merchantId={merchant.id}
               terminalId={terminal?.id ?? null}
@@ -634,7 +636,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
               onOrderPaid={finish}
               onModuleDisabled={disablePos}
               onClearCart={() => { if(!draftRef.current&&!order){setCart([]);setOrderKey(newKey());} }}
-              hasOrder={Boolean(order||savedOrder.draft)}
+              hasOrder={Boolean(order||savedOrder.draft||orphanTender)}
             />
           )}
         </div>
