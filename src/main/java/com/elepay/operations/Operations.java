@@ -93,4 +93,93 @@ class Operations {
         return db.sql("SELECT id, rail, period, imported_by, summary::text AS summary, created_at FROM reconciliation_run ORDER BY created_at DESC LIMIT 100")
                 .query().listOfRows();
     }
+
+    @GetMapping("/me")
+    public Map<String, Object> me() {
+        Actor actor = Actor.current();
+        actor.requireOps();
+        return Map.of(
+                "subject", actor.subject(),
+                "roles", actor.roles(),
+                "primaryRole", actor.primaryRole(),
+                "permissions", Map.of(
+                        "canApproveMakerChecker", actor.isOpsAdmin(),
+                        "canFreezeRisk", actor.canFreezeRisk(),
+                        "canManageFinance", actor.canManageFinance(),
+                        "canOnboardMerchants", actor.canOnboardMerchants(),
+                        "canManageSupport", actor.canManageSupport()
+                )
+        );
+    }
+
+    @GetMapping("/merchants/search")
+    public List<Map<String, Object>> searchMerchants(@RequestParam(defaultValue = "") String q) {
+        Actor.current().requireOps();
+        String trimmed = q == null ? "" : q.trim();
+        String like = "%" + trimmed.toLowerCase() + "%";
+        return db.sql("""
+                SELECT m.id, m.merchant_code, m.legal_name, m.trading_name, m.status, m.contact_phone,
+                       m.fee_bps, m.settlement_delay_hours, m.created_at,
+                       COALESCE(k.frozen, false) AS frozen, k.reason AS freeze_reason
+                FROM merchant m
+                LEFT JOIN merchant_kill_switch k ON k.merchant_id = m.id
+                WHERE (:empty = true
+                       OR lower(m.trading_name) LIKE :like
+                       OR lower(m.legal_name) LIKE :like
+                       OR lower(COALESCE(m.merchant_code, '')) LIKE :like
+                       OR lower(COALESCE(m.contact_phone, '')) LIKE :like
+                       OR m.id::text = :exact)
+                ORDER BY m.created_at DESC
+                LIMIT 50""")
+                .param("empty", trimmed.isEmpty())
+                .param("like", like)
+                .param("exact", trimmed)
+                .query().listOfRows();
+    }
+
+    @GetMapping("/merchants/{id}/controls")
+    public Map<String, Object> merchantControls(@PathVariable UUID id) {
+        Actor.current().requireOps();
+        var merchant = db.sql("""
+                SELECT m.id, m.merchant_code, m.legal_name, m.trading_name, m.status, m.contact_phone,
+                       m.fee_bps, m.settlement_delay_hours, m.created_at,
+                       COALESCE(k.frozen, false) AS frozen, k.reason AS freeze_reason
+                FROM merchant m
+                LEFT JOIN merchant_kill_switch k ON k.merchant_id = m.id
+                WHERE m.id = :id""")
+                .param("id", id)
+                .query().listOfRows();
+        if (merchant.isEmpty()) {
+            throw com.elepay.common.ApiException.notFound("Merchant not found");
+        }
+        var apiKeys = db.sql("""
+                SELECT id, key_prefix, COALESCE(key_type, 'legacy') AS key_type, status, label, created_at, revoked_at
+                FROM api_credential
+                WHERE merchant_id = :id
+                ORDER BY created_at DESC
+                LIMIT 50""")
+                .param("id", id)
+                .query().listOfRows();
+        var terminals = db.sql("""
+                SELECT id, serial_number, model, status, paired_at, created_at
+                FROM pos_terminal
+                WHERE merchant_id = :id
+                ORDER BY created_at DESC
+                LIMIT 50""")
+                .param("id", id)
+                .query().listOfRows();
+        var balances = db.sql("""
+                SELECT bucket, currency, balance
+                FROM account
+                WHERE owner_type = 'merchant' AND owner_id = :id
+                ORDER BY currency, bucket""")
+                .param("id", id)
+                .query().listOfRows();
+        return Map.of(
+                "merchant", merchant.get(0),
+                "balances", balances,
+                "apiKeys", apiKeys,
+                "terminals", terminals
+        );
+    }
 }

@@ -21,9 +21,33 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
 
     public static final String OPS = "ops";
     public static final String OPS_ADMIN = "ops_admin";
+    public static final String SUPPORT_AGENT = "support_agent";
+    public static final String ONBOARDING_OFFICER = "onboarding_officer";
+    public static final String FINANCE_OPS = "finance_ops";
+    public static final String RISK_COMPLIANCE = "risk_compliance";
 
-    public boolean isOps() { return roles.contains(OPS) || roles.contains(OPS_ADMIN); }
+    public boolean isOps() {
+        return roles.contains(OPS)
+                || roles.contains(OPS_ADMIN)
+                || roles.contains(SUPPORT_AGENT)
+                || roles.contains(ONBOARDING_OFFICER)
+                || roles.contains(FINANCE_OPS)
+                || roles.contains(RISK_COMPLIANCE);
+    }
     public boolean isOpsAdmin() { return roles.contains(OPS_ADMIN); }
+    public boolean canManageSupport() { return roles.contains(SUPPORT_AGENT) || roles.contains(RISK_COMPLIANCE) || roles.contains(OPS) || isOpsAdmin(); }
+    public boolean canOnboardMerchants() { return roles.contains(ONBOARDING_OFFICER) || roles.contains(RISK_COMPLIANCE) || roles.contains(OPS) || isOpsAdmin(); }
+    public boolean canManageFinance() { return roles.contains(FINANCE_OPS) || roles.contains(OPS) || isOpsAdmin(); }
+    public boolean canFreezeRisk() { return roles.contains(RISK_COMPLIANCE) || roles.contains(OPS) || isOpsAdmin(); }
+    public String primaryRole() {
+        if (isOpsAdmin()) return OPS_ADMIN;
+        if (roles.contains(RISK_COMPLIANCE)) return RISK_COMPLIANCE;
+        if (roles.contains(FINANCE_OPS)) return FINANCE_OPS;
+        if (roles.contains(ONBOARDING_OFFICER)) return ONBOARDING_OFFICER;
+        if (roles.contains(SUPPORT_AGENT)) return SUPPORT_AGENT;
+        if (roles.contains(OPS)) return OPS;
+        return "customer";
+    }
     public boolean isApiKey() { return apiKeyMerchant != null; }
     public boolean isCustomer() { return !isOps() && !isApiKey(); }
     public boolean isPublishableKey() { return "publishable".equalsIgnoreCase(keyType); }

@@ -12934,6 +12934,25 @@
         "tags" : [ "maker-checker-controller" ]
       }
     },
+    "/v1/ops/me" : {
+      "get" : {
+        "operationId" : "me",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "operations" ]
+      }
+    },
     "/v1/ops/merchants" : {
       "get" : {
         "operationId" : "queue",
@@ -12961,6 +12980,65 @@
           }
         },
         "tags" : [ "merchants" ]
+      }
+    },
+    "/v1/ops/merchants/search" : {
+      "get" : {
+        "operationId" : "searchMerchants",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "q",
+          "required" : false,
+          "schema" : {
+            "default" : "",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "additionalProperties" : { },
+                    "type" : "object"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "operations" ]
+      }
+    },
+    "/v1/ops/merchants/{id}/controls" : {
+      "get" : {
+        "operationId" : "merchantControls",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "operations" ]
       }
     },
     "/v1/ops/merchants/{id}/review" : {

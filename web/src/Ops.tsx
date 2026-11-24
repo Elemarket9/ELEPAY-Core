@@ -6,26 +6,100 @@ interface Item { id: string; kind: string; severity: string; subject: string; de
 interface MerchantView { id: string; legalName: string; tradingName: string; kind: string; status: string }
 interface Integrity { accountsWithDrift: number; netByCurrency: Record<string, number>; unbalancedTransactions: number }
 
-const TABS = [
-  "Overview", "Maker-Checker", "Kill Switches", "Custodian Trust",
-  "Agent Banking", "Lending Portfolio", "System Health",
-  "Exceptions", "Onboarding", "Disputes", "Reconciliation"
-] as const;
+interface OpsPermissions {
+  canApproveMakerChecker: boolean;
+  canFreezeRisk: boolean;
+  canManageFinance: boolean;
+  canOnboardMerchants: boolean;
+  canManageSupport: boolean;
+}
+interface OpsMe {
+  subject: string;
+  roles: string[];
+  primaryRole: string;
+  permissions: OpsPermissions;
+}
 
-/** Operations console: maker-checker, kill switches, custodian trust, exceptions, disputes, and reconciliation. */
+const ALL_TABS = [
+  "Overview", "Merchant Controls", "Maker-Checker", "Kill Switches", "Custodian Trust",
+  "Onboarding", "Disputes", "Reconciliation", "Exceptions", "System Health"
+] as const;
+type OpsTab = (typeof ALL_TABS)[number];
+
+function visibleTabsFor(perms: OpsPermissions | null): OpsTab[] {
+  if (!perms) return [...ALL_TABS];
+  return ALL_TABS.filter((t) => {
+    if (t === "Overview" || t === "Merchant Controls" || t === "Exceptions" || t === "Disputes" || t === "System Health") return true;
+    if (t === "Maker-Checker") return perms.canApproveMakerChecker || perms.canFreezeRisk || perms.canManageFinance;
+    if (t === "Kill Switches") return perms.canFreezeRisk;
+    if (t === "Custodian Trust" || t === "Reconciliation") return perms.canManageFinance || perms.canApproveMakerChecker;
+    if (t === "Onboarding") return perms.canOnboardMerchants;
+    return true;
+  });
+}
+
+/** Operations console: role-scoped controls, merchant overrides, maker-checker, kill switches, custodian trust, and reconciliation. */
 export function OpsConsole() {
-  const [tab, setTab] = useState<(typeof TABS)[number]>("Overview");
+  const [tab, setTab] = useState<OpsTab>("Overview");
+  const [me, setMe] = useState<OpsMe | null>(null);
+  const [globalFrozen, setGlobalFrozen] = useState<boolean>(false);
+  const [bannerMsg, setBannerMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    api<OpsMe>("/v1/ops/me").then(setMe).catch(() => {});
+    api<KillSwitchStatus>("/v1/ops/kill-switch/status").then((s) => setGlobalFrozen(s.globalFrozen)).catch(() => {});
+  }, []);
+
+  const tabs = visibleTabsFor(me?.permissions ?? null);
+
+  async function quickEmergencyFreeze() {
+    const reason = prompt("Reason for emergency global payout freeze:");
+    if (!reason) return;
+    try {
+      const res = await api<Record<string, unknown>>("/v1/ops/kill-switch/global", {
+        body: { frozen: true, reason },
+      });
+      setGlobalFrozen(true);
+      setBannerMsg(formatDualControlOutcome(res, "Global payout freeze activated."));
+    } catch (e) {
+      setBannerMsg(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   return (
     <main>
-      <h1>Operations console</h1>
-      <nav className="tabs">{TABS.map((t) => <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}</nav>
+      <div className="flex-between" style={{ gap: "1rem", flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ marginBottom: "0.25rem" }}>Operations console</h1>
+          {me && (
+            <p className="small muted" style={{ margin: 0 }}>
+              Signed in as <strong>{me.subject}</strong> · Role: <span className="tag active">{me.primaryRole}</span>
+            </p>
+          )}
+        </div>
+        {(me?.permissions.canFreezeRisk ?? true) && !globalFrozen && (
+          <button style={{ background: "#b91c1c", color: "#fff" }} onClick={() => void quickEmergencyFreeze()}>
+            Emergency Freeze All Payouts
+          </button>
+        )}
+      </div>
+
+      {globalFrozen && (
+        <p className="notice warn" style={{ marginTop: "0.75rem" }}>
+          <strong>GLOBAL PAYOUT FREEZE ACTIVE</strong> — All merchant payouts are paused. Unfreezing requires Maker-Checker dual approval.
+        </p>
+      )}
+      {bannerMsg && <p className="notice ok">{bannerMsg}</p>}
+
+      <nav className="tabs" style={{ marginTop: "1rem" }}>
+        {tabs.map((t) => <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}
+      </nav>
 
       {tab === "Overview" && <Overview />}
-      {tab === "Maker-Checker" && <MakerChecker />}
+      {tab === "Merchant Controls" && <MerchantControls perms={me?.permissions ?? null} />}
+      {tab === "Maker-Checker" && <MakerChecker canApprove={me?.permissions.canApproveMakerChecker ?? true} />}
       {tab === "Kill Switches" && <KillSwitches />}
       {tab === "Custodian Trust" && <CustodianTrust />}
-      {tab === "Agent Banking" && <AgentBanking />}
-      {tab === "Lending Portfolio" && <LendingPortfolio />}
       {tab === "System Health" && <SystemHealth />}
       {tab === "Exceptions" && <Exceptions />}
       {tab === "Onboarding" && <Onboarding />}
@@ -43,29 +117,7 @@ function useAction() {
   return { msg, run };
 }
 
-// -------------------------------------------------------------------------------------------------
-// 1. Agent Banking Oversight
-// -------------------------------------------------------------------------------------------------
-function AgentBanking() {
-  return (
-    <div>
-      <h3>Agent banking</h3>
-      <p className="muted">Verified agent-status and float-management APIs are not connected to this view. Agent state and funds cannot be changed locally.</p>
-    </div>
-  );
-}
 
-// -------------------------------------------------------------------------------------------------
-// 2. Lending Portfolio Review
-// -------------------------------------------------------------------------------------------------
-function LendingPortfolio() {
-  return (
-    <div>
-      <h3>Lending portfolio</h3>
-      <p className="muted">No verified loan portfolio source is connected to this view. Principal, arrears, impairment and NPL figures are unavailable rather than fabricated.</p>
-    </div>
-  );
-}
 
 // -------------------------------------------------------------------------------------------------
 // 4. System Health Status
@@ -240,7 +292,14 @@ interface MakerCheckerProposal {
   expiresAt: string;
 }
 
-function MakerChecker() {
+const ACTION_LABELS: Record<string, string> = {
+  "kill_switch.global_unfreeze": "Lift Global Payout Freeze",
+  "kill_switch.merchant_unfreeze": "Unfreeze Merchant Payouts",
+  "kill_switch.module_enable": "Enable Platform Module",
+  "suspense.write_off": "Approve Suspense Write-Off",
+};
+
+function MakerChecker({ canApprove }: { canApprove: boolean }) {
   const [proposals, setProposals] = useState<MakerCheckerProposal[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>("PENDING");
   const [msg, setMsg] = useState<string | null>(null);
@@ -284,6 +343,7 @@ function MakerChecker() {
           </select>
         </label>
       </div>
+      {!canApprove && <p className="notice warn">View-only: Only an Operations Administrator (ops_admin) can approve dual-control proposals.</p>}
       {error && <p className="error">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
       <table className="grid" style={{ marginTop: "1rem" }}>
@@ -293,17 +353,21 @@ function MakerChecker() {
         <tbody>
           {proposals.map((p) => (
             <tr key={p.id}>
-              <td className="mono small">{p.actionType}</td>
+              <td className="small"><strong>{ACTION_LABELS[p.actionType] ?? p.actionType}</strong></td>
               <td className="mono small">{p.resourceType}:{p.resourceId}</td>
               <td className="small">{p.reason ?? "—"}</td>
               <td className="small">{p.proposedBy}</td>
               <td><span className={`tag ${p.status === "APPROVED" ? "active" : p.status === "PENDING" ? "pending" : "failed"}`}>{p.status}</span></td>
               <td>
                 {p.status === "PENDING" ? (
-                  <>
-                    <button className="small" onClick={() => void review(p.id, "approve")}>Approve</button>
-                    <button className="small secondary" onClick={() => void review(p.id, "reject")}>Reject</button>
-                  </>
+                  canApprove ? (
+                    <>
+                      <button className="small" onClick={() => void review(p.id, "approve")}>Approve</button>
+                      <button className="small secondary" onClick={() => void review(p.id, "reject")}>Reject</button>
+                    </>
+                  ) : (
+                    <span className="small muted">Awaiting ops_admin</span>
+                  )
                 ) : (
                   <span className="small muted">{p.reviewedBy ?? "—"}</span>
                 )}
@@ -519,6 +583,177 @@ function CustodianTrust() {
             <dt>Per-Payout Cap</dt><dd>{formatMoney(config.perPayoutCapPesewas)}</dd>
             <dt>Min Reserve Floor</dt><dd>{formatMoney(config.minReserveFloorPesewas)}</dd>
           </dl>
+        </section>
+      )}
+    </div>
+  );
+}
+
+interface MerchantSearchRow {
+  id: string;
+  merchant_code: string | null;
+  legal_name: string;
+  trading_name: string;
+  status: string;
+  contact_phone: string | null;
+  fee_bps: number;
+  frozen: boolean;
+  freeze_reason: string | null;
+}
+
+interface MerchantControlsData {
+  merchant: MerchantSearchRow;
+  balances: { bucket: string; currency: string; balance: number }[];
+  apiKeys: { id: string; key_prefix: string; key_type: string; status: string; label: string | null; created_at: string }[];
+  terminals: { id: string; serial_number: string; model: string; status: string }[];
+}
+
+function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<MerchantSearchRow[]>([]);
+  const [selected, setSelected] = useState<MerchantControlsData | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const search = (q: string) => {
+    api<MerchantSearchRow[]>(`/v1/ops/merchants/search?q=${encodeURIComponent(q)}`)
+      .then((res) => { setResults(res); setError(null); })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
+  useEffect(() => { search(""); }, []);
+
+  const openMerchant = (id: string) => {
+    api<MerchantControlsData>(`/v1/ops/merchants/${id}/controls`)
+      .then((res) => { setSelected(res); setError(null); })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
+  async function toggleFreeze(id: string, frozen: boolean) {
+    const reason = prompt(frozen ? "Reason for freezing merchant payouts:" : "Reason for unfreezing merchant payouts:");
+    if (!reason) return;
+    setMsg(null);
+    setError(null);
+    try {
+      const res = await api<Record<string, unknown>>(`/v1/ops/kill-switch/merchants/${id}`, {
+        body: { frozen, reason },
+      });
+      setMsg(formatDualControlOutcome(res, frozen ? "Merchant payouts frozen." : "Merchant payouts unfrozen."));
+      openMerchant(id);
+      search(query);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function revokeKey(keyId: string, merchantId: string) {
+    const reason = prompt("Reason for revoking this API key:");
+    if (!reason) return;
+    setMsg(null);
+    setError(null);
+    try {
+      await api(`/v1/ops/kill-switch/api-keys/${keyId}`, { body: { active: false, reason } });
+      setMsg(`API key ${keyId} revoked immediately.`);
+      openMerchant(merchantId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div>
+      <h3>Merchant Controls &amp; Overrides</h3>
+      <div className="flex-row" style={{ marginBottom: "1rem" }}>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search merchant by name, phone, code, or UUID"
+        />
+        <button onClick={() => search(query)}>Search</button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {msg && <p className="notice ok">{msg}</p>}
+
+      <table className="grid">
+        <thead>
+          <tr><th>Merchant</th><th>Phone</th><th>Status</th><th>Payouts</th><th>Fee</th><th></th></tr>
+        </thead>
+        <tbody>
+          {results.map((m) => (
+            <tr key={m.id}>
+              <td><strong>{m.trading_name}</strong><div className="small muted">{m.legal_name}</div></td>
+              <td className="small">{m.contact_phone ?? "—"}</td>
+              <td><span className={`tag ${m.status === "approved" ? "active" : "pending"}`}>{m.status}</span></td>
+              <td><span className={`tag ${m.frozen ? "failed" : "active"}`}>{m.frozen ? "FROZEN" : "ACTIVE"}</span></td>
+              <td className="small">{(m.fee_bps / 100).toFixed(2)}%</td>
+              <td><button className="small" onClick={() => openMerchant(m.id)}>Inspect</button></td>
+            </tr>
+          ))}
+          {results.length === 0 && <tr><td colSpan={6} className="muted">No merchants matched.</td></tr>}
+        </tbody>
+      </table>
+
+      {selected && (
+        <section className="panel" style={{ marginTop: "1.25rem" }}>
+          <div className="flex-between">
+            <h4>{selected.merchant.trading_name} ({selected.merchant.status})</h4>
+            {(perms?.canFreezeRisk ?? true) && (
+              <button
+                className={selected.merchant.frozen ? "secondary" : ""}
+                onClick={() => void toggleFreeze(selected.merchant.id, !selected.merchant.frozen)}
+              >
+                {selected.merchant.frozen ? "Unfreeze Merchant Payouts" : "Freeze Merchant Payouts"}
+              </button>
+            )}
+          </div>
+
+          <div className="cards" style={{ marginTop: "0.75rem" }}>
+            {selected.balances.map((b) => (
+              <div className="card" key={`${b.currency}-${b.bucket}`}>
+                <div className="muted">{b.currency} {b.bucket}</div>
+                <div className="big">{formatMoney(b.balance)}</div>
+              </div>
+            ))}
+            {selected.balances.length === 0 && <p className="small muted">No ledger accounts opened yet.</p>}
+          </div>
+
+          <h4 style={{ marginTop: "1rem" }}>API Keys</h4>
+          <table className="grid">
+            <thead><tr><th>Prefix</th><th>Tier</th><th>Label</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {selected.apiKeys.map((k) => (
+                <tr key={k.id}>
+                  <td className="mono small">{k.key_prefix}…</td>
+                  <td className="small">{k.key_type}</td>
+                  <td className="small">{k.label ?? "—"}</td>
+                  <td><span className={`tag ${k.status === "active" ? "active" : "failed"}`}>{k.status}</span></td>
+                  <td>
+                    {k.status === "active" && (perms?.canFreezeRisk ?? true) && (
+                      <button className="small secondary" onClick={() => void revokeKey(k.id, selected.merchant.id)}>
+                        Revoke Key
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {selected.apiKeys.length === 0 && <tr><td colSpan={5} className="muted">No API keys.</td></tr>}
+            </tbody>
+          </table>
+
+          <h4 style={{ marginTop: "1rem" }}>POS Terminals</h4>
+          <table className="grid">
+            <thead><tr><th>Serial</th><th>Model</th><th>Status</th></tr></thead>
+            <tbody>
+              {selected.terminals.map((t) => (
+                <tr key={t.id}>
+                  <td className="mono small">{t.serial_number}</td>
+                  <td className="small">{t.model}</td>
+                  <td><span className={`tag ${t.status === "ACTIVE" ? "active" : "pending"}`}>{t.status}</span></td>
+                </tr>
+              ))}
+              {selected.terminals.length === 0 && <tr><td colSpan={3} className="muted">No POS terminals registered.</td></tr>}
+            </tbody>
+          </table>
         </section>
       )}
     </div>
