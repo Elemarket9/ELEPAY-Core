@@ -62,13 +62,23 @@ public class PosCheckoutGateway {
                 "POS payment", 30, actor, orderRef).reference();
     }
 
-    @Transactional
-    public RailStartResult startAndSubmitRail(String reference, String method, String msisdn, String network, String email) {
-        var started = checkouts.startRailPayment(reference, method, msisdn, network, email, payUrl(reference));
-        if (started != null && started.attemptId() != null) {
-            UUID railTx = checkouts.railTxOf(started.attemptId());
-            if (railTx != null) {
-                rails.submit(railTx);
+    /** Prepare the durable intent within the order/idempotency transaction; no external call here. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public RailStartResult prepareRail(String reference, String method, String msisdn, String network, String email) {
+        checkouts.startRailPayment(reference, method, msisdn, network, email, payUrl(reference));
+        var status = checkouts.status(reference);
+        return new RailStartResult(status.reference(), status.status(), status.attemptId(),
+                status.railStatus(), status.redirectUrl(), status.message());
+    }
+
+    /** Called by the controller only after the transaction holding the order and intent has committed. */
+    @Transactional(propagation = Propagation.NEVER)
+    public RailStartResult submitPreparedRail(String reference, UUID attemptId) {
+        if (attemptId != null) {
+            var status = checkouts.status(reference);
+            if (attemptId.equals(status.attemptId()) && "processing".equals(status.status())) {
+                UUID railTx = checkouts.railTxOf(attemptId);
+                if (railTx != null) rails.submit(railTx);
             }
         }
         var status = checkouts.status(reference);

@@ -387,7 +387,7 @@ public class PosOrderService {
     private Optional<Link> link(UUID orderId) {
         return db.sql("""
                 SELECT id, order_id, checkout_ref, amount, status, split_key FROM pos_checkout_link
-                WHERE order_id = :id AND status IN ('open','applied') ORDER BY created_at DESC LIMIT 1
+                WHERE order_id = :id AND status IN ('open','applied') ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END, created_at DESC LIMIT 1
                 """).param("id", orderId).query(Link.class).optional();
     }
 
@@ -514,14 +514,14 @@ public class PosOrderService {
                 if (network == null || !MOMO_NETWORKS.contains(network)) {
                     throw ApiException.badRequest("invalid_network", "Choose mtn, telecel or airteltigo");
                 }
-                var railRes = checkout.startAndSubmitRail(linkRecord.checkoutRef(), "momo", msisdn, network, req.email());
+                var railRes = checkout.prepareRail(linkRecord.checkoutRef(), "momo", msisdn, network, req.email());
                 yield new TenderResult(orderId, order.status(), TenderType.MOMO, linkRecord.amount(),
                         linkRecord.id(), linkRecord.checkoutRef(), railRes.attemptId(), railRes.status(),
                         checkout.payUrl(linkRecord.checkoutRef()), null, null,
                         railRes.message() != null ? railRes.message() : "Approve the payment on your phone", order);
             }
             case CARD -> {
-                var railRes = checkout.startAndSubmitRail(linkRecord.checkoutRef(), "card", null, null, req.email());
+                var railRes = checkout.prepareRail(linkRecord.checkoutRef(), "card", null, null, req.email());
                 yield new TenderResult(orderId, order.status(), TenderType.CARD, linkRecord.amount(),
                         linkRecord.id(), linkRecord.checkoutRef(), railRes.attemptId(), railRes.status(),
                         checkout.payUrl(linkRecord.checkoutRef()), null, null,
@@ -533,7 +533,7 @@ public class PosOrderService {
                         .orElse("ELEPAY Merchant");
                 String terminalRef = order.terminalId() != null ? order.terminalId().toString().replace("-", "") : "POS";
                 var qr = checkout.createGhQrIntent(order.merchantId(), terminalRef, linkRecord.amount(), merchantName);
-                var railRes = checkout.startAndSubmitRail(linkRecord.checkoutRef(), "ghqr", null, null, req.email());
+                var railRes = checkout.prepareRail(linkRecord.checkoutRef(), "ghqr", null, null, req.email());
                 PosOrder latestOrder = getOrder(orderId).orElse(order);
                 yield new TenderResult(orderId, latestOrder.status(), TenderType.GHQR, linkRecord.amount(),
                         linkRecord.id(), linkRecord.checkoutRef(), railRes.attemptId(), railRes.status(),
@@ -592,6 +592,17 @@ public class PosOrderService {
             throw ApiException.unprocessable("digital_payment_unverified", "Use the linked ELEPAY checkout");
         PosOrder order = lockOrder(orderId);
         return recordTender(order, tenderType, amountPesewas, reference);
+    }
+
+    /** External submission follows commit of the order, attempt and idempotency response. */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
+    public TenderResult submitPreparedTender(TenderResult prepared) {
+        if (prepared.attemptId() == null) return prepared;
+        var rail = checkout.submitPreparedRail(prepared.checkoutRef(), prepared.attemptId());
+        var order = getOrder(prepared.orderId()).orElseThrow();
+        return new TenderResult(order.id(), order.status(), prepared.tenderType(), prepared.amountPesewas(),
+                prepared.linkId(), prepared.checkoutRef(), prepared.attemptId(), rail.status(), prepared.payUrl(),
+                prepared.qrPayload(), prepared.qrReference(), rail.message(), order);
     }
 
     private PosOrder recordTender(PosOrder order, TenderType tenderType, long amountPesewas, String reference) {

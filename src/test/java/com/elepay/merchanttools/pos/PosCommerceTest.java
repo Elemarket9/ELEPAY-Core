@@ -451,4 +451,16 @@ public class PosCommerceTest extends PostgresTestBase {
                 .single();
         assertThat(storedFmt).isEqualTo("ECDSA_P256");
     }
+    @Test
+    void preparedDigitalTenderDoesNotSubmitBeforeCommit() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Item", BigDecimal.ONE, 1500L, 0L, 0L, "[]", 1, "MAIN", null)),
+                0L, 0L, 0L, "STANDARD");
+        var prepared = orderService.initiateTender(order.id(),
+                new PosOrderService.TenderRequest(TenderType.MOMO, 1500L, null, "0241234567", "mtn", null, null), "cashier");
+        String status = db.sql("SELECT r.status FROM rail_transaction r JOIN payment_attempt a ON a.rail_tx=r.id WHERE a.id=:id")
+                .param("id", prepared.attemptId()).query(String.class).single();
+        assertThat(status).isEqualTo("created");
+        assertThat(orderService.getOrder(order.id()).orElseThrow().paidPesewas()).isZero();
+    }
 }
