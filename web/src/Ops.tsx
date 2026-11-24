@@ -128,7 +128,7 @@ export function OpsConsole() {
             </p>
           )}
         </div>
-        <button className="secondary" disabled={meLoading||freezingGlobal} onClick={()=>void refreshAccess()}>Refresh access</button>
+        <button className="secondary" disabled={meLoading||freezingGlobal||!!promptReq} onClick={()=>void refreshAccess()}>Refresh access</button>
         {(me?.permissions.canFreezeRisk ?? false) && globalFrozen !== true && (
           <button
             style={{ background: "#b91c1c", color: "#fff" }}
@@ -155,7 +155,7 @@ export function OpsConsole() {
 
       {!meLoading && !meError && me && (
         <>
-          <div className="merchant-shell"><aside className="panel merchant-sidebar"><nav aria-label="Operations sections">{tabs.map(t=><button key={t} aria-pressed={tab===t} className={t===tab?"active":""} onClick={()=>setTab(t)}>{t}</button>)}</nav></aside><div className="merchant-content ops-content" key={me.subject+":"+tab}>
+          <div className="merchant-shell"><aside className="panel merchant-sidebar"><nav aria-label="Operations sections">{tabs.map(t=><button key={t} aria-pressed={tab===t} className={t===tab?"active":""} onClick={()=>{if(!promptLock.current)setTab(t);}}>{t}</button>)}</nav></aside><div className="merchant-content ops-content" key={me.subject+":"+tab}>
 
           {tabs.includes(tab) && (
             <>
@@ -633,15 +633,15 @@ function MakerChecker({ canApprove,subject,onChanged }: { canApprove: boolean;su
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
-    const n=++sequence.current;setLoading(true);setProposals([]);setSelected(null);
+    const n=++sequence.current;setLoading(true);setProposals([]);setSelected(null);setError(null);
     const q = statusFilter === "ALL" ? "" : `?status=${encodeURIComponent(statusFilter)}`;
     try {
       const res = await api<MakerCheckerProposal[]>(`/v1/ops/maker-checker/proposals${q}`);
       if(n===sequence.current){setProposals(res);setError(null);}
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if(n===sequence.current)setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if(n===sequence.current)setLoading(false);
     }
   };
 
@@ -662,7 +662,7 @@ function MakerChecker({ canApprove,subject,onChanged }: { canApprove: boolean;su
     setError(null);
     try {
       const latest=await api<MakerCheckerProposal>(`/v1/ops/maker-checker/proposals/${id}`);
-      if(!canReviewProposal(latest,subject,canApprove)||JSON.stringify(latest.payload)!==JSON.stringify(selected.payload))throw Error("Proposal changed or expired. Refresh and review again.");
+      if(latest.id!==id||!canReviewProposal(latest,subject,canApprove)||latest.actionType!==selected.actionType||latest.resourceId!==selected.resourceId||latest.resourceType!==selected.resourceType||latest.merchantId!==selected.merchantId||JSON.stringify(latest.payload)!==JSON.stringify(selected.payload))throw Error("Proposal changed or expired. Refresh and review again.");
       const res = await api<MakerCheckerProposal>(`/v1/ops/maker-checker/proposals/${id}/${action}`, {
         body: { note },
       });
@@ -682,7 +682,7 @@ function MakerChecker({ canApprove,subject,onChanged }: { canApprove: boolean;su
         <h3>Maker-Checker Dual Control</h3>
         <label className="choice">
           Status:
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: "auto" }}>
+          <select disabled={!!busyId} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: "auto" }}>
             <option value="PENDING">Pending</option>
             <option value="APPROVED">Approved</option>
             <option value="REJECTED">Rejected</option>
@@ -767,7 +767,7 @@ function KillSwitches({canRestore,onChanged}:{canRestore:boolean;onChanged:()=>P
       const res = await api<Record<string, unknown>>("/v1/ops/kill-switch/global", {
         body: { frozen, reason: reason.trim() || undefined },
       });
-      setMsg(formatDualControlOutcome(res, frozen ? "Global payout freeze activated." : "Global payout freeze lifted."));
+      setMsg(formatDualControlOutcome(res, res.globalFrozen===frozen?"Global payout state change confirmed.":"Request returned; verify global payout state."));
       await load();await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -786,7 +786,7 @@ function KillSwitches({canRestore,onChanged}:{canRestore:boolean;onChanged:()=>P
       const res = await api<Record<string, unknown>>(`/v1/ops/kill-switch/merchants/${id.trim()}`, {
         body: { frozen, reason: reason.trim() || undefined },
       });
-      setMsg(formatDualControlOutcome(res, `Merchant ${id.trim()} ${frozen ? "frozen" : "unfrozen"}.`));
+      setMsg(formatDualControlOutcome(res, res.payoutsFrozen===frozen?"Merchant payout state change confirmed.":"Request returned; verify merchant payout state."));
       await load();await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -804,7 +804,7 @@ function KillSwitches({canRestore,onChanged}:{canRestore:boolean;onChanged:()=>P
       const res = await api<Record<string, unknown>>(`/v1/ops/kill-switch/modules/${moduleKey}`, {
         body: { enabled, reason: reason.trim() || undefined },
       });
-      setMsg(formatDualControlOutcome(res, `Module ${moduleKey} ${enabled ? "enabled" : "disabled"}.`));
+      setMsg(formatDualControlOutcome(res, res.enabled===enabled?"Module state change confirmed.":"Request returned; verify module state."));
       await load();await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -937,7 +937,7 @@ function CustodianTrust() {
       {loading && !report && <p className="muted">Loading custodian safeguarding report…</p>}
       {report && (
         <>
-          <p className={report.safeguardingSatisfied ? "notice ok" : "notice warn"}>
+          <p className={report.reconciledBankBalancePesewas!==null&&report.safeguardingSatisfied ? "notice ok" : "notice warn"}>
             Trust Safeguarding ({report.trustAccountCode} / {report.currency}):{" "}
             <strong>{report.reconciledBankBalancePesewas===null?"BANK BALANCE UNVERIFIED":report.safeguardingSatisfied?"SATISFIED PER SERVER REPORT":"DEFICIT / REVIEW REQUIRED"}</strong>
             {report.outflowFrozen && " — OUTFLOW FROZEN"}
@@ -1039,7 +1039,7 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
       const res = await api<Record<string, unknown>>(`/v1/ops/kill-switch/merchants/${id}`, {
         body: { frozen, reason },
       });
-      setMsg(formatDualControlOutcome(res, frozen ? "Merchant payouts frozen." : "Merchant payouts unfrozen."));
+      setMsg(formatDualControlOutcome(res, res.payoutsFrozen===frozen?"Merchant payout state change confirmed.":"Request returned; verify merchant payout state."));
       await openMerchant(id);
       await search(query);
     } catch (e) {
@@ -1137,7 +1137,7 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
             {selected.balances.map((b) => (
               <div className="card" key={`${b.currency}-${b.bucket}`}>
                 <div className="muted">{b.currency} {b.bucket}</div>
-                <div className="big">{formatMoney(b.balance)}</div>
+                <div className="big">{b.currency==="GHS"?formatMoney(b.balance):`${b.currency} ${b.balance} minor units`}</div>
               </div>
             ))}
             {selected.balances.length === 0 && <p className="small muted">No ledger accounts opened yet.</p>}
