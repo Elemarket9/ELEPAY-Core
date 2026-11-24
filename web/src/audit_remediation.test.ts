@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "./api";
-import { formatSplitReceipt, safeRedirectUrl } from "./Checkout";
+import { formatSplitReceipt, safeRedirectUrl, checkoutPhase, checkoutAttemptResolved, checkoutExpired, validCheckoutTotal, decodeCheckoutAttempt } from "./Checkout";
 import { formatDualControlOutcome } from "./Ops";
 import { sanitizeCsvCell, transactionStatusClass, decodePendingTransfer, confirmationExpired, statementWindow, searchWalletHistory } from "./Wallet";
 import { safeReturnPath } from "./auth";
@@ -97,6 +97,29 @@ describe("Audit Remediation Tests", () => {
     });
   });
 
+  it("never treats an unknown or in-flight rail as payable", () => {
+    expect(checkoutPhase({status:"open",railStatus:"unknown"})).toBe("waiting");
+    expect(checkoutPhase({status:"processing",railStatus:"failed"})).toBe("waiting");
+    expect(checkoutPhase({status:"open",railStatus:"failed"})).toBe("open");
+    expect(checkoutPhase({status:"paid",railStatus:"succeeded"})).toBe("paid");
+    expect(checkoutPhase(null)).toBe("unknown");
+  });
+  it("does not release an attempt based on an older failed payment", () => {
+    const a = {key:"original",method:"momo" as const,previousAttemptId:"old",phone:"233241234567",network:"mtn"};
+    const s = {reference:"ref",status:"open",method:"momo",fee:0,total:100,railStatus:"failed",redirectUrl:null,message:null,attemptId:"old"};
+    expect(checkoutAttemptResolved(a,s)).toBe(false);
+    expect(checkoutAttemptResolved(a,{...s,attemptId:"new"})).toBe(true);
+    expect(checkoutAttemptResolved(a,{...s,attemptId:"new",railStatus:"unknown"})).toBe(false);
+    expect(decodeCheckoutAttempt(JSON.stringify(a))).toEqual(a);
+    expect(() => decodeCheckoutAttempt(JSON.stringify({...a,phone:"invalid"}))).toThrow();
+  });
+  it("requires safe integer totals and a valid unexpired checkout", () => {
+    expect(validCheckoutTotal(100,2,102)).toBe(true);
+    expect(validCheckoutTotal(100,2,103)).toBe(false);
+    expect(validCheckoutTotal(100,0.5,100.5)).toBe(false);
+    expect(checkoutExpired("invalid",0)).toBe(true);
+    expect(checkoutExpired("2026-11-24T12:00:00Z",Date.parse("2026-11-24T12:00:00Z"))).toBe(true);
+  });
   it("rejects external API paths before fetching", async () => {
     const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
     for (const path of ["https://other.example/api", "//other.example/api", "/\\\\other.example/api"]) {

@@ -15,6 +15,7 @@ export interface CallOptions {
   body?: unknown;
   idempotencyKey?: string;
   anonymous?: boolean;
+  signal?: AbortSignal;
 }
 
 export async function api<T>(path: string, options: CallOptions = {}): Promise<T> {
@@ -31,6 +32,7 @@ export async function api<T>(path: string, options: CallOptions = {}): Promise<T
   const response = await fetch(path, {
     method: options.method ?? (options.body === undefined ? "GET" : "POST"),
     headers,
+    signal: options.signal,
     cache: "no-store",
     redirect: "error",
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
