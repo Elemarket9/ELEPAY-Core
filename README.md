@@ -23,7 +23,19 @@ Run isolated local test fixtures using `mvn -B -Dspring-boot.run.profiles=sandbo
 
 ## Connection status
 
-**Bank and mobile-money API integration testing has been completed, as reported by the project owner on 24 November 2026.** This includes Ecobank banking and MTN MoMo integration testing. ELEPAY defaults to the production profile; local simulated rails remain isolated from the production artifact. Provider testing is distinct from live production activation: production credentials, provider onboarding/authorization, and live settlement and reconciliation evidence must be verified separately. Card-network production connectivity has not been confirmed. No real GRA submission integration exists; **GRA integration NOT IMPLEMENTED - manual submission required.** Historic e-Levy data is retained for audit only: e-Levy was repealed in April 2025 and must not be charged. International card acceptance and FX conversion remain within scope; recipient payouts and remittances abroad are excluded.
+### MTN MoMo
+
+**Provider sandbox integration: passed (reported 24 November 2026).** Following [PR #39](https://github.com/Elemarket9/ELEPAY-Core/pull/39), the integration test report records 47/47 payment scenarios and 12/12 database-backed lifecycle tests passing against MTN's live sandbox at commit `1b709f9`. On the initial run, 46/47 scenarios passed; one slow upstream response produced an unknown outcome that was handled without fabricating success, and the scenario passed on two reruns. Reported coverage includes collections, declines, expired prompts, payouts, refunds, failed-payout release, duplicate prevention after a lost response, and operational alerting for repeated payout failures. These results are from the supplied integration report, not an independent reproduction.
+
+### Ecobank and card acquiring
+
+The project owner has separately reported bank integration testing, but the supplied MTN report lists Ecobank as untested at the time of that report. Ecobank test results and production connectivity therefore remain unverified in this repository. Card-network production connectivity has not been confirmed.
+
+### Production activation
+
+ELEPAY defaults to the production profile; local simulated rails remain isolated from the production artifact. Provider sandbox testing is not live-money activation. Before enabling MTN production traffic, confirm production credentials and onboarding, production firewall behavior, and an authorized low-value charge, payout and refund with settlement and reconciliation evidence. Rotate any credentials previously shared in chat. Do not store credentials or temporary provider test harnesses in Git.
+
+ No real GRA submission integration exists; **GRA integration NOT IMPLEMENTED - manual submission required.** Historic e-Levy data is retained for audit only: e-Levy was repealed in April 2025 and must not be charged. International card acceptance and FX conversion remain within scope; recipient payouts and remittances abroad are excluded.
 
 
 ## Maintainer verification and operational handover
