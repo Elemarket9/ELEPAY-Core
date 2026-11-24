@@ -175,6 +175,7 @@ public class PosCommerceTest extends PostgresTestBase {
         assertThat(finalOrder.status()).isEqualTo("PAID");
         assertThat(finalOrder.paidPesewas()).isEqualTo(3500L);
         assertThat(finalOrder.changePesewas()).isEqualTo(500L); // 5.00 GHS change
+        assertThat(cashierService.getActiveShift(terminal.id()).orElseThrow().expectedCashPesewas()).isEqualTo(13000L);
 
         // Verify stock automatically deducted by 2 pies: 30 - 2 = 28 pies
         var stockAfterSale = stockService.getOrCreateStock(defaultWarehouse.id(), variant.id());
@@ -323,6 +324,20 @@ public class PosCommerceTest extends PostgresTestBase {
                 killSwitchService.setModuleEnabled("consumer-w2w", prevW2w, "restore test", "test");
             }
         }
+    }
+
+    @Test
+    void cashCannotBypassOpenDigitalCheckoutThroughEitherTenderEndpoint() {
+        var order = orderService.createOrder(merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Item", BigDecimal.ONE, 4500L, 0L, 0L, "[]", 1, "MAIN", null)),
+                0L, 0L, 0L, "STANDARD");
+        orderService.startDigital(order.id(), "cashier-test");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.addTenderPayment(order.id(), TenderType.CASH, 4500L, null))
+                .isInstanceOf(com.elepay.common.ApiException.class).hasMessageContaining("linked digital checkouts");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.initiateTender(order.id(),
+                new PosOrderService.TenderRequest(TenderType.CASH, 4500L, null, null, null, null, null), "cashier-test"))
+                .isInstanceOf(com.elepay.common.ApiException.class).hasMessageContaining("linked digital checkouts");
+        assertThat(orderService.getOrder(order.id()).orElseThrow().paidPesewas()).isZero();
     }
 
     @Test

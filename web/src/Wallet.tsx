@@ -255,7 +255,7 @@ function SendMoney({ customerId, onSent }: { customerId: string; onSent: () => v
     try {
       // Save only the exact retry payload and key, scoped to this wallet in this browser tab.
       // If persistence fails, do not initiate a payment that cannot be safely recovered here.
-      try { sessionStorage.setItem(storageKey, JSON.stringify(pending)); }
+      try { const prior=decodePendingTransfer(sessionStorage.getItem(storageKey));if(prior&&(prior.key!==pending.key||prior.confirmationId!==pending.confirmationId||prior.amount!==pending.amount)){setSaved({pending:prior,blocked:false});setMessage("A previous transfer must be resolved first.");return;}sessionStorage.setItem(storageKey, JSON.stringify(pending)); }
       catch { setMessage("Secure retry storage is unavailable. No transfer was initiated by this action."); return; }
       setSaved({ pending, blocked: false });
       let receipt: TransferReceipt;

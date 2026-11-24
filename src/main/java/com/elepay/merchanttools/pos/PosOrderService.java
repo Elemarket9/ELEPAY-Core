@@ -586,17 +586,24 @@ public class PosOrderService {
         if (tenderType != TenderType.CASH)
             throw ApiException.unprocessable("digital_payment_unverified", "Use the linked ELEPAY checkout");
         PosOrder order = lockOrder(orderId);
-        if (link(orderId).isPresent())
-            throw ApiException.conflict("digital_payment_active", "Resolve the linked checkout before recording cash");
         return recordTender(order, tenderType, amountPesewas, reference);
     }
 
     private PosOrder recordTender(PosOrder order, TenderType tenderType, long amountPesewas, String reference) {
-        if (amountPesewas <= 0) throw new IllegalArgumentException("Payment amount must be positive");
+        if (amountPesewas <= 0) throw ApiException.badRequest("invalid_amount", "Payment amount must be positive");
         UUID orderId = order.id();
         if ("PAID".equals(order.status()))
             throw ApiException.conflict("order_paid", "Order is already fully paid");
 
+        // Central guard covers both cash entry points and every open split checkout.
+        if (tenderType == TenderType.CASH && db.sql("SELECT EXISTS (SELECT 1 FROM pos_checkout_link WHERE order_id = :id AND status = 'open')")
+                .param("id", orderId).query(Boolean.class).single()) {
+            throw ApiException.conflict("digital_payment_active", "Resolve all linked digital checkouts before recording cash");
+        }
+        long outstanding = Math.subtractExact(order.totalPesewas(), order.paidPesewas());
+        if (outstanding <= 0 || (tenderType != TenderType.CASH && amountPesewas > outstanding)) {
+            throw ApiException.conflict("pos_payment_mismatch", "Tender does not match the remaining order balance");
+        }
         UUID paymentId = UUID.randomUUID();
         db.sql("""
             INSERT INTO pos_tender_payment (id, order_id, tender_type, amount_pesewas, reference, status, created_at)
@@ -612,7 +619,7 @@ public class PosOrderService {
         // Update active shift if cash
         if (tenderType == TenderType.CASH && order.terminalId() != null) {
             cashierService.getActiveShift(order.terminalId())
-                    .ifPresent(shift -> cashierService.recordCashTender(shift.id(), amountPesewas));
+                    .ifPresent(shift -> cashierService.recordCashTender(shift.id(), Math.min(amountPesewas, outstanding)));
         }
 
         long newPaid = Math.addExact(order.paidPesewas(), amountPesewas);
