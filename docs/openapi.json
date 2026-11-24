@@ -7338,24 +7338,12 @@
             "format" : "uuid",
             "type" : "string"
           },
-          "requestHeaders" : {
-            "type" : "string"
-          },
-          "requestPayload" : {
-            "type" : "string"
-          },
           "requestUrl" : {
-            "type" : "string"
-          },
-          "responseBody" : {
             "type" : "string"
           },
           "responseCode" : {
             "format" : "int32",
             "type" : "integer"
-          },
-          "responseHeaders" : {
-            "type" : "string"
           },
           "status" : {
             "type" : "string"
@@ -7428,9 +7416,6 @@
           },
           "lastDeliveryAt" : {
             "format" : "date-time",
-            "type" : "string"
-          },
-          "secret" : {
             "type" : "string"
           },
           "url" : {

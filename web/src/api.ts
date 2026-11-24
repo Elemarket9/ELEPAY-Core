@@ -16,6 +16,7 @@ export interface CallOptions {
   idempotencyKey?: string;
   anonymous?: boolean;
   signal?: AbortSignal;
+  approvedTotal?: number;
 }
 
 export function safeApiPath(path: string): boolean {
@@ -30,6 +31,7 @@ export async function api<T>(path: string, options: CallOptions = {}): Promise<T
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
+  if(options.approvedTotal!==undefined){if(!Number.isSafeInteger(options.approvedTotal)||options.approvedTotal<=0)throw new ApiError(400,"invalid_approved_total","Invalid approved total");headers["X-Elepay-Approved-Total"]=String(options.approvedTotal);}
   let sentToken:string|undefined;
   if (!options.anonymous) {
     const token = await getToken();

@@ -255,4 +255,20 @@ class CheckoutAuditRemediationIT extends PostgresTestBase {
                         "frequency", "monthly", "consentReference", "SUB-NO-KEY"));
         assertThat(noKeyMandate.status()).isEqualTo(400);
     }
+    @Test
+    void rejectsChangedApprovedTotalBeforeMoneyMoves() {
+        var created = api.call("POST", "/v1/merchants/" + marketplace + "/checkouts", mpOwner,
+                UUID.randomUUID().toString(), Map.of("allocations", List.of(Map.of("merchantId", seller, "kind", "sale", "amount", 5000))));
+        assertThat(created.status()).isEqualTo(200);
+        String ref = created.body().get("reference").asString();
+        String path = "/v1/checkouts/" + ref + "/pay/wallet";
+        long before = ledger.balance(Ledger.code("customer", customer, "available", "GHS"));
+        String key = UUID.randomUUID().toString();
+        int rejected = api.http.post().uri(path).headers(h -> h.setBearerAuth(customerToken))
+                .header("Idempotency-Key", key).header("X-Elepay-Approved-Total", "1")
+                .exchange((req,res)->res.getStatusCode().value());
+        assertThat(rejected).isEqualTo(409);
+        assertThat(ledger.balance(Ledger.code("customer", customer, "available", "GHS"))).isEqualTo(before);
+        assertThat(checkoutService.status(ref).status()).isEqualTo("open");
+    }
 }

@@ -132,20 +132,20 @@ class PublicCheckouts {
             }
         }
         String phone = msisdn;
-        int attempts = payAttempts.computeIfAbsent(reference, r -> new AtomicInteger()).incrementAndGet();
-        if (attempts > 8) {
-            throw new com.elepay.common.ApiException(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
-                    "checkout_rate_limited", "Too many payment attempts for this checkout");
-        }
+        Long approvedTotal = approvedTotal(httpRequest);
+        Object intent = approvedTotal == null ? request : Map.of("request", request, "approvedTotal", approvedTotal);
         String caller = httpRequest.getRemoteAddr() == null ? "unknown" : httpRequest.getRemoteAddr();
         String payChannel = payChannel(channel);
         String coarseIp = "unknown".equals(caller) ? null : caller;
-        var started = tx.execute(s -> idempotency.execute("checkout-pay:" + reference, key, request,
+        var started = tx.execute(s -> idempotency.execute("checkout-pay:" + reference, key, intent,
                 CheckoutService.PaymentResult.class, () -> {
+                    int attempts = payAttempts.computeIfAbsent(reference, r -> new AtomicInteger()).incrementAndGet();
+                    if (attempts > 8) throw new ApiException(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
+                            "checkout_rate_limited", "Too many new payment attempts for this checkout");
                     checkouts.noteChannel(reference, payChannel);
                     regulatory.rememberCheckout(checkouts.load(reference, false).id(), coarseIp);
                     return checkouts.startRailPayment(reference, request.method(), phone,
-                        request.network(), request.email(), publicBaseUrl + "/pay/" + reference);
+                        request.network(), request.email(), publicBaseUrl + "/pay/" + reference, approvedTotal);
                 }));
         if (started != null && started.attemptId() != null) {
             UUID railTx = checkouts.railTxOf(started.attemptId());
@@ -162,12 +162,26 @@ class PublicCheckouts {
         UUID customer = customers.currentCustomer();
         String payChannel = payChannel(channel);
         String coarseIp = http.getRemoteAddr();
-        return tx.execute(s -> idempotency.execute("checkout-wallet:" + customer, key, Map.of("reference", reference),
+        Long approvedTotal = approvedTotal(http);
+        Object intent = approvedTotal == null ? Map.of("reference", reference) : Map.of("reference", reference, "approvedTotal", approvedTotal);
+        return tx.execute(s -> idempotency.execute("checkout-wallet:" + customer, key, intent,
                 CheckoutService.PaymentResult.class, () -> {
                     checkouts.noteChannel(reference, payChannel);
                     regulatory.rememberCheckout(checkouts.load(reference, false).id(), coarseIp);
-                    return checkouts.payWithWallet(reference, customer);
+                    return checkouts.payWithWallet(reference, customer, approvedTotal);
                 }));
+    }
+
+    // Optional for legacy clients; the web checkout always supplies the exact approved total.
+    private static Long approvedTotal(HttpServletRequest request) {
+        String value = request.getHeader("X-Elepay-Approved-Total");
+        if (value == null) return null;
+        try {
+            if (!value.matches("[0-9]{1,16}")) throw new NumberFormatException();
+            long total = Long.parseLong(value);
+            if (total <= 0 || total > 9_007_199_254_740_991L) throw new NumberFormatException();
+            return total;
+        } catch (NumberFormatException ex) { throw ApiException.badRequest("invalid_approved_total", "Approved total must be positive integer minor units"); }
     }
 
     /** App clients send MOBILE_APP. Anything else on this HTTP API is the web channel, not a GPS fix. */

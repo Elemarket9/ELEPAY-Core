@@ -178,13 +178,13 @@ export function Checkout({ reference }: { reference: string }) {
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   const phase = checkoutPhase(status);
   useEffect(() => {
-    if (phase !== "waiting" && !recovery.attempt) return;
+    if (phase !== "waiting" && !recovery.attempt && checkout?.status===status?.status) return;
     const timer = setInterval(() => { if (document.visibilityState === "visible" && !inFlight.current) void refresh(); }, 5000);
     const resume = () => { if (document.visibilityState === "visible" && !inFlight.current) void refresh(); };
     document.addEventListener("visibilitychange", resume);
     window.addEventListener("online", resume);
     return () => { clearInterval(timer); document.removeEventListener("visibilitychange", resume); window.removeEventListener("online", resume); };
-  }, [phase, recovery.attempt, refresh]);
+  }, [phase, recovery.attempt, refresh, checkout?.status, status?.status]);
   useEffect(() => {
     if (!showQr) return;
     let active = true;
@@ -235,14 +235,15 @@ export function Checkout({ reference }: { reference: string }) {
       attemptRef.current = attempt; setRecovery({ attempt, blocked: false });
       const response = await api<PaymentStatus>(
         payMethod === "wallet" ? "/v1/checkouts/" + reference + "/pay/wallet" : "/v1/public/checkouts/" + reference + "/pay",
-        { method: "POST", anonymous: payMethod !== "wallet", idempotencyKey: attempt.key, signal: requestSignal(),
+        { method: "POST", anonymous: payMethod !== "wallet", idempotencyKey: attempt.key, approvedTotal:attempt.approvedTotal, signal: requestSignal(),
           ...(payMethod === "wallet" ? {} : { body: payMethod === "momo" ? { method: payMethod, phone: attempt.phone, network: attempt.network } : { method: payMethod } }) });
       if (!response || response.reference !== reference) throw new Error("Payment response was not verified");
       // Only server-provided status is displayed; never infer success from an HTTP response.
       setStatus(response);
       await refresh();
     } catch (e) {
-      if (attemptRef.current && e instanceof ApiError && [400, 401, 403, 422].includes(e.status) && ["invalid_phone", "invalid_network", "payer_mismatch", "validation_failed", "rail_unavailable", "rail_operation_unavailable"].includes(e.code)) {
+      if (attemptRef.current && e instanceof ApiError && e.status===409 && e.code==="quote_changed"){clearAttempt();setError(e.message);}
+      else if (attemptRef.current && e instanceof ApiError && [400, 401, 403, 422].includes(e.status) && ["invalid_phone", "invalid_network", "payer_mismatch", "validation_failed", "rail_unavailable", "rail_operation_unavailable"].includes(e.code)) {
         clearAttempt();
         setError(e.message);
       } else {
