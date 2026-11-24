@@ -17,6 +17,7 @@ public final class EcobankGatewayClient {
     public enum Operation {
         ACCOUNT_TRANSFER(Product.LOCAL_PAYMENT, "/corp-payment/api/v2/payment/account/transfer"),
         DOMESTIC_TRANSFER(Product.LOCAL_PAYMENT, "/corp-payment/api/v2/payment/domestic"),
+        TRANSACTION_STATUS(Product.LOCAL_PAYMENT, "/corp-payment/api/v2/integration/payment/status"),
         BALANCE(Product.ACCOUNT_ENQUIRY, "/corp-account-inquiry/api/v2/integration/account/inquiry/balance"),
         ACCOUNT_INFO(Product.ACCOUNT_ENQUIRY, "/corp-account-inquiry/api/v2/integration/account/inquiry/info");
 
@@ -68,6 +69,47 @@ public final class EcobankGatewayClient {
             throw new IOException("Ecobank did not issue a usable service token");
         }
         return post(operation.path, signedRequest, token);
+    }
+
+    /** Signs a single domestic GHS transfer using the bank's documented field order. */
+    public JsonNode domesticTransfer(JsonNode signedTokenRequest, String clientId, String affiliateCode,
+            String sourceCode, String requestId, String ipAddress, String signingSecret,
+            String receiverAccountNo, long amountPesewas, String description)
+            throws IOException, InterruptedException {
+        if (amountPesewas <= 0) throw new IllegalArgumentException("Expected a positive payout amount");
+        for (String value : new String[]{clientId, affiliateCode, sourceCode, requestId, ipAddress,
+                signingSecret, receiverAccountNo, description}) {
+            if (value == null || value.isBlank()) throw new IllegalArgumentException("Missing Ecobank payout field");
+        }
+        String requestType = "DOMESTIC_TRANSFER";
+        String prefix = clientId + affiliateCode + sourceCode + requestId + requestType + ipAddress;
+        String requestToken = sha512(prefix + signingSecret);
+        java.math.BigDecimal amount = java.math.BigDecimal.valueOf(amountPesewas, 2);
+        var body = json.createObjectNode();
+        var header = body.putObject("headerRequest");
+        header.put("clientId", clientId);
+        header.put("affiliateCode", affiliateCode);
+        header.put("sourceCode", sourceCode);
+        header.put("requestId", requestId);
+        header.put("requestType", requestType);
+        header.put("ipAddress", ipAddress);
+        header.put("requestToken", requestToken);
+        body.put("receiverAccountNo", receiverAccountNo);
+        body.put("amount", amount);
+        body.put("currency", "GHS");
+        body.put("description", description);
+        body.put("secureHash", sha512(prefix + requestToken + receiverAccountNo + amount.toPlainString()
+                + "GHS" + description + signingSecret));
+        return execute(Operation.DOMESTIC_TRANSFER, signedTokenRequest, body);
+    }
+
+    private static String sha512(String input) {
+        try {
+            var digest = java.security.MessageDigest.getInstance("SHA-512");
+            return java.util.HexFormat.of().formatHex(digest.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-512 unavailable", e);
+        }
     }
 
     private JsonNode post(String path, JsonNode envelope, String token) throws IOException, InterruptedException {
