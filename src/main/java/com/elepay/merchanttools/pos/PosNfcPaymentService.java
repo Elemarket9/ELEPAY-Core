@@ -69,7 +69,8 @@ public class PosNfcPaymentService {
             String checkoutRef,
             String payUrl,
             long amountPesewas,
-            String status
+            String status,
+            UUID attemptId
     ) {}
 
     @Transactional
@@ -207,19 +208,14 @@ public class PosNfcPaymentService {
                 ? req.cardScheme().trim().toUpperCase(Locale.ROOT)
                 : emv.cardScheme();
 
-        // 4. Submit real card rail attempt through ELEPAY Checkout & RailTransactions (never fabricate local auth codes)
-        var railRes = checkoutGateway.startAndSubmitRail(checkoutRef, "card", null, scheme.toLowerCase(Locale.ROOT), null);
-        if (railRes != null && "failed".equalsIgnoreCase(railRes.railStatus())) {
-            throw ApiException.unprocessable("card_rail_declined",
-                    railRes.message() != null ? railRes.message() : "Card acquiring rail declined NFC tap");
+        // The existing acquirer contract is hosted card approval, not native EMV authorization.
+        // Prepare only; the controller submits after the order, KSN, link and idempotency record commit.
+        var railRes = checkoutGateway.prepareRail(checkoutRef, "card", null, null, null);
+        if (railRes == null || railRes.attemptId() == null) {
+            throw ApiException.conflict("card_intent_unavailable", "Card payment intent could not be prepared");
         }
-        String rawRef = (railRes != null && railRes.attemptId() != null)
-                ? railRes.attemptId().toString().replace("-", "").toUpperCase(Locale.ROOT)
-                : authId.toString().replace("-", "").toUpperCase(Locale.ROOT);
-        String authCode = rawRef.substring(0, Math.min(16, rawRef.length()));
-        String status = (railRes != null && "paid".equalsIgnoreCase(railRes.status()))
-                ? "SETTLED"
-                : "PENDING_SETTLEMENT";
+        String authCode = null; // Never manufacture an acquirer authorization code.
+        String status = "AWAITING_CARD_APPROVAL";
 
         db.sql("""
             INSERT INTO pos_nfc_authorization (
@@ -258,7 +254,18 @@ public class PosNfcPaymentService {
                 checkoutRef,
                 checkoutGateway.payUrl(checkoutRef),
                 req.amountPesewas(),
-                status
+                status,
+                railRes.attemptId()
         );
+    }
+    /** Hosted continuation only: an EMV payload does not prove acquirer authorization. */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NEVER)
+    public NfcTapResult submitPreparedTap(NfcTapResult prepared) {
+        var rail = checkoutGateway.submitPreparedRail(prepared.checkoutRef(), prepared.attemptId());
+        String status = "paid".equals(rail.status()) ? "PAYMENT_CONFIRMED"
+                : "failed".equals(rail.railStatus()) ? "PAYMENT_FAILED" : "AWAITING_CARD_APPROVAL";
+        return new NfcTapResult(prepared.authorizationId(), prepared.orderId(), prepared.terminalId(),
+                prepared.ksn(), prepared.ksnCounter(), prepared.cardScheme(), prepared.cvmMethod(),
+                null, prepared.checkoutRef(), prepared.payUrl(), prepared.amountPesewas(), status, prepared.attemptId());
     }
 }

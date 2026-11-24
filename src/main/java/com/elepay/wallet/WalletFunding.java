@@ -77,7 +77,7 @@ class WalletFunding {
         String msisdn = null;
         if (request.method().equals("momo")) {
             msisdn = References.msisdn(request.phone());
-            if (!NETWORKS.contains(request.network())) throw ApiException.badRequest("invalid_network", "Choose mtn, telecel or airteltigo");
+            if (request.network() == null || !NETWORKS.contains(request.network())) throw ApiException.badRequest("invalid_network", "Choose mtn, telecel or airteltigo");
         }
         String phone = msisdn;
         if (ownMsisdnOnly && msisdn != null) {
@@ -116,7 +116,7 @@ class WalletFunding {
     public List<Operation> operations(@RequestParam(defaultValue = "50") int limit) {
         UUID customer = wallets.customer(com.elepay.identity.Actor.current());
         return db.sql("SELECT id FROM wallet_operation WHERE customer_id = :c ORDER BY created_at DESC LIMIT :l")
-                .param("c", customer).param("l", Math.min(limit, 200)).query(UUID.class).list()
+                .param("c", customer).param("l", Math.max(1, Math.min(limit, 200))).query(UUID.class).list()
                 .stream().map(this::operation).toList();
     }
 

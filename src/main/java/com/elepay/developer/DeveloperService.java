@@ -62,14 +62,14 @@ public class DeveloperService {
     public record WebhookEndpointCreated(UUID id, String url, String secret, String environment, String description,
                                          List<String> eventTypes, boolean active, OffsetDateTime createdAt) {}
 
-    public record WebhookEndpointView(UUID id, String url, String secret, String environment, String description,
+    public record WebhookEndpointView(UUID id, String url, String environment, String description,
                                       List<String> eventTypes, boolean active, int failureCount,
                                       OffsetDateTime lastDeliveryAt, OffsetDateTime createdAt) {}
 
     public record WebhookDeliveryLogView(UUID id, UUID deliveryId, UUID endpointId, UUID eventId, UUID merchantId,
-                                         String eventType, String requestUrl, String requestHeaders,
-                                         String requestPayload, Integer responseCode, String responseHeaders,
-                                         String responseBody, int durationMs, String status, int attemptNumber,
+                                         String eventType, String requestUrl, @com.fasterxml.jackson.annotation.JsonIgnore String requestHeaders,
+                                         @com.fasterxml.jackson.annotation.JsonIgnore String requestPayload, Integer responseCode, @com.fasterxml.jackson.annotation.JsonIgnore String responseHeaders,
+                                         @com.fasterxml.jackson.annotation.JsonIgnore String responseBody, int durationMs, String status, int attemptNumber,
                                          boolean isManualRetry, OffsetDateTime createdAt) {}
 
     public record ReplayResult(UUID newLogId, boolean success, int statusCode, String responseBody, int durationMs) {}
@@ -166,7 +166,7 @@ public class DeveloperService {
     public List<WebhookEndpointView> listWebhooks(UUID merchantId, String environment) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
         return webhooks.endpoints(merchantId, environment).stream().map(e -> new WebhookEndpointView(e.id(), e.url(),
-                e.secret(), e.environment(), e.description(), e.eventTypes(), e.active(), e.failureCount(),
+                e.environment(), e.description(), e.eventTypes(), e.active(), e.failureCount(),
                 e.lastDeliveryAt(), e.createdAt())).toList();
     }
 
@@ -196,6 +196,7 @@ public class DeveloperService {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
         var e = webhooks.endpoint(merchantId, endpointId)
                 .orElseThrow(() -> ApiException.notFound("Webhook endpoint not found"));
+        if (!e.active()) throw ApiException.conflict("webhook_disabled", "Enable the endpoint before pinging it");
         var ep = Map.of("id", e.id().toString(), "url", e.url(), "secret", e.secret());
 
         String eventId = UUID.randomUUID().toString();
@@ -286,14 +287,16 @@ public class DeveloperService {
     public ReplayResult replayDelivery(UUID merchantId, UUID logId, String replayedBy) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
         var old = getDeliveryLog(merchantId, logId);
-        var ep = webhooks.endpoint(merchantId, old.endpointId()).map(Webhooks.EndpointView::secret)
+        var ep = webhooks.endpoint(merchantId, old.endpointId())
                 .orElseThrow(() -> ApiException.badRequest("endpoint_missing", "Associated webhook endpoint no longer exists"));
+        if (!java.util.Set.of("FAILED", "DEAD").contains(old.status())) throw ApiException.conflict("replay_not_failed", "Only failed or dead delivery logs may be replayed");
+        if (!ep.active() || !ep.url().equals(old.requestUrl())) throw ApiException.conflict("webhook_destination_changed", "Endpoint disabled or changed since the original delivery; review before retrying");
 
         audit.record(replayedBy, "developer.webhook_delivery_replayed", "merchant:" + merchantId,
                 Map.of("originalLogId", logId.toString(), "endpointId", old.endpointId().toString()));
 
         return executeAndLogDelivery(merchantId, old.endpointId(), old.eventId(), old.eventType(),
-                old.requestUrl(), ep, old.requestPayload(), true);
+                ep.url(), ep.secret(), old.requestPayload(), true);
     }
 
     private ReplayResult executeAndLogDelivery(UUID merchantId, UUID endpointId, UUID eventId,

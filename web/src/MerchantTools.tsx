@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
 import {
   buildPosOrderPayload,
   computeCartTotals,
+  decodeSavedPosOrder,
+  decodePosTender,
+  exactBarcodeMatch,
+  isPaidPosOrder,
+  remainingPosBalance,
+  SavedPosOrder,
   DiningTable as PosDiningTable,
   EvenSplitResult,
-  formatKdsStatusLabel,
   HeldCart,
   isFeatureNotEnabled,
-  KdsTicketSummary,
   ORDER_TYPES,
   OrderType,
   parseHeldCartPayload,
@@ -209,6 +213,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [catalog, reloadCatalog, loadError] = useLoad<CatalogRow[]>(`/v1/inventory/catalog/merchant/${merchant.id}`, []);
   const [tables] = useLoad<PosDiningTable[]>(`/v1/restaurant/tables/merchant/${merchant.id}`, []);
   const [moduleDisabled, setModuleDisabled] = useState(false);
+  const disablePos=useCallback(()=>setModuleDisabled(true),[]);
 
   const [terminal, setTerminal] = useState<PosTerminal | null>(null);
   const [cashier, setCashier] = useState<{ id: string; badgeNumber: string; name?: string } | null>(null);
@@ -221,6 +226,11 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [taxPercent, setTaxPercent] = useState(() => { try { return localStorage.getItem(TAX_KEY(merchant.id)) ?? "0"; } catch { return "0"; } });
 
   const [order, setOrder] = useState<PosOrder | null>(null);
+  const orderStorage = "elepay.pos.order." + merchant.id;
+  const [savedOrder,setSavedOrder] = useState<{draft:SavedPosOrder|null;blocked:boolean}>(()=>{try{return {draft:decodeSavedPosOrder(sessionStorage.getItem(orderStorage),merchant.id),blocked:false};}catch{return {draft:null,blocked:true};}});
+  const [orphanTender,setOrphanTender]=useState(()=>{try{return !savedOrder.draft&&Boolean(decodePosTender(sessionStorage.getItem('elepay.pos.tender.'+merchant.id)));}catch{return true;}});
+  const draftRef = useRef(savedOrder.draft);
+  const creatingOrder = useRef<Promise<PosOrder>|null>(null);
   const [orderKey, setOrderKey] = useState<string>(() => newKey());
   const [receipt, setReceipt] = useState<{ receipt: PosReceipt; order: PosOrder } | null>(null);
 
@@ -229,7 +239,6 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [splitCount, setSplitCount] = useState("2");
   const [evenSplit, setEvenSplit] = useState<EvenSplitResult | null>(null);
   const [seatSplit, setSeatSplit] = useState<SeatSplitResult | null>(null);
-  const [kdsTicket, setKdsTicket] = useState<KdsTicketSummary | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -258,80 +267,59 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     void loadHeldCarts(terminal?.id ?? null);
   }, [terminal?.id, loadHeldCarts]);
 
-  const add = (row: CatalogRow) => setCart((c) => c.some((x) => x.variantId === row.variantId)
+  const cartLocked = Boolean(order || savedOrder.draft || savedOrder.blocked || orphanTender || busy);
+  const payableTotal = order ? remainingPosBalance(order) : total;
+  const add = (row: CatalogRow) => { if(draftRef.current||savedOrder.blocked||orphanTender||order||busy)return; if(!Number.isSafeInteger(row.retailPricePesewas)||row.retailPricePesewas<0)return; if(row.trackInventory && Number(row.onHand)<=(cart.find(x=>x.variantId===row.variantId)?.qty??0)){setError("Insufficient available stock.");return;} setError(null);setCart((c) => c.some((x) => x.variantId === row.variantId)
     ? c.map((x) => x.variantId === row.variantId ? { ...x, qty: x.qty + 1 } : x)
-    : [...c, { variantId: row.variantId, label: itemLabel(row), unitPricePesewas: row.retailPricePesewas, qty: 1, seatNumber: null }]);
+    : [...c, { variantId: row.variantId, label: itemLabel(row), unitPricePesewas: row.retailPricePesewas, qty: 1, seatNumber: null }]); };
 
-  const setQty = (id: string, qty: number) => setCart((c) => qty <= 0
+  const setQty = (id: string, qty: number) => { if(draftRef.current||order||busy||savedOrder.blocked||orphanTender||!Number.isSafeInteger(qty))return; const row=catalog.find(r=>r.variantId===id);if(row?.trackInventory&&qty>Number(row.onHand)){setError("Insufficient available stock.");return;}setCart((c) => qty <= 0
     ? c.filter((x) => x.variantId !== id)
-    : c.map((x) => x.variantId === id ? { ...x, qty } : x));
+    : c.map((x) => x.variantId === id ? { ...x, qty } : x)); };
 
   const setSeat = (id: string, seatNumber: number | null) => setCart((c) =>
     c.map((x) => x.variantId === id ? { ...x, seatNumber } : x));
 
-  async function ensureOrder(): Promise<PosOrder> {
-    if (order) return order;
-    if (discountP === null) throw new Error("Enter the discount like 5.00");
-    if (!taxValid) throw new Error("Tax must be between 0 and 100%");
-    try {
-      const payload = buildPosOrderPayload({
-        merchantId: merchant.id,
-        branchId: terminal?.branchId ?? null,
-        terminalId: terminal?.id ?? null,
-        cashierId: cashier?.id ?? null,
-        orderType,
-        tableId: tableId || null,
-        lines: cart,
-        discountPesewas: effectiveDiscount,
-        taxPesewas: tax,
-      });
-      const created = await api<PosOrder>("/v1/pos/orders", {
-        body: payload,
-        idempotencyKey: orderKey,
-      });
-      setOrder(created);
-      return created;
-    } catch (e) {
-      if (isFeatureNotEnabled(e)) setModuleDisabled(true);
-      throw e;
-    }
+  function persistOrder(draft:SavedPosOrder){
+    const stored=decodeSavedPosOrder(sessionStorage.getItem(orderStorage),merchant.id);
+    if(stored&&stored.key!==draft.key)throw new Error("Another saved order requires recovery.");
+    sessionStorage.setItem(orderStorage,JSON.stringify(draft));draftRef.current=draft;setSavedOrder({draft,blocked:false});
   }
-
-  async function sendToKitchen(targetOrder: PosOrder) {
-    if (kdsTicket || orderType === "RETAIL") return;
-    try {
-      const selectedTable = tables.find((t) => t.id === tableId);
-      const created = await api<KdsTicketSummary>("/v1/restaurant/kds/tickets", {
-        body: {
-          merchantId: merchant.id,
-          orderId: targetOrder.id,
-          orderNumber: targetOrder.orderNumber,
-          tableNumber: selectedTable?.tableNumber ?? null,
-          serverName: cashier?.name ?? cashier?.badgeNumber ?? null,
-          course: "MAIN",
-          items: cart.map((c) => ({
-            orderItemId: c.variantId,
-            itemName: c.label,
-            quantity: c.qty,
-            modifiersJson: "[]",
-            notes: c.seatNumber ? `Seat ${c.seatNumber}` : null,
-          })),
-          notes: orderType,
-          stationId: null,
-        },
-      });
-      setKdsTicket(created);
-    } catch {
-      // KDS routing is non-blocking if restaurant stations are not yet configured
-    }
+  function ensureOrder():Promise<PosOrder>{
+    if(order)return api<PosOrder>("/v1/pos/orders/"+order.id,{signal:AbortSignal.timeout(20000)}).then(v=>{if(!v||v.id!==order.id||v.merchantId!==merchant.id)throw new Error("Order mismatch");setOrder(v);return v;});
+    if(creatingOrder.current)return creatingOrder.current;
+    const task=(async()=>{
+      if(savedOrder.blocked||orphanTender)throw new Error("Resolve the saved order or tender before starting another sale.");
+      let draft=draftRef.current;
+      if(!draft){
+        if(discountP===null||!taxValid||!cart.length||!Number.isSafeInteger(total)||total<=0)throw new Error("Review valid cart amounts before creating an order.");
+        if(!terminal||terminal.status!=="ACTIVE"||!cashier)throw new Error("Select an active paired terminal and authenticate a cashier.");
+        if(cart.some(l=>!Number.isSafeInteger(l.qty)||l.qty<=0||!Number.isSafeInteger(l.unitPricePesewas)||l.unitPricePesewas<0))throw new Error("Invalid cart line.");
+        const payload=buildPosOrderPayload({merchantId:merchant.id,branchId:terminal.branchId,terminalId:terminal.id,cashierId:cashier.id,orderType,tableId:tableId||null,lines:cart,discountPesewas:effectiveDiscount,taxPesewas:tax});
+        draft={key:orderKey,payload,orderId:null};persistOrder(draft);
+      }
+      try{
+        const created=draft.orderId?await api<PosOrder>("/v1/pos/orders/"+draft.orderId,{signal:AbortSignal.timeout(20000)}):await api<PosOrder>("/v1/pos/orders",{body:draft.payload,idempotencyKey:draft.key,signal:AbortSignal.timeout(20000)});
+        if(!created||!created.id||created.merchantId!==merchant.id||(draft.orderId&&created.id!==draft.orderId))throw new Error("Order response could not be verified.");
+        remainingPosBalance(created);
+        persistOrder({...draft,orderId:created.id});setOrder(created);
+        if(!cart.length){setCart(draft.payload.items.map(l=>({variantId:l.variantId,label:l.itemName,unitPricePesewas:l.unitPricePesewas,qty:l.quantity,seatNumber:l.seatNumber})));setOrderType(draft.payload.orderType);setTableId(draft.payload.tableId??"");}
+        return created;
+      }catch(e){if(isFeatureNotEnabled(e))setModuleDisabled(true);throw e;}
+    })();
+    creatingOrder.current=task;void task.finally(()=>{creatingOrder.current=null;}).catch(()=>{});return task;
   }
 
   async function finish(paidOrder: PosOrder) {
-    const r = await api<PosReceipt>(`/v1/pos/orders/${paidOrder.id}/receipt`, { method: "POST" });
+    if(!isPaidPosOrder(paidOrder))throw new Error("Order is not fully paid.");
     const latest = await api<PosOrder>(`/v1/pos/orders/${paidOrder.id}`);
-    if (orderType !== "RETAIL" && !kdsTicket) {
-      await sendToKitchen(latest);
-    }
+    if(latest.id!==paidOrder.id||latest.merchantId!==merchant.id||!isPaidPosOrder(latest))throw new Error("Payment not verified by POS server.");
+    const r = await api<PosReceipt>(`/v1/pos/orders/${paidOrder.id}/receipt`, { method: "POST" });
+    if(!r?.receiptNumber||typeof r.escposFormattedText!=="string")throw new Error("Receipt unavailable; recover the paid order.");
+    // Paid restaurant orders are routed by the backend using the real order-item IDs.
+    const stored=decodeSavedPosOrder(sessionStorage.getItem(orderStorage),merchant.id);
+    if(stored&&stored.orderId!==latest.id)throw new Error("Another order requires recovery.");
+    sessionStorage.removeItem(orderStorage); draftRef.current=null;setSavedOrder({draft:null,blocked:false});setOrphanTender(false);
     setReceipt({ receipt: r, order: latest });
     setCart([]);
     setDiscount("");
@@ -343,6 +331,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   }
 
   async function holdCurrentCart() {
+    if(cartLocked)return;
     if (!terminal || !cashier) {
       setError("Select a terminal and authenticate a cashier before holding a cart.");
       return;
@@ -381,6 +370,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   }
 
   async function recallCart(hc: HeldCart) {
+    if(cartLocked||cart.length){setError("Clear the unsubmitted cart before recalling another.");return;}
     setError(null);
     setBusy(true);
     try {
@@ -456,34 +446,38 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         <h3>Sale complete</h3>
         <p>Order {receipt.order.orderNumber} · {formatMoney(receipt.order.totalPesewas)}
           {receipt.order.changePesewas > 0 && <> · <strong>Change {formatMoney(receipt.order.changePesewas)}</strong></>}
-          {kdsTicket && <> · <span className="tag active">{formatKdsStatusLabel(kdsTicket.status)}</span></>}</p>
-        <pre className="receipt">{receipt.receipt.escposFormattedText}</pre>
-        <button onClick={() => { setReceipt(null); setKdsTicket(null); }}>New sale</button>
+          </p>
+        <pre className="receipt">{receipt.receipt.escposFormattedText}</pre><button className="secondary" onClick={()=>{const url=URL.createObjectURL(new Blob([receipt.receipt.escposFormattedText],{type:"text/plain;charset=utf-8"}));const a=document.createElement("a");a.href=url;a.download="elepay_receipt_"+receipt.receipt.receiptNumber+".txt";document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);}}>Download receipt</button>
+        <button onClick={() => setReceipt(null)}>New sale</button>
       </div>
     );
   }
 
   return (
     <div>
+      <div className="page-title"><div><p className="eyebrow">ELEPAY POS</p><h2>Cashier register</h2><p className="muted small">Scan products, review the order, collect and verify payment.</p></div></div>
+      {savedOrder.blocked&&<p className="notice warn" role="alert">Saved order data is unavailable. Contact support before accepting another sale.</p>}
+      {savedOrder.draft&&!order&&<div className="notice warn"><p>A saved order must be recovered before a new sale.</p><button disabled={busy} onClick={()=>{setBusy(true);void ensureOrder().catch(e=>setError(message(e))).finally(()=>setBusy(false));}}>Recover original order</button></div>}
       <PosTerminalBar
         merchantId={merchant.id}
+        locked={Boolean(savedOrder.draft||order||orphanTender||busy)}
         terminalId={terminal?.id ?? null}
         cashierId={cashier?.id ?? null}
         onSelectTerminal={setTerminal}
         onSelectCashier={setCashier}
-        onModuleDisabled={() => setModuleDisabled(true)}
+        onModuleDisabled={disablePos}
       />
 
       <div className="pos-layout">
         <div>
           <h3>Products</h3>
           {loadError && <p className="error">{loadError}</p>}
-          <input placeholder="Search or scan barcode" value={search} onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { const hit = catalog.find((r) => r.barcode === search.trim() || r.sku === search.trim()); if (hit) { add(hit); setSearch(""); } } }} />
+          <label>Search or scan product barcode<input disabled={cartLocked} placeholder="Barcode, SKU or product name" value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();const hit=exactBarcodeMatch(catalog,search);if(hit){add(hit);setSearch("");}else setError("No unique barcode or SKU match. Select the product manually.");}}}/></label>
+          <p className="small muted">Use a keyboard-compatible barcode scanner or type the barcode. This scans products, not card credentials.</p>
           {catalog.length === 0 && !loadError && <p className="muted">No products yet. Add them in <strong>Inventory &amp; Stock</strong>.</p>}
           <div className="pos-items">
             {shown.map((r) => (
-              <button key={r.variantId} className="secondary pos-item" disabled={!!order} onClick={() => add(r)}>
+              <button key={r.variantId} className="secondary pos-item" disabled={cartLocked} onClick={() => add(r)}>
                 <span>{itemLabel(r)}</span><strong>{formatMoney(r.retailPricePesewas)}</strong>
                 {r.trackInventory && <span className="small muted">{Number(r.onHand)} in stock</span>}
               </button>
@@ -500,7 +494,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
                       <td>{hc.customerName ?? "Walk-in"}</td>
                       <td>{formatMoney(hc.totalPesewas)}</td>
                       <td>
-                        <button type="button" className="secondary small" disabled={busy} onClick={() => void recallCart(hc)}>
+                        <button type="button" className="secondary small" disabled={cartLocked || cart.length>0} onClick={() => void recallCart(hc)}>
                           Recall
                         </button>
                       </td>
@@ -515,18 +509,18 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         <div className="panel">
           <div className="flex-between">
             <h3>Sale</h3>
-            {kdsTicket && <span className="tag active">{formatKdsStatusLabel(kdsTicket.status)}</span>}
+
           </div>
 
           <div className="grid-2" style={{ marginBottom: ".6rem" }}>
             <label>Order Type
-              <select value={orderType} disabled={!!order} onChange={(e) => setOrderType(e.target.value as OrderType)}>
+              <select value={orderType} disabled={cartLocked} onChange={(e) => setOrderType(e.target.value as OrderType)}>
                 {ORDER_TYPES.map((ot) => <option key={ot.value} value={ot.value}>{ot.label}</option>)}
               </select>
             </label>
             {orderType === "DINE_IN" && (
               <label>Table
-                <select value={tableId} disabled={!!order} onChange={(e) => setTableId(e.target.value)}>
+                <select value={tableId} disabled={cartLocked} onChange={(e) => setTableId(e.target.value)}>
                   <option value="">-- Select table --</option>
                   {tables.map((t) => (
                     <option key={t.id} value={t.id}>
@@ -551,16 +545,16 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
                           min={1}
                           placeholder="Seat #"
                           value={c.seatNumber ?? ""}
-                          disabled={!!order}
+                          disabled={cartLocked}
                           onChange={(e) => setSeat(c.variantId, e.target.value ? Number(e.target.value) : null)}
                           style={{ width: "4.5rem", marginLeft: ".4rem" }}
                         />
                       )}
                     </td>
                     <td style={{ whiteSpace: "nowrap" }}>
-                      <button className="secondary small" disabled={!!order} onClick={() => setQty(c.variantId, c.qty - 1)}>−</button>
+                      <button className="secondary small" disabled={cartLocked} onClick={() => setQty(c.variantId, c.qty - 1)}>−</button>
                       {c.qty}
-                      <button className="secondary small" disabled={!!order} onClick={() => setQty(c.variantId, c.qty + 1)}>+</button>
+                      <button className="secondary small" disabled={cartLocked} onClick={() => setQty(c.variantId, c.qty + 1)}>+</button>
                     </td>
                     <td>{formatMoney(c.unitPricePesewas * c.qty)}</td>
                   </tr>
@@ -570,18 +564,19 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           )}
 
           <div className="grid-2">
-            <label>Discount (GH₵)<input inputMode="decimal" value={discount} disabled={!!order} onChange={(e) => setDiscount(e.target.value)} placeholder="0.00" /></label>
-            <label>Tax %<input inputMode="decimal" value={taxPercent} disabled={!!order} onChange={(e) => setTaxPercent(e.target.value)} /></label>
+            <label>Discount (GH₵)<input inputMode="decimal" value={discount} disabled={cartLocked} onChange={(e) => setDiscount(e.target.value)} placeholder="0.00" /></label>
+            <label>Tax %<input inputMode="decimal" value={taxPercent} disabled={cartLocked} onChange={(e) => setTaxPercent(e.target.value)} /></label>
           </div>
           <dl className="confirm">
-            <dt>Subtotal</dt><dd>{formatMoney(subtotal)}</dd>
-            {tax > 0 && <><dt>Tax</dt><dd>{formatMoney(tax)}</dd></>}
-            <dt><strong>Total</strong></dt><dd><strong>{formatMoney(total)}</strong></dd>
+            <dt>Subtotal</dt><dd>{formatMoney(order?.subtotalPesewas??subtotal)}</dd>
+            {(order?.discountPesewas??effectiveDiscount)>0&&<><dt>Discount</dt><dd>{formatMoney(order?.discountPesewas??effectiveDiscount)}</dd></>}
+            {(order?.taxPesewas??tax)>0&&<><dt>Tax</dt><dd>{formatMoney(order?.taxPesewas??tax)}</dd></>}
+            <dt><strong>{order?"Server order total":"Estimated total"}</strong></dt><dd><strong>{formatMoney(order?.totalPesewas??total)}</strong></dd>{order&&<><dt>Outstanding</dt><dd>{formatMoney(payableTotal)}</dd></>}
           </dl>
 
-          {error && <p className="error">{error}</p>}
+          {error && <p className="error" role="alert">{error}</p>}
 
-          {cart.length > 0 && !order && (
+          {cart.length > 0 && !cartLocked && (
             <div className="flex-row" style={{ marginBottom: ".6rem", flexWrap: "wrap" }}>
               <input
                 placeholder="Hold name / table"
@@ -592,20 +587,11 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
               <button type="button" className="secondary small" disabled={busy} onClick={() => void holdCurrentCart()}>
                 Hold Cart
               </button>
-              {orderType !== "RETAIL" && (
-                <button
-                  type="button"
-                  className="secondary small"
-                  disabled={busy}
-                  onClick={() => void ensureOrder().then(sendToKitchen).catch((e) => setError(message(e)))}
-                >
-                  Send to Kitchen
-                </button>
-              )}
+
             </div>
           )}
 
-          {cart.length > 0 && (
+          {cart.length > 0 && !savedOrder.blocked && !savedOrder.draft && (
             <details style={{ marginBottom: ".6rem" }}>
               <summary className="small muted">Split Bill</summary>
               <div className="flex-row" style={{ marginTop: ".4rem", flexWrap: "wrap" }}>
@@ -640,16 +626,17 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
             </details>
           )}
 
-          {cart.length > 0 && (
+          {(cart.length > 0 || order || orphanTender) && !savedOrder.blocked && (
             <PosTenderPanel
               merchantId={merchant.id}
               terminalId={terminal?.id ?? null}
-              totalPesewas={total}
+              totalPesewas={payableTotal}
+              order={order}
               ensureOrder={ensureOrder}
               onOrderPaid={finish}
-              onModuleDisabled={() => setModuleDisabled(true)}
-              onClearCart={() => { setCart([]); setOrder(null); setOrderKey(newKey()); }}
-              hasOrder={!!order}
+              onModuleDisabled={disablePos}
+              onClearCart={() => { if(!draftRef.current&&!order){setCart([]);setOrderKey(newKey());} }}
+              hasOrder={Boolean(order||savedOrder.draft||orphanTender)}
             />
           )}
         </div>

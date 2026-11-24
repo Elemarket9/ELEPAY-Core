@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
 import { formatMoney, parseMoney } from "../money";
 import { isFeatureNotEnabled, PosCashier, PosShift, PosTerminal } from "./posHelpers";
@@ -6,6 +6,7 @@ import { isFeatureNotEnabled, PosCashier, PosShift, PosTerminal } from "./posHel
 interface PosTerminalBarProps {
   merchantId: string;
   terminalId: string | null;
+  locked?: boolean;
   cashierId: string | null;
   onSelectTerminal: (terminal: PosTerminal | null) => void;
   onSelectCashier: (cashier: { id: string; badgeNumber: string; name?: string } | null) => void;
@@ -19,6 +20,7 @@ export function upsertKnownCashier(list: PosCashier[], cashier: PosCashier): Pos
 export function PosTerminalBar({
   merchantId,
   terminalId,
+  locked = false,
   cashierId,
   onSelectTerminal,
   onSelectCashier,
@@ -33,15 +35,18 @@ export function PosTerminalBar({
   const [panel, setPanel] = useState<"none" | "register-terminal" | "pair-terminal" | "cashier" | "shift">("none");
 
   const [serialNumber, setSerialNumber] = useState("");
-  const [model, setModel] = useState("ELEPAY-T1");
+  const [model, setModel] = useState("");
   const [deviceName, setDeviceName] = useState("");
-  const [city, setCity] = useState("Accra");
-  const [pairingCode, setPairingCode] = useState("");
-  const [hardwareFp, setHardwareFp] = useState("");
+  const [city, setCity] = useState("");
+  const [region,setRegion]=useState("");
+  const [manufacturer,setManufacturer]=useState("");
+  const [connection,setConnection]=useState("");
+  const shiftSequence=useRef(0);
+  const actionLock=useRef(false);
   const [openingCash, setOpeningCash] = useState("0.00");
   const [closingCash, setClosingCash] = useState("0.00");
   const [shiftNotes, setShiftNotes] = useState("");
-  const [knownCashiers, setKnownCashiers] = useState<PosCashier[]>([]);
+
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -50,8 +55,8 @@ export function PosTerminalBar({
     try {
       const list = await api<PosTerminal[]>(`/v1/pos/terminals/merchant/${merchantId}`);
       setTerminals(list);
-      if (!terminalId && list.length > 0) {
-        onSelectTerminal(list[0]);
+      if (!terminalId && !locked) {
+        const active=list.find(t=>t.status==="ACTIVE");if(active)onSelectTerminal(active);
       }
       setError(null);
     } catch (e) {
@@ -61,26 +66,22 @@ export function PosTerminalBar({
       }
       setError(e instanceof ApiError ? e.message : String(e));
     }
-  }, [merchantId, terminalId, onSelectTerminal, onModuleDisabled]);
+  }, [merchantId, terminalId, locked, onSelectTerminal, onModuleDisabled]);
 
   const loadShift = useCallback(async (tid: string | null) => {
-    if (!tid) {
-      setShift(null);
-      return;
-    }
+    const sequence=++shiftSequence.current;setShift(null);
+    if (!tid) return;
     try {
       const active = await api<PosShift>(`/v1/pos/shifts/active/${tid}`);
-      setShift(active);
+      if(sequence===shiftSequence.current&&active.terminalId===tid&&active.merchantId===merchantId)setShift(active);
     } catch (e) {
       if (isFeatureNotEnabled(e)) {
         onModuleDisabled();
         return;
       }
-      if (e instanceof ApiError && e.status === 404) {
-        setShift(null);
-      }
+      if(sequence===shiftSequence.current && !(e instanceof ApiError&&e.status===404))setError(e instanceof Error?e.message:"Shift status unavailable.");
     }
-  }, [onModuleDisabled]);
+  }, [onModuleDisabled,merchantId]);
 
   useEffect(() => {
     void loadTerminals();
@@ -92,26 +93,27 @@ export function PosTerminalBar({
 
   async function registerTerminal(e: React.FormEvent) {
     e.preventDefault();
+    if(locked||actionLock.current)return;
     setError(null);
     setStatusMsg(null);
-    setBusy(true);
+    actionLock.current=true;setBusy(true);
     try {
       const created = await api<PosTerminal>("/v1/pos/terminals/register", {
         body: {
           merchantId,
           branchId: null,
           serialNumber: serialNumber.trim(),
-          model: model.trim() || "ELEPAY-T1",
-          city: city.trim() || "Accra",
-          region: "Greater Accra",
+          model: model.trim(),
+          city: city.trim(),
+          region: region.trim() || null,
           country: "GH",
           address: null,
           location: null,
           latitude: null,
           longitude: null,
-          connectionType: "WIFI",
-          manufacturer: "ELEPAY",
-          manufactureYear: 2026,
+          connectionType: connection || null,
+          manufacturer: manufacturer.trim() || null,
+          manufactureYear: null,
           deviceName: deviceName.trim() || serialNumber.trim(),
           deviceDescription: "POS Register Terminal",
         },
@@ -121,45 +123,21 @@ export function PosTerminalBar({
       setPanel("none");
       setStatusMsg(`Terminal ${created.serialNumber} registered.`);
       await loadTerminals();
-      onSelectTerminal(created);
+      setStatusMsg("Terminal "+created.serialNumber+" registered ("+created.status+"). Pair using the approved device workflow.");
     } catch (err) {
       if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function pairTerminal(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setStatusMsg(null);
-    setBusy(true);
-    try {
-      const res = await api<{ terminalId: string; serialNumber: string; status: string }>("/v1/pos/terminals/pair", {
-        body: {
-          serialNumber: serialNumber.trim(),
-          pairingCode: pairingCode.trim(),
-          hardwareFingerprint: hardwareFp.trim() || `web-${navigator.userAgent.slice(0, 32)}`,
-        },
-      });
-      setPairingCode("");
-      setPanel("none");
-      setStatusMsg(`Terminal ${res.serialNumber} paired (${res.status}).`);
-      await loadTerminals();
-    } catch (err) {
-      if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
-      setError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setBusy(false);
+      actionLock.current=false;setBusy(false);setCashierPin("");
     }
   }
 
   async function registerCashier(e: React.FormEvent) {
     e.preventDefault();
+    if(locked||actionLock.current)return;
     setError(null);
     setStatusMsg(null);
-    setBusy(true);
+    actionLock.current=true;setBusy(true);
     try {
       const created = await api<PosCashier>("/v1/pos/cashiers/register", {
         body: {
@@ -169,26 +147,27 @@ export function PosTerminalBar({
           badgeNumber: cashierBadge.trim(),
         },
       });
-      setKnownCashiers((prev) => upsertKnownCashier(prev, created));
-      onSelectCashier({ id: created.id, badgeNumber: created.badgeNumber, name: created.name });
-      setAuthBadgeLabel(`${created.name} (${created.badgeNumber})`);
+      onSelectCashier(null);
+      setAuthBadgeLabel(null);
       setCashierPin("");
       setCashierName("");
       setPanel("none");
-      setStatusMsg(`Cashier ${created.name} registered & active.`);
+      setStatusMsg(`Cashier ${created.name} registered. Verify the PIN to start a session.`);
     } catch (err) {
       if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
-      setBusy(false);
+      actionLock.current=false;setBusy(false);setCashierPin("");
     }
   }
 
   async function authenticateCashier(e: React.FormEvent) {
     e.preventDefault();
+    if(locked||actionLock.current)return;
+    onSelectCashier(null);setAuthBadgeLabel(null);
     setError(null);
     setStatusMsg(null);
-    setBusy(true);
+    actionLock.current=true;setBusy(true);
     try {
       const cashier = await api<PosCashier>("/v1/pos/cashiers/auth", {
         body: {
@@ -197,17 +176,14 @@ export function PosTerminalBar({
           pin: cashierPin,
         },
       });
-      const resolved = cashier?.id
-        ? cashier
-        : knownCashiers.find((c) => c.badgeNumber === cashierBadge.trim()) ?? null;
+      const resolved = cashier?.id && cashier.merchantId===merchantId && cashier.isActive ? cashier : null;
       if (resolved) {
-        setKnownCashiers((prev) => upsertKnownCashier(prev, resolved));
         onSelectCashier({ id: resolved.id, badgeNumber: resolved.badgeNumber, name: resolved.name });
         setAuthBadgeLabel(`${resolved.name} (${resolved.badgeNumber})`);
         setStatusMsg(`Cashier ${resolved.name} (${resolved.badgeNumber}) verified & active.`);
       } else {
-        setAuthBadgeLabel(`Badge ${cashierBadge.trim()} (PIN verified)`);
-        setStatusMsg(`Cashier PIN verified for badge ${cashierBadge.trim()}.`);
+        onSelectCashier(null);setAuthBadgeLabel(null);
+        setError("Cashier identity could not be verified.");
       }
       setCashierPin("");
       setPanel("none");
@@ -215,13 +191,14 @@ export function PosTerminalBar({
       if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
       setError(err instanceof ApiError && err.status === 401 ? "Invalid cashier badge or PIN." : (err instanceof ApiError ? err.message : String(err)));
     } finally {
-      setBusy(false);
+      actionLock.current=false;setBusy(false);setCashierPin("");
     }
   }
 
   async function openShift(e: React.FormEvent) {
     e.preventDefault();
-    if (!terminalId || !cashierId) {
+    if(locked||actionLock.current)return;
+    if (!terminalId || !cashierId || !terminals.some(t=>t.id===terminalId&&t.status==="ACTIVE")) {
       setError("Select a terminal and authenticate a cashier first.");
       return;
     }
@@ -231,7 +208,7 @@ export function PosTerminalBar({
       return;
     }
     setError(null);
-    setBusy(true);
+    actionLock.current=true;setBusy(true);
     try {
       const opened = await api<PosShift>("/v1/pos/shifts/open", {
         body: {
@@ -250,20 +227,21 @@ export function PosTerminalBar({
       if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
-      setBusy(false);
+      actionLock.current=false;setBusy(false);setCashierPin("");
     }
   }
 
   async function closeShift(e: React.FormEvent) {
     e.preventDefault();
-    if (!shift) return;
+    if(locked||actionLock.current)return;
+    if (!shift || shift.terminalId!==terminalId) return;
     const pesewas = parseMoney(closingCash);
     if (pesewas === null || pesewas < 0) {
       setError("Enter a valid closing cash count, e.g. 250.00");
       return;
     }
     setError(null);
-    setBusy(true);
+    actionLock.current=true;setBusy(true);
     try {
       const closed = await api<PosShift>(`/v1/pos/shifts/${shift.id}/close`, {
         body: {
@@ -281,7 +259,7 @@ export function PosTerminalBar({
       if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
-      setBusy(false);
+      actionLock.current=false;setBusy(false);setCashierPin("");
     }
   }
 
@@ -293,15 +271,16 @@ export function PosTerminalBar({
             Terminal:
             <select
               value={terminalId ?? ""}
+              disabled={locked||busy}
               onChange={(e) => {
                 const found = terminals.find((t) => t.id === e.target.value) ?? null;
-                onSelectTerminal(found);
+                onSelectTerminal(found);onSelectCashier(null);setAuthBadgeLabel(null);setShift(null);
               }}
               style={{ marginLeft: ".4rem", width: "auto" }}
             >
               <option value="">-- Select terminal --</option>
               {terminals.map((t) => (
-                <option key={t.id} value={t.id}>
+                <option key={t.id} value={t.id} disabled={t.status!=="ACTIVE"}>
                   {t.serialNumber} ({t.model} · {t.status})
                 </option>
               ))}
@@ -316,22 +295,22 @@ export function PosTerminalBar({
         </div>
 
         <div className="flex-row" style={{ flexWrap: "wrap", gap: ".4rem" }}>
-          <button type="button" className="secondary small" onClick={() => setPanel(panel === "register-terminal" ? "none" : "register-terminal")}>
+          <button type="button" className="secondary small" disabled={locked||busy} onClick={() => setPanel(panel === "register-terminal" ? "none" : "register-terminal")}>
             + Terminal
           </button>
-          <button type="button" className="secondary small" onClick={() => setPanel(panel === "pair-terminal" ? "none" : "pair-terminal")}>
+          <button type="button" className="secondary small" disabled={locked||busy} onClick={() => setPanel(panel === "pair-terminal" ? "none" : "pair-terminal")}>
             Pair
           </button>
-          <button type="button" className="secondary small" onClick={() => setPanel(panel === "cashier" ? "none" : "cashier")}>
+          <button type="button" className="secondary small" disabled={locked||busy} onClick={() => setPanel(panel === "cashier" ? "none" : "cashier")}>
             Cashier PIN
           </button>
-          <button type="button" className="secondary small" onClick={() => setPanel(panel === "shift" ? "none" : "shift")}>
+          <button type="button" className="secondary small" disabled={locked||busy} onClick={() => setPanel(panel === "shift" ? "none" : "shift")}>
             {shift ? "Close Shift" : "Open Shift"}
           </button>
         </div>
       </div>
 
-      {error && <p className="error" style={{ marginTop: ".5rem" }}>{error}</p>}
+      {error && <p role="alert" className="error" style={{ marginTop: ".5rem" }}>{error}</p>}
       {statusMsg && <p className="notice ok" style={{ marginTop: ".5rem" }}>{statusMsg}</p>}
 
       {panel === "register-terminal" && (
@@ -340,22 +319,13 @@ export function PosTerminalBar({
             <label>Serial Number<input value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} required placeholder="SN-ACCRA-001" /></label>
             <label>Model<input value={model} onChange={(e) => setModel(e.target.value)} required /></label>
             <label>Device Name<input value={deviceName} onChange={(e) => setDeviceName(e.target.value)} placeholder="Front Counter 1" /></label>
-            <label>City<input value={city} onChange={(e) => setCity(e.target.value)} /></label>
+            <label>City<input required value={city} onChange={(e) => setCity(e.target.value)} /></label><label>Region<input value={region} onChange={e=>setRegion(e.target.value)}/></label><label>Manufacturer<input value={manufacturer} onChange={e=>setManufacturer(e.target.value)}/></label><label>Connection type<select value={connection} onChange={e=>setConnection(e.target.value)} required><option value="">Select</option><option value="WIFI">Wi-Fi</option><option value="CELLULAR">Cellular</option><option value="ETHERNET">Ethernet</option></select></label>
           </div>
-          <button type="submit" disabled={busy}>{busy ? "Registering…" : "Register Terminal"}</button>
+          <button type="submit" disabled={busy||locked}>{busy ? "Registering…" : "Register Terminal"}</button>
         </form>
       )}
 
-      {panel === "pair-terminal" && (
-        <form onSubmit={pairTerminal} style={{ marginTop: ".8rem" }}>
-          <div className="grid-2">
-            <label>Serial Number<input value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} required /></label>
-            <label>Pairing Code<input value={pairingCode} onChange={(e) => setPairingCode(e.target.value)} required /></label>
-            <label>Hardware Fingerprint (optional)<input value={hardwareFp} onChange={(e) => setHardwareFp(e.target.value)} /></label>
-          </div>
-          <button type="submit" disabled={busy}>{busy ? "Pairing…" : "Pair Terminal"}</button>
-        </form>
-      )}
+      {panel === "pair-terminal" && <p className="notice">Pair physical payment terminals using the approved device workflow and actual hardware attestation. This browser does not generate a synthetic hardware fingerprint or handle terminal secrets.</p>}
 
       {panel === "cashier" && (
         <div style={{ marginTop: ".8rem" }}>
@@ -363,7 +333,7 @@ export function PosTerminalBar({
             <label>Badge Number<input value={cashierBadge} onChange={(e) => setCashierBadge(e.target.value)} required placeholder="B-001" /></label>
             <label>PIN<input type="password" inputMode="numeric" value={cashierPin} onChange={(e) => setCashierPin(e.target.value)} required placeholder="••••" /></label>
             <div className="flex-row">
-              <button type="submit" disabled={busy}>{busy ? "Verifying…" : "Verify PIN"}</button>
+              <button type="submit" disabled={busy||locked}>{busy ? "Verifying…" : "Verify PIN"}</button>
             </div>
           </form>
           <details style={{ marginTop: ".6rem" }}>
@@ -371,9 +341,9 @@ export function PosTerminalBar({
             <form onSubmit={registerCashier} className="grid-2" style={{ marginTop: ".5rem" }}>
               <label>Cashier Name<input value={cashierName} onChange={(e) => setCashierName(e.target.value)} required /></label>
               <label>Badge Number<input value={cashierBadge} onChange={(e) => setCashierBadge(e.target.value)} required /></label>
-              <label>PIN (4-6 digits)<input type="password" inputMode="numeric" value={cashierPin} onChange={(e) => setCashierPin(e.target.value)} required minLength={4} /></label>
+              <label>PIN (4-8 digits)<input type="password" inputMode="numeric" value={cashierPin} onChange={(e) => setCashierPin(e.target.value)} required minLength={4} maxLength={8} autoComplete="off" /></label>
               <div className="flex-row" style={{ alignItems: "end" }}>
-                <button type="submit" className="secondary" disabled={busy}>Register Cashier</button>
+                <button type="submit" className="secondary" disabled={busy||locked}>Register Cashier</button>
               </div>
             </form>
           </details>
@@ -390,7 +360,7 @@ export function PosTerminalBar({
             )}
             <label>Notes<input value={shiftNotes} onChange={(e) => setShiftNotes(e.target.value)} placeholder="Optional shift notes" /></label>
           </div>
-          <button type="submit" disabled={busy}>
+          <button type="submit" disabled={busy||locked}>
             {busy ? "Saving…" : shift ? "Close Active Shift" : "Open Shift"}
           </button>
         </form>

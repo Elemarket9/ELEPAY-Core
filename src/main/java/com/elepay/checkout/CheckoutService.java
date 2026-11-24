@@ -403,12 +403,18 @@ class CheckoutService {
 
     @Transactional
     PaymentResult payWithWallet(String reference, UUID customer) {
+        return payWithWallet(reference, customer, null);
+    }
+
+    @Transactional
+    PaymentResult payWithWallet(String reference, UUID customer, Long approvedTotal) {
         Checkout c = lockPayable(reference);
         if (c.status().equals("processing")) {
             throw ApiException.conflict("payment_in_progress", "Another payment for this checkout is in progress");
         }
         long fee = customerFee("wallet", c.subtotal());
         long total = Math.addExact(c.subtotal(), fee);
+        verifyApprovedTotal(approvedTotal, total);
         if (transferLimits != null) {
             transferLimits.check(customer, total);
         }
@@ -434,6 +440,12 @@ class CheckoutService {
     @Transactional
     PaymentResult startRailPayment(String reference, String method, String msisdn, String network, String email,
                                    String returnUrl) {
+        return startRailPayment(reference, method, msisdn, network, email, returnUrl, null);
+    }
+
+    @Transactional
+    PaymentResult startRailPayment(String reference, String method, String msisdn, String network, String email,
+                                   String returnUrl, Long approvedTotal) {
         Checkout current = load(reference, true);
         if (current.status().equals("paid")) return status(reference);
         String boundPhone = db.sql("SELECT payer_phone FROM checkout WHERE reference = :r")
@@ -447,6 +459,7 @@ class CheckoutService {
         Checkout c = lockPayable(reference);
         long fee = customerFee(method, c.subtotal());
         long total = Math.addExact(c.subtotal(), fee);
+        verifyApprovedTotal(approvedTotal, total);
         if (riskEngine != null) {
             String actorId = msisdn != null ? msisdn : (email != null ? email : c.reference());
             var assessment = riskEngine.assessTransaction(new com.elepay.risk.RiskEngineService.AssessmentRequest(
@@ -500,6 +513,12 @@ class CheckoutService {
         return db.sql("SELECT rail_tx FROM payment_attempt WHERE id = :id").param("id", attempt).query(UUID.class).single();
     }
 
+    private static void verifyApprovedTotal(Long approvedTotal, long actualTotal) {
+        if (approvedTotal != null && approvedTotal.longValue() != actualTotal) {
+            throw ApiException.conflict("quote_changed", "Payment total changed. Review the new amount before approving.");
+        }
+    }
+
     PaymentResult status(String reference) {
         Checkout c = load(reference, false);
         record Attempt(UUID id, String method, String status, UUID railTx) {}
@@ -516,7 +535,7 @@ class CheckoutService {
             redirect = tx.status().equals("pending") ? tx.redirectUrl() : null;
         }
         String method = c.paymentMethod() != null ? c.paymentMethod() : attempt.map(Attempt::method).orElse(null);
-        long fee = method == null ? 0 : (c.totalPaid() != null ? c.customerFee() : customerFee(method, c.subtotal()));
+        long fee = method == null ? 0 : (c.totalPaid() != null || "processing".equals(c.status()) ? c.customerFee() : customerFee(method, c.subtotal()));
         String message = switch (c.status()) {
             case "paid" -> "Payment received";
             case "processing" -> "Waiting for payment confirmation. You can safely reopen this link with reference " + c.reference();
@@ -524,7 +543,7 @@ class CheckoutService {
             default -> attempt.filter(a -> a.status().equals("failed")).isPresent()
                     ? "The last payment attempt failed. You can try again." : "Awaiting payment";
         };
-        return new PaymentResult(c.reference(), c.status(), method, c.subtotal(), fee, c.subtotal() + fee,
+        return new PaymentResult(c.reference(), c.status(), method, c.subtotal(), fee, c.totalPaid() != null ? c.totalPaid() : Math.addExact(c.subtotal(), fee),
                 attempt.map(Attempt::id).orElse(null), railStatus, redirect, message);
     }
 
