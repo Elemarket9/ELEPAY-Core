@@ -111,6 +111,7 @@ describe("Audit Remediation Tests", () => {
     expect(safeReturnPath("/\\\\other.example")).toBe("/");
     expect(safeReturnPath("https://other.example")).toBe("/");
     expect(safeReturnPath("/app/callback")).toBe("/");
+    expect(safeReturnPath("/a/..//other.example")).toBe("/");
   });
 
   it("does not label uncertain or failed wallet operations as completed", () => {
