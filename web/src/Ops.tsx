@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { api } from "./api";
 import { formatMoney } from "./money";
 
@@ -18,6 +18,19 @@ interface OpsMe {
   roles: string[];
   primaryRole: string;
   permissions: OpsPermissions;
+}
+
+
+interface PromptRequest {
+  title: string;
+  defaultValue?: string;
+  resolve: (value: string | null) => void;
+}
+const OpsPromptContext = createContext<(title: string, defaultValue?: string) => Promise<string | null>>(
+  async () => null,
+);
+function useOpsPrompt() {
+  return useContext(OpsPromptContext);
 }
 
 const ALL_TABS = [
@@ -47,6 +60,13 @@ export function OpsConsole() {
   const [globalFrozen, setGlobalFrozen] = useState<boolean>(false);
   const [killSwitchError, setKillSwitchError] = useState<string | null>(null);
   const [bannerMsg, setBannerMsg] = useState<string | null>(null);
+  const [promptReq, setPromptReq] = useState<PromptRequest | null>(null);
+  const [promptInput, setPromptInput] = useState("");
+  const askPrompt = (title: string, defaultValue = ""): Promise<string | null> =>
+    new Promise((resolve) => {
+      setPromptInput(defaultValue);
+      setPromptReq({ title, defaultValue, resolve });
+    });
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [freezingGlobal, setFreezingGlobal] = useState<boolean>(false);
 
@@ -66,7 +86,7 @@ export function OpsConsole() {
   const tabs = visibleTabsFor(me?.permissions ?? null);
 
   async function quickEmergencyFreeze() {
-    const rawReason = prompt("Reason for emergency global payout freeze:");
+    const rawReason = await askPrompt("Reason for emergency global payout freeze:");
     if (rawReason === null) return;
     const reason = rawReason.trim();
     if (!reason) {
@@ -90,6 +110,7 @@ export function OpsConsole() {
   }
 
   return (
+    <OpsPromptContext.Provider value={askPrompt}>
     <main>
       <div className="flex-between" style={{ gap: "1rem", flexWrap: "wrap" }}>
         <div>
@@ -145,7 +166,21 @@ export function OpsConsole() {
           )}
         </>
       )}
+      {promptReq && (
+        <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <form className="panel" style={{ width: "min(440px, 92vw)", background: "#fff", padding: "1.25rem", borderRadius: "8px" }}
+            onSubmit={(e) => { e.preventDefault(); const r = promptReq; setPromptReq(null); r.resolve(promptInput); }}>
+            <h4 style={{ marginTop: 0 }}>{promptReq.title}</h4>
+            <input autoFocus value={promptInput} onChange={(e) => setPromptInput(e.target.value)} style={{ width: "100%", marginBottom: "1rem" }} />
+            <div className="flex-row" style={{ justifyContent: "flex-end", gap: "0.5rem" }}>
+              <button type="button" className="secondary" onClick={() => { const r = promptReq; setPromptReq(null); r.resolve(null); }}>Cancel</button>
+              <button type="submit">Confirm</button>
+            </div>
+          </form>
+        </div>
+      )}
     </main>
+    </OpsPromptContext.Provider>
   );
 }
 
@@ -242,6 +277,7 @@ function Overview() {
 }
 
 function Exceptions() {
+  const askPrompt = useOpsPrompt();
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -264,7 +300,7 @@ function Exceptions() {
   useEffect(() => { void load(); }, []);
 
   async function resolveItem(id: string) {
-    const raw = prompt("Resolution note");
+    const raw = await askPrompt("Resolution note");
     if (raw === null) return;
     const resolution = raw.trim();
     if (!resolution) {
@@ -317,6 +353,7 @@ function Exceptions() {
 }
 
 function Onboarding() {
+  const askPrompt = useOpsPrompt();
   const [merchants, setMerchants] = useState<MerchantView[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -341,7 +378,7 @@ function Onboarding() {
   async function review(m: MerchantView, decision: "approve" | "reject") {
     let feeBps: number | undefined;
     if (decision === "approve") {
-      const rawFee = prompt("Agreed fee in basis points (100 = 1%)", "100");
+      const rawFee = await askPrompt("Agreed fee in basis points (100 = 1%)", "100");
       if (rawFee === null) return;
       const trimmed = rawFee.trim();
       if (!trimmed) {
@@ -559,6 +596,7 @@ export const ACTION_LABELS: Record<string, string> = {
 };
 
 function MakerChecker({ canApprove }: { canApprove: boolean }) {
+  const askPrompt = useOpsPrompt();
   const [proposals, setProposals] = useState<MakerCheckerProposal[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>("PENDING");
   const [loading, setLoading] = useState<boolean>(true);
@@ -583,7 +621,7 @@ function MakerChecker({ canApprove }: { canApprove: boolean }) {
   useEffect(() => { void load(); }, [statusFilter]);
 
   async function review(id: string, action: "approve" | "reject") {
-    const rawNote = prompt(action === "approve" ? "Approval note (optional)" : "Rejection reason");
+    const rawNote = await askPrompt(action === "approve" ? "Approval note (optional)" : "Rejection reason");
     if (rawNote === null) return;
     const note = rawNote.trim();
     if (action === "reject" && !note) {
@@ -916,6 +954,7 @@ interface MerchantControlsData {
 }
 
 function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
+  const askPrompt = useOpsPrompt();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MerchantSearchRow[]>([]);
   const [searching, setSearching] = useState<boolean>(true);
@@ -954,7 +993,7 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
   };
 
   async function toggleFreeze(id: string, frozen: boolean) {
-    const rawReason = prompt(frozen ? "Reason for freezing merchant payouts:" : "Reason for unfreezing merchant payouts:");
+    const rawReason = await askPrompt(frozen ? "Reason for freezing merchant payouts:" : "Reason for unfreezing merchant payouts:");
     if (rawReason === null) return;
     const reason = rawReason.trim();
     if (!reason) {
@@ -979,7 +1018,7 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
   }
 
   async function revokeKey(keyId: string, merchantId: string) {
-    const rawReason = prompt("Reason for revoking this API key:");
+    const rawReason = await askPrompt("Reason for revoking this API key:");
     if (rawReason === null) return;
     const reason = rawReason.trim();
     if (!reason) {

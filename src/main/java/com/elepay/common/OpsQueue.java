@@ -118,6 +118,17 @@ public class OpsQueue {
                 .param("k", kind).param("s", subject).query(Long.class).single();
     }
 
+    public java.util.Optional<Item> find(UUID id) {
+        return db.sql("""
+                SELECT id, kind, severity, subject, details::text, status, created_at, resolved_by, resolution
+                FROM ops_item WHERE id = :id""")
+                .param("id", id)
+                .query((rs, i) -> new Item(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5), rs.getString(6),
+                        rs.getObject(7, java.time.OffsetDateTime.class), rs.getString(8), rs.getString(9)))
+                .optional();
+    }
+
     @Transactional
     public void resolve(UUID id, String actor, String resolution) {
         int updated = db.sql("""

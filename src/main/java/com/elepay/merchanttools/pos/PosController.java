@@ -261,7 +261,8 @@ public class PosController {
             @RequestHeader("Idempotency-Key") String key, @RequestBody TenderPaymentRequest req) {
         var order = verifyOrder(orderId);
         if (req.tenderType() != TenderType.CASH)
-            throw ApiException.unprocessable("digital_payment_unverified", "Use ELEPAY checkout for digital payment; POS capture is not connected yet");
+            throw ApiException.unprocessable("digital_payment_use_tenders",
+                    "Use POST /v1/pos/orders/{orderId}/tenders (MoMo/GhQR/Card) or /nfc-tap for digital payments");
         return idempotency.execute("pos-cash:" + order.merchantId() + ":" + orderId, key, req,
                 PosOrderService.PosOrder.class,
                 () -> orderService.addTenderPayment(orderId, req.tenderType(), req.amountPesewas(), req.reference()));

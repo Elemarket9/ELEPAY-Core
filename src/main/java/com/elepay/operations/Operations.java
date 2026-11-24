@@ -38,6 +38,15 @@ class Operations {
     public Map<String, String> resolve(@PathVariable UUID id, @Valid @RequestBody Resolution request) {
         Actor actor = Actor.current();
         actor.requireOps();
+        var item = queue.find(id).orElseThrow(() -> com.elepay.common.ApiException.notFound("Ops item not found"));
+        String kind = item.kind() == null ? "" : item.kind().toLowerCase(java.util.Locale.ROOT);
+        boolean sensitive = "high".equalsIgnoreCase(item.severity())
+                || kind.contains("recon") || kind.contains("rail") || kind.contains("payout")
+                || kind.contains("custodian") || kind.contains("security") || kind.contains("fraud")
+                || kind.contains("ledger") || kind.contains("audit");
+        if (sensitive && !actor.canManageFinance() && !actor.canFreezeRisk()) {
+            throw com.elepay.common.ApiException.forbidden("Finance or Risk/Compliance role required to resolve this exception");
+        }
         queue.resolve(id, actor.subject(), request.resolution());
         return Map.of("status", "resolved");
     }
@@ -77,7 +86,10 @@ class Operations {
 
     @GetMapping("/audit")
     public List<Map<String, Object>> audit(@RequestParam String subject) {
-        Actor.current().requireOps();
+        Actor actor = Actor.current();
+        if (!actor.canFreezeRisk()) {
+            throw com.elepay.common.ApiException.forbidden("Risk/Compliance or Operations Administrator role required for audit log");
+        }
         if (subject == null || subject.isBlank()) {
             throw com.elepay.common.ApiException.badRequest("blank_subject", "Audit subject must not be blank");
         }

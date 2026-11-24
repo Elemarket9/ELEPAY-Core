@@ -180,12 +180,13 @@ class CheckoutAuditRemediationIT extends PostgresTestBase {
         UUID attemptId = UUID.fromString(pay.body().get("attemptId").asString());
         UUID railTxId = checkoutService.railTxOf(attemptId);
 
-        // Reset processing (clears checkout.payment_method to NULL)
+        // Reset processing while rail_transaction is in flight must be rejected with 409 rail_in_flight (prevents double-charge)
         var reset = api.call("POST", "/v1/merchants/" + marketplace + "/checkouts/" + ref + "/reset-payment",
                 mpOwner, null, null);
-        assertThat(reset.status()).isEqualTo(200);
+        assertThat(reset.status()).isEqualTo(409);
 
-        // Late RailEvents.Succeeded arrives -> must fall back to payment_attempt.method without NPE
+        // Even if payment_method is NULL on checkout, late RailEvents.Succeeded must fall back to payment_attempt.method without NPE
+        db.sql("UPDATE checkout SET payment_method = NULL WHERE reference = :ref").param("ref", ref).update();
         new org.springframework.transaction.support.TransactionTemplate(txManager).executeWithoutResult(status ->
                 events.publishEvent(new RailEvents.Succeeded(
                         railTxId, "sandbox", "charge", "checkout", attemptId, 5_000L, 0L)));

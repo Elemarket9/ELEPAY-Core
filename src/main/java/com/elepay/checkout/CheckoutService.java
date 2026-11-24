@@ -466,10 +466,24 @@ class CheckoutService {
     @Transactional
     void resetProcessing(UUID merchantId, String reference) {
         Checkout c = load(reference, true);
-        if (!c.collectorId().equals(merchantId) && c.allocations().stream().noneMatch(a -> a.merchantId().equals(merchantId))) {
+        if (!c.collectorId().equals(merchantId)) {
             throw ApiException.notFound("Checkout not found");
         }
         if (c.status().equals("paid")) throw ApiException.conflict("already_paid", "A paid checkout cannot be reset");
+        List<UUID> pendingRailTxs = db.sql("""
+                SELECT rail_tx FROM payment_attempt
+                WHERE checkout_id = :c AND status = 'pending' AND rail_tx IS NOT NULL""")
+                .param("c", c.id()).query(UUID.class).list();
+        for (UUID railTxId : pendingRailTxs) {
+            var txOpt = rails.find(railTxId);
+            if (txOpt.isPresent()) {
+                String rs = txOpt.get().status();
+                if ("created".equals(rs) || "pending".equals(rs) || "unknown".equals(rs) || "succeeded".equals(rs)) {
+                    throw ApiException.conflict("rail_in_flight",
+                            "Cannot reset checkout while payment rail transaction is " + rs + "; wait for finality or run rail recovery");
+                }
+            }
+        }
         db.sql("UPDATE payment_attempt SET status = 'failed' WHERE checkout_id = :c AND status = 'pending'")
                 .param("c", c.id()).update();
         db.sql("UPDATE checkout SET status = 'open', payment_method = NULL WHERE id = :id AND status = 'processing'")

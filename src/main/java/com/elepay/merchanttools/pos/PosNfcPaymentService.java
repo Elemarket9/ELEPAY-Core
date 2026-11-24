@@ -206,8 +206,20 @@ public class PosNfcPaymentService {
         String scheme = (req.cardScheme() != null && !req.cardScheme().isBlank())
                 ? req.cardScheme().trim().toUpperCase(Locale.ROOT)
                 : emv.cardScheme();
-        String authCode = "NFC" + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase(Locale.ROOT);
-        String status = "PENDING_SETTLEMENT";
+
+        // 4. Submit real card rail attempt through ELEPAY Checkout & RailTransactions (never fabricate local auth codes)
+        var railRes = checkoutGateway.startAndSubmitRail(checkoutRef, "card", null, scheme.toLowerCase(Locale.ROOT), null);
+        if (railRes != null && "failed".equalsIgnoreCase(railRes.railStatus())) {
+            throw ApiException.unprocessable("card_rail_declined",
+                    railRes.message() != null ? railRes.message() : "Card acquiring rail declined NFC tap");
+        }
+        String rawRef = (railRes != null && railRes.attemptId() != null)
+                ? railRes.attemptId().toString().replace("-", "").toUpperCase(Locale.ROOT)
+                : authId.toString().replace("-", "").toUpperCase(Locale.ROOT);
+        String authCode = rawRef.substring(0, Math.min(16, rawRef.length()));
+        String status = (railRes != null && "paid".equalsIgnoreCase(railRes.status()))
+                ? "SETTLED"
+                : "PENDING_SETTLEMENT";
 
         db.sql("""
             INSERT INTO pos_nfc_authorization (

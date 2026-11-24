@@ -67,6 +67,21 @@ class FxApi {
             throw new ApiException(org.springframework.http.HttpStatus.UNAUTHORIZED, "invalid_callback",
                     "Partner callbacks must include a timestamp and nonce");
         }
+        try {
+            long epochSec = ts.trim().matches("^\\d+$")
+                    ? Long.parseLong(ts.trim())
+                    : java.time.Instant.parse(ts.trim()).getEpochSecond();
+            long skew = Math.abs(java.time.Instant.now().getEpochSecond() - epochSec);
+            if (skew > 300) {
+                throw new ApiException(org.springframework.http.HttpStatus.UNAUTHORIZED, "stale_callback",
+                        "Partner callback timestamp is outside the 5-minute replay window");
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new ApiException(org.springframework.http.HttpStatus.UNAUTHORIZED, "invalid_callback",
+                    "Partner callback timestamp must be Unix epoch seconds or ISO-8601 instant");
+        }
         FxPartner.Notification n;
         try {
             n = fx.partner(partner).verify(headers(request), body);

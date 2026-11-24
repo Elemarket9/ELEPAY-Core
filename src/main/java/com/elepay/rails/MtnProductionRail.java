@@ -180,8 +180,71 @@ public class MtnProductionRail implements PaymentRail {
     }
 
     @Override public Result refund(Refund request) {
-        // Refund product contract must be confirmed separately; never substitute an unrelated transfer.
-        return Result.unknown("MTN refund operation not configured");
+        if (request.amount() <= 0 || !"GHS".equals(request.currency())) {
+            return new Result(Status.FAILED, null, request.amount(), request.currency(), null, null, "Invalid Ghana currency or refund amount");
+        }
+        if (request.originalRailReference() == null || request.originalRailReference().isBlank()) {
+            return new Result(Status.FAILED, null, request.amount(), request.currency(), null, null, "Original MTN reference required for refund");
+        }
+        if (!isConfigured("payout")) {
+            return Result.unavailable("MTN Mobile Money disbursement credentials not configured for refund");
+        }
+        long start = System.currentTimeMillis();
+        try {
+            Credentials c = disbursement;
+            String token = getOrRefreshToken("disbursement", c, false);
+            String id = providerId("refund", request.reference()).toString();
+            String note = sanitizeNote("ELEPAY refund " + request.originalReference(), request.reference());
+            Map<String, Object> body = Map.of(
+                    "amount", BigDecimal.valueOf(request.amount(), 2).toPlainString(),
+                    "currency", request.currency(),
+                    "externalId", request.reference(),
+                    "payerMessage", note,
+                    "payeeNote", note,
+                    "referenceIdToRefund", request.originalRailReference());
+
+            HttpRequest req = buildRequest("/disbursement/v2_0/refund")
+                    .header("Authorization", "Bearer " + token)
+                    .header("Ocp-Apim-Subscription-Key", c.subscription())
+                    .header("X-Reference-Id", id)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();
+            Response response = send(req);
+            if (response.status() == 401) {
+                token = getOrRefreshToken("disbursement", c, true);
+                req = buildRequest("/disbursement/v2_0/refund")
+                        .header("Authorization", "Bearer " + token)
+                        .header("Ocp-Apim-Subscription-Key", c.subscription())
+                        .header("X-Reference-Id", id)
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();
+                response = send(req);
+            }
+            long latency = System.currentTimeMillis() - start;
+            boolean accepted = response.status() == 202 && !isNonJsonWafResponse(response);
+            health.record(name(), accepted, false, latency);
+            if (isNonJsonWafResponse(response)) {
+                return Result.unknown("MTN refund rejected by upstream WAF (non-JSON HTML response)");
+            }
+            if (response.status() == 202) {
+                return new Result(Status.PENDING, id, request.amount(), request.currency(), 0L, null,
+                        "MTN refund accepted; awaiting verified status");
+            }
+            if (response.status() == 400 || response.status() == 422) {
+                return new Result(Status.FAILED, null, request.amount(), request.currency(), 0L, null,
+                        "MTN rejected refund: " + response.body());
+            }
+            return Result.unknown("MTN refund submission outcome requires status verification");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Result.unknown("MTN refund interrupted");
+        } catch (HttpTimeoutException e) {
+            health.record(name(), false, true, System.currentTimeMillis() - start);
+            return Result.unknown("MTN refund network timeout; verify status with query");
+        } catch (Exception e) {
+            health.record(name(), false, false, System.currentTimeMillis() - start);
+            return Result.unknown("MTN refund communication unavailable: " + e.getMessage());
+        }
     }
 
     private Result submit(String direction, String ref, long amount, String currency, String phone, String description) {
@@ -258,8 +321,8 @@ public class MtnProductionRail implements PaymentRail {
     }
 
     @Override public Result query(String direction, String reference, String railReference) {
-        if (!Set.of("charge", "payout").contains(direction)) return Result.unknown("Unsupported MTN query");
-        if (!isConfigured(direction))
+        if (!Set.of("charge", "payout", "refund").contains(direction)) return Result.unknown("Unsupported MTN query");
+        if (!isConfigured("refund".equals(direction) ? "payout" : direction))
             return Result.unavailable("MTN Mobile Money credentials not configured for " + direction);
         long start = System.currentTimeMillis();
         try {
@@ -337,7 +400,13 @@ public class MtnProductionRail implements PaymentRail {
 
     private String product(String direction) { return direction.equals("charge") ? "collection" : "disbursement"; }
     private Credentials credentials(String direction) { return direction.equals("charge") ? collection : disbursement; }
-    private String path(String direction) { return direction.equals("charge") ? "/collection/v1_0/requesttopay" : "/disbursement/v1_0/transfer"; }
+    private String path(String direction) {
+        return switch (direction) {
+            case "charge" -> "/collection/v1_0/requesttopay";
+            case "refund" -> "/disbursement/v2_0/refund";
+            default -> "/disbursement/v1_0/transfer";
+        };
+    }
 
     private HttpRequest.Builder buildRequest(String path) {
         return HttpRequest.newBuilder(base.resolve(path)).timeout(Duration.ofSeconds(15))

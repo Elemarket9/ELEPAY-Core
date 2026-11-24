@@ -145,7 +145,11 @@ class OpsRbacAndControlsIT extends PostgresTestBase {
             assertThat(combined).contains("%");
         }
 
-        var blankAuditRes = api.call("GET", "/v1/ops/audit?subject=   ", supportToken, null, null);
+        var supportAuditRes = api.call("GET", "/v1/ops/audit?subject=merchant:1", supportToken, null, null);
+        assertThat(supportAuditRes.status()).isEqualTo(403);
+
+        String riskToken = api.token("risk-audit-" + UUID.randomUUID().toString().substring(0, 6), "risk_compliance");
+        var blankAuditRes = api.call("GET", "/v1/ops/audit?subject=   ", riskToken, null, null);
         assertThat(blankAuditRes.status()).isEqualTo(400);
     }
 
