@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "./api";
+import { api, ApiError, safeApiPath } from "./api";
 import { formatSplitReceipt, safeRedirectUrl, checkoutPhase, checkoutAttemptResolved, checkoutExpired, validCheckoutTotal, decodeCheckoutAttempt } from "./Checkout";
 import { formatDualControlOutcome, ledgerIntegrityClear, canReviewProposal, canResolveException } from "./Ops";
 import { sanitizeCsvCell, transactionStatusClass, decodePendingTransfer, confirmationExpired, statementWindow, searchWalletHistory } from "./Wallet";
-import { safeReturnPath } from "./auth";
+import { safeReturnPath, validIssuer } from "./auth";
 import { destinationReady, summarizePaidLines, safeMerchantCsv, decodeMerchantAction, merchantStatusClass } from "./Merchant";
 
 describe("Audit Remediation Tests", () => {
@@ -226,3 +226,5 @@ describe("Audit Remediation Tests", () => {
 });
 
 describe("Operations safety checks",()=>{it("requires independent nonexpired proposal review",()=>{const p={status:"PENDING",proposedBy:"maker",expiresAt:"2027-01-01T00:00:00Z"};expect(canReviewProposal(p,"checker",true,0)).toBe(true);expect(canReviewProposal(p,"maker",true,0)).toBe(false);expect(canReviewProposal(p,"checker",false,0)).toBe(false);expect(canReviewProposal(p,"checker",true,Date.parse(p.expiresAt))).toBe(false);});it("checks every currency for ledger imbalance",()=>{expect(ledgerIntegrityClear({accountsWithDrift:0,unbalancedTransactions:0,netByCurrency:{GHS:0}})).toBe(true);expect(ledgerIntegrityClear({accountsWithDrift:0,unbalancedTransactions:0,netByCurrency:{GHS:1}})).toBe(false);});it("restricts financial exceptions",()=>{const p={canApproveMakerChecker:false,canFreezeRisk:false,canManageFinance:false,canOnboardMerchants:false,canManageSupport:true};expect(canResolveException({severity:"low",kind:"fraud"},p)).toBe(false);expect(canResolveException({severity:"low",kind:"support"},p)).toBe(true);});});
+
+describe("Stage 8 browser security",()=>{it("rejects normalized traversal and encoded path separators",()=>{for(const p of ["/v1/../ops","/v1/%2e%2e/ops","/v1/%2fsecret","/v1/wallet#fragment","//outside.example/x"])expect(safeApiPath(p)).toBe(false);expect(safeApiPath("/v1/ops/audit?subject=merchant%3Aabc")).toBe(true);});it("requires a trustworthy OIDC issuer",()=>{expect(validIssuer("https://id.example/realm")).toBe(true);expect(validIssuer("http://id.example")).toBe(false);expect(validIssuer("https://user:pass@id.example")).toBe(false);expect(validIssuer("http://localhost:8080",true)).toBe(true);});});

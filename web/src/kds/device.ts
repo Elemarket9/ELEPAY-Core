@@ -1,4 +1,4 @@
-import { api, ApiError, type CallOptions } from "../api";
+import { api, ApiError, safeApiPath, type CallOptions } from "../api";
 
 /**
  * A paired kitchen device. Pairing gives the device its own kitchen-only key, so it keeps working after
@@ -37,10 +37,12 @@ export type KitchenCall = <T>(path: string, options?: CallOptions) => Promise<T>
 export function kitchenClient(device: DeviceCredential | null): KitchenCall {
   if (!device) return api;
   return async <T,>(path: string, options: CallOptions = {}): Promise<T> => {
-    const method = options.method ?? (options.body === undefined ? "GET" : "POST");
+    if(!safeApiPath(path)||!path.startsWith("/v1/restaurant/kds/"))throw new ApiError(403,"invalid_device_path","Kitchen device requests are restricted to kitchen endpoints.");
+    const method = (options.method ?? (options.body === undefined ? "GET" : "POST")).toUpperCase();
     const body = options.body === undefined ? "" : JSON.stringify(options.body);
     const headers: Record<string, string> = { Accept: "application/json", "X-Elepay-Api-Key": device.apiKey };
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
+    if(options.idempotencyKey)headers["Idempotency-Key"]=options.idempotencyKey;
     if (method !== "GET") {
       const url = new URL(path, window.location.origin);
       const timestamp = String(Math.floor((Date.now() + clockOffsetMs) / 1000));
@@ -49,9 +51,9 @@ export function kitchenClient(device: DeviceCredential | null): KitchenCall {
       headers["X-Elepay-Nonce"] = nonce;
       headers["X-Elepay-Signature-Version"] = "2";
       headers["X-Elepay-Signature"] = await sign(device.signingSecret,
-        canonicalV2([timestamp, method, url.pathname, url.search.replace(/^\?/, "") || null, nonce, null, body]));
+        canonicalV2([timestamp, method, url.pathname, url.search.replace(/^\?/, "") || null, nonce, options.idempotencyKey??null, body]));
     }
-    const response = await fetch(path, { method, headers, body: options.body === undefined ? undefined : body });
+    const response = await fetch(path, { method, headers, cache:"no-store", redirect:"error", credentials:"omit", signal:options.signal??AbortSignal.timeout(30000), body: options.body === undefined ? undefined : body });
     const text = await response.text();
     const data = text ? JSON.parse(text) : null;
     if (!response.ok) throw new ApiError(response.status, data?.code ?? "error", data?.message ?? data?.detail ?? response.statusText);

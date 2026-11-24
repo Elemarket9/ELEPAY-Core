@@ -185,3 +185,6 @@ body:not(.kitchen-body) .home-hero h1 { font-size: clamp(2rem,4.8vw,3.7rem); max
 
 /* Operations control room */
 .ops-workspace .ops-content{min-width:0}.ops-workspace .ops-freeze-state{display:flex;align-items:center;flex-wrap:wrap;gap:1rem;margin:1rem 0}.ops-workspace .ops-content .grid{display:block;overflow-x:auto;max-width:100%}.ops-workspace .grid td{overflow-wrap:anywhere}.ops-workspace .ops-proposal .code-box{max-height:350px;overflow:auto;white-space:pre-wrap}.ops-workspace .ops-content>section{margin-bottom:1rem}.ops-workspace .cards .big{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+
+/* Keyboard navigation and safe content wrapping */
+.skip-link{position:absolute;left:1rem;top:0;transform:translateY(-150%);z-index:2000;background:#fff;color:var(--green);padding:.75rem;border:2px solid var(--green);border-radius:8px}.skip-link:focus{transform:translateY(.5rem)}.site-header .skip-link{margin:0}.mono,.code-box{overflow-wrap:anywhere}.notice[role=alert]{border-left:4px solid #b45309}button:disabled{opacity:.7}input[type=checkbox],input[type=radio]{accent-color:var(--green)}@media(forced-colors:active){button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid Highlight}.tag{border:1px solid ButtonText}}

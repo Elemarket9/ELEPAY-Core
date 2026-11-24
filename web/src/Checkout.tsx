@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import QRCode from "qrcode";
+
 import { api, ApiError, newKey } from "./api";
 import { devSignInEnabled, getToken, oidcEnabled, signIn } from "./auth";
 import { formatMoney, normalizeGhanaPhone, parseMoney } from "./money";
@@ -189,7 +189,7 @@ export function Checkout({ reference }: { reference: string }) {
     if (!showQr) return;
     let active = true;
     setQrError(false); setQrCodeUrl(null);
-    QRCode.toDataURL(window.location.origin + "/pay/" + reference, { margin: 2, width: 220 })
+    import("qrcode").then(({default:QRCode})=>QRCode.toDataURL(window.location.origin + "/pay/" + reference, { margin: 2, width: 220 }))
       .then(url => { if (active) setQrCodeUrl(url); })
       .catch(() => { if (active) setQrError(true); });
     return () => { active = false; };

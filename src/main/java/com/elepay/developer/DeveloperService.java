@@ -62,14 +62,14 @@ public class DeveloperService {
     public record WebhookEndpointCreated(UUID id, String url, String secret, String environment, String description,
                                          List<String> eventTypes, boolean active, OffsetDateTime createdAt) {}
 
-    public record WebhookEndpointView(UUID id, String url, String secret, String environment, String description,
+    public record WebhookEndpointView(UUID id, String url, String environment, String description,
                                       List<String> eventTypes, boolean active, int failureCount,
                                       OffsetDateTime lastDeliveryAt, OffsetDateTime createdAt) {}
 
     public record WebhookDeliveryLogView(UUID id, UUID deliveryId, UUID endpointId, UUID eventId, UUID merchantId,
-                                         String eventType, String requestUrl, String requestHeaders,
-                                         String requestPayload, Integer responseCode, String responseHeaders,
-                                         String responseBody, int durationMs, String status, int attemptNumber,
+                                         String eventType, String requestUrl, @com.fasterxml.jackson.annotation.JsonIgnore String requestHeaders,
+                                         @com.fasterxml.jackson.annotation.JsonIgnore String requestPayload, Integer responseCode, @com.fasterxml.jackson.annotation.JsonIgnore String responseHeaders,
+                                         @com.fasterxml.jackson.annotation.JsonIgnore String responseBody, int durationMs, String status, int attemptNumber,
                                          boolean isManualRetry, OffsetDateTime createdAt) {}
 
     public record ReplayResult(UUID newLogId, boolean success, int statusCode, String responseBody, int durationMs) {}
@@ -166,7 +166,7 @@ public class DeveloperService {
     public List<WebhookEndpointView> listWebhooks(UUID merchantId, String environment) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
         return webhooks.endpoints(merchantId, environment).stream().map(e -> new WebhookEndpointView(e.id(), e.url(),
-                e.secret(), e.environment(), e.description(), e.eventTypes(), e.active(), e.failureCount(),
+                e.environment(), e.description(), e.eventTypes(), e.active(), e.failureCount(),
                 e.lastDeliveryAt(), e.createdAt())).toList();
     }
 

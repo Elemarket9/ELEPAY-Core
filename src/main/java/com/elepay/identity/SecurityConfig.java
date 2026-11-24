@@ -6,7 +6,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
@@ -81,8 +80,8 @@ class SecurityConfig {
                             @Value("${management.server.port:0}") int managementPort,
                             @Value("${elepay.security.trusted-proxies:}") String trustedProxies)
             throws Exception {
-        boolean isProd = env != null && Arrays.stream(env.getActiveProfiles())
-                .anyMatch(p -> "prod".equalsIgnoreCase(p) || "production".equalsIgnoreCase(p));
+        boolean isProd = env != null && env.acceptsProfiles(org.springframework.core.env.Profiles.of("prod", "production"));
+        String oidcOrigin = trustedOidcOrigin(env == null ? null : env.getProperty("spring.security.oauth2.resourceserver.jwt.issuer-uri"), isProd);
 
         CompositeFilter preAuthFilters = new CompositeFilter();
         preAuthFilters.setFilters(List.of(
@@ -98,12 +97,12 @@ class SecurityConfig {
                 .headers(h -> h
                         .contentSecurityPolicy(csp -> csp.policyDirectives(
                                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-                                + "img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; "
+                                + "img-src 'self' data:; connect-src 'self'" + oidcOrigin + "; font-src 'self'; object-src 'none'; "
                                 + "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"))
                         .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31_536_000))
                         .frameOptions(f -> f.deny())
                         .referrerPolicy(r -> r.policy(org.springframework.security.web.header.writers
-                                .ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
+                                .ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
                         .addHeaderWriter(new org.springframework.security.web.header.writers.StaticHeadersWriter(
                                 "Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(self)")))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -136,6 +135,18 @@ class SecurityConfig {
                 .addFilterBefore(preAuthFilters, BearerTokenAuthenticationFilter.class)
                 .addFilterAfter(requestSigningFilter, BearerTokenAuthenticationFilter.class);
         return http.build();
+    }
+
+    static String trustedOidcOrigin(String issuer, boolean production) {
+        if (issuer == null || issuer.isBlank()) return "";
+        try {
+            var uri = java.net.URI.create(issuer);
+            String host = uri.getHost();
+            if (host == null || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) return "";
+            boolean local = java.util.Set.of("localhost", "127.0.0.1", "[::1]", "::1").contains(host.toLowerCase(java.util.Locale.ROOT));
+            if (!"https".equalsIgnoreCase(uri.getScheme()) && !( !production && local && "http".equalsIgnoreCase(uri.getScheme()))) return "";
+            return " " + uri.getScheme().toLowerCase(java.util.Locale.ROOT) + "://" + (host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host) + (uri.getPort() == -1 ? "" : ":" + uri.getPort());
+        } catch (IllegalArgumentException ex) { return ""; }
     }
 
     /** Maps the OIDC {@code roles} claim (and realm roles from Keycloak) to authorities. */

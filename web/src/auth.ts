@@ -7,18 +7,27 @@ import type { UserManager } from "oidc-client-ts";
  */
 const issuer = import.meta.env.VITE_OIDC_ISSUER as string | undefined;
 const clientId = import.meta.env.VITE_OIDC_CLIENT_ID as string | undefined;
+export function validIssuer(value: string | undefined, dev = false): boolean {
+  if(!value)return false;
+  try{const u=new URL(value);return !u.username&&!u.password&&!u.search&&!u.hash&&(u.protocol==="https:"||(dev&&u.protocol==="http:"&&["localhost","127.0.0.1","[::1]"].includes(u.hostname)));}catch{return false;}
+}
+export const SESSION_EXPIRED = "elepay:session-expired";
+export function notifySessionExpired(){if(typeof window!=="undefined")window.dispatchEvent(new Event(SESSION_EXPIRED));}
 
 let managerPromise: Promise<UserManager> | null = null;
 
 /** The OIDC client is loaded only when sign-in is configured and needed, keeping checkout pages small. */
 function oidc(): Promise<UserManager> | null {
-  if (!issuer || !clientId) return null;
+  if (!issuer || !clientId || !validIssuer(issuer,import.meta.env.DEV)) return null;
   managerPromise ??= import("oidc-client-ts").then(({ UserManager, WebStorageStateStore }) => new UserManager({
     authority: issuer,
     client_id: clientId,
     redirect_uri: window.location.origin + "/app/callback",
     post_logout_redirect_uri: window.location.origin,
     response_type: "code",
+    automaticSilentRenew: false,
+    monitorSession: false,
+    stateStore: new WebStorageStateStore({ store: window.sessionStorage }),
     scope: "openid profile",
     userStore: new WebStorageStateStore({ store: window.sessionStorage }),
   }));
@@ -27,9 +36,9 @@ function oidc(): Promise<UserManager> | null {
 
 const DEV_KEY = "elepay.devToken";
 
-export const oidcEnabled = Boolean(issuer && clientId);
+export const oidcEnabled = Boolean(validIssuer(issuer,import.meta.env.DEV) && clientId?.trim());
 // Production bundles must never fall back to development token issuance.
-export const devSignInEnabled = import.meta.env.DEV && !oidcEnabled;
+export const devSignInEnabled = import.meta.env.DEV && !issuer && !clientId;
 
 export function safeReturnPath(state: unknown): string {
   if (typeof state !== "string" || !state.startsWith("/") || state.startsWith("//") || /[\\\u0000-\u001f\u007f]/.test(state)) return "/";
@@ -78,6 +87,7 @@ export function completeSignIn(): Promise<string> {
 
 export async function signOut(): Promise<void> {
   const pending = oidc();
-  if (pending) await (await pending).signoutRedirect();
   sessionStorage.removeItem(DEV_KEY);
+  if(pending){const manager=await pending;const user=await manager.getUser();await manager.removeUser();notifySessionExpired();await manager.signoutRedirect({id_token_hint:user?.id_token});}
+  else notifySessionExpired();
 }
