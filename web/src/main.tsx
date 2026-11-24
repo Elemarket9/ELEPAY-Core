@@ -143,9 +143,9 @@ function App() {
       <main className="home" id="main-content">
         <section className="home-hero">
           <div className="hero-copy"><p className="eyebrow">GHANA-FIRST FINANCIAL TECHNOLOGY</p><h1>Payments for everyday life and business.</h1><p>Manage your wallet, collect payments and connect your business to ELEPAY.</p><div className="hero-actions"><a className="action-link" href="/app">Open personal wallet</a><a className="action-link outline" href="/merchant">Business dashboard</a></div></div>
-          <form className="panel merchant-pay" onSubmit={(e) => { e.preventDefault(); const code = String(new FormData(e.currentTarget).get("code") ?? "").trim(); if (/^\\d{6}$/.test(code)) window.location.assign(`/pay/m/${code}`); }}>
+          <form className="panel merchant-pay" onSubmit={(e) => { e.preventDefault(); const code = String(new FormData(e.currentTarget).get("code") ?? "").trim(); if (/^\d{6}$/.test(code)) window.location.assign(`/pay/m/${code}`); }}>
             <p className="eyebrow">PAY A MERCHANT</p><h2>Enter merchant code</h2><p className="muted">Review the merchant and payment amount before approving.</p>
-            <label>Six-digit merchant code<input name="code" inputMode="numeric" pattern="\\d{6}" maxLength={6} autoComplete="off" placeholder="000000" required /></label>
+            <label>Six-digit merchant code<input name="code" inputMode="numeric" pattern="\d{6}" maxLength={6} autoComplete="off" placeholder="000000" required /></label>
             <button type="submit">Continue to payment</button>
           </form>
         </section>
