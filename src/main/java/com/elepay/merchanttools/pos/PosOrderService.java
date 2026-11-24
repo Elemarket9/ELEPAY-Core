@@ -411,6 +411,10 @@ public class PosOrderService {
         long amount = Math.subtractExact(order.totalPesewas(), order.paidPesewas());
         if ("PAID".equals(order.status()) || amount <= 0)
             throw ApiException.conflict("order_paid", "Order already paid");
+        if (db.sql("SELECT EXISTS (SELECT 1 FROM pos_checkout_link WHERE order_id = :id AND status = 'open')")
+                .param("id", orderId).query(Boolean.class).single()) {
+            throw ApiException.conflict("digital_payment_active", "Resolve existing split checkouts before requesting the whole balance");
+        }
         UUID linkId = UUID.randomUUID();
         String ref = checkout.createSplitAware(order.merchantId(), order.branchId(), linkId, amount, null, actor);
         db.sql("""
@@ -474,6 +478,7 @@ public class PosOrderService {
         Link linkRecord;
         if (existing.isPresent()) {
             linkRecord = existing.get();
+            if (linkRecord.amount() != amount) throw ApiException.conflict("pos_payment_mismatch", "Existing tender has a different amount; resolve it before requesting another");
             if ("applied".equals(linkRecord.status())) {
                 return new TenderResult(orderId, order.status(), req.tenderType(), linkRecord.amount(),
                         linkRecord.id(), linkRecord.checkoutRef(), null, "paid",
