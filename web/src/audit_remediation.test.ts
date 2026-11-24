@@ -4,6 +4,7 @@ import { formatSplitReceipt, safeRedirectUrl, checkoutPhase, checkoutAttemptReso
 import { formatDualControlOutcome } from "./Ops";
 import { sanitizeCsvCell, transactionStatusClass, decodePendingTransfer, confirmationExpired, statementWindow, searchWalletHistory } from "./Wallet";
 import { safeReturnPath } from "./auth";
+import { destinationReady, summarizePaidLines, safeMerchantCsv, decodeMerchantAction, merchantStatusClass } from "./Merchant";
 
 describe("Audit Remediation Tests", () => {
   afterEach(() => {
@@ -167,6 +168,27 @@ describe("Audit Remediation Tests", () => {
     expect(searchWalletHistory(rows,"","failed")).toEqual([rows[1]]);
     expect(rows).toHaveLength(2);
     expect(sanitizeCsvCell("  =1+1")).toContain("'  =1+1");
+  });
+
+  it("excludes processing allocations from paid analytics",()=>{
+    const line={amount:1000,fee:100,net:900,refunded:200,disputed:0};
+    expect(summarizePaidLines([{...line,paidAt:null},{...line,paidAt:"2026-11-24T00:00:00Z"}])).toEqual({count:1,gross:1000,fee:100,net:900,refunded:200,disputed:0});
+  });
+  it("rejects cooling-off, removed and unconfirmed settlement destinations",()=>{
+    const d={status:"active",verification:"verified",coolingOffUntil:null,oobVerificationStatus:"confirmed"};
+    expect(destinationReady(d,0)).toBe(true);
+    expect(destinationReady({...d,status:"removed"},0)).toBe(false);
+    expect(destinationReady({...d,oobVerificationStatus:"pending_oob"},0)).toBe(false);
+    expect(destinationReady({...d,coolingOffUntil:"2026-11-24T00:00:00Z"},0)).toBe(false);
+  });
+  it("preserves refund retry identity and prevents spreadsheet formula injection",()=>{
+    const action={kind:"refund",key:"key",reference:"CHK-1",line:0,amount:500,reason:"Returned"};
+    expect(decodeMerchantAction(JSON.stringify(action),"refund")).toEqual(action);
+    expect(()=>decodeMerchantAction(JSON.stringify(action),"withdraw")).toThrow();
+    expect(()=>decodeMerchantAction(JSON.stringify({...action,amount:-1}),"refund")).toThrow();
+    expect(safeMerchantCsv("  =1+1")).toContain("'  =1+1");
+    expect(safeMerchantCsv(-200)).toBe("-200");
+    expect(merchantStatusClass("returned")).toBe("failed");
   });
 
   describe("Ops.tsx dual-control proposal handling", () => {
