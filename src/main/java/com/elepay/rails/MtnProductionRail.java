@@ -53,6 +53,11 @@ public class MtnProductionRail implements PaymentRail {
         AuthenticationWafException() { super("MTN authentication rejected by upstream WAF"); }
     }
 
+    /** MTN refused to issue an access token (bad credentials, disabled user, or an error status). */
+    private static final class TokenRejectedException extends IllegalStateException {
+        TokenRejectedException(String message) { super(message); }
+    }
+
     private static class CachedToken {
         final String token;
         final Instant expiresAt;
@@ -124,8 +129,12 @@ public class MtnProductionRail implements PaymentRail {
     }
 
     /**
-     * Sanitizes {@code payerMessage} / {@code payeeNote} for MTN MoMo's F5 ASM WAF,
-     * which rejects requests containing {@code &} or HTML/script metacharacters.
+     * Sanitizes {@code payerMessage} / {@code payeeNote} for MTN MoMo's F5 ASM WAF. The WAF blocks the
+     * whole request (HTML "Request Rejected" page) when a note contains any of
+     * {@code ! # $ % & ' ( ) * ; ? [ ] ^ ` { | } ~ < > " \}, so ordinary text such as "Order #12" or
+     * "Refund (item 2)" would otherwise fail. Verified against the MTN sandbox WAF: letters (including
+     * accented and Ghanaian letters), digits, space and {@code + , - . / : @ _} pass. Everything else
+     * is replaced with a space (an allow-list, so new WAF-sensitive characters cannot slip through).
      */
     public static String sanitizeNote(String note, String fallbackRef) {
         String raw = (note == null || note.isBlank())
@@ -133,7 +142,9 @@ public class MtnProductionRail implements PaymentRail {
                 : note;
         String cleaned = raw
                 .replace("&", " and ")
-                .replaceAll("[<>\"'\\\\;\\p{Cntrl}]", " ")
+                .replace("%", " percent ")
+                .replace("#", " no ")
+                .replaceAll("[^\\p{L}\\p{N} +,\\-./:@_]", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
         if (cleaned.isEmpty()) {
@@ -153,6 +164,11 @@ public class MtnProductionRail implements PaymentRail {
     @Override public String name() { return "mtn"; }
 
     @Override public boolean supports(String direction, String channel, String network) {
+        if ("refund".equals(direction)) {
+            // Refunds go back through the rail that took the payment; callers (e.g. checkout refunds)
+            // do not repeat the network, so accept a null network for MoMo refunds.
+            return "momo".equalsIgnoreCase(channel) && (network == null || "mtn".equalsIgnoreCase(network));
+        }
         return Set.of("charge", "payout").contains(direction) && "momo".equalsIgnoreCase(channel)
                 && "mtn".equalsIgnoreCase(network);
     }
@@ -196,9 +212,16 @@ public class MtnProductionRail implements PaymentRail {
             return Result.unavailable("MTN Mobile Money disbursement credentials not configured for refund");
         }
         long start = System.currentTimeMillis();
+        Credentials c = disbursement;
+        String token;
         try {
-            Credentials c = disbursement;
-            String token = getOrRefreshToken("disbursement", c, false);
+            token = getOrRefreshToken("disbursement", c, false);
+        } catch (Exception e) {
+            // Nothing has been sent to MTN yet: report UNAVAILABLE so the refund fails cleanly instead of
+            // sitting in UNKNOWN recovery for hours.
+            return preSubmissionFailure(e, start, "refund");
+        }
+        try {
             String id = providerId("refund", request.reference()).toString();
             String note = sanitizeNote("ELEPAY refund " + request.originalReference(), request.reference());
             Map<String, Object> body = Map.of(
@@ -207,7 +230,7 @@ public class MtnProductionRail implements PaymentRail {
                     "externalId", request.reference(),
                     "payerMessage", note,
                     "payeeNote", note,
-                    "referenceIdToRefund", request.originalRailReference());
+                    "referenceIdToRefund", referenceIdToRefund(request));
 
             HttpRequest req = buildRequest("/disbursement/v2_0/refund")
                     .header("Authorization", "Bearer " + token)
@@ -217,7 +240,11 @@ public class MtnProductionRail implements PaymentRail {
                     .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();
             Response response = send(req);
             if (response.status() == 401) {
-                token = getOrRefreshToken("disbursement", c, true);
+                try {
+                    token = getOrRefreshToken("disbursement", c, true);
+                } catch (Exception e) {
+                    return preSubmissionFailure(e, start, "refund"); // the 401 means MTN did not accept it
+                }
                 req = buildRequest("/disbursement/v2_0/refund")
                         .header("Authorization", "Bearer " + token)
                         .header("Ocp-Apim-Subscription-Key", c.subscription())
@@ -254,16 +281,55 @@ public class MtnProductionRail implements PaymentRail {
         }
     }
 
+    /**
+     * MTN's {@code referenceIdToRefund} is the X-Reference-Id UUID of the original request-to-pay. ELEPAY
+     * stores MTN's {@code financialTransactionId} as the rail reference once a charge succeeds, and MTN
+     * rejects that value with HTTP 400. The original X-Reference-Id is derived deterministically from the
+     * ELEPAY reference, so recompute it; fall back to the stored rail reference only if it already is a UUID.
+     */
+    static String referenceIdToRefund(Refund request) {
+        if (request.originalReference() != null && !request.originalReference().isBlank()) {
+            return providerId("charge", request.originalReference()).toString();
+        }
+        return request.originalRailReference();
+    }
+
+    /** Failure before any payment request reached MTN (token/authentication stage). Never ambiguous. */
+    private Result preSubmissionFailure(Exception e, long start, String what) {
+        if (e instanceof InterruptedException) {
+            Thread.currentThread().interrupt();
+        }
+        health.record(name(), false, e instanceof HttpTimeoutException, System.currentTimeMillis() - start);
+        String reason = e instanceof AuthenticationWafException
+                ? "MTN authentication rejected by upstream WAF"
+                : e instanceof HttpTimeoutException ? "MTN authentication timed out"
+                : e instanceof TokenRejectedException ? e.getMessage()
+                : "MTN authentication unavailable";
+        log.warn("MTN {} not sent: {}", what, reason);
+        return Result.unavailable(reason + "; " + what + " was not sent to MTN");
+    }
+
     private Result submit(String direction, String ref, long amount, String currency, String phone, String description) {
         if (amount <= 0 || !"GHS".equals(currency))
             return new Result(Status.FAILED, null, amount, currency, null, null, "Invalid Ghana currency or amount");
         long start = System.currentTimeMillis();
         long fee = calculateFee(amount);
+        String msisdn;
         try {
-            String msisdn = References.msisdn(phone);
-            String product = product(direction);
-            Credentials c = credentials(direction);
-            String token = getOrRefreshToken(product, c, false);
+            msisdn = References.msisdn(phone);
+        } catch (RuntimeException invalidPhone) {
+            // Definitively rejected before anything is sent: never leave it UNKNOWN for recovery.
+            return new Result(Status.FAILED, null, amount, currency, null, null, "Invalid Ghana MTN phone number");
+        }
+        String product = product(direction);
+        Credentials c = credentials(direction);
+        String token;
+        try {
+            token = getOrRefreshToken(product, c, false);
+        } catch (Exception e) {
+            return preSubmissionFailure(e, start, direction);
+        }
+        try {
             String id = providerId(direction, ref).toString();
             String note = sanitizeNote(description, ref);
             Map<String, Object> body = Map.of(
@@ -287,7 +353,11 @@ public class MtnProductionRail implements PaymentRail {
             // Handle token expiration/refresh (401 Unauthorized)
             if (response.status() == 401) {
                 log.info("MTN token expired during submit, refreshing token for {}", product);
-                token = getOrRefreshToken(product, c, true);
+                try {
+                    token = getOrRefreshToken(product, c, true);
+                } catch (Exception e) {
+                    return preSubmissionFailure(e, start, direction); // the 401 means MTN did not accept it
+                }
                 req = buildRequest(path(direction))
                         .header("Authorization", "Bearer " + token)
                         .header("Ocp-Apim-Subscription-Key", c.subscription())
@@ -339,7 +409,7 @@ public class MtnProductionRail implements PaymentRail {
             String token = getOrRefreshToken(product, c, false);
             String id = providerId(direction, reference).toString();
 
-            HttpRequest req = buildRequest(path(direction) + "/" + id)
+            HttpRequest req = buildRequest(statusPath(direction) + "/" + id)
                     .header("Authorization", "Bearer " + token)
                     .header("Ocp-Apim-Subscription-Key", c.subscription())
                     .GET().build();
@@ -349,7 +419,7 @@ public class MtnProductionRail implements PaymentRail {
             if (response.status() == 401) {
                 log.info("MTN token expired during query, refreshing token for {}", product);
                 token = getOrRefreshToken(product, c, true);
-                req = buildRequest(path(direction) + "/" + id)
+                req = buildRequest(statusPath(direction) + "/" + id)
                         .header("Authorization", "Bearer " + token)
                         .header("Ocp-Apim-Subscription-Key", c.subscription())
                         .GET().build();
@@ -390,9 +460,12 @@ public class MtnProductionRail implements PaymentRail {
         if (!reference.equals(node.path("externalId").asString("")))
             return Result.unknown("MTN external reference mismatch");
         String status = node.path("status").asString("");
-        if ("PENDING".equals(status)) return new Result(Status.PENDING, null, null, null, null, null, "MTN payment pending");
+        // CREATED: MTN registered the request but the customer prompt is not yet live. Not terminal.
+        if ("PENDING".equals(status) || "CREATED".equals(status)) {
+            return new Result(Status.PENDING, null, null, null, null, null, "MTN payment pending");
+        }
         if ("FAILED".equals(status) || "REJECTED".equals(status)) {
-            return new Result(Status.FAILED, null, null, null, null, null, "MTN payment failed");
+            return new Result(Status.FAILED, null, null, null, null, null, failureMessage(node.path("reason")));
         }
         if (!"SUCCESSFUL".equals(status)) return Result.unknown("Unknown MTN status");
         try {
@@ -404,6 +477,36 @@ public class MtnProductionRail implements PaymentRail {
             long fee = calculateFee(amount);
             return new Result(Status.SUCCEEDED, financialId, amount, currency, fee, null, "MTN authenticated status confirmed");
         } catch (RuntimeException e) { return Result.unknown("MTN amount evidence malformed"); }
+    }
+
+    /**
+     * Keeps MTN's failure reason so customers and operators can tell a decline from an expired prompt
+     * or a float shortfall. Only known codes are echoed; anything else is reported generically.
+     */
+    static String failureMessage(JsonNode reasonNode) {
+        String code = reasonNode.isObject() ? reasonNode.path("code").asString("") : reasonNode.asString("");
+        code = code == null ? "" : code.trim().toUpperCase(Locale.ROOT);
+        String text = switch (code) {
+            case "APPROVAL_REJECTED" -> "customer declined the MoMo prompt";
+            case "EXPIRED" -> "customer did not approve the MoMo prompt in time (expired)";
+            case "PAYER_NOT_FOUND" -> "MoMo wallet not found for this number";
+            case "PAYEE_NOT_FOUND" -> "recipient MoMo wallet not found for this number";
+            case "NOT_ENOUGH_FUNDS" -> "not enough funds in the paying wallet";
+            case "PAYER_LIMIT_REACHED" -> "paying wallet limit reached";
+            case "PAYEE_NOT_ALLOWED_TO_RECEIVE" -> "recipient wallet is not allowed to receive";
+            case "NOT_ALLOWED" -> "MTN did not allow this transaction";
+            case "INTERNAL_PROCESSING_ERROR" -> "MTN internal processing error";
+            case "SERVICE_UNAVAILABLE" -> "MTN service unavailable";
+            case "COULD_NOT_PERFORM_TRANSACTION" -> "MTN could not perform the transaction";
+            case "TRANSACTION_CANCELED" -> "transaction cancelled";
+            default -> null;
+        };
+        return text == null ? "MTN payment failed" : "MTN payment failed: " + text + " (" + code + ")";
+    }
+
+    private String statusPath(String direction) {
+        // MTN serves refund status only on v1_0; GET /disbursement/v2_0/refund/{id} is a 404.
+        return "refund".equals(direction) ? "/disbursement/v1_0/refund" : path(direction);
     }
 
     private String product(String direction) { return direction.equals("charge") ? "collection" : "disbursement"; }
@@ -438,7 +541,14 @@ public class MtnProductionRail implements PaymentRail {
         if (isNonJsonWafResponse(response)) {
             throw new AuthenticationWafException();
         }
-        if (response.status() != 200) throw new IllegalStateException("MTN authentication rejected with status " + response.status());
+        if (response.status() != 200) {
+            // MTN answers wrong credentials with HTTP 500 {"error":"login_failed"}, not 401.
+            String error = "";
+            try { error = json.readTree(response.body()).path("error").asString(""); } catch (RuntimeException ignored) {}
+            throw new TokenRejectedException("login_failed".equals(error)
+                    ? "MTN rejected the API user or API key (login_failed)"
+                    : "MTN authentication rejected with status " + response.status());
+        }
         JsonNode root;
         try {
             root = json.readTree(response.body());

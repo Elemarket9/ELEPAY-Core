@@ -387,6 +387,13 @@ public class RailTransactions {
         }
         db.sql("UPDATE rail_transaction SET status = 'created', updated_at = now() WHERE id = :id")
                 .param("id", t.id()).update();
+        // A rail that keeps refusing the same request (e.g. a WAF block or a permanent validation error
+        // returned as HTTP 5xx) would otherwise be resent forever without anyone being told.
+        if (checkAttempts(t.id()) >= MAX_UNKNOWN_CHECKS) {
+            ops.raise("rail_resubmission_loop", "high", "rail_tx:" + t.reference(), Map.of(
+                    "rail", t.rail(), "direction", t.direction(), "amount", t.amount(),
+                    "attempts", checkAttempts(t.id())));
+        }
     }
 
     private int checkAttempts(UUID id) {

@@ -326,7 +326,63 @@ class MtnProductionRailTest {
         startServer(wafHtml, 202, "", 200, "{}");
         MtnProductionRail freshRail = new MtnProductionRail(json, health, serverUri, collCreds, disbCreds, client);
         PaymentRail.Result tokenWafResult = freshRail.charge(charge);
-        assertThat(tokenWafResult.status()).isEqualTo(PaymentRail.Status.UNKNOWN);
+        // Token blocked before any payment request was sent: unambiguous, so UNAVAILABLE (fails cleanly).
+        assertThat(tokenWafResult.status()).isEqualTo(PaymentRail.Status.UNAVAILABLE);
         assertThat(tokenWafResult.message()).containsIgnoringCase("WAF");
+    }
+
+    // ---- regressions found by live MTN sandbox testing ----
+
+    @Test
+    void sanitizeNoteRemovesEveryCharacterTheMtnWafBlocks() {
+        // Blocked by the sandbox WAF: ! # $ % & ' ( ) * ; ? [ ] ^ ` { | } ~
+        String note = MtnProductionRail.sanitizeNote("Order #45 (2 items)! 50% off? [x] {y} |z| ~a^ `b` $c *d;", "EP");
+        assertThat(note).doesNotContainPattern("[!#$%&'()*;?\\[\\]^`{|}~<>\"\\\\]");
+        assertThat(MtnProductionRail.sanitizeNote("Order #45 - Accra, Ghana", "EP")).isEqualTo("Order no 45 - Accra, Ghana");
+        assertThat(MtnProductionRail.sanitizeNote("Kɔfi Ŋmɛ paid GHS 10.00 / ref: EPC1", "EP"))
+                .isEqualTo("Kɔfi Ŋmɛ paid GHS 10.00 / ref: EPC1");
+    }
+
+    @Test
+    void createdStatusIsPendingAndFailureReasonIsKept() {
+        var created = json.readTree("{\"externalId\":\"EPC1\",\"status\":\"CREATED\"}");
+        assertThat(MtnProductionRail.parseStatus(created, "EPC1").status()).isEqualTo(PaymentRail.Status.PENDING);
+        var declined = json.readTree("{\"externalId\":\"EPC1\",\"status\":\"FAILED\",\"reason\":\"APPROVAL_REJECTED\"}");
+        assertThat(MtnProductionRail.parseStatus(declined, "EPC1").message()).contains("declined", "APPROVAL_REJECTED");
+        var expired = json.readTree("{\"externalId\":\"EPC1\",\"status\":\"FAILED\",\"reason\":{\"code\":\"EXPIRED\"}}");
+        assertThat(MtnProductionRail.parseStatus(expired, "EPC1").message()).contains("EXPIRED");
+        var odd = json.readTree("{\"externalId\":\"EPC1\",\"status\":\"FAILED\",\"reason\":\"<script>\"}");
+        assertThat(MtnProductionRail.parseStatus(odd, "EPC1").message()).isEqualTo("MTN payment failed");
+    }
+
+    @Test
+    void refundTargetsOriginalRequestReferenceAndIsSupportedWithoutNetwork() {
+        var refund = new PaymentRail.Refund("EPR1", "EPC1", "1440473424", 100, "GHS", "0241234567", null);
+        assertThat(MtnProductionRail.referenceIdToRefund(refund))
+                .isEqualTo(MtnProductionRail.providerId("charge", "EPC1").toString());
+        var rail = new MtnProductionRail(json, health, URI.create("http://127.0.0.1:1"),
+                new MtnProductionRail.Credentials("u", "k", "s"), new MtnProductionRail.Credentials("u", "k", "s"), null);
+        assertThat(rail.supports("refund", "momo", null)).isTrue();
+        assertThat(rail.supports("refund", "momo", "telecel")).isFalse();
+    }
+
+    @Test
+    void rejectedCredentialsAndInvalidPhoneFailWithoutBecomingUnknown() throws Exception {
+        testServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        testServer.createContext("/collection/token/", exchange -> {
+            byte[] bytes = "{\"error\":\"login_failed\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(500, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+        });
+        testServer.start();
+        serverUri = URI.create("http://127.0.0.1:" + testServer.getAddress().getPort());
+        var creds = new MtnProductionRail.Credentials("u", "wrong", "s");
+        var rail = new MtnProductionRail(json, health, serverUri, creds, creds, null);
+        var charge = new PaymentRail.Charge("EPC-BAD", 100, "GHS", "momo", "0241234567", "mtn", null, null, "x", null);
+        var result = rail.charge(charge);
+        assertThat(result.status()).isEqualTo(PaymentRail.Status.UNAVAILABLE);
+        assertThat(result.message()).contains("login_failed");
+        var badPhone = new PaymentRail.Charge("EPC-PH", 100, "GHS", "momo", "12345", "mtn", null, null, "x", null);
+        assertThat(rail.charge(badPhone).status()).isEqualTo(PaymentRail.Status.FAILED);
     }
 }
