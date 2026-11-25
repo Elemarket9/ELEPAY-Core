@@ -1,5 +1,5 @@
 import { canonicalV2, hmacSha256Hex } from "./hmac";
-import type { DeviceCredential } from "./types";
+import type { DeviceCredential, WaiterDeviceCredential } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -191,8 +191,22 @@ export class ElepayClient {
     });
   }
 
+  /** Pairs a waiter's phone with the one-time code a manager created for that waiter. */
+  async pairWaiterDevice(merchantCode: string, code: string, deviceName: string): Promise<WaiterDeviceCredential> {
+    return this.call<WaiterDeviceCredential>("/v1/public/waiter/pair", {
+      method: "POST",
+      anonymous: true,
+      body: { merchantCode: merchantCode.trim(), code: code.replace(/\s/g, ""), deviceName: deviceName.trim() || "Waiter phone" },
+    });
+  }
+
+  /** Execute an API request as a paired waiter phone, signed exactly like a kitchen device. */
+  async callAsWaiterDevice<T>(device: WaiterDeviceCredential, path: string, options: CallOptions = {}): Promise<T> {
+    return this.callAsKitchenDevice<T>(device, path, options);
+  }
+
   /** Execute an API request authenticated as a paired KDS device with HMAC-SHA256 v2 request signing. */
-  async callAsKitchenDevice<T>(device: DeviceCredential, path: string, options: CallOptions = {}): Promise<T> {
+  async callAsKitchenDevice<T>(device: Pick<DeviceCredential, "apiKey" | "signingSecret">, path: string, options: CallOptions = {}): Promise<T> {
     const method = (options.method ?? (options.body === undefined ? "GET" : "POST")).toUpperCase();
     const body = options.body === undefined ? "" : JSON.stringify(options.body);
     const headers: Record<string, string> = {

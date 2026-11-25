@@ -18,6 +18,14 @@ import java.util.*;
 public final class ProportionalAllocation {
     private ProportionalAllocation() {}
 
+    /** Exact floor of amount times basis points without intermediate long overflow. */
+    public static long basisPoints(long amount, int bps) {
+        if (amount < 0 || bps < 0 || bps > 10_000)
+            throw new IllegalArgumentException("Amount must be non-negative and basis points between 0 and 10000");
+        return Math.addExact(Math.multiplyExact(amount / 10_000L, bps),
+                Math.multiplyExact(amount % 10_000L, bps) / 10_000L);
+    }
+
     /**
      * Allocates {@code totalMinor} units across the given {@code weights}.
      *

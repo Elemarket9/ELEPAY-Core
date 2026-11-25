@@ -200,6 +200,41 @@ public class ApiKeys {
         return new Created(id, prefix, secret, scopes, signingSecret, "kitchen", List.of());
     }
 
+    /**
+     * Credential for a paired waiter phone ({@code wd_live_<8hex>_<40hex>}). Reaches only {@link WaiterDevicePaths}
+     * at the gateway; the waiter it acts for is resolved per request from the pairing record, and access ends as
+     * soon as that person is no longer a waiter of the merchant.
+     */
+    @Transactional
+    public Created createWaiterDevice(UUID merchantId, String label, String createdBy) {
+        byte[] bytes = new byte[24];
+        RANDOM.nextBytes(bytes);
+        String prefix = "wd_live_" + HexFormat.of().formatHex(bytes, 0, 4);
+        String secret = prefix + "_" + HexFormat.of().formatHex(bytes, 4, 24);
+        byte[] signingBytes = new byte[32];
+        RANDOM.nextBytes(signingBytes);
+        String signingSecret = "sec_" + HexFormat.of().formatHex(signingBytes);
+        UUID id = UUID.randomUUID();
+        List<String> scopes = List.of("collect", "view");
+        String storedSigningSecret = protectSigningSecret(id, signingSecret);
+        db.sql("""
+                INSERT INTO api_credential (id, prefix, secret_hash, merchant_id, label, created_by, scopes,
+                    signing_secret, key_type, allowed_ips)
+                VALUES (:id, :prefix, :hash, :merchant, :label, :by, :scopes, :signing_secret, 'waiter', '{}')""")
+                .param("id", id).param("prefix", prefix).param("hash", Idempotency.sha256(secret))
+                .param("merchant", merchantId).param("label", label).param("by", createdBy)
+                .param("scopes", scopes.toArray(String[]::new)).param("signing_secret", storedSigningSecret)
+                .update();
+        return new Created(id, prefix, secret, scopes, signingSecret, "waiter", List.of());
+    }
+
+    /** Revokes a waiter phone credential; returns false if no such waiter device belongs to the merchant. */
+    public boolean revokeWaiterDevice(UUID merchantId, UUID id) {
+        boolean waiter = db.sql("SELECT count(*) FROM api_credential WHERE id = :id AND merchant_id = :m AND key_type = 'waiter'")
+                .param("id", id).param("m", merchantId).query(Long.class).single() > 0;
+        return waiter && revoke(merchantId, id);
+    }
+
     public record KitchenDevice(UUID id, String label, String prefix, java.time.OffsetDateTime createdAt,
                                 java.time.OffsetDateTime revokedAt) {}
 
@@ -498,7 +533,7 @@ public class ApiKeys {
 
     private static boolean hasValidKeyPrefix(String secret) {
         return secret.startsWith("ek_") || secret.startsWith("pk_") || secret.startsWith("sk_") || secret.startsWith("payout_")
-                || secret.startsWith("kd_") || secret.startsWith("pos_");
+                || secret.startsWith("kd_") || secret.startsWith("pos_") || secret.startsWith("wd_");
     }
 
     private static boolean isTestKey(String secret) {
@@ -554,6 +589,7 @@ public class ApiKeys {
         if (secret.startsWith("ek_")) return "secret";
         if (secret.startsWith("kd_")) return "kitchen";
         if (secret.startsWith("pos_")) return "pos_terminal";
+        if (secret.startsWith("wd_")) return "waiter";
         return dbKeyType != null ? dbKeyType : "secret";
     }
 

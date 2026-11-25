@@ -60,6 +60,10 @@ export interface HeldCart {
 export interface PosOrder {
   id: string;
   orderNumber: string;
+  subtotalPesewas?: number;
+  discountPesewas?: number;
+  taxPesewas?: number;
+  tipPesewas?: number;
   totalPesewas: number;
   paidPesewas: number;
   changePesewas: number;
@@ -245,4 +249,34 @@ export function parseHeldCartPayload(payloadJson: string): {
   } catch {
     return null;
   }
+}
+
+export interface RegisterTotals {
+  subtotal: number;
+  discount: number;
+  tax: number;
+  paid: number;
+  /** Amount still to collect. */
+  due: number;
+  /** True when the figures come from the saved order (e.g. a waiter order), not the local cart. */
+  fromOrder: boolean;
+}
+
+/**
+ * What the register shows. Once an order exists the server's figures are the truth (a waiter order carries the
+ * restaurant's tax; the cart's tax field does not apply), so subtotal, tax and total always add up on screen.
+ */
+export function registerTotals(
+  order: PosOrder | null | undefined,
+  cart: { subtotal: number; effectiveDiscount: number; tax: number; total: number },
+): RegisterTotals {
+  if (order) {
+    const paid = order.paidPesewas ?? 0;
+    const tax = order.taxPesewas ?? 0;
+    const discount = order.discountPesewas ?? 0;
+    const tip = order.tipPesewas ?? 0;
+    const subtotal = order.subtotalPesewas ?? Math.max(0, order.totalPesewas - tax - tip + discount);
+    return { subtotal, discount, tax, paid, due: Math.max(0, order.totalPesewas - paid), fromOrder: true };
+  }
+  return { subtotal: cart.subtotal, discount: cart.effectiveDiscount, tax: cart.tax, paid: 0, due: cart.total, fromOrder: false };
 }

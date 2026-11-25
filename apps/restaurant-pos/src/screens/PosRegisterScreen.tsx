@@ -16,6 +16,7 @@ import {
   CatalogRow,
   colors,
   computeCartTotals,
+  registerTotals,
   DiningTable,
   ElepayClient,
   formatMoney,
@@ -147,8 +148,9 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
   const discountP = discount.trim() ? parseMoney(discount) : 0;
   const taxRate = Number(taxPercent);
   const calculated = computeCartTotals(cart, discountP, taxRate);
-  const { subtotal, effectiveDiscount, tax } = calculated;
-  const total = order ? Math.max(0, order.totalPesewas - order.paidPesewas) : calculated.total;
+  const { effectiveDiscount, tax } = calculated;
+  const shownTotals = registerTotals(order, calculated);
+  const total = shownTotals.due;
 
   const addItem = (row: CatalogRow) => {
     if (order) return;
@@ -528,16 +530,28 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
       <View style={styles.totalsBox}>
         <View style={styles.rowBetween}>
           <Text style={styles.mutedText}>Subtotal</Text>
-          <Text style={styles.totalVal}>{formatMoney(subtotal)}</Text>
+          <Text style={styles.totalVal}>{formatMoney(shownTotals.subtotal)}</Text>
         </View>
-        {tax > 0 && (
+        {shownTotals.discount > 0 && (
           <View style={styles.rowBetween}>
-            <Text style={styles.mutedText}>Tax ({taxPercent}%)</Text>
-            <Text style={styles.totalVal}>{formatMoney(tax)}</Text>
+            <Text style={styles.mutedText}>Discount</Text>
+            <Text style={styles.totalVal}>-{formatMoney(shownTotals.discount)}</Text>
+          </View>
+        )}
+        {shownTotals.tax > 0 && (
+          <View style={styles.rowBetween}>
+            <Text style={styles.mutedText}>{shownTotals.fromOrder ? "Tax" : `Tax (${taxPercent}%)`}</Text>
+            <Text style={styles.totalVal}>{formatMoney(shownTotals.tax)}</Text>
+          </View>
+        )}
+        {shownTotals.paid > 0 && (
+          <View style={styles.rowBetween}>
+            <Text style={styles.mutedText}>Paid</Text>
+            <Text style={styles.totalVal}>-{formatMoney(shownTotals.paid)}</Text>
           </View>
         )}
         <View style={[styles.rowBetween, { marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: colors.line }]}>
-          <Text style={styles.grandLabel}>Total</Text>
+          <Text style={styles.grandLabel}>{shownTotals.paid > 0 ? "Balance due" : "Total"}</Text>
           <Text style={styles.grandValue}>{formatMoney(total)}</Text>
         </View>
       </View>

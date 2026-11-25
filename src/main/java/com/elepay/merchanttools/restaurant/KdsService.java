@@ -35,11 +35,18 @@ public class KdsService {
     private final KitchenStationService stations;
     private final KdsPrintService printing;
 
-    public KdsService(JdbcClient db, KitchenStationService stations, KdsPrintService printing) {
+    private final org.springframework.context.ApplicationEventPublisher events;
+
+    public KdsService(JdbcClient db, KitchenStationService stations, KdsPrintService printing,
+                      org.springframework.context.ApplicationEventPublisher events) {
         this.db = db;
         this.stations = stations;
         this.printing = printing;
+        this.events = events;
     }
+
+    /** Published in the cancelling transaction after a whole kitchen ticket is cancelled. */
+    public record TicketCancelled(UUID merchantId, UUID ticketId, UUID orderId, String reason) {}
 
     public record KdsTicket(
             UUID id,
@@ -408,6 +415,9 @@ public class KdsService {
         db.sql("UPDATE restaurant_kds_item SET item_status = 'CANCELLED' WHERE ticket_id = :id AND item_status <> 'SERVED'")
                 .param("id", ticketId).update();
         printing.enqueueVoid(ticketId);
+        if (ticket.orderId() != null) {
+            events.publishEvent(new TicketCancelled(ticket.merchantId(), ticketId, ticket.orderId(), reason));
+        }
         return new BumpResult(view(ticketId), true, null);
     }
 

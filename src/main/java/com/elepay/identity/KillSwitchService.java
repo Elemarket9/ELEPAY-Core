@@ -274,7 +274,7 @@ public class KillSwitchService {
             return isModuleEnabled(CHECKOUT) ? null : CHECKOUT;
         }
         // 6c. Restaurant ordering and kitchen screens
-        if (path.startsWith("/v1/restaurant") || path.startsWith("/v1/public/kitchen")) {
+        if (path.startsWith("/v1/restaurant") || path.startsWith("/v1/public/kitchen") || path.startsWith("/v1/public/waiter")) {
             return isModuleEnabled(RESTAURANT) ? null : RESTAURANT;
         }
         // 7. Consumer Wallet / W2W / Growth

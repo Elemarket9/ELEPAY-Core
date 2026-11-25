@@ -1,6 +1,7 @@
 package com.elepay.enterprise.refund;
 
 import org.springframework.stereotype.Component;
+import com.elepay.common.ProportionalAllocation;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -46,7 +47,11 @@ public class EnterpriseItemRefundCalculator {
         long reserveReversal;
         long merchantReversal;
 
-        if (item.customMerchantReversalPesewas() != null && item.customCommissionReversalPesewas() != null) {
+        boolean custom = item.customMerchantReversalPesewas() != null || item.customCommissionReversalPesewas() != null
+                || item.customPlatformFeeReversalPesewas() != null || item.customReserveReversalPesewas() != null;
+        if (custom && (item.customMerchantReversalPesewas() == null || item.customCommissionReversalPesewas() == null))
+            throw new IllegalArgumentException("Custom refund requires merchant and commission reversals");
+        if (custom) {
             commissionReversal = item.customCommissionReversalPesewas();
             platformFeeReversal = item.customPlatformFeeReversalPesewas() != null ? item.customPlatformFeeReversalPesewas() : 0L;
             reserveReversal = item.customReserveReversalPesewas() != null ? item.customReserveReversalPesewas() : 0L;
@@ -69,9 +74,9 @@ public class EnterpriseItemRefundCalculator {
                 throw new IllegalArgumentException("Basis points must be between 0 and 10000");
             }
 
-            commissionReversal = (gross * commBps) / 10000L;
-            platformFeeReversal = (gross * platBps) / 10000L;
-            reserveReversal = (gross * resBps) / 10000L;
+            commissionReversal = ProportionalAllocation.basisPoints(gross, commBps);
+            platformFeeReversal = ProportionalAllocation.basisPoints(gross, platBps);
+            reserveReversal = ProportionalAllocation.basisPoints(gross, resBps);
 
             long totalDeductions = Math.addExact(
                     Math.addExact(commissionReversal, platformFeeReversal),

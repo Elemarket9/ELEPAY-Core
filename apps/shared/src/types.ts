@@ -81,6 +81,16 @@ export interface DiningTable {
   currentOrderId?: string | null;
 }
 
+/** Credential for a paired waiter phone; it acts for the waiter the manager paired it to. */
+export interface WaiterDeviceCredential {
+  apiKey: string;
+  signingSecret: string;
+  deviceId: string;
+  merchantId: string;
+  merchantName: string;
+  branchId: string;
+}
+
 export interface DeviceCredential {
   apiKey: string;
   signingSecret: string;
