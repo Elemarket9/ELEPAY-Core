@@ -385,4 +385,62 @@ class MtnProductionRailTest {
         var badPhone = new PaymentRail.Charge("EPC-PH", 100, "GHS", "momo", "12345", "mtn", null, null, "x", null);
         assertThat(rail.charge(badPhone).status()).isEqualTo(PaymentRail.Status.FAILED);
     }
+
+    // ---- circuit breaker must measure MTN reachability, not MTN saying yes ----
+
+    @Test
+    void mtnAnsweredCountsOnlyRealOutages() {
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(202, "", "application/json"))).isTrue();
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(400, "", null))).isTrue();
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(404, "{}", "application/json"))).isTrue();
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(409,
+                "{\"code\":\"RESOURCE_ALREADY_EXIST\"}", "application/json"))).isTrue();
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(500,
+                "{\"code\":\"NOT_ALLOWED\",\"message\":\"Authorization failed.\"}", "application/json"))).isTrue();
+        // real outages
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(503, "{\"code\":\"X\"}", "application/json"))).isFalse();
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(502, "", null))).isFalse();
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(429, "", null))).isFalse();
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(500, "Internal error", "text/plain"))).isFalse();
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(500, "", null))).isFalse();
+        assertThat(MtnProductionRail.mtnAnswered(new MtnProductionRail.Response(200,
+                "<html>Request Rejected</html>", "text/html"))).isFalse();
+    }
+
+    @Test
+    void refusedOpsLookupsAndResendsDoNotOpenTheCircuitButOutagesDo() throws Exception {
+        AtomicInteger outage = new AtomicInteger(0);
+        testServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        testServer.createContext("/disbursement/token/", ex -> reply(ex, 200,
+                "{\"access_token\":\"t\",\"token_type\":\"access_token\",\"expires_in\":3600}"));
+        testServer.createContext("/collection/token/", ex -> reply(ex, 200,
+                "{\"access_token\":\"t\",\"token_type\":\"access_token\",\"expires_in\":3600}"));
+        testServer.createContext("/disbursement/v1_0/account/balance", ex ->
+                reply(ex, outage.get() > 0 ? 503 : 500, outage.get() > 0 ? "" : "{\"code\":\"NOT_ALLOWED\",\"message\":\"Authorization failed.\"}"));
+        testServer.createContext("/collection/v1_0/requesttopay", ex ->
+                reply(ex, 409, "{\"code\":\"RESOURCE_ALREADY_EXIST\",\"message\":\"Duplicated reference id.\"}"));
+        testServer.start();
+        serverUri = URI.create("http://127.0.0.1:" + testServer.getAddress().getPort());
+        var creds = new MtnProductionRail.Credentials("u", "k", "s");
+        NetworkHealthDetector real = new NetworkHealthDetector(null);
+        var rail = new MtnProductionRail(json, real, serverUri, creds, creds, null);
+
+        for (int i = 0; i < 5; i++) {
+            assertThat(rail.getAccountBalance("payout").available()).isFalse();        // refused, shown to ops
+            rail.charge(new PaymentRail.Charge("EPC-DUP", 100, "GHS", "momo", "0241234567", "mtn", null, null, "x", null));
+        }
+        assertThat(real.isRailAvailable("mtn")).as("MTN answered every time; payments must stay available").isTrue();
+
+        outage.set(1);
+        for (int i = 0; i < 8; i++) rail.getAccountBalance("payout");                   // genuine 503 outage: 8/18 > 40%
+        assertThat(real.isRailAvailable("mtn")).as("a real outage must still open the circuit").isFalse();
+    }
+
+    private static void reply(com.sun.net.httpserver.HttpExchange ex, int status, String body) throws IOException {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().add("Content-Type", "application/json");
+        ex.sendResponseHeaders(status, bytes.length == 0 ? -1 : bytes.length);
+        if (bytes.length > 0) try (OutputStream os = ex.getResponseBody()) { os.write(bytes); }
+        ex.close();
+    }
 }

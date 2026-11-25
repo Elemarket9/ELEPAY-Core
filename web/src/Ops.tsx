@@ -1051,6 +1051,52 @@ function MakerChecker({ canApprove }: { canApprove: boolean }) {
 // -------------------------------------------------------------------------------------------------
 // Kill Switches
 // -------------------------------------------------------------------------------------------------
+export interface ModuleSwitchRow {
+  key: string;
+  label: string;
+  description: string;
+  enabled: boolean;
+}
+
+const PAYMENT_SWITCHES: Record<string, [string, string]> = {
+  "card-payments": ["Card payments", "New card payments and card tokenisation (online checkout and in-store)."],
+  "mtn-collections": ["MTN MoMo payments in", "Customers paying by MTN Mobile Money."],
+  "mtn-payouts": ["MTN MoMo payouts", "Paying merchants and customers out to MTN Mobile Money."],
+};
+
+const FEATURE_SWITCHES: Record<string, [string, string]> = {
+  checkout: ["Online checkout", "Creating and paying checkouts for online stores and marketplaces."],
+  restaurant: ["Restaurant ordering", "Floor plans, tables, orders and kitchen screens."],
+  pos: ["Point of sale (physical stores)", "POS terminals, tap-to-pay and offline sales."],
+  "consumer-wallet": ["Customer wallet", "Wallet balances, wallet-to-wallet transfers and paying with the wallet."],
+  ussd: ["USSD", "Dial-in wallet menu (needs a short code)."],
+  mandates: ["Recurring payments", "Customer mandates for subscriptions and repeat charges."],
+  fx: ["FX conversion", "Foreign-currency quotes and conversions."],
+};
+
+const NOT_IN_BUILD: Record<string, [string, string]> = {
+  lending: ["Lending and credit", "Loans, overdrafts, earned-wage access and cash advances."],
+  "virtual-cards": ["Virtual card issuing", "Issuing cards to customers (card acceptance is a payment switch above)."],
+  "bill-payments": ["Bill payments and airtime", "Utilities and airtime purchases."],
+  "agent-banking": ["Agent banking", "Cash-in and cash-out agents."],
+  "fx-trading": ["FX trading", "Trading foreign currency."],
+};
+
+/** Groups the raw switch map into labelled rows; consumer-w2w is the same switch as consumer-wallet. */
+export function groupModuleSwitches(modules: Record<string, boolean>) {
+  const row = (map: Record<string, [string, string]>, key: string): ModuleSwitchRow =>
+    ({ key, label: map[key][0], description: map[key][1], enabled: modules[key] ?? true });
+  const payments = Object.keys(PAYMENT_SWITCHES).filter((k) => k in modules).map((k) => row(PAYMENT_SWITCHES, k));
+  const features = Object.keys(FEATURE_SWITCHES).filter((k) => k in modules).map((k) => row(FEATURE_SWITCHES, k));
+  const notInBuild = Object.keys(NOT_IN_BUILD).filter((k) => k in modules).map((k) => row(NOT_IN_BUILD, k));
+  const known = new Set([...Object.keys(PAYMENT_SWITCHES), ...Object.keys(FEATURE_SWITCHES),
+    ...Object.keys(NOT_IN_BUILD), "consumer-w2w"]);
+  for (const key of Object.keys(modules)) {
+    if (!known.has(key)) features.push({ key, label: key, description: "", enabled: modules[key] });
+  }
+  return { payments, features, notInBuild };
+}
+
 interface KillSwitchStatus {
   globalFrozen: boolean;
   globalFreezeReason: string | null;
@@ -1066,6 +1112,7 @@ function KillSwitches() {
   const [reason, setReason] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmOff, setConfirmOff] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -1139,6 +1186,37 @@ function KillSwitches() {
   }
 
   const moduleEntries = status ? Object.entries(status.modules) : [];
+  const grouped = groupModuleSwitches(status?.modules ?? {});
+
+  function renderSwitchRows(rows: ModuleSwitchRow[], confirmBeforeOff: boolean) {
+    return rows.map((row) => (
+      <tr key={row.key}>
+        <td>
+          <strong>{row.label}</strong>
+          <div className="small muted">{row.description}</div>
+        </td>
+        <td><span className={`tag ${row.enabled ? "active" : "failed"}`}>{row.enabled ? "ON" : "OFF"}</span></td>
+        <td className="num">
+          {row.enabled && confirmBeforeOff && confirmOff !== row.key && (
+            <button className="small secondary" disabled={busy} onClick={() => setConfirmOff(row.key)}>Turn off</button>
+          )}
+          {row.enabled && confirmBeforeOff && confirmOff === row.key && (
+            <span className="flex-row">
+              <button className="small btn-danger" disabled={busy}
+                onClick={() => { setConfirmOff(null); void toggleModule(row.key, false); }}>Confirm turn off</button>
+              <button className="small secondary" disabled={busy} onClick={() => setConfirmOff(null)}>Cancel</button>
+            </span>
+          )}
+          {row.enabled && !confirmBeforeOff && (
+            <button className="small secondary" disabled={busy} onClick={() => void toggleModule(row.key, false)}>Turn off</button>
+          )}
+          {!row.enabled && (
+            <button className="small" disabled={busy} onClick={() => void toggleModule(row.key, true)}>Turn on</button>
+          )}
+        </td>
+      </tr>
+    ));
+  }
 
   return (
     <div>
@@ -1196,30 +1274,47 @@ function KillSwitches() {
             </section>
           </div>
 
-          <section className="panel">
-            <h3>Module Route Kill Switches</h3>
+          <section className="panel" style={{ marginBottom: "1rem" }}>
+            <h3>Payment Switches</h3>
+            <p className="small muted">
+              Turning a payment switch off stops new payments only. Payments already in progress keep being
+              checked and settled, and refunds keep working. Turning a switch back on needs a second admin's approval.
+            </p>
             <div className="table-wrap" style={{ margin: 0 }}>
               <table className="grid">
-                <thead><tr><th>Module</th><th>State</th><th /></tr></thead>
+                <thead><tr><th>Payment method</th><th>State</th><th /></tr></thead>
+                <tbody>{renderSwitchRows(grouped.payments, true)}</tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h3>Feature Switches</h3>
+            <div className="table-wrap" style={{ margin: 0 }}>
+              <table className="grid">
+                <thead><tr><th>Feature</th><th>State</th><th /></tr></thead>
                 <tbody>
-                  {moduleEntries.map(([mod, enabled]) => (
-                    <tr key={mod}>
-                      <td className="mono small"><strong>{mod}</strong></td>
-                      <td><span className={`tag ${enabled ? "active" : "failed"}`}>{enabled ? "ENABLED" : "DISABLED"}</span></td>
-                      <td className="num">
-                        <button className="small secondary" disabled={busy} onClick={() => void toggleModule(mod, !enabled)}>
-                          {enabled ? "Disable" : "Enable"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {renderSwitchRows(grouped.features, true)}
                   {moduleEntries.length === 0 && (
-                    <tr><td colSpan={3} className="muted" style={{ textAlign: "center", padding: "1.25rem" }}>No module switches configured.</td></tr>
+                    <tr><td colSpan={3} className="muted" style={{ textAlign: "center", padding: "1.25rem" }}>No switches configured.</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
           </section>
+
+          {grouped.notInBuild.length > 0 && (
+            <section className="panel" style={{ marginTop: "1rem" }}>
+              <h4>Not in this launch</h4>
+              <p className="small muted">
+                These are not part of the launch build, so they cannot be turned on here. Bringing them in needs a
+                release with ELEPAY_DORMANT_MODULES_ENABLED=true and, for lending, a Bank of Ghana digital credit licence.
+              </p>
+              <ul className="small">
+                {grouped.notInBuild.map((row) => <li key={row.key}><strong>{row.label}</strong> — {row.description}</li>)}
+              </ul>
+            </section>
+          )}
         </>
       )}
     </div>

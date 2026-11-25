@@ -274,6 +274,55 @@ public class PayoutPolicies {
         return created;
     }
 
+    /**
+     * Longest a merchant's settled (available) money may stay with ELEPAY before an alert. BoG Notice
+     * BG/GOV/SEC/2026/43 requires merchant funds to be settled to the merchant's bank account within the
+     * settlement period agreed in the merchant SLA; set this to that period.
+     */
+    private int maxHoldDays = 3;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setMaxHoldDays(@Value("${elepay.settlement.max-hold-days:3}") int maxHoldDays) {
+        this.maxHoldDays = maxHoldDays;
+    }
+
+    /**
+     * Raises a {@code merchant_settlement_overdue} alert for every merchant whose oldest unpaid settled money
+     * is older than {@link #maxHoldDays}. Money is matched first-in, first-out: the available balance is made
+     * of the most recent credits, so the oldest credit still needed to cover it dates the oldest unpaid money.
+     * Typical causes: merchant on "on request" never withdraws, no single verified destination, kill switch
+     * or velocity ceiling skipping automatic withdrawals.
+     */
+    public List<UUID> flagOverdueSettlements() {
+        java.time.OffsetDateTime cutoff = java.time.OffsetDateTime.now().minusDays(maxHoldDays);
+        List<UUID> overdue = new ArrayList<>();
+        for (UUID merchant : ledger.ownersWithBalance("merchant", "available", Ledger.GHS)) {
+            String account = Ledger.code("merchant", merchant, "available", Ledger.GHS);
+            long balance = ledger.balance(account);
+            if (balance <= 0) continue;
+            Optional<java.time.OffsetDateTime> oldest = ledger.oldestUnspentCreditAt(account);
+            if (oldest.isPresent() && oldest.get().isBefore(cutoff)) {
+                overdue.add(merchant);
+                ops.raise("merchant_settlement_overdue", "high", "merchant:" + merchant, Map.of(
+                        "availableAmount", balance,
+                        "oldestUnpaidSince", oldest.get().toString(),
+                        "maxHoldDays", maxHoldDays,
+                        "payoutMode", effective(merchant).mode()));
+            }
+        }
+        return overdue;
+    }
+
+    @Scheduled(fixedDelayString = "${elepay.settlement.overdue-check-ms:3600000}",
+            initialDelayString = "${elepay.settlement.overdue-check-ms:3600000}")
+    void scheduledOverdueCheck() {
+        if (jobLock != null) {
+            jobLock.runIfLeader("merchant-settlement-overdue", this::flagOverdueSettlements);
+        } else {
+            flagOverdueSettlements();
+        }
+    }
+
     @Scheduled(fixedDelayString = "${elepay.payouts.auto-ms:60000}", initialDelayString = "${elepay.payouts.auto-ms:60000}")
     void scheduledRun() {
         if (!autoEnabled) return;

@@ -1,2 +1,3 @@
 org.springframework.context.ApplicationContextInitializer=\
-com.elepay.common.JsonParsingLimits
+com.elepay.common.JsonParsingLimits,\
+com.elepay.common.DormantModules

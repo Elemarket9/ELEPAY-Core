@@ -107,7 +107,10 @@ public class RailTransactions {
     }
 
     public boolean available(String direction, String channel, String network) {
-        try { rails.select(direction, channel, network); return true; }
+        try {
+            String rail = rails.select(direction, channel, network);
+            return killSwitch == null || killSwitch.isRailAllowed(direction, rail);
+        }
         catch (ApiException unavailable) { return false; }
     }
 
@@ -115,6 +118,11 @@ public class RailTransactions {
     public RailTx create(String rail, String direction, String purpose, UUID purposeId, long amount,
                              Request request) {
         if (!"refund".equals(direction)) rail = rails.select(direction, request.channel(), request.network());
+        if (killSwitch != null && !killSwitch.isRailAllowed(direction, rail)) {
+            // Switched off from the admin dashboard: refuse before anything is recorded or reserved.
+            throw ApiException.unprocessable("rail_switched_off",
+                    "This payment method is temporarily switched off. Please try another method or try again later.");
+        }
         if (!rails.get(rail).supports(direction, request.channel(), request.network()))
             throw ApiException.unprocessable("rail_operation_unavailable", "This network does not support the requested operation");
         if (amount <= 0) throw ApiException.badRequest("invalid_amount", "Amount must be positive");
@@ -522,6 +530,11 @@ public class RailTransactions {
                             // A charge that was never sent is abandoned rather than sent late.
                             apply(id, safeQuery(rails.get(t.rail()), t), "recovery");
                         } else {
+                            if (killSwitch != null && !killSwitch.isRailAllowed(t.direction(), t.rail())) {
+                                log.warn("Skipping recovery resubmission of {} {}: rail switched off",
+                                        t.direction(), t.reference());
+                                continue; // stays 'created'; resent once the switch is back on
+                            }
                             if ("payout".equals(t.direction()) && killSwitch != null) {
                                 try {
                                     killSwitch.requirePayoutsAllowed(null);
