@@ -33,6 +33,41 @@
         },
         "type" : "object"
       },
+      "AccountBalance" : {
+        "properties" : {
+          "available" : {
+            "type" : "boolean"
+          },
+          "availableBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "AccountValidation" : {
+        "properties" : {
+          "active" : {
+            "type" : "boolean"
+          },
+          "checked" : {
+            "type" : "boolean"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "msisdn" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "AddModifierOptionRequest" : {
         "properties" : {
           "additionalPricePesewas" : {
@@ -4079,6 +4114,9 @@
             "format" : "uuid",
             "type" : "string"
           },
+          "hasPrinter" : {
+            "type" : "boolean"
+          },
           "merchantId" : {
             "format" : "uuid",
             "type" : "string"
@@ -5750,6 +5788,50 @@
         },
         "type" : "object"
       },
+      "RegisteredTerminal" : {
+        "properties" : {
+          "branchId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "hardwareFingerprint" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "model" : {
+            "type" : "string"
+          },
+          "pairedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "pairingCode" : {
+            "type" : "string"
+          },
+          "pairingCodeExpiresAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "serialNumber" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "RegulatoryProfile" : {
         "properties" : {
           "address" : {
@@ -6015,6 +6097,17 @@
       "ReviewRequest" : {
         "properties" : {
           "note" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "RevokeApiKeyRequest" : {
+        "properties" : {
+          "active" : {
+            "type" : "boolean"
+          },
+          "reason" : {
             "type" : "string"
           }
         },
@@ -11883,6 +11976,47 @@
         "tags" : [ "integrity-api" ]
       }
     },
+    "/v1/ops/compliance/mml-transactions" : {
+      "get" : {
+        "operationId" : "mmlTransactions",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "days",
+          "required" : false,
+          "schema" : {
+            "default" : 30,
+            "format" : "int32",
+            "type" : "integer"
+          }
+        }, {
+          "in" : "query",
+          "name" : "limit",
+          "required" : false,
+          "schema" : {
+            "default" : 500,
+            "format" : "int32",
+            "type" : "integer"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "additionalProperties" : { },
+                    "type" : "object"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "operations" ]
+      }
+    },
     "/v1/ops/custodian/config" : {
       "get" : {
         "operationId" : "getCustodianConfig",
@@ -12581,6 +12715,15 @@
             "type" : "string"
           }
         } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RevokeApiKeyRequest"
+              }
+            }
+          }
+        },
         "responses" : {
           "200" : {
             "content" : {
@@ -13133,6 +13276,67 @@
           }
         },
         "tags" : [ "observability-controller" ]
+      }
+    },
+    "/v1/ops/mtn/balance" : {
+      "get" : {
+        "operationId" : "balance",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "direction",
+          "required" : false,
+          "schema" : {
+            "default" : "payout",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AccountBalance"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "mtn-ops-controller" ]
+      }
+    },
+    "/v1/ops/mtn/validate-account" : {
+      "get" : {
+        "operationId" : "validateAccount",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "direction",
+          "required" : false,
+          "schema" : {
+            "default" : "payout",
+            "type" : "string"
+          }
+        }, {
+          "in" : "query",
+          "name" : "msisdn",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AccountValidation"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "mtn-ops-controller" ]
       }
     },
     "/v1/ops/overview" : {
@@ -13718,6 +13922,13 @@
         } ],
         "responses" : {
           "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PayrollRunRow"
+                }
+              }
+            },
             "description" : "OK"
           }
         },
@@ -13805,6 +14016,13 @@
         } ],
         "responses" : {
           "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PayrollRunRow"
+                }
+              }
+            },
             "description" : "OK"
           }
         },
@@ -14089,6 +14307,36 @@
         "tags" : [ "pos-controller" ]
       }
     },
+    "/v1/pos/orders/{orderId}/items" : {
+      "get" : {
+        "operationId" : "listOrderItems",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/PosOrderItem"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
     "/v1/pos/orders/{orderId}/nfc-tap" : {
       "post" : {
         "operationId" : "nfcTap",
@@ -14335,6 +14583,33 @@
         "tags" : [ "pos-controller" ]
       }
     },
+    "/v1/pos/orders/{orderId}/void" : {
+      "post" : {
+        "operationId" : "voidOrder",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "orderId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PosOrder"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "pos-controller" ]
+      }
+    },
     "/v1/pos/shifts/active/{terminalId}" : {
       "get" : {
         "operationId" : "getActiveShift",
@@ -14531,7 +14806,7 @@
             "content" : {
               "*/*" : {
                 "schema" : {
-                  "$ref" : "#/components/schemas/PosTerminal"
+                  "$ref" : "#/components/schemas/RegisteredTerminal"
                 }
               }
             },
