@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api } from "./api";
-import { formatMoney } from "./money";
+import { formatMoney, parseMoney } from "./money";
 import {
   IconActivity,
   IconAlertTriangle,
@@ -265,16 +265,96 @@ export function OpsConsole() {
 // -------------------------------------------------------------------------------------------------
 // System Health Status
 // -------------------------------------------------------------------------------------------------
+interface RailHealth {
+  rail: string;
+  circuitState: string;
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  timeoutRequests: number;
+  errorRate: number;
+  averageLatencyMs: number;
+}
+
+const MONITORED_RAILS = ["mtn", "telecel", "airteltigo", "ghqr", "card"] as const;
+
 function SystemHealth() {
+  const [rails, setRails] = useState<RailHealth[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const results = await Promise.all(
+        MONITORED_RAILS.map((r) =>
+          api<RailHealth>(`/v1/ops/rails/health/${r}`).catch(() => ({
+            rail: r,
+            circuitState: "UNKNOWN",
+            totalRequests: 0,
+            successfulRequests: 0,
+            failedRequests: 0,
+            timeoutRequests: 0,
+            errorRate: 0,
+            averageLatencyMs: 0,
+          })),
+        ),
+      );
+      setRails(results);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
   return (
     <div className="panel">
-      <h3>Infrastructure and Payment Rails</h3>
-      <p className="muted">
-        No authenticated live telemetry is connected to this screen. Rail uptime, ledger integrity, database health, queue backlog and webhook reliability are unavailable rather than assumed healthy.
-      </p>
-      <p className="small muted" style={{ margin: 0 }}>
-        For operational decisions, use verified runtime health metrics and reconciliation evidence.
-      </p>
+      <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
+        <div>
+          <h3 style={{ margin: 0 }}>Payment Rail Health &amp; Circuit Breakers</h3>
+          <p className="small muted" style={{ margin: "0.2rem 0 0" }}>
+            Live circuit state, error rate, timeout count, and average latency from NetworkHealthDetector.
+          </p>
+        </div>
+        <button type="button" className="secondary small" disabled={loading} onClick={() => void load()}>
+          <IconRefresh size={14} /> Refresh
+        </button>
+      </div>
+      {error && <p className="notice error" role="alert">{error}</p>}
+      <div className="table-wrap" style={{ margin: 0 }}>
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>Rail</th>
+              <th>Circuit State</th>
+              <th className="num">Requests</th>
+              <th className="num">Failed / Timeouts</th>
+              <th className="num">Error Rate</th>
+              <th className="num">Avg Latency</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rails.map((r) => {
+              const state = String(r.circuitState).toUpperCase();
+              const tone = state === "CLOSED" ? "active" : state === "HALF_OPEN" ? "pending" : "failed";
+              return (
+                <tr key={r.rail}>
+                  <td><strong>{r.rail.toUpperCase()}</strong></td>
+                  <td><span className={`tag ${tone}`}>{state}</span></td>
+                  <td className="num mono">{r.totalRequests}</td>
+                  <td className="num mono">{r.failedRequests} / {r.timeoutRequests}</td>
+                  <td className="num mono">{(Number(r.errorRate || 0) * 100).toFixed(1)}%</td>
+                  <td className="num mono">{Math.round(Number(r.averageLatencyMs || 0))} ms</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -644,6 +724,9 @@ function Disputes() {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [opening, setOpening] = useState<boolean>(false);
+  const [submittingOpen, setSubmittingOpen] = useState<boolean>(false);
+  const [form, setForm] = useState({ checkout: "", line: "0", amount: "", reason: "", caseReference: "" });
 
   const load = async () => {
     setLoading(true);
@@ -659,6 +742,38 @@ function Disputes() {
   };
 
   useEffect(() => { void load(); }, []);
+
+  async function openDispute(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+    setError(null);
+    const amount = parseMoney(form.amount);
+    const line = Number(form.line);
+    if (!form.checkout.trim() || !amount || amount <= 0 || !Number.isInteger(line) || line < 0 || !form.reason.trim()) {
+      setError("Enter a checkout reference, non-negative allocation line, valid GH₵ amount, and reason.");
+      return;
+    }
+    setSubmittingOpen(true);
+    try {
+      await api("/v1/ops/disputes", {
+        body: {
+          checkout: form.checkout.trim(),
+          line,
+          amount,
+          reason: form.reason.trim(),
+          caseReference: form.caseReference.trim() || null,
+        },
+      });
+      setForm({ checkout: "", line: "0", amount: "", reason: "", caseReference: "" });
+      setOpening(false);
+      setMsg("Dispute opened and merchant reserve held.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmittingOpen(false);
+    }
+  }
 
   async function resolve(id: string, outcome: string) {
     setBusyId(id);
@@ -679,6 +794,25 @@ function Disputes() {
 
   return (
     <>
+      <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
+        <span className="small muted">{rows.length} open dispute{rows.length === 1 ? "" : "s"}</span>
+        <button type="button" className="small" onClick={() => setOpening(!opening)}>
+          {opening ? "Close Form" : "+ Open Dispute"}
+        </button>
+      </div>
+      {opening && (
+        <form className="panel" style={{ marginBottom: "1rem" }} onSubmit={(e) => void openDispute(e)}>
+          <h4 style={{ marginTop: 0 }}>Open Chargeback / Dispute</h4>
+          <div className="grid-2">
+            <label>Checkout Reference<input className="mono" value={form.checkout} onChange={(e) => setForm({ ...form, checkout: e.target.value })} placeholder="chk_..." required /></label>
+            <label>Allocation Line #<input inputMode="numeric" value={form.line} onChange={(e) => setForm({ ...form, line: e.target.value })} required /></label>
+            <label>Disputed Amount (GH₵)<input className="mono" inputMode="decimal" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="50.00" required /></label>
+            <label>Bank / MTN Case Ref (optional)<input className="mono" value={form.caseReference} onChange={(e) => setForm({ ...form, caseReference: e.target.value })} placeholder="MML-CASE-001" /></label>
+          </div>
+          <label>Reason<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="Customer reported unauthorized debit or non-delivery" required /></label>
+          <button type="submit" disabled={submittingOpen}>{submittingOpen ? "Opening…" : "Open Dispute"}</button>
+        </form>
+      )}
       {error && <p className="notice error" role="alert">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
       {loading && rows.length === 0 && <p className="muted">Loading disputes…</p>}
@@ -1187,10 +1321,83 @@ function CustodianTrust() {
               <dd className="mono">{formatMoney(config.minReserveFloorPesewas)}</dd>
             </div>
           </dl>
+          <CustodianConfigEditor config={config} />
         </section>
       )}
 
       <MtnCompliancePanel />
+    </div>
+  );
+}
+
+function CustodianConfigEditor({ config }: { config: TrustAccountConfig }) {
+  const [open, setOpen] = useState(false);
+  const [dailyCap, setDailyCap] = useState((config.dailyOutflowCapPesewas / 100).toFixed(2));
+  const [perPayoutCap, setPerPayoutCap] = useState((config.perPayoutCapPesewas / 100).toFixed(2));
+  const [minReserve, setMinReserve] = useState((config.minReserveFloorPesewas / 100).toFixed(2));
+  const [bankBalance, setBankBalance] = useState("");
+  const [outflowFrozen, setOutflowFrozen] = useState(config.outflowFrozen);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+    setErr(null);
+    const dCap = parseMoney(dailyCap);
+    const pCap = parseMoney(perPayoutCap);
+    const mRes = parseMoney(minReserve);
+    const bBal = bankBalance.trim() ? parseMoney(bankBalance) : null;
+    if (dCap === null || pCap === null || mRes === null || (bankBalance.trim() && bBal === null)) {
+      setErr("Enter valid GH₵ amounts for all cap/floor fields.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api<Record<string, unknown>>("/v1/ops/custodian/config", {
+        method: "PUT",
+        body: {
+          dailyOutflowCapPesewas: dCap,
+          perPayoutCapPesewas: pCap,
+          minReserveFloorPesewas: mRes,
+          lastReconciledBankBalancePesewas: bBal,
+          outflowFrozen,
+        },
+      });
+      setMsg(formatDualControlOutcome(res, "Custodian trust configuration updated."));
+      setOpen(false);
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: "0.9rem" }}>
+      <button type="button" className="secondary small" onClick={() => setOpen(!open)}>
+        {open ? "Hide Config Editor" : "Edit Caps / Reconciled Bank Balance"}
+      </button>
+      {msg && <p className="notice ok" style={{ marginTop: "0.6rem" }}>{msg}</p>}
+      {err && <p className="notice error" role="alert" style={{ marginTop: "0.6rem" }}>{err}</p>}
+      {open && (
+        <form onSubmit={(e) => void save(e)} style={{ marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: "1px solid var(--line)" }}>
+          <div className="grid-2">
+            <label>Daily Outflow Cap (GH₵)<input className="mono" inputMode="decimal" value={dailyCap} onChange={(e) => setDailyCap(e.target.value)} required /></label>
+            <label>Per-Payout Cap (GH₵)<input className="mono" inputMode="decimal" value={perPayoutCap} onChange={(e) => setPerPayoutCap(e.target.value)} required /></label>
+            <label>Min Reserve Floor (GH₵)<input className="mono" inputMode="decimal" value={minReserve} onChange={(e) => setMinReserve(e.target.value)} required /></label>
+            <label>Reconciled Bank Balance (GH₵, optional)<input className="mono" inputMode="decimal" value={bankBalance} onChange={(e) => setBankBalance(e.target.value)} placeholder="Leave blank to keep" /></label>
+          </div>
+          <label className="choice" style={{ marginTop: "0.4rem" }}>
+            <input type="checkbox" checked={outflowFrozen} onChange={(e) => setOutflowFrozen(e.target.checked)} />
+            Freeze Custodian Trust Outflows
+          </label>
+          <div style={{ marginTop: "0.65rem" }}>
+            <button type="submit" className="small" disabled={busy}>{busy ? "Submitting…" : "Save Custodian Config (Dual-Control)"}</button>
+          </div>
+        </form>
+      )}
     </div>
   );
 }
@@ -1604,6 +1811,81 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
           </div>
         </section>
       )}
+
+      {canFreeze && <AuditTrailPanel />}
     </div>
+  );
+}
+
+interface AuditEntry {
+  actor: string;
+  action: string;
+  subject: string;
+  details: string;
+  created_at: string;
+}
+
+function AuditTrailPanel() {
+  const [subject, setSubject] = useState("");
+  const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [searched, setSearched] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function lookup(e: React.FormEvent) {
+    e.preventDefault();
+    if (!subject.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<AuditEntry[]>(`/v1/ops/audit?subject=${encodeURIComponent(subject.trim())}`);
+      setEntries(res);
+      setSearched(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: "1.25rem" }}>
+      <h3>Immutable Audit Trail Lookup</h3>
+      <p className="small muted">Inspect append-only compliance &amp; admin audit events by merchant, customer, or reference subject.</p>
+      <form onSubmit={(e) => void lookup(e)} className="flex-row" style={{ marginBottom: "0.75rem" }}>
+        <input
+          className="mono"
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          placeholder="Subject (e.g. merchant:UUID or customer:UUID)"
+          style={{ flex: "1 1 260px", margin: 0 }}
+        />
+        <button type="submit" className="secondary small" style={{ margin: 0 }} disabled={busy}>
+          {busy ? "Querying…" : "Search Audit Log"}
+        </button>
+      </form>
+      {error && <p className="notice error" role="alert">{error}</p>}
+      {searched && (
+        <div className="table-wrap" style={{ margin: 0 }}>
+          <table className="grid">
+            <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Subject</th><th>Details</th></tr></thead>
+            <tbody>
+              {entries.map((row, idx) => (
+                <tr key={idx}>
+                  <td className="small muted">{new Date(row.created_at).toLocaleString()}</td>
+                  <td className="small"><strong>{row.actor}</strong></td>
+                  <td className="mono small">{row.action}</td>
+                  <td className="mono small">{row.subject}</td>
+                  <td className="mono small">{row.details}</td>
+                </tr>
+              ))}
+              {entries.length === 0 && (
+                <tr><td colSpan={5} className="muted" style={{ textAlign: "center", padding: "1.25rem" }}>No audit events found for this subject.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
