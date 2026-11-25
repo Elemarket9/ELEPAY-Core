@@ -75,10 +75,17 @@ public class RailEndpoints {
         return actor.isApiKey() ? "merchant:" + actor.apiKeyMerchant() : actor.subject();
     }
 
-    /** Only the owner (or operations) can see or revoke a card token; others get 404, not a hint it exists. */
-    private void requireOwner(String token) {
+    /**
+     * Only the owner (or authorised operations) can see or revoke a card token; others get 404, not a
+     * hint it exists. Reads need a support-capable ops role; revocation needs risk/compliance.
+     */
+    private void requireOwner(String token, boolean revoke) {
         Actor actor = Actor.current();
-        if (actor.isOps()) return;
+        if (actor.isOps()) {
+            if (revoke) actor.requireFreezeRisk();
+            else actor.requireSupport();
+            return;
+        }
         String owner = vault.ownerOf(token).orElse(null);
         if (owner == null || !owner.equals(ownerKey(actor))) {
             throw ApiException.notFound("token_not_found", "Card token not found");
@@ -87,14 +94,14 @@ public class RailEndpoints {
 
     @GetMapping("/v1/rails/card/tokens/{token}")
     public CardTokenVault.TokenizedCard getToken(@PathVariable String token) {
-        requireOwner(token);
+        requireOwner(token, false);
         return vault.findByToken(token)
                 .orElseThrow(() -> ApiException.notFound("token_not_found", "Card token not found"));
     }
 
     @DeleteMapping("/v1/rails/card/tokens/{token}")
     public Map<String, String> revokeToken(@PathVariable String token) {
-        requireOwner(token);
+        requireOwner(token, true);
         vault.revoke(token);
         return Map.of("status", "revoked", "token", token);
     }
@@ -146,6 +153,7 @@ public class RailEndpoints {
     ) {
         Actor actor = Actor.current();
         actor.requireFinance();
+        validateCustodianConfig(request);
         dualControl.hold("CUSTODIAN_CONFIG", "custodian", "primary", null, Map.of(
                 "dailyOutflowCapPesewas", String.valueOf(request.dailyOutflowCapPesewas()),
                 "perPayoutCapPesewas", String.valueOf(request.perPayoutCapPesewas()),
@@ -161,5 +169,22 @@ public class RailEndpoints {
                 request.outflowFrozen(),
                 actor.subject()
         );
+    }
+
+    /** Rejects negative caps/floors and a per-payout cap above the daily cap before any proposal is held. */
+    static void validateCustodianConfig(CustodianConfigRequest request) {
+        if (request == null) {
+            throw ApiException.badRequest("invalid_custodian_config", "Configuration body is required");
+        }
+        for (Long v : new Long[] {request.dailyOutflowCapPesewas(), request.perPayoutCapPesewas(),
+                request.minReserveFloorPesewas(), request.lastReconciledBankBalancePesewas()}) {
+            if (v != null && v < 0) {
+                throw ApiException.badRequest("invalid_custodian_config", "Caps, floors and balances cannot be negative");
+            }
+        }
+        if (request.dailyOutflowCapPesewas() != null && request.perPayoutCapPesewas() != null
+                && request.perPayoutCapPesewas() > request.dailyOutflowCapPesewas()) {
+            throw ApiException.badRequest("invalid_custodian_config", "Per-payout cap cannot exceed the daily outflow cap");
+        }
     }
 }

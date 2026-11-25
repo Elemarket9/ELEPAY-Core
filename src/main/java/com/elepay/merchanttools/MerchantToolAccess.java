@@ -2,6 +2,7 @@ package com.elepay.merchanttools;
 
 import com.elepay.common.ApiException;
 import com.elepay.merchant.MerchantAccess;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -66,7 +67,7 @@ public class MerchantToolAccess {
 
     public MerchantAccess.Access viewAccess(UUID merchantId) {
         if (merchantId == null) throw ApiException.badRequest("merchant_required", "Merchant is required");
-        return merchants.require(merchantId, MerchantAccess.Permission.VIEW);
+        return bindTerminal(merchants.require(merchantId, MerchantAccess.Permission.VIEW));
     }
 
     public MerchantAccess.Access viewAccess(Resource type, UUID id) { return viewAccess(owner(type, id)); }
@@ -81,10 +82,45 @@ public class MerchantToolAccess {
 
     public MerchantAccess.Access operateAccess(UUID merchantId) {
         if (merchantId == null) throw ApiException.badRequest("merchant_required", "Merchant is required");
-        return merchants.require(merchantId, MerchantAccess.Permission.COLLECT);
+        return bindTerminal(merchants.require(merchantId, MerchantAccess.Permission.COLLECT));
     }
 
     public MerchantAccess.Access operateAccess(Resource type, UUID id) { return operateAccess(owner(type, id)); }
+
+    private record TerminalBinding(UUID id, UUID branchId) {}
+
+    private Optional<TerminalBinding> boundTerminal(MerchantAccess.Access access) {
+        if (access == null || access.actor() == null || !access.actor().isPosTerminalKey()) {
+            return Optional.empty();
+        }
+        UUID credId = access.actor().apiKeyCredentialId();
+        if (credId == null) {
+            throw ApiException.forbidden("Terminal credential is not bound to a terminal");
+        }
+        return Optional.of(db.sql("""
+                SELECT id, branch_id FROM pos_terminal
+                WHERE merchant_id = :m AND credential_id = :cred AND status <> 'REVOKED'
+                LIMIT 1
+                """)
+                .param("m", access.merchantId())
+                .param("cred", credId)
+                .query((rs, i) -> new TerminalBinding(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class)))
+                .optional()
+                .orElseThrow(() -> ApiException.forbidden("Terminal credential is not bound to an active terminal")));
+    }
+
+    private MerchantAccess.Access bindTerminal(MerchantAccess.Access access) {
+        Optional<TerminalBinding> bound = boundTerminal(access);
+        if (bound.isEmpty()) return access;
+        return new MerchantAccess.Access(access.merchantId(), access.role(), bound.get().branchId(), access.actor());
+    }
+
+    public void requireTerminal(MerchantAccess.Access access, UUID terminalId) {
+        Optional<TerminalBinding> bound = boundTerminal(access);
+        if (bound.isPresent() && !java.util.Objects.equals(bound.get().id(), terminalId)) {
+            throw ApiException.notFound("Terminal not found");
+        }
+    }
 
     public void requireBranch(MerchantAccess.Access access, UUID resourceBranchId) {
         if (access != null && access.branchScoped() && !java.util.Objects.equals(access.branchId(), resourceBranchId)) {

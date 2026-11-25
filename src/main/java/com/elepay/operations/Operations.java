@@ -229,7 +229,7 @@ class Operations {
                        rt.currency,
                        rt.status AS transaction_status,
                        CASE
-                           WHEN rt.direction = 'charge' THEN COALESCE(NULLIF(rt.request->>'description', ''), 'ELEPAY Collection')
+                           WHEN rt.direction = 'charge' THEN COALESCE(NULLIF(m.trading_name, ''), 'ELEPAY Collection')
                            ELSE COALESCE(NULLIF(rt.request->>'accountName', ''), rt.msisdn, 'MTN Recipient')
                        END AS credit_customer_name,
                        CASE
@@ -238,6 +238,9 @@ class Operations {
                        END AS debit_customer_name,
                        rt.failure_reason
                 FROM rail_transaction rt
+                LEFT JOIN payment_attempt pa ON rt.purpose = 'checkout' AND pa.id = rt.purpose_id
+                LEFT JOIN checkout c ON c.id = pa.checkout_id
+                LEFT JOIN merchant m ON m.id = c.collector_id
                 WHERE rt.rail = 'mtn'
                   AND rt.created_at >= now() - make_interval(days => :days)
                 ORDER BY rt.created_at DESC

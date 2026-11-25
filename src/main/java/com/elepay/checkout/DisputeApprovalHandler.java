@@ -25,8 +25,11 @@ class DisputeApprovalHandler implements ApprovedActionHandler {
     public void execute(MakerCheckerService.Proposal proposal) {
         UUID id = UUID.fromString(String.valueOf(proposal.payload().get("disputeId")));
         String outcome = String.valueOf(proposal.payload().get("outcome"));
-        String note = proposal.payload().get("note") == null ? null : String.valueOf(proposal.payload().get("note"));
+        Object rawNote = proposal.payload().get("note");
+        // Older proposals stored String.valueOf(null) == "null".
+        String note = rawNote == null || "null".equals(rawNote) ? null : String.valueOf(rawNote);
         checkouts.resolveDispute(proposal.reviewedBy(), id, outcome, note);
-        checkouts.disputeRefundRailTx(id).ifPresent(rails::submit);
+        // approve() is transactional: submit the rail refund only once the approval commits.
+        checkouts.disputeRefundRailTx(id).ifPresent(tx -> AfterCommit.run(() -> rails.submit(tx)));
     }
 }

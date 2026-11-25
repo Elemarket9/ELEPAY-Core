@@ -381,6 +381,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     setReceipt({ receipt: r, order: latest });
     setCart([]);
     setDiscount("");
+    setTableId("");
     setOrder(null);
     setOrderKey(newKey());
     setEvenSplit(null);
@@ -416,6 +417,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
       });
       setCart([]);
       setDiscount("");
+      setTableId("");
       setHoldCustomer("");
       await loadHeldCarts(terminal.id);
     } catch (e) {

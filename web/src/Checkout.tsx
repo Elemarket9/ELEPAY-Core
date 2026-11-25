@@ -176,9 +176,14 @@ export function Checkout({ reference }: { reference: string }) {
   async function pay() {
     setBusy(true);
     setError(null);
-    const key = localStorage.getItem(keyName) ?? newKey();
-    localStorage.setItem(keyName, key);
     try {
+      let key: string;
+      try {
+        key = localStorage.getItem(keyName) ?? newKey();
+        localStorage.setItem(keyName, key);
+      } catch {
+        key = newKey();
+      }
       if (method === "wallet") {
         if (!(await getToken())) {
           if (oidcEnabled) {

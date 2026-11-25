@@ -1100,15 +1100,19 @@ function KillSwitches() {
   }
 
   async function toggleMerchant(id: string, frozen: boolean) {
-    if (!id.trim()) { setError("Enter a merchant UUID."); return; }
+    const trimmed = id.trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+      setError("Enter a valid merchant UUID.");
+      return;
+    }
     setBusy(true);
     setMsg(null);
     setError(null);
     try {
-      const res = await api<Record<string, unknown>>(`/v1/ops/kill-switch/merchants/${id.trim()}`, {
+      const res = await api<Record<string, unknown>>(`/v1/ops/kill-switch/merchants/${encodeURIComponent(trimmed)}`, {
         body: { frozen, reason: reason.trim() || undefined },
       });
-      setMsg(formatDualControlOutcome(res, `Merchant ${id.trim()} ${frozen ? "frozen" : "unfrozen"}.`));
+      setMsg(formatDualControlOutcome(res, `Merchant ${trimmed} ${frozen ? "frozen" : "unfrozen"}.`));
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1380,6 +1384,14 @@ function CustodianConfigEditor({ config, onUpdated }: { config: TrustAccountConf
     const bBal = bankBalance.trim() ? parseMoney(bankBalance) : null;
     if (dCap === null || pCap === null || mRes === null || (bankBalance.trim() && bBal === null)) {
       setErr("Enter valid GH₵ amounts for all cap/floor fields.");
+      return;
+    }
+    if (dCap <= 0 || pCap <= 0) {
+      setErr("Daily and per-payout caps must be greater than GH₵ 0.00 (use the Outflow Frozen toggle to halt payouts).");
+      return;
+    }
+    if (pCap > dCap) {
+      setErr("Per-payout cap cannot exceed the daily outflow cap.");
       return;
     }
     setBusy(true);
@@ -1702,8 +1714,10 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
     setMsg(null);
     setError(null);
     try {
-      await api(`/v1/ops/kill-switch/api-keys/${keyId}`, { body: { active: false, reason } });
-      setMsg(`API key ${keyId} revoked immediately.`);
+      const res = await api<{ revoked?: boolean; status?: string }>(`/v1/ops/kill-switch/api-keys/${keyId}`, { body: { active: false, reason } });
+      setMsg(res.status === "ALREADY_REVOKED" || res.revoked === false
+        ? `API key ${keyId} was already revoked.`
+        : `API key ${keyId} revoked immediately.`);
       await openMerchant(merchantId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

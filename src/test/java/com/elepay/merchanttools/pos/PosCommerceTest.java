@@ -173,7 +173,7 @@ public class PosCommerceTest extends PostgresTestBase {
 
         var finalOrder = orderService.addTenderPayment(order.id(), TenderType.CASH, 2500L, "CASH-PAID");
         assertThat(finalOrder.status()).isEqualTo("PAID");
-        assertThat(finalOrder.paidPesewas()).isEqualTo(3500L);
+        assertThat(finalOrder.paidPesewas()).isEqualTo(3000L); // change is not booked as paid
         assertThat(finalOrder.changePesewas()).isEqualTo(500L); // 5.00 GHS change
 
         // Verify stock automatically deducted by 2 pies: 30 - 2 = 28 pies

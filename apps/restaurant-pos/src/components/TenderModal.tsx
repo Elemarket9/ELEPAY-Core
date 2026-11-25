@@ -31,6 +31,9 @@ import {
   TenderMode,
 } from "@elepay/mobile-core";
 
+const POLL_INTERVAL_MS = 3000;
+const POLL_MAX_MS = 5 * 60 * 1000;
+
 interface Props {
   visible: boolean;
   onClose: () => void;
@@ -62,15 +65,22 @@ export function TenderModal({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollGenRef = useRef(0);
   const completingRef = useRef(false);
   const usedFallbackRef = useRef(false);
+  // Stable idempotency key per logical attempt: a retry after a timeout must reuse the
+  // same key so the server replays instead of pushing a second charge.
+  const attemptKeyRef = useRef<{ sig: string; key: string } | null>(null);
+  const keyFor = (sig: string) => {
+    if (attemptKeyRef.current?.sig !== sig) attemptKeyRef.current = { sig, key: newKey() };
+    return attemptKeyRef.current.key;
+  };
 
   const stopPolling = useCallback(() => {
     pollGenRef.current += 1;
     if (pollRef.current) {
-      clearInterval(pollRef.current);
+      clearTimeout(pollRef.current);
       pollRef.current = null;
     }
   }, []);
@@ -81,6 +91,7 @@ export function TenderModal({
     if (!visible) {
       stopPolling();
       usedFallbackRef.current = false;
+      attemptKeyRef.current = null;
       setActiveOrder(null);
       setPendingRef(null);
       setPollStatus(null);
@@ -120,6 +131,7 @@ export function TenderModal({
         }
         stopPolling();
         usedFallbackRef.current = false;
+        attemptKeyRef.current = null;
         setPendingRef(null);
         setQrPayload(null);
         setCardPayUrl(null);
@@ -143,42 +155,51 @@ export function TenderModal({
     (ord: PosOrder, refToPoll: string, usedFallback: boolean) => {
       stopPolling();
       const gen = ++pollGenRef.current;
+      const deadline = Date.now() + POLL_MAX_MS;
       usedFallbackRef.current = usedFallback;
       setPollStatus("PENDING");
-      pollRef.current = setInterval(() => {
-        void (async () => {
+      // Self-scheduling loop: one request in flight at a time, bounded duration.
+      const tick = async () => {
+        if (pollGenRef.current !== gen) return;
+        try {
+          const st = await client.call<{ status: string; railStatus?: string | null; message?: string | null }>(
+            `/v1/public/checkouts/${refToPoll}/status`,
+            { anonymous: true },
+          );
+          if (pollGenRef.current !== gen) return;
+          setPollStatus(st.railStatus && st.status.toLowerCase() === "open" ? `${st.status} (${st.railStatus})` : st.status);
+          if (isTerminalStatusPaid(st.status)) {
+            await completeDigitalOrder(ord, usedFallback, false);
+          } else if (
+            isTerminalStatusFailed(st.status) ||
+            (st.status.toLowerCase() === "open" && isTerminalStatusFailed(st.railStatus))
+          ) {
+            stopPolling();
+            const failedLabel = (st.railStatus || st.status).toLowerCase();
+            setError(st.message || `Payment ${failedLabel}.`);
+            return;
+          }
+        } catch {
           if (pollGenRef.current !== gen) return;
           try {
-            const st = await client.call<{ status: string; railStatus?: string | null; message?: string | null }>(
-              `/v1/public/checkouts/${refToPoll}/status`,
-              { anonymous: true },
-            );
+            const latest = await client.call<PosOrder>(`/v1/pos/orders/${ord.id}`);
             if (pollGenRef.current !== gen) return;
-            setPollStatus(st.railStatus && st.status.toLowerCase() === "open" ? `${st.status} (${st.railStatus})` : st.status);
-            if (isTerminalStatusPaid(st.status)) {
+            if (isTerminalStatusPaid(latest.status)) {
               await completeDigitalOrder(ord, usedFallback, false);
-            } else if (
-              isTerminalStatusFailed(st.status) ||
-              (st.status.toLowerCase() === "open" && isTerminalStatusFailed(st.railStatus))
-            ) {
-              stopPolling();
-              const failedLabel = (st.railStatus || st.status).toLowerCase();
-              setError(st.message || `Payment ${failedLabel}.`);
             }
           } catch {
-            if (pollGenRef.current !== gen) return;
-            try {
-              const latest = await client.call<PosOrder>(`/v1/pos/orders/${ord.id}`);
-              if (pollGenRef.current !== gen) return;
-              if (isTerminalStatusPaid(latest.status)) {
-                await completeDigitalOrder(ord, usedFallback, false);
-              }
-            } catch {
-              // Keep polling across transient drops
-            }
+            // Keep polling across transient drops
           }
-        })();
-      }, 3000);
+        }
+        if (pollGenRef.current !== gen) return;
+        if (Date.now() >= deadline) {
+          pollRef.current = null;
+          setNotice("Still no rail confirmation. Ask the customer to check their wallet, then tap Verify Now.");
+          return;
+        }
+        pollRef.current = setTimeout(() => void tick(), POLL_INTERVAL_MS);
+      };
+      pollRef.current = setTimeout(() => void tick(), POLL_INTERVAL_MS);
     },
     [client, completeDigitalOrder, stopPolling],
   );
@@ -201,7 +222,7 @@ export function TenderModal({
         return;
       }
       const paid = await client.call<PosOrder>(`/v1/pos/orders/${ord.id}/payments`, {
-        idempotencyKey: newKey(),
+        idempotencyKey: keyFor(`cash:${ord.id}:${ord.paidPesewas}:${cash}`),
         body: { tenderType: "CASH", amountPesewas: cash, reference: null },
       });
       if (paid.status !== "PAID") {
@@ -232,8 +253,9 @@ export function TenderModal({
       let usedFallback = false;
       try {
         const res = await client.call<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
-          idempotencyKey: newKey(),
-          body: { tenderType: "MOMO", network: momoNetwork, phone: msisdn, amountPesewas: ord.totalPesewas },
+          idempotencyKey: keyFor(`momo:${ord.id}:${ord.paidPesewas}:${momoNetwork}:${msisdn}`),
+          // Omit amount: the server charges the remaining balance (partial payments safe).
+          body: { tenderType: "MOMO", network: momoNetwork, phone: msisdn },
         });
         const norm = normalizeTenderResult(res);
         ref = norm.checkoutRef;
@@ -252,7 +274,7 @@ export function TenderModal({
           await client.call(`/v1/public/checkouts/${dc.reference}/pay`, {
             method: "POST",
             anonymous: true,
-            idempotencyKey: newKey(),
+            idempotencyKey: keyFor(`pay:${dc.reference}:${momoNetwork}:${msisdn}`),
             body: { method: "momo", phone: msisdn, network: momoNetwork },
           });
         } else {
@@ -281,8 +303,8 @@ export function TenderModal({
       let usedFallback = false;
       try {
         const res = await client.call<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
-          idempotencyKey: newKey(),
-          body: { tenderType: "GHQR", amountPesewas: ord.totalPesewas },
+          idempotencyKey: keyFor(`ghqr:${ord.id}:${ord.paidPesewas}`),
+          body: { tenderType: "GHQR" },
         });
         const norm = normalizeTenderResult(res);
         ref = norm.checkoutRef;
@@ -323,8 +345,8 @@ export function TenderModal({
       const ord = await ensureOrder();
       setActiveOrder(ord);
       const res = await client.call<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
-        idempotencyKey: newKey(),
-        body: { tenderType: "CARD", amountPesewas: ord.totalPesewas },
+        idempotencyKey: keyFor(`card:${ord.id}:${ord.paidPesewas}`),
+        body: { tenderType: "CARD" },
       });
       const norm = normalizeTenderResult(res);
       if (isTerminalStatusPaid(norm.paymentStatus) || isTerminalStatusPaid(norm.orderStatus)) {
@@ -509,7 +531,7 @@ export function TenderModal({
                   placeholderTextColor={colors.subtle}
                 />
                 <Pressable style={styles.primaryBtn} disabled={busy} onPress={() => void startMomoPush()}>
-                  {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Send MoMo Push ({formatMoney(totalPesewas)})</Text>}
+                  {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Send MoMo Push ({formatMoney(remainingDue)})</Text>}
                 </Pressable>
               </View>
             ) : mode === "GHQR" ? (
@@ -518,7 +540,7 @@ export function TenderModal({
                   Generate a dynamic EMVCo GhQR code for the customer to scan with any Ghana bank or MoMo app.
                 </Text>
                 <Pressable style={styles.primaryBtn} disabled={busy} onPress={() => void startGhQr()}>
-                  {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Display GhQR ({formatMoney(totalPesewas)})</Text>}
+                  {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Display GhQR ({formatMoney(remainingDue)})</Text>}
                 </Pressable>
               </View>
             ) : (
@@ -527,7 +549,7 @@ export function TenderModal({
                   Create a live ELEPAY Card Checkout session for Visa / Mastercard payment.
                 </Text>
                 <Pressable style={styles.primaryBtn} disabled={busy} onPress={() => void startCard()}>
-                  {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Start Card Checkout ({formatMoney(totalPesewas)})</Text>}
+                  {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Start Card Checkout ({formatMoney(remainingDue)})</Text>}
                 </Pressable>
               </View>
             )}

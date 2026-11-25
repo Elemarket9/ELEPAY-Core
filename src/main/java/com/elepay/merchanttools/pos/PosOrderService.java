@@ -26,13 +26,17 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class PosOrderService {
     private static final Set<String> MOMO_NETWORKS = Set.of("mtn", "telecel", "airteltigo");
+    private static final Set<String> PAYABLE_STATUSES = Set.of("PENDING", "PARTIAL");
 
     private final JdbcClient db;
     private final StockService stockService;
@@ -44,6 +48,8 @@ public class PosOrderService {
     private final ObjectProvider<PosReceiptService> receiptServiceProvider;
     private final MerchantAccess merchants;
     private final ObjectMapper json;
+    /** Savepoint-scoped template so a failed stock deduction never rolls back the payment. */
+    private final TransactionTemplate savepointTx;
 
     public PosOrderService(JdbcClient db,
                            StockService stockService,
@@ -54,7 +60,8 @@ public class PosOrderService {
                            KdsService kdsService,
                            ObjectProvider<PosReceiptService> receiptServiceProvider,
                            MerchantAccess merchants,
-                           ObjectMapper json) {
+                           ObjectMapper json,
+                           PlatformTransactionManager tm) {
         this.db = db;
         this.stockService = stockService;
         this.cashierService = cashierService;
@@ -65,6 +72,22 @@ public class PosOrderService {
         this.receiptServiceProvider = receiptServiceProvider;
         this.merchants = merchants;
         this.json = json;
+        this.savepointTx = new TransactionTemplate(tm);
+        this.savepointTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
+    }
+
+    private static void requirePayable(PosOrder order) {
+        if ("PAID".equals(order.status())) {
+            throw ApiException.conflict("order_paid", "Order is already fully paid");
+        }
+        if (!PAYABLE_STATUSES.contains(order.status())) {
+            throw ApiException.conflict("order_not_payable", "Order is " + order.status() + " and cannot take payments");
+        }
+    }
+
+    private boolean hasOpenDigitalCheckout(UUID orderId) {
+        return db.sql("SELECT count(*) FROM pos_checkout_link WHERE order_id = :id AND status = 'open'")
+                .param("id", orderId).query(Long.class).single() > 0;
     }
 
     public record PosOrder(
@@ -408,8 +431,9 @@ public class PosOrderService {
             Link l = existing.get();
             return new DigitalCheckout(l.id(), orderId, l.checkoutRef(), l.amount(), l.status(), checkout.payUrl(l.checkoutRef()));
         }
+        requirePayable(order);
         long amount = Math.subtractExact(order.totalPesewas(), order.paidPesewas());
-        if ("PAID".equals(order.status()) || amount <= 0)
+        if (amount <= 0)
             throw ApiException.conflict("order_paid", "Order already paid");
         UUID linkId = UUID.randomUUID();
         String ref = checkout.createSplitAware(order.merchantId(), order.branchId(), linkId, amount, null, actor);
@@ -482,9 +506,7 @@ public class PosOrderService {
             throw ApiException.badRequest("tender_required", "Tender type is required");
         }
         PosOrder order = lockOrder(orderId);
-        if ("PAID".equals(order.status())) {
-            throw ApiException.conflict("order_paid", "Order is already fully paid");
-        }
+        requirePayable(order);
         long remaining = Math.subtractExact(order.totalPesewas(), order.paidPesewas());
         long amount = req.amountPesewas() != null ? req.amountPesewas() : remaining;
         if (amount <= 0) {
@@ -492,6 +514,10 @@ public class PosOrderService {
         }
 
         if (req.tenderType() == TenderType.CASH) {
+            // An open MoMo/card/GhQR checkout may still be approved by the customer: taking cash
+            // now would capture the order twice.
+            if (hasOpenDigitalCheckout(orderId))
+                throw ApiException.conflict("digital_payment_active", "Resolve the linked checkout before recording cash");
             PosOrder updated = recordTender(order, TenderType.CASH, amount, req.reference());
             return new TenderResult(orderId, updated.status(), TenderType.CASH, amount,
                     null, null, null, "paid", null, null, null, "Cash tender recorded", updated);
@@ -592,6 +618,16 @@ public class PosOrderService {
             return; // Already applied or cancelled
         }
         PosOrder order = lockOrder(l.orderId());
+        if (!PAYABLE_STATUSES.contains(order.status())) {
+            opsQueue.raise("pos_overpayment", "high", "pos-checkout:" + l.checkoutRef(), Map.of(
+                    "orderId", order.id().toString(),
+                    "merchantId", order.merchantId().toString(),
+                    "orderStatus", String.valueOf(order.status()),
+                    "checkoutRef", l.checkoutRef(),
+                    "amountPesewas", String.valueOf(l.amount()),
+                    "journalTx", String.valueOf(event.journalTx())));
+            return;
+        }
         TenderType tenderType = mapMethodToTenderType(event.method());
         db.sql("UPDATE pos_checkout_link SET status = 'applied', journal_tx = :journal WHERE id = :id")
                 .param("journal", event.journalTx())
@@ -618,6 +654,7 @@ public class PosOrderService {
         if (tenderType != TenderType.CASH)
             throw ApiException.unprocessable("digital_payment_unverified", "Use the linked ELEPAY checkout");
         PosOrder order = lockOrder(orderId);
+        requirePayable(order);
         if (link(orderId).isPresent())
             throw ApiException.conflict("digital_payment_active", "Resolve the linked checkout before recording cash");
         return recordTender(order, tenderType, amountPesewas, reference);
@@ -626,8 +663,14 @@ public class PosOrderService {
     private PosOrder recordTender(PosOrder order, TenderType tenderType, long amountPesewas, String reference) {
         if (amountPesewas <= 0) throw new IllegalArgumentException("Payment amount must be positive");
         UUID orderId = order.id();
-        if ("PAID".equals(order.status()))
-            throw ApiException.conflict("order_paid", "Order is already fully paid");
+        requirePayable(order);
+
+        long remaining = Math.max(0, Math.subtractExact(order.totalPesewas(), order.paidPesewas()));
+        // Cash handed over beyond the balance is returned as change: it must not be booked
+        // as paid nor added to the drawer's expected cash.
+        long applied = tenderType == TenderType.CASH ? Math.min(amountPesewas, remaining) : amountPesewas;
+        long change = tenderType == TenderType.CASH ? amountPesewas - applied : 0;
+        if (applied <= 0) throw ApiException.conflict("order_paid", "Order is already fully paid");
 
         UUID paymentId = UUID.randomUUID();
         db.sql("""
@@ -637,26 +680,18 @@ public class PosOrderService {
             .param("id", paymentId)
             .param("orderId", orderId)
             .param("tenderType", tenderType.name())
-            .param("amount", amountPesewas)
+            .param("amount", applied)
             .param("reference", reference)
             .update();
 
         // Update active shift if cash
         if (tenderType == TenderType.CASH && order.terminalId() != null) {
             cashierService.getActiveShift(order.terminalId())
-                    .ifPresent(shift -> cashierService.recordCashTender(shift.id(), amountPesewas));
+                    .ifPresent(shift -> cashierService.recordCashTender(shift.id(), applied));
         }
 
-        long newPaid = Math.addExact(order.paidPesewas(), amountPesewas);
-        long change = 0;
-        String status = "PARTIAL";
-
-        if (newPaid >= order.totalPesewas()) {
-            status = "PAID";
-            if (tenderType == TenderType.CASH && newPaid > order.totalPesewas()) {
-                change = newPaid - order.totalPesewas();
-            }
-        }
+        long newPaid = Math.addExact(order.paidPesewas(), applied);
+        String status = newPaid >= order.totalPesewas() ? "PAID" : "PARTIAL";
 
         db.sql("""
             UPDATE pos_order
@@ -741,14 +776,14 @@ public class PosOrderService {
         for (PosOrderItem item : items) {
             if (item.variantId() != null) {
                 try {
-                    stockService.deductStock(
+                    savepointTx.executeWithoutResult(st -> stockService.deductStock(
                             warehouseId,
                             item.variantId(),
                             item.quantity(),
                             MovementType.SALE_DEDUCTION,
                             orderId,
                             "POS Sale Order " + orderId
-                    );
+                    ));
                 } catch (Exception e) {
                     opsQueue.raise(
                             "pos_low_stock",
@@ -765,7 +800,8 @@ public class PosOrderService {
                     );
                 }
                 try {
-                    recipeCostingService.deductRecipeStock(item.variantId(), item.quantity(), warehouseId, orderId);
+                    savepointTx.executeWithoutResult(st ->
+                            recipeCostingService.deductRecipeStock(item.variantId(), item.quantity(), warehouseId, orderId));
                 } catch (Exception e) {
                     opsQueue.raise(
                             "pos_recipe_low_stock",

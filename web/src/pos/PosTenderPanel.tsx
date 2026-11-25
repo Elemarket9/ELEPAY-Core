@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { api, ApiError, newKey } from "../api";
+import { safeRedirectUrl } from "../Checkout";
 import { formatMoney, normalizeGhanaPhone, parseMoney } from "../money";
 import { IconBanknote, IconCreditCard, IconExternalLink, IconQrCode, IconSmartphone } from "../ui/Icons";
 import {
@@ -183,6 +184,8 @@ export function PosTenderPanel({
     ? Math.max(0, activeOrder.totalPesewas - activeOrder.paidPesewas)
     : totalPesewas;
 
+  const cashKeyRef = useRef<{ sig: string; key: string } | null>(null);
+
   async function payCash() {
     setError(null);
     const cash = parseMoney(cashInput);
@@ -195,18 +198,25 @@ export function PosTenderPanel({
       return;
     }
     setBusy(true);
+    let currentOrderId: string | null = null;
     try {
       const ord = await ensureOrder();
+      currentOrderId = ord.id;
       setActiveOrder(ord);
       const duePesewas = Math.max(0, ord.totalPesewas - ord.paidPesewas);
       if (cash < duePesewas) {
         setError(`Cash received is less than remaining balance ${formatMoney(duePesewas)}`);
         return;
       }
+      const sig = `${ord.id}:${ord.paidPesewas}:${cash}`;
+      if (cashKeyRef.current?.sig !== sig) {
+        cashKeyRef.current = { sig, key: newKey() };
+      }
       const paid = await api<PosOrder>(`/v1/pos/orders/${ord.id}/payments`, {
         body: { tenderType: "CASH", amountPesewas: cash, reference: null },
-        idempotencyKey: newKey(),
+        idempotencyKey: cashKeyRef.current.key,
       });
+      cashKeyRef.current = null;
       setActiveOrder(paid);
       if (paid.status !== "PAID") {
         const left = Math.max(0, paid.totalPesewas - paid.paidPesewas);
@@ -216,6 +226,19 @@ export function PosTenderPanel({
       await onOrderPaid(paid);
     } catch (err) {
       if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
+      if (err instanceof ApiError && err.status === 409 && err.code === "order_paid" && currentOrderId) {
+        try {
+          const latest = await api<PosOrder>(`/v1/pos/orders/${currentOrderId}`);
+          if (latest.status === "PAID") {
+            cashKeyRef.current = null;
+            setActiveOrder(latest);
+            await onOrderPaid(latest);
+            return;
+          }
+        } catch {
+          // fall through to show original error
+        }
+      }
       setError(`Sale not recorded: ${err instanceof ApiError ? err.message : String(err)}`);
     } finally {
       setBusy(false);
@@ -360,7 +383,7 @@ export function PosTenderPanel({
       }
       setPendingRef(normalized.checkoutRef);
       setCheckoutRef(normalized.checkoutRef);
-      setCardPayUrl(normalized.payUrl);
+      setCardPayUrl(safeRedirectUrl(normalized.payUrl));
       startPolling(ord, normalized.checkoutRef, false);
     } catch (err) {
       if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }

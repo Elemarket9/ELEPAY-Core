@@ -53,6 +53,16 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
     public boolean isPublishableKey() { return "publishable".equalsIgnoreCase(keyType); }
     public boolean isSecretKey() { return "secret".equalsIgnoreCase(keyType); }
     public boolean isPayoutKey() { return "payout".equalsIgnoreCase(keyType); }
+    public boolean isPosTerminalKey() { return "pos_terminal".equalsIgnoreCase(keyType); }
+
+    public UUID apiKeyCredentialId() {
+        if (!isApiKey() || subject == null || !subject.startsWith("apikey:")) return null;
+        try {
+            return UUID.fromString(subject.substring(7));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
 
     public static Actor current() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();

@@ -117,7 +117,7 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const [newKeyPlaintext, setNewKeyPlaintext] = useState<string | null>(null);
+  const [newKeyBundle, setNewKeyBundle] = useState<{ apiKey: string; signingSecret?: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Form state
@@ -143,10 +143,10 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
     setBusy(true);
     try {
       const ips = allowedIps.split(",").map((s) => s.trim()).filter(Boolean);
-      const res = await api<{ apiKey: string }>(`/v1/developer/merchants/${merchantId}/keys`, {
+      const res = await api<{ apiKey: string; signingSecret?: string }>(`/v1/developer/merchants/${merchantId}/keys`, {
         body: { label: label || "Default Key", environment: env, scopes, keyType, allowedIps: ips },
       });
-      setNewKeyPlaintext(res.apiKey);
+      setNewKeyBundle({ apiKey: res.apiKey, signingSecret: res.signingSecret });
       setShowModal(false);
       setLabel("");
       load();
@@ -181,10 +181,10 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
     setMsg(null);
     setBusy(true);
     try {
-      const res = await api<{ apiKey: string }>(`/v1/developer/merchants/${merchantId}/keys/${id}/rotate`, {
+      const res = await api<{ apiKey: string; signingSecret?: string }>(`/v1/developer/merchants/${merchantId}/keys/${id}/rotate`, {
         body: { label: "Rotated Key" },
       });
-      setNewKeyPlaintext(res.apiKey);
+      setNewKeyBundle({ apiKey: res.apiKey, signingSecret: res.signingSecret });
       setMsg("API key rotated successfully.");
       load();
     } catch (e) {
@@ -213,15 +213,29 @@ function ApiKeysView({ merchantId }: { merchantId: string }) {
       {error && <p className="error">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
 
-      {newKeyPlaintext && (
+      {newKeyBundle && (
         <div className="notice warn">
-          <strong>New API Key Generated:</strong>
-          <p className="mono" style={{ fontSize: "1.1rem", margin: ".5rem 0", background: "#fff", padding: ".5rem", borderRadius: "4px" }}>
-            {newKeyPlaintext}
-          </p>
-          <p className="small">Copy this key now. It is hashed and will never be displayed again!</p>
-          <button className="small" onClick={() => navigator.clipboard.writeText(newKeyPlaintext)}>Copy to Clipboard</button>
-          <button className="small secondary" onClick={() => setNewKeyPlaintext(null)}>Dismiss</button>
+          <strong>New API Key Generated (shown once):</strong>
+          <div style={{ margin: ".5rem 0" }}>
+            <div className="small muted">API Key</div>
+            <p className="mono" style={{ fontSize: "1.05rem", margin: ".2rem 0", background: "#fff", padding: ".5rem", borderRadius: "4px" }}>
+              {newKeyBundle.apiKey}
+            </p>
+            {newKeyBundle.signingSecret && (
+              <>
+                <div className="small muted">Request Signing Secret (<code className="mono">X-Elepay-Signature</code>)</div>
+                <p className="mono" style={{ fontSize: "1.05rem", margin: ".2rem 0", background: "#fff", padding: ".5rem", borderRadius: "4px" }}>
+                  {newKeyBundle.signingSecret}
+                </p>
+              </>
+            )}
+          </div>
+          <p className="small">Copy these credentials now. They are stored protected and will never be displayed again!</p>
+          <button className="small" onClick={() => void navigator.clipboard.writeText(newKeyBundle.apiKey)}>Copy API Key</button>
+          {newKeyBundle.signingSecret && (
+            <button className="small" onClick={() => void navigator.clipboard.writeText(newKeyBundle.signingSecret!)}>Copy Signing Secret</button>
+          )}
+          <button className="small secondary" onClick={() => setNewKeyBundle(null)}>Dismiss</button>
         </div>
       )}
 
@@ -373,10 +387,12 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
     }
     setBusy(true);
     try {
-      await api(`/v1/developer/merchants/${merchantId}/webhooks`, {
+      const created = await api<{ secret?: string }>(`/v1/developer/merchants/${merchantId}/webhooks`, {
         body: { url: url.trim(), environment: env, description: desc, eventTypes: selectedEvents },
       });
-      setMsg("Webhook endpoint registered successfully.");
+      setMsg(created.secret
+        ? `Webhook endpoint registered. Signing secret (shown once): ${created.secret}`
+        : "Webhook endpoint registered successfully.");
       setShowAdd(false);
       setUrl(""); setDesc("");
       load();
@@ -454,8 +470,7 @@ function WebhooksView({ merchantId }: { merchantId: string }) {
               <td><span className={`tag ${ep.environment === "live" ? "active" : "info"}`}>{ep.environment}</span></td>
               <td className="small">{ep.eventTypes.join(", ")}</td>
               <td>
-                <div className="mono small">{ep.secret ? `${ep.secret.slice(0, 12)}…` : "Hidden"}</div>
-                {ep.secret && <button className="small secondary" onClick={() => navigator.clipboard.writeText(ep.secret)}>Copy</button>}
+                <div className="mono small">{ep.secret ?? "Configured"}</div>
                 <button className="small secondary" disabled={busy} onClick={() => void rotateSecret(ep.id)}>Rotate</button>
               </td>
               <td>
@@ -654,18 +669,17 @@ function DeliveryLogsView({ merchantId }: { merchantId: string }) {
 // -------------------------------------------------------------------------------------------------
 function ApiExplorerView({ merchantId }: { merchantId: string }) {
   const [selectedEndpoint, setSelectedEndpoint] = useState("create_checkout");
+  const [checkoutRef, setCheckoutRef] = useState("");
   const [reqBody, setReqBody] = useState(`{
-  "currency": "GHS",
-  "lines": [
-    { "kind": "sale", "description": "Order #5001", "amount": 2500 }
-  ]
+  "amount": 2500,
+  "description": "Order #5001"
 }`);
   const [resData, setResData] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const ENDPOINTS = [
     { id: "create_checkout", method: "POST", path: `/v1/merchants/${merchantId}/checkouts`, label: "Create Checkout Session" },
-    { id: "get_checkout_status", method: "GET", path: "/v1/public/checkouts/YOUR_REF/status", label: "Get Checkout Status" },
+    { id: "get_checkout_status", method: "GET", path: `/v1/public/checkouts/${encodeURIComponent(checkoutRef.trim() || "YOUR_REF")}/status`, label: "Get Checkout Status" },
     { id: "get_balances", method: "GET", path: `/v1/merchants/${merchantId}/balances`, label: "Get Merchant Balances" },
     { id: "list_transactions", method: "GET", path: `/v1/merchants/${merchantId}/transactions`, label: "List Transactions" },
   ];
@@ -676,6 +690,10 @@ function ApiExplorerView({ merchantId }: { merchantId: string }) {
     try {
       const ep = ENDPOINTS.find((x) => x.id === selectedEndpoint);
       if (!ep) return;
+      if (ep.id === "get_checkout_status" && !checkoutRef.trim()) {
+        setResData(JSON.stringify({ error: "Enter a checkout reference first." }, null, 2));
+        return;
+      }
       let bodyData = undefined;
       if (ep.method === "POST" && reqBody.trim()) {
         bodyData = JSON.parse(reqBody);
@@ -703,6 +721,17 @@ function ApiExplorerView({ merchantId }: { merchantId: string }) {
           ))}
         </select>
       </label>
+
+      {selectedEndpoint === "get_checkout_status" && (
+        <label>Checkout Reference
+          <input
+            className="mono"
+            value={checkoutRef}
+            onChange={(e) => setCheckoutRef(e.target.value)}
+            placeholder="CHK-..."
+          />
+        </label>
+      )}
 
       {ep.method === "POST" && (
         <label>Request Body (JSON)

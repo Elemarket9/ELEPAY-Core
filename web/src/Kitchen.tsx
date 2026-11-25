@@ -233,8 +233,17 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
     let stopped = false;
     let failures = 0;
     let timer: number | undefined;
+    let running = false;
+    let kickPending = false;
     const freshTimers = new Set<number>();
     const run = async () => {
+      if (stopped) return;
+      if (running) {
+        kickPending = true;
+        return;
+      }
+      running = true;
+      window.clearTimeout(timer);
       try {
         let more = true;
         while (more && !stopped) {
@@ -264,8 +273,17 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) setSignedOut(true);
         failures++; setOnline(false);
+      } finally {
+        running = false;
       }
-      if (!stopped) timer = window.setTimeout(run, backoff(failures));
+      if (!stopped) {
+        if (kickPending) {
+          kickPending = false;
+          void run();
+        } else {
+          timer = window.setTimeout(run, backoff(failures));
+        }
+      }
     };
     const flush = async () => {
       while (stateRef.current.queue.length && !stopped) {

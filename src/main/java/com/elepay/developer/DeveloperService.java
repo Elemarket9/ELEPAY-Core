@@ -166,8 +166,13 @@ public class DeveloperService {
     public List<WebhookEndpointView> listWebhooks(UUID merchantId, String environment) {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
         return webhooks.endpoints(merchantId, environment).stream().map(e -> new WebhookEndpointView(e.id(), e.url(),
-                e.secret(), e.environment(), e.description(), e.eventTypes(), e.active(), e.failureCount(),
+                maskSecret(e.secret()), e.environment(), e.description(), e.eventTypes(), e.active(), e.failureCount(),
                 e.lastDeliveryAt(), e.createdAt())).toList();
+    }
+
+    private static String maskSecret(String secret) {
+        if (secret == null || secret.isBlank()) return null;
+        return secret.length() <= 8 ? "••••" : secret.substring(0, 6) + "••••";
     }
 
     @Transactional

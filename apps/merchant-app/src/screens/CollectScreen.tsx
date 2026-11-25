@@ -15,7 +15,7 @@ import {
   ElepayClient,
   formatMoney,
   MerchantView,
-  newKey,
+  createAttemptKeys,
   parseMoney,
   radius,
   spacing,
@@ -41,6 +41,8 @@ export function CollectScreen({ client, merchant }: Props) {
       .catch(() => setShopQrPayload(null));
   }, [client, merchant.id]);
 
+  const attemptKeys = React.useRef(createAttemptKeys()).current;
+
   async function createPaymentLink() {
     if (busy) return;
     setError(null);
@@ -52,9 +54,10 @@ export function CollectScreen({ client, merchant }: Props) {
     setBusy(true);
     try {
       const res = await client.call<{ payUrl: string }>(`/v1/merchants/${merchant.id}/checkouts`, {
-        idempotencyKey: newKey(),
+        idempotencyKey: attemptKeys.keyFor(`link:${pesewas}`),
         body: { amount: pesewas },
       });
+      attemptKeys.reset();
       setPayUrl(res.payUrl);
       setCreatedAmount(pesewas);
       setAmount("");

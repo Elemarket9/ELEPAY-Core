@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonAlias;
 import com.elepay.identity.Actor;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -45,19 +46,31 @@ class CheckoutOperations {
     public CheckoutService.Dispute resolve(@PathVariable UUID id, @Valid @RequestBody Resolve request) {
         Actor actor = Actor.current();
         actor.requireFinance();
-        dualControl.hold("DISPUTE_RESOLUTION", "dispute", id.toString(), null,
-                Map.of("disputeId", id.toString(), "outcome", request.outcome(), "note", String.valueOf(request.note())),
-                request.note(), actor);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("disputeId", id.toString());
+        payload.put("outcome", request.outcome());
+        if (request.note() != null) payload.put("note", request.note()); // never persist the literal "null"
+        dualControl.hold("DISPUTE_RESOLUTION", "dispute", id.toString(), null, payload, request.note(), actor);
         var dispute = checkouts.resolveDispute(actor.subject(), id, request.outcome(), request.note());
-        // A customer-won dispute paid by MoMo or card goes back through the original rail.
-        checkouts.disputeRefundRailTx(id).ifPresent(rails::submit);
+        // A customer-won dispute paid by MoMo or card goes back through the original rail, only
+        // after the resolution commits so the rail intent is durable before the network call.
+        checkouts.disputeRefundRailTx(id).ifPresent(tx -> AfterCommit.run(() -> rails.submit(tx)));
         return dispute;
     }
 
     @PostMapping("/settlements/run")
     public List<CheckoutService.SettlementBatch> settle(@RequestBody(required = false) SettlementRun request) {
-        Actor.current().requireFinance();
+        Actor actor = Actor.current();
+        actor.requireFinance();
         boolean force = request != null && Boolean.TRUE.equals(request.ignoreDelay());
-        return checkouts.settleDue(force, request == null ? null : request.merchantId());
+        UUID merchantId = request == null ? null : request.merchantId();
+        if (force) {
+            // Releasing funds inside the settlement delay window is a dual-control action.
+            Map<String, Object> payload = new HashMap<>();
+            if (merchantId != null) payload.put("merchantId", merchantId.toString());
+            dualControl.hold("FORCE_SETTLEMENT", "settlement", merchantId == null ? "all" : merchantId.toString(),
+                    merchantId, payload, "force settlement", actor);
+        }
+        return checkouts.settleDue(force, merchantId);
     }
 }

@@ -54,17 +54,32 @@ function formatErrorMessage(data: ErrorBody | null, response: Response): string 
   return errs.length > 0 ? `${base}: ${errs.join("; ")}` : base;
 }
 
-function extractSigningPathAndQuery(fullUrl: string, fallbackPath: string): { pathname: string; query: string | null } {
-  try {
-    const parsed = new URL(fullUrl);
-    const query = parsed.search ? parsed.search.slice(1) : null;
-    return { pathname: parsed.pathname || "/", query: query || null };
-  } catch {
-    const qIndex = fallbackPath.indexOf("?");
-    const pathname = qIndex >= 0 ? fallbackPath.slice(0, qIndex) : fallbackPath;
-    const query = qIndex >= 0 ? fallbackPath.slice(qIndex + 1) : null;
-    return { pathname, query: query || null };
-  }
+/**
+ * Splits the request path (relative to the API base URL) into the signed path and raw query.
+ * Always signs the exact path sent, never a parsed absolute URL: the server signs
+ * servletPath + pathInfo (excluding any context/base prefix), and URL.pathname is not
+ * implemented on React Native, which made web and device signatures diverge.
+ */
+export function signingPathAndQuery(path: string): { pathname: string; query: string | null } {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  const qIndex = normalized.indexOf("?");
+  const pathname = qIndex >= 0 ? normalized.slice(0, qIndex) : normalized;
+  const query = qIndex >= 0 ? normalized.slice(qIndex + 1) : null;
+  return { pathname, query: query || null };
+}
+
+/** Allocates one idempotency key per logical attempt (signature) so retries reuse it. */
+export function createAttemptKeys(): { keyFor: (sig: string) => string; reset: () => void } {
+  let current: { sig: string; key: string } | null = null;
+  return {
+    keyFor(sig: string) {
+      if (!current || current.sig !== sig) current = { sig, key: newKey() };
+      return current.key;
+    },
+    reset() {
+      current = null;
+    },
+  };
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
@@ -194,7 +209,7 @@ export class ElepayClient {
     const normalizedPath = path.startsWith("/") ? path : `/${path}`;
     const url = `${this.baseUrl}${normalizedPath}`;
     if (method !== "GET") {
-      const { pathname, query } = extractSigningPathAndQuery(url, normalizedPath);
+      const { pathname, query } = signingPathAndQuery(normalizedPath);
       const timestamp = String(Math.floor((Date.now() + this.clockOffsetMs) / 1000));
       const nonce = newKey();
       headers["X-Elepay-Timestamp"] = timestamp;

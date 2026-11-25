@@ -74,8 +74,11 @@ public class PosController {
 
     @PostMapping("/terminals/{terminalId}/events")
     public DeviceEvents.Event terminalEvent(@PathVariable UUID terminalId, @RequestBody DeviceEventRequest req) {
-        access.manage(com.elepay.merchanttools.MerchantToolAccess.Resource.TERMINAL, terminalId);
+        // Paired terminals (pos_live keys, COLLECT scope) report their own health: operate, not manage.
+        var caller = access.operateAccess(com.elepay.merchanttools.MerchantToolAccess.Resource.TERMINAL, terminalId);
+        access.requireTerminal(caller, terminalId);
         var terminal = terminalService.getTerminal(terminalId).orElseThrow(() -> ApiException.notFound("Terminal not found"));
+        access.requireBranch(caller, terminal.branchId());
         return deviceEvents.record(terminalId, null, terminal.id().toString(), req.health(), req.status(),
                 req.description(), null);
     }
@@ -253,6 +256,7 @@ public class PosController {
             @RequestBody CreateOrderRequest req) {
         var caller = access.operateAccess(req.merchantId());
         access.requireBranch(caller, req.branchId());
+        if (req.terminalId() != null) access.requireTerminal(caller, req.terminalId());
         verifyOrderInputs(req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(), req.items());
         return idempotency.execute("pos-order:" + req.merchantId(), key, req,
                 PosOrderService.PosOrder.class,
@@ -364,7 +368,10 @@ public class PosController {
     // Offline Sync
     @PostMapping("/sync")
     public PosOfflineSyncService.SyncResult syncOfflineOrder(@RequestBody PosOfflineSyncService.OfflineOrderPayload payload) {
-        access.manage(payload.merchantId());
+        // Offline order replay comes from paired terminals / cashiers: operate scope, branch-bound.
+        var caller = access.operateAccess(payload.merchantId());
+        access.requireBranch(caller, payload.branchId());
+        if (payload.terminalId() != null) access.requireTerminal(caller, payload.terminalId());
         verifyOrderInputs(payload.merchantId(), payload.branchId(), payload.terminalId(), payload.cashierId(), payload.customerId(), payload.items());
         return syncService.syncOfflineOrder(payload);
     }
@@ -388,7 +395,10 @@ public class PosController {
         var order = orderService.getOrder(id).orElseThrow(() -> ApiException.notFound("Order not found"));
         access.requireBranch(caller, order.branchId());
         access.branch(order.merchantId(), order.branchId());
-        if (order.terminalId() != null) access.belongs(order.merchantId(), TERMINAL, order.terminalId());
+        if (order.terminalId() != null) {
+            access.belongs(order.merchantId(), TERMINAL, order.terminalId());
+            access.requireTerminal(caller, order.terminalId());
+        }
         if (order.cashierId() != null) access.belongs(order.merchantId(), CASHIER, order.cashierId());
         orderService.listOrderItems(id).forEach(item -> {
             if (item.variantId() != null) access.belongs(order.merchantId(), VARIANT, item.variantId());

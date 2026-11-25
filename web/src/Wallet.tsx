@@ -31,7 +31,7 @@ export function Wallet() {
     try {
       const w = await api<{ accounts: Account[] }>("/v1/wallet");
       setAccounts(w.accounts);
-      setOperations(await api<Operation[]>("/v1/wallet/operations"));
+      setOperations(await api<Operation[]>("/v1/wallet/operations?limit=200"));
     } catch (e) {
       if (e instanceof ApiError && e.code === "FEATURE_NOT_ENABLED") {
         setModuleDisabled(true);
@@ -336,6 +336,9 @@ function ExportStatements({ operations }: { operations: Operation[] }) {
     <section className="panel">
       <h2>Export Account Statements &amp; Receipts</h2>
       <p className="muted small">Download bank-grade financial statements for tax filing, loan verification, or accounting records.</p>
+      {operations.length >= 200 && (
+        <p className="notice warn small">Showing the latest 200 operations (server export limit). Older history is omitted from this CSV.</p>
+      )}
 
       <div className="flex-row" style={{ margin: "1rem 0" }}>
         <label className="choice">Date Range:

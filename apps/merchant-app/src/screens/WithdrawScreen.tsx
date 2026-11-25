@@ -15,7 +15,7 @@ import {
   ElepayClient,
   formatMoney,
   MerchantView,
-  newKey,
+  createAttemptKeys,
   parseMoney,
   Payout,
   radius,
@@ -69,6 +69,8 @@ export function WithdrawScreen({ client, merchant }: Props) {
     void load();
   }, [load]);
 
+  const withdrawKeys = React.useRef(createAttemptKeys()).current;
+
   async function submitWithdraw() {
     if (busy) return;
     setError(null);
@@ -87,7 +89,7 @@ export function WithdrawScreen({ client, merchant }: Props) {
       const res = await client.call<{ code?: string; detail?: string; message?: string } | null>(
         `/v1/merchants/${merchant.id}/withdrawals`,
         {
-          idempotencyKey: newKey(),
+          idempotencyKey: withdrawKeys.keyFor(`${selectedDest}:${pesewas}`),
           body: { amount: pesewas, destinationId: selectedDest },
         },
       );
@@ -96,6 +98,7 @@ export function WithdrawScreen({ client, merchant }: Props) {
       } else {
         setMsg(`Withdrawal of ${formatMoney(pesewas)} requested.`);
       }
+      withdrawKeys.reset();
       setAmount("");
       await load();
     } catch (e) {

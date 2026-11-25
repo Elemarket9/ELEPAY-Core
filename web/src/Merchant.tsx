@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import QRCode from "qrcode";
 import { api, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
@@ -35,7 +35,23 @@ interface Line {
   refunded: number; disputed: number; pending: number; settled: number; status: string; paidAt: string | null; collector: string;
 }
 interface Payout { reference: string; amount: number; status: string; clientReference: string; createdAt: string; failureReason: string | null }
-interface Destination { id: string; type: string; network: string; accountNumber: string; accountName: string; verification: string }
+interface Destination {
+  id: string;
+  type: string;
+  network: string;
+  accountNumber: string;
+  accountName: string;
+  verification: string;
+  coolingOffUntil?: string | null;
+  oobVerificationStatus?: string | null;
+}
+
+function isDestinationReady(d: Destination): boolean {
+  if (d.verification !== "verified") return false;
+  if (d.coolingOffUntil && new Date(d.coolingOffUntil).getTime() > Date.now()) return false;
+  if (d.oobVerificationStatus && d.oobVerificationStatus !== "confirmed") return false;
+  return true;
+}
 
 const TABS = [
   "Overview", "POS Register", "Orders & Receipts", "Inventory & Stock", "Restaurant & KDS",
@@ -634,7 +650,10 @@ function Transactions({ id }: { id: string }) {
     .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   useEffect(() => { void load(); }, [id]);
 
+  const refundKeyRef = useRef<{ sig: string; key: string } | null>(null);
+
   function openRefundModal(l: Line) {
+    refundKeyRef.current = null;
     setRefundTarget(l);
     setRefundAmount("");
     setRefundReason("");
@@ -650,12 +669,17 @@ function Transactions({ id }: { id: string }) {
       setRefundError(validated.error);
       return;
     }
+    const sig = `${refundTarget.reference}:${refundTarget.line}:${validated.pesewas}:${refundReason.trim()}`;
+    if (refundKeyRef.current?.sig !== sig) {
+      refundKeyRef.current = { sig, key: newKey() };
+    }
     setRefundError(null);
     setMsg(null);
     setBusy(true);
     try {
       await api(`/v1/merchants/${id}/checkouts/${refundTarget.reference}/allocations/${refundTarget.line}/refunds`,
-        { idempotencyKey: newKey(), body: { amount: validated.pesewas, reason: refundReason.trim() } });
+        { idempotencyKey: refundKeyRef.current.key, body: { amount: validated.pesewas, reason: refundReason.trim() } });
+      refundKeyRef.current = null;
       setMsg("Refund recorded");
       setRefundTarget(null);
       await load();
@@ -784,14 +808,15 @@ function Payouts({ id }: { id: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const withdrawKeyRef = useRef<{ sig: string; key: string } | null>(null);
 
   const load = async () => {
     setPayouts(await api<Payout[]>(`/v1/merchants/${id}/payouts`));
     const d = await api<Destination[]>(`/v1/merchants/${id}/settlement-destinations`);
     setDestinations(d);
-    setDestination((prev) => prev && d.some((x) => x.id === prev && x.verification === "verified")
+    setDestination((prev) => prev && d.some((x) => x.id === prev && isDestinationReady(x))
       ? prev
-      : (d.find((x) => x.verification === "verified")?.id ?? ""));
+      : (d.find((x) => isDestinationReady(x))?.id ?? ""));
   };
   useEffect(() => { load().catch((e) => setError(e instanceof Error ? e.message : String(e))); }, [id]);
 
@@ -808,9 +833,14 @@ function Payouts({ id }: { id: string }) {
       setError("Enter a valid withdrawal amount, e.g. 50.00.");
       return;
     }
+    const sig = `${destination}:${pesewas}`;
+    if (withdrawKeyRef.current?.sig !== sig) {
+      withdrawKeyRef.current = { sig, key: newKey() };
+    }
     setBusy(true);
     try {
-      await api(`/v1/merchants/${id}/withdrawals`, { idempotencyKey: newKey(), body: { amount: pesewas, destinationId: destination } });
+      await api(`/v1/merchants/${id}/withdrawals`, { idempotencyKey: withdrawKeyRef.current.key, body: { amount: pesewas, destinationId: destination } });
+      withdrawKeyRef.current = null;
       setMsg("Withdrawal requested");
       setAmount("");
       await load();
@@ -828,8 +858,22 @@ function Payouts({ id }: { id: string }) {
         <div className="grid-2">
           <label>Destination<select value={destination} onChange={(e) => setDestination(e.target.value)}>
             <option value="">-- Select verified destination --</option>
-            {destinations.map((d) => <option key={d.id} value={d.id} disabled={d.verification !== "verified"}>
-              {d.type} {d.network} {d.accountNumber} — {d.accountName} ({d.verification})</option>)}
+            {destinations.map((d) => {
+              const ready = isDestinationReady(d);
+              const cooling = d.coolingOffUntil && new Date(d.coolingOffUntil).getTime() > Date.now();
+              const statusNote = d.verification !== "verified"
+                ? d.verification
+                : cooling
+                  ? "cooling-off active"
+                  : d.oobVerificationStatus && d.oobVerificationStatus !== "confirmed"
+                    ? `OOB ${d.oobVerificationStatus}`
+                    : d.verification;
+              return (
+                <option key={d.id} value={d.id} disabled={!ready}>
+                  {d.type} {d.network} {d.accountNumber} — {d.accountName} ({statusNote})
+                </option>
+              );
+            })}
           </select></label>
           <label>Amount (GH₵)<input className="mono" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="50.00" /></label>
         </div>

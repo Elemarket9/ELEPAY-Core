@@ -14,7 +14,7 @@ import {
   ElepayClient,
   formatMoney,
   MerchantView,
-  newKey,
+  createAttemptKeys,
   parseMoney,
   radius,
   spacing,
@@ -60,11 +60,13 @@ export function SalesScreen({ client, merchant }: Props) {
     const matchStatus =
       statusFilter === "all" ||
       (statusFilter === "settled" && (s === "settled" || s === "partially_refunded_settled")) ||
-      (statusFilter === "pending" && (s === "pending_settlement" || s === "processing" || s === "awaiting_delivery"));
+      (statusFilter === "pending" && (s === "pending_settlement" || s === "processing" || s === "awaiting_delivery" || s === "partially_refunded"));
     const q = search.trim().toLowerCase();
     const matchQuery = !q || r.reference.toLowerCase().includes(q) || (r.description ?? "").toLowerCase().includes(q);
     return matchStatus && matchQuery;
   });
+
+  const refundKeys = React.useRef(createAttemptKeys()).current;
 
   async function submitRefund() {
     if (!selected || refundBusy) return;
@@ -84,10 +86,11 @@ export function SalesScreen({ client, merchant }: Props) {
       await client.call(
         `/v1/merchants/${merchant.id}/checkouts/${selected.reference}/allocations/${selected.line}/refunds`,
         {
-          idempotencyKey: newKey(),
+          idempotencyKey: refundKeys.keyFor(`${selected.reference}:${selected.line}:${pesewas}:${refundReason.trim()}`),
           body: { amount: pesewas, reason: refundReason.trim() },
         },
       );
+      refundKeys.reset();
       setSelected(null);
       setRefundAmount("");
       setRefundReason("");

@@ -191,7 +191,16 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
         }
       } catch (e) {
         if (stopped) return;
-        if (e instanceof ApiError && e.status === 401) setRevoked(true);
+        if (e instanceof ApiError && e.status === 401) {
+          if (e.code === "request_expired") {
+            // Clock skew: the next unsigned sync re-learns server time, then signed calls retry.
+            setNotice("Device clock is out of sync with the server — re-syncing…");
+          } else if (e.code === "invalid_signature" || e.code === "signing_not_configured" || e.code === "signature_version_required") {
+            setNotice(`Signing problem (${e.code}). Re-pair this tablet if it persists.`);
+          } else {
+            setRevoked(true);
+          }
+        }
         failures++;
         setOnline(false);
       } finally {
@@ -247,7 +256,8 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
     }
   };
 
-  const canReprint = Boolean(setup.hasPrinter || device.hasPrinter);
+  // Reprint is station-scoped server-side (stationId is a required UUID); hide it on "All stations".
+  const canReprint = Boolean(setup.stationId) && Boolean(setup.hasPrinter || device.hasPrinter);
   const tickets = kdsVisible(state, setup.stationId);
   const columns = width >= 1024 ? 4 : width >= 720 ? 3 : width >= 480 ? 2 : 1;
   const cardWidth: number | "100%" =

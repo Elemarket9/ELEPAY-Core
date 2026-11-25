@@ -167,8 +167,12 @@ public class KillSwitchController {
         String reason = (request != null && request.reason() != null)
                 ? request.reason()
                 : (enabled ? "Module enabled" : "Module disabled by kill switch");
-        if (enabled && dualControl) {
+        if (enabled) {
+            // Re-enabling a killed module is an ops_admin action regardless of dual-control mode,
+            // matching global/merchant unfreeze.
             actor.requireOpsAdmin();
+        }
+        if (enabled && dualControl) {
             propose("MODULE_ENABLE", "module", moduleKey, null,
                     Map.of("target", "module", "module", moduleKey, "frozen", false),
                     reason, actor.subject());

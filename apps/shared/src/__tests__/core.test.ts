@@ -341,7 +341,7 @@ describe("@elepay/mobile-core", () => {
     expect(kdsVisible(state, "grill").map((v) => v.ticket.id)).toEqual(["t-queued"]);
   });
 
-  it("signs callAsKitchenDevice with uppercased method, Idempotency-Key, and baseUrl path prefix", async () => {
+  it("signs callAsKitchenDevice with uppercased method, Idempotency-Key, excluding baseUrl path prefix", async () => {
     const captured: { url: string; init: RequestInit }[] = [];
     vi.stubGlobal(
       "fetch",
@@ -380,7 +380,8 @@ describe("@elepay/mobile-core", () => {
       canonicalV2([
         headers["X-Elepay-Timestamp"],
         "POST",
-        "/edge/v1/restaurant/kds/tickets/t1/advance",
+        // Server signs servletPath + pathInfo: the base-URL prefix (/edge) is not part of it.
+        "/v1/restaurant/kds/tickets/t1/advance",
         "stationId=s1",
         headers["X-Elepay-Nonce"],
         "idem-123",
@@ -416,5 +417,23 @@ describe("@elepay/mobile-core", () => {
 
   it("normalizes trailing slashes from base URLs", () => {
     expect(normalizeBaseUrl("https://api.elepay.gh///")).toBe("https://api.elepay.gh");
+  });
+
+  it("createAttemptKeys reuses a key for the same attempt and rotates on change/reset", async () => {
+    const { createAttemptKeys } = await import("../api");
+    const keys = createAttemptKeys();
+    const a = keys.keyFor("w:dest1:5000");
+    expect(keys.keyFor("w:dest1:5000")).toBe(a);
+    const b = keys.keyFor("w:dest1:6000");
+    expect(b).not.toBe(a);
+    keys.reset();
+    expect(keys.keyFor("w:dest1:6000")).not.toBe(b);
+  });
+
+  it("signingPathAndQuery splits path and raw query without parsing absolute URLs", async () => {
+    const { signingPathAndQuery } = await import("../api");
+    expect(signingPathAndQuery("/v1/x?a=1&b=2")).toEqual({ pathname: "/v1/x", query: "a=1&b=2" });
+    expect(signingPathAndQuery("v1/x")).toEqual({ pathname: "/v1/x", query: null });
+    expect(signingPathAndQuery("/v1/x?")).toEqual({ pathname: "/v1/x", query: null });
   });
 });
