@@ -1,6 +1,7 @@
 import { lazy, StrictMode, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Checkout, StartFromLink } from "./Checkout";
+import { api } from "./api";
 import { completeSignIn, getToken, signOut } from "./auth";
 import { LoginScreen } from "./LoginScreen";
 import {
@@ -21,8 +22,29 @@ const Kitchen = lazy(() => import("./Kitchen").then((m) => ({ default: m.Kitchen
 const DeveloperPortal = lazy(() => import("./Developer").then((m) => ({ default: m.DeveloperPortal })));
 import "./styles.css";
 
-function tokenHasAnyRole(token: string, required: string[]): boolean {
+interface CallerProfile {
+  subject: string;
+  roles: string[];
+  primaryRole: string;
+  isOps: boolean;
+  isOpsAdmin: boolean;
+}
+
+const OPS_ROLES = new Set([
+  "ops",
+  "ops_admin",
+  "support_agent",
+  "onboarding_officer",
+  "finance_ops",
+  "risk_compliance",
+]);
+
+function tokenHasAnyRole(token: string, required: string[], profile?: CallerProfile | null): boolean {
   if (required.length === 0) return true;
+  if (profile) {
+    if (required.includes("ops") && profile.isOps) return true;
+    return required.some((r) => profile.roles.includes(r));
+  }
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return true;
@@ -30,7 +52,7 @@ function tokenHasAnyRole(token: string, required: string[]): boolean {
     const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
     const payload = JSON.parse(atob(padded)) as { roles?: string[]; realm_access?: { roles?: string[] } };
     const roles = payload.roles ?? payload.realm_access?.roles ?? [];
-    return required.some((r) => roles.includes(r) || (r === "ops" && roles.includes("ops_admin")));
+    return required.some((r) => roles.includes(r) || (r === "ops" && roles.some((role) => OPS_ROLES.has(role))));
   } catch {
     return true;
   }
@@ -43,43 +65,63 @@ function SignedIn({
 }: {
   children: React.ReactNode;
   roles?: string[];
-  onAuthChange?: (signedIn: boolean) => void;
+  onAuthChange?: (profile: CallerProfile | null) => void;
 }) {
   const [token, setToken] = useState<string | null | undefined>(undefined);
+  const [profile, setProfile] = useState<CallerProfile | null>(null);
+  const [profileLoaded, setProfileLoaded] = useState(false);
 
-  useEffect(() => {
+  const loadSession = () => {
+    setProfileLoaded(false);
     getToken()
-      .then((t) => {
-        setToken(t);
-        onAuthChange?.(!!t);
+      .then(async (t) => {
+        if (!t) {
+          setToken(null);
+          setProfile(null);
+          setProfileLoaded(true);
+          onAuthChange?.(null);
+          return;
+        }
+        try {
+          const me = await api<CallerProfile>("/v1/auth/me");
+          setToken(t);
+          setProfile(me);
+          onAuthChange?.(me);
+        } catch {
+          // If token was rejected (401), api.ts clears stale storage; re-check token.
+          const remaining = await getToken();
+          setToken(remaining);
+          setProfile(null);
+          onAuthChange?.(remaining ? { subject: "authenticated", roles: [], primaryRole: "user", isOps: false, isOpsAdmin: false } : null);
+        } finally {
+          setProfileLoaded(true);
+        }
       })
       .catch(() => {
         setToken(null);
-        onAuthChange?.(false);
+        setProfile(null);
+        setProfileLoaded(true);
+        onAuthChange?.(null);
       });
-  }, [onAuthChange]);
+  };
 
-  if (token === undefined) return null;
+  useEffect(() => {
+    loadSession();
+  }, []);
+
+  if (token === undefined || !profileLoaded) return null;
   if (!token) {
-    return (
-      <LoginScreen
-        roles={roles}
-        onAuthenticated={() => {
-          void getToken().then((t) => {
-            setToken(t);
-            onAuthChange?.(!!t);
-          });
-        }}
-      />
-    );
+    return <LoginScreen roles={roles} onAuthenticated={loadSession} />;
   }
-  if (!tokenHasAnyRole(token, roles)) {
+  if (!tokenHasAnyRole(token, roles, profile)) {
     return (
       <div className="auth-shell">
         <div className="auth-card">
           <h1>Operations Access Required</h1>
           <p className="notice error">
-            Your signed-in account does not have the <code>ops</code> role required for the Operations Console.
+            Signed in as <strong>{profile?.subject ?? "current user"}</strong> ({profile?.primaryRole ?? "customer"}),
+            which does not have an operations role (<code>ops</code>, <code>ops_admin</code>, <code>support_agent</code>,
+            <code>onboarding_officer</code>, <code>finance_ops</code>, or <code>risk_compliance</code>).
           </p>
           <button
             type="button"
@@ -103,10 +145,20 @@ function App() {
   const path = window.location.pathname;
   const [callbackDone, setCallbackDone] = useState(false);
   const [callbackError, setCallbackError] = useState<string | null>(null);
-  const [hasSession, setHasSession] = useState(false);
+  const [sessionProfile, setSessionProfile] = useState<CallerProfile | null>(null);
 
   useEffect(() => {
-    void getToken().then((t) => setHasSession(!!t)).catch(() => setHasSession(false));
+    void getToken().then(async (t) => {
+      if (!t) {
+        setSessionProfile(null);
+        return;
+      }
+      try {
+        setSessionProfile(await api<CallerProfile>("/v1/auth/me"));
+      } catch {
+        setSessionProfile(null);
+      }
+    }).catch(() => setSessionProfile(null));
   }, [callbackDone]);
 
   useEffect(() => {
@@ -165,7 +217,12 @@ function App() {
         <a href="/kitchen" className={navItemClass("/kitchen")}>Kitchen</a>
         <a href="/developer" className={navItemClass("/developer")}>Developer</a>
         <a href="/ops" className={navItemClass("/ops")}>Operations</a>
-        {hasSession && (
+        {sessionProfile && (
+          <span className="small" style={{ opacity: 0.85, padding: "0 0.4rem" }}>
+            {sessionProfile.subject} ({sessionProfile.primaryRole})
+          </span>
+        )}
+        {sessionProfile && (
           <button
             className="link nav-signout"
             onClick={() => void signOut().then(() => window.location.assign("/"))}
@@ -176,10 +233,10 @@ function App() {
       </nav>
     </header>
   );
-  if (path.startsWith("/merchant")) return <>{header}<SignedIn onAuthChange={setHasSession}><MerchantDashboard /></SignedIn></>;
-  if (path.startsWith("/developer")) return <>{header}<SignedIn onAuthChange={setHasSession}><DeveloperPortal /></SignedIn></>;
-  if (path.startsWith("/ops")) return <>{header}<SignedIn roles={["ops"]} onAuthChange={setHasSession}><OpsConsole /></SignedIn></>;
-  if (path.startsWith("/app")) return <>{header}<SignedIn onAuthChange={setHasSession}><Wallet /></SignedIn></>;
+  if (path.startsWith("/merchant")) return <>{header}<SignedIn onAuthChange={setSessionProfile}><MerchantDashboard /></SignedIn></>;
+  if (path.startsWith("/developer")) return <>{header}<SignedIn onAuthChange={setSessionProfile}><DeveloperPortal /></SignedIn></>;
+  if (path.startsWith("/ops")) return <>{header}<SignedIn roles={["ops"]} onAuthChange={setSessionProfile}><OpsConsole /></SignedIn></>;
+  if (path.startsWith("/app")) return <>{header}<SignedIn onAuthChange={setSessionProfile}><Wallet /></SignedIn></>;
   return (
     <>
       {header}

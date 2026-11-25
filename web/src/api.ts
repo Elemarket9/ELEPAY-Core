@@ -40,6 +40,15 @@ export async function api<T>(path: string, options: CallOptions = {}): Promise<T
     }
   }
   if (!response.ok) {
+    if (response.status === 401 && !options.anonymous) {
+      try {
+        sessionStorage.removeItem("elepay.nativeToken");
+        sessionStorage.removeItem("elepay.authUser");
+        sessionStorage.removeItem("elepay.devToken");
+      } catch {
+        // ignore storage errors
+      }
+    }
     throw new ApiError(
       response.status,
       data?.code ?? "error",

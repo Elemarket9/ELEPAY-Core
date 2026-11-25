@@ -179,8 +179,13 @@ public class ProductionSafetyCheck {
                 }
             }
         }
+        String authJwtSecret = env.getProperty("elepay.auth.jwt-signing-secret", "");
+        if (!authJwtSecret.isBlank() && (authJwtSecret.length() < 32 || KNOWN_SECRETS.contains(authJwtSecret))) {
+            p.add("elepay.auth.jwt-signing-secret must be at least 32 random characters and not a published value");
+        }
         for (String secretProp : List.of(
                 "elepay.security.signing-secret",
+                "elepay.auth.jwt-signing-secret",
                 "elepay.vault.master-key",
                 "elepay.integrity.mac-key",
                 "elepay.integrity.ed25519-private-key",

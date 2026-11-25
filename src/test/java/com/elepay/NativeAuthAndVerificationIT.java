@@ -115,5 +115,54 @@ class NativeAuthAndVerificationIT extends PostgresTestBase {
                 .body(Map.of("identifier", email, "password", "NewStrongPass456!"))
                 .exchange((req, res) -> res.getStatusCode().value());
         assertThat(newPwdStatus).isEqualTo(200);
+
+        // 8. /v1/auth/me returns authoritative caller profile & non-admin is blocked from /v1/auth/admin/accounts
+        JsonNode me = http.get().uri("/v1/auth/me")
+                .headers(h -> h.setBearerAuth(token))
+                .retrieve().body(JsonNode.class);
+        assertThat(me.get("subject").asString()).isEqualTo(email);
+        assertThat(me.get("isOps").asBoolean()).isFalse();
+
+        int nonAdminStatus = http.get().uri("/v1/auth/admin/accounts")
+                .headers(h -> h.setBearerAuth(token))
+                .exchange((req, res) -> res.getStatusCode().value());
+        assertThat(nonAdminStatus).isEqualTo(403);
+
+        // 9. ops_admin can promote account to finance_ops and /v1/auth/me reflects it on next sign-in
+        String opsAdminToken = http.post().uri("/dev/token")
+                .body(Map.of("subject", "root-admin@elepay.gh", "roles", java.util.List.of("ops_admin")))
+                .retrieve().body(JsonNode.class).get("accessToken").asString();
+        JsonNode accounts = http.get().uri("/v1/auth/admin/accounts")
+                .headers(h -> h.setBearerAuth(opsAdminToken))
+                .retrieve().body(JsonNode.class);
+        String accountId = null;
+        for (JsonNode row : accounts) {
+            if (email.equals(row.get("email").asString())) {
+                accountId = row.get("id").asString();
+                break;
+            }
+        }
+        assertThat(accountId).isNotNull();
+
+        JsonNode updated = http.patch().uri("/v1/auth/admin/accounts/" + accountId + "/roles")
+                .headers(h -> h.setBearerAuth(opsAdminToken))
+                .body(Map.of("roles", java.util.List.of("finance_ops"), "status", "active"))
+                .retrieve().body(JsonNode.class);
+        assertThat(updated.get("roles").toString()).contains("finance_ops");
+
+        JsonNode relogin = http.post().uri("/v1/auth/login")
+                .body(Map.of("identifier", email, "password", "NewStrongPass456!"))
+                .retrieve().body(JsonNode.class);
+        var reloginEmail = verificationDelivery.lastDispatchedForTest("email", email);
+        var reloginSms = verificationDelivery.lastDispatchedForTest("sms", phone);
+        JsonNode reloginVerified = http.post().uri("/v1/auth/verify")
+                .body(Map.of("challengeId", relogin.get("challengeId").asString(),
+                        "emailCode", reloginEmail.code(), "smsCode", reloginSms.code()))
+                .retrieve().body(JsonNode.class);
+        JsonNode promotedMe = http.get().uri("/v1/auth/me")
+                .headers(h -> h.setBearerAuth(reloginVerified.get("accessToken").asString()))
+                .retrieve().body(JsonNode.class);
+        assertThat(promotedMe.get("isOps").asBoolean()).isTrue();
+        assertThat(promotedMe.get("primaryRole").asString()).isEqualTo("finance_ops");
     }
 }

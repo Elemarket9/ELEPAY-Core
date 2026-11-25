@@ -360,6 +360,123 @@ public class NativeAuthService {
                 .param("now", now).param("id", challengeId).update();
     }
 
+    public static final java.util.Set<String> ALLOWED_ROLES = java.util.Set.of(
+            "user",
+            Actor.OPS,
+            Actor.OPS_ADMIN,
+            Actor.SUPPORT_AGENT,
+            Actor.ONBOARDING_OFFICER,
+            Actor.FINANCE_OPS,
+            Actor.RISK_COMPLIANCE
+    );
+
+    public record CallerProfile(
+            String subject,
+            List<String> roles,
+            String primaryRole,
+            boolean isOps,
+            boolean isOpsAdmin,
+            String fullName,
+            String email,
+            String phone
+    ) {}
+
+    public CallerProfile currentProfile(Actor actor) {
+        actor.requireUser();
+        var accountOpt = findByIdentifier(actor.subject());
+        List<String> roles = actor.roles().stream().sorted().toList();
+        return new CallerProfile(
+                actor.subject(),
+                roles,
+                actor.primaryRole(),
+                actor.isOps(),
+                actor.isOpsAdmin(),
+                accountOpt.map(AccountRow::fullName).orElse(null),
+                accountOpt.map(AccountRow::email).orElse(null),
+                accountOpt.map(AccountRow::phone).orElse(null)
+        );
+    }
+
+    public List<AuthUserView> listAccounts(Actor actor) {
+        actor.requireOpsAdmin();
+        return db.sql("""
+                SELECT id, full_name, email, phone, roles, email_verified_at, phone_verified_at
+                FROM auth_account
+                ORDER BY created_at DESC
+                LIMIT 200""")
+                .query((rs, i) -> new AuthUserView(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("full_name"),
+                        rs.getString("email"),
+                        rs.getString("phone"),
+                        parseRoles(rs.getString("roles")),
+                        rs.getObject("email_verified_at", OffsetDateTime.class) != null,
+                        rs.getObject("phone_verified_at", OffsetDateTime.class) != null
+                ))
+                .list();
+    }
+
+    @Transactional
+    public AuthUserView updateAccountRolesAndStatus(Actor actor, UUID accountId, List<String> requestedRoles, String status) {
+        actor.requireOpsAdmin();
+        AccountRow target = db.sql("""
+                SELECT id, email, phone, full_name, password_hash, roles, failed_login_attempts, locked_until, status
+                FROM auth_account WHERE id = :id FOR UPDATE""")
+                .param("id", accountId)
+                .query(this::mapAccount)
+                .optional()
+                .orElseThrow(() -> ApiException.notFound("Auth account not found"));
+
+        List<String> cleanRoles = requestedRoles == null || requestedRoles.isEmpty()
+                ? parseRoles(target.roles())
+                : requestedRoles.stream()
+                        .map(r -> r == null ? "" : r.trim().toLowerCase(Locale.ROOT))
+                        .filter(r -> !r.isEmpty())
+                        .distinct()
+                        .toList();
+        if (cleanRoles.isEmpty() || !ALLOWED_ROLES.containsAll(cleanRoles)) {
+            throw ApiException.badRequest("invalid_roles", "Roles must be from: " + ALLOWED_ROLES);
+        }
+
+        String nextStatus = (status == null || status.isBlank()) ? target.status() : status.trim().toLowerCase(Locale.ROOT);
+        if (!java.util.Set.of("pending_verification", "active", "suspended").contains(nextStatus)) {
+            throw ApiException.badRequest("invalid_status", "Status must be pending_verification, active, or suspended");
+        }
+
+        if (target.email().equalsIgnoreCase(actor.subject())) {
+            if (!cleanRoles.contains(Actor.OPS_ADMIN)) {
+                throw ApiException.forbidden("You cannot remove your own ops_admin role");
+            }
+            if ("suspended".equals(nextStatus)) {
+                throw ApiException.forbidden("You cannot suspend your own account");
+            }
+        }
+
+        db.sql("""
+                UPDATE auth_account
+                SET roles = :roles, status = :status, updated_at = now()
+                WHERE id = :id""")
+                .param("roles", String.join(",", cleanRoles))
+                .param("status", nextStatus)
+                .param("id", accountId)
+                .update();
+
+        return db.sql("""
+                SELECT id, full_name, email, phone, roles, email_verified_at, phone_verified_at
+                FROM auth_account WHERE id = :id""")
+                .param("id", accountId)
+                .query((rs, i) -> new AuthUserView(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("full_name"),
+                        rs.getString("email"),
+                        rs.getString("phone"),
+                        parseRoles(rs.getString("roles")),
+                        rs.getObject("email_verified_at", OffsetDateTime.class) != null,
+                        rs.getObject("phone_verified_at", OffsetDateTime.class) != null
+                ))
+                .single();
+    }
+
     private ChallengeResponse createAndDispatchChallenge(
             UUID accountId, String email, String phone, String purpose,
             String emailSubject, String purposeLabel) {

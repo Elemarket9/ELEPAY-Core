@@ -72,6 +72,7 @@ class RateLimitFilter extends OncePerRequestFilter {
         this.maxBodyBytes = maxBodyBytes;
         int m = Math.max(1, multiplier);
         this.rules = List.of(
+                new Rule("POST", "/v1/auth/", "auth", TokenBucketRateLimiter.perMinute(20 * m, 20 * m, redis)),
                 new Rule("POST", "/v1/rails/card/tokens", "card-tokenize", TokenBucketRateLimiter.perMinute(10 * m, 10 * m, redis)),
                 new Rule(null, "/v1/wallet/recipients/lookup", "recipient-lookup", TokenBucketRateLimiter.perMinute(20 * m, 20 * m, redis)),
                 new Rule(null, "/v1/public/", "public", TokenBucketRateLimiter.perMinute(120 * m, 120 * m, redis)),
