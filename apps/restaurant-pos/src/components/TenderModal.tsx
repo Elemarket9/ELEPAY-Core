@@ -414,6 +414,11 @@ export function TenderModal({
                 <Text style={styles.pendingMeta}>
                   Ref: {pendingRef} · Status: {pollStatus ?? "PENDING"}
                 </Text>
+                {mode === "MOMO" && (
+                  <Text style={[styles.pendingMeta, { textAlign: "center", fontWeight: "700", color: colors.warn }]}>
+                    Ask customer to approve prompt with MoMo PIN, or dial *170# → 6 (My Wallet) → 3 (My Approvals).
+                  </Text>
+                )}
                 {qrPayload && (
                   <View style={styles.qrBox}>
                     <QRCode value={qrPayload} size={200} backgroundColor="#fff" color={colors.ink} />

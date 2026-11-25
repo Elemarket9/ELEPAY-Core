@@ -282,9 +282,24 @@ function SystemHealth() {
 // -------------------------------------------------------------------------------------------------
 // Overview
 // -------------------------------------------------------------------------------------------------
+interface OpenRailTx {
+  id: string;
+  rail: string;
+  direction: string;
+  reference: string;
+  amount: number;
+  currency: string;
+  msisdn: string | null;
+  status: string;
+  railReference: string | null;
+  failureReason: string | null;
+  createdAt: string;
+}
+
 function Overview() {
   const [o, setO] = useState<Record<string, number> | null>(null);
   const [integrity, setIntegrity] = useState<Integrity | null>(null);
+  const [openRails, setOpenRails] = useState<OpenRailTx[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -293,12 +308,14 @@ function Overview() {
   const load = async () => {
     setLoading(true);
     try {
-      const [overviewData, integrityData] = await Promise.all([
+      const [overviewData, integrityData, openRailData] = await Promise.all([
         api<Record<string, number>>("/v1/ops/overview"),
         api<Integrity>("/v1/ops/ledger/integrity"),
+        api<OpenRailTx[]>("/v1/ops/rails/open").catch(() => [] as OpenRailTx[]),
       ]);
       setO(overviewData);
       setIntegrity(integrityData);
+      setOpenRails(openRailData);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -314,8 +331,9 @@ function Overview() {
     setMsg(null);
     setError(null);
     try {
-      await api(path, body === undefined ? { method: "POST" } : { body });
-      setMsg(okMessage);
+      const res = await api<Record<string, unknown>>(path, body === undefined ? { method: "POST" } : { body });
+      const resolved = typeof res?.resolved === "number" ? ` (${res.resolved} resolved)` : "";
+      setMsg(`${okMessage}${resolved}`);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -384,6 +402,46 @@ function Overview() {
             <IconLandmark size={15} />
             {busy ? "Running…" : "Run Due Settlements"}
           </button>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginTop: "1rem" }}>
+        <div className="flex-between" style={{ marginBottom: "0.65rem" }}>
+          <h3 style={{ margin: 0 }}>Open / Stuck Rail Transactions ({openRails.length})</h3>
+          <button type="button" className="secondary small" disabled={loading} onClick={() => void load()}>
+            Refresh
+          </button>
+        </div>
+        <div className="table-wrap" style={{ margin: 0 }}>
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>Rail</th>
+                <th>Direction</th>
+                <th>Reference</th>
+                <th>MSISDN</th>
+                <th className="num">Amount</th>
+                <th>Status</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {openRails.map((tx) => (
+                <tr key={tx.id}>
+                  <td><strong>{tx.rail.toUpperCase()}</strong></td>
+                  <td className="small">{tx.direction}</td>
+                  <td className="mono small">{tx.reference}</td>
+                  <td className="mono small">{tx.msisdn ?? "—"}</td>
+                  <td className="num mono">{formatMoney(tx.amount, tx.currency)}</td>
+                  <td><span className={`tag ${tx.status === "unknown" ? "failed" : "pending"}`}>{tx.status}</span></td>
+                  <td className="small muted">{tx.failureReason ?? "Awaiting customer approval / rail confirmation"}</td>
+                </tr>
+              ))}
+              {openRails.length === 0 && (
+                <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "1.25rem" }}>No open or stuck rail transactions.</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </>

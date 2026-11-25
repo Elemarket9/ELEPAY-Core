@@ -340,6 +340,16 @@ export function Checkout({ reference }: { reference: string }) {
                 </div>
                 <h2 style={{ margin: "0 0 0.3rem", fontSize: "1.1rem", color: "inherit" }}>Waiting for confirmation…</h2>
                 {status.message && <p className="small" style={{ marginBottom: "0.65rem" }}>{status.message}</p>}
+                {displayMethod === "momo" && (
+                  <div className="notice warn" style={{ textAlign: "left", margin: "0.75rem 0" }}>
+                    <strong>Approve on your phone:</strong>
+                    <span className="small">
+                      1. Enter your MoMo PIN on the prompt sent to your phone.
+                      <br />
+                      2. No prompt? Dial <strong className="mono">*170#</strong> → <strong>6 (My Wallet)</strong> → <strong>3 (My Approvals)</strong> to approve.
+                    </span>
+                  </div>
+                )}
                 {railQrImage && (
                   <div className="qr-frame" style={{ margin: "0.75rem auto" }}>
                     <img src={railQrImage} alt="GhQR payment code" width={210} height={210} />
@@ -355,6 +365,11 @@ export function Checkout({ reference }: { reference: string }) {
                     </a>
                   </p>
                 )}
+                <div style={{ margin: "0.75rem 0" }}>
+                  <button type="button" className="secondary small" onClick={() => void refresh()}>
+                    I&apos;ve Approved — Check Status Now
+                  </button>
+                </div>
                 <p className="small muted" style={{ margin: 0 }}>
                   You can close this page and reopen the same link. Reference <span className="mono">{checkout.reference}</span>.
                 </p>

@@ -473,6 +473,12 @@ export function PosTenderPanel({
             </div>
           </div>
           <p className="small muted" style={{ marginBottom: "0.65rem" }}>Auto-polling every 3 seconds…</p>
+          {mode === "MOMO" && (
+            <p className="notice warn" style={{ margin: "0 0 0.65rem" }}>
+              <strong>Customer approval required:</strong> Ask customer to enter MoMo PIN, or dial{" "}
+              <strong className="mono">*170# → 6 (My Wallet) → 3 (My Approvals)</strong> if no prompt appeared.
+            </p>
+          )}
           {verifyNotice && <p className="notice warn" role="status" style={{ marginBottom: "0.65rem" }}>{verifyNotice}</p>}
           {qrImage && (
             <div className="qr-frame" style={{ margin: "0.65rem 0" }}>
