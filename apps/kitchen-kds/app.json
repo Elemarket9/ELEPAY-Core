@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "ELEPAY Kitchen",
+    "slug": "elepay-kitchen-kds",
+    "version": "1.0.0",
+    "orientation": "landscape",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0D1210",
+    "primaryColor": "#0A5838",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "gh.elepay.kitchen"
+    },
+    "android": {
+      "package": "gh.elepay.kitchen",
+      "adaptiveIcon": {
+        "backgroundColor": "#0D1210"
+      }
+    }
+  }
+}

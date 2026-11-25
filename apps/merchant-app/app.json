@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "ELEPAY Merchant",
+    "slug": "elepay-merchant",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F4F7F5",
+    "primaryColor": "#0A5838",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "gh.elepay.merchant"
+    },
+    "android": {
+      "package": "gh.elepay.merchant",
+      "adaptiveIcon": {
+        "backgroundColor": "#0A5838"
+      }
+    }
+  }
+}

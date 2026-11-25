@@ -1,0 +1,23 @@
+{
+  "name": "elepay-mobile-apps",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "shared",
+    "restaurant-pos",
+    "kitchen-kds",
+    "merchant-app"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck -w @elepay/mobile-core && npm run typecheck -w elepay-restaurant-pos && npm run typecheck -w elepay-kitchen-kds && npm run typecheck -w elepay-merchant-app",
+    "test": "npm test -w @elepay/mobile-core",
+    "start:pos": "npm run start -w elepay-restaurant-pos",
+    "start:kds": "npm run start -w elepay-kitchen-kds",
+    "start:merchant": "npm run start -w elepay-merchant-app"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.12",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.9"
+  }
+}
