@@ -276,6 +276,36 @@
         ],
         "type": "object"
       },
+      "AuthUserView": {
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "emailVerified": {
+            "type": "boolean"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "phoneVerified": {
+            "type": "boolean"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "AuthenticateCashierRequest": {
         "properties": {
           "badgeNumber": {
@@ -629,6 +659,40 @@
           "maxSinglePayoutPesewas": {
             "format": "int64",
             "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ChallengeResponse": {
+        "properties": {
+          "challengeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "channels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "emailVerified": {
+            "type": "boolean"
+          },
+          "expiresInSeconds": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maskedEmail": {
+            "type": "string"
+          },
+          "maskedPhone": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "smsVerified": {
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -2658,6 +2722,14 @@
         },
         "type": "object"
       },
+      "ForgotPasswordRequest": {
+        "properties": {
+          "identifier": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "GlobalKillSwitchRequest": {
         "properties": {
           "active": {
@@ -3432,6 +3504,17 @@
           "country",
           "source"
         ],
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "identifier": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "LookupRequest": {
@@ -5853,6 +5936,23 @@
         },
         "type": "object"
       },
+      "RegisterRequest": {
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "RegisterTerminalRequest": {
         "properties": {
           "address": {
@@ -6058,6 +6158,15 @@
         },
         "type": "object"
       },
+      "ResendRequest": {
+        "properties": {
+          "challengeId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "ReserveRelease": {
         "properties": {
           "amount": {
@@ -6100,6 +6209,24 @@
           "reason": {
             "maxLength": 500,
             "minLength": 0,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ResetPasswordRequest": {
+        "properties": {
+          "challengeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "emailCode": {
+            "type": "string"
+          },
+          "newPassword": {
+            "type": "string"
+          },
+          "smsCode": {
             "type": "string"
           }
         },
@@ -7535,6 +7662,48 @@
         },
         "type": "object"
       },
+      "VerifyRequest": {
+        "properties": {
+          "challengeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "emailCode": {
+            "type": "string"
+          },
+          "smsCode": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "VerifyResponse": {
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "emailVerified": {
+            "type": "boolean"
+          },
+          "expiresInSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "smsVerified": {
+            "type": "boolean"
+          },
+          "tokenType": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/AuthUserView"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "WaiterBranchAssignment": {
         "properties": {
           "branchId": {
@@ -8106,6 +8275,187 @@
         },
         "tags": [
           "accounting-controller"
+        ]
+      }
+    },
+    "/v1/auth/forgot-password": {
+      "post": {
+        "operationId": "forgotPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChallengeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "auth-controller"
+        ]
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChallengeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "auth-controller"
+        ]
+      }
+    },
+    "/v1/auth/register": {
+      "post": {
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChallengeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "auth-controller"
+        ]
+      }
+    },
+    "/v1/auth/resend": {
+      "post": {
+        "operationId": "resend",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChallengeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "auth-controller"
+        ]
+      }
+    },
+    "/v1/auth/reset-password": {
+      "post": {
+        "operationId": "resetPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "additionalProperties": {},
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "auth-controller"
+        ]
+      }
+    },
+    "/v1/auth/verify": {
+      "post": {
+        "operationId": "verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "auth-controller"
         ]
       }
     },
@@ -11256,6 +11606,47 @@
         ]
       }
     },
+    "/v1/merchants/{id}/settlement-destinations/{destination}/resend-oob": {
+      "post": {
+        "operationId": "resendOob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "destination",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "additionalProperties": {},
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "merchants"
+        ]
+      }
+    },
     "/v1/merchants/{id}/webhooks": {
       "get": {
         "operationId": "listWebhooks",
@@ -12835,7 +13226,7 @@
     },
     "/v1/ops/audit/verify": {
       "get": {
-        "operationId": "verify",
+        "operationId": "verify_1",
         "responses": {
           "200": {
             "content": {

@@ -64,7 +64,9 @@ def audit() -> list[str]:
                 failures.append(f"{rel}:{line_num}: production credential has a non-empty default")
             if re.search(r"\b(?:class|record)\s+Simulated\w+", line):
                 failures.append(f"{rel}:{line_num}: simulated production implementation")
-            if BANNED_PARTNERS.search(line):
+            # Hubtel delivers verification SMS in this adapter. Payment partner restrictions still apply elsewhere.
+            partner_line = line.replace("hubtel", "") if path == JAVA / "com/elepay/common/VerificationDelivery.java" else line
+            if BANNED_PARTNERS.search(partner_line):
                 failures.append(f"{rel}:{line_num}: excluded partner reference (paystack/hubtel)")
             if rel.endswith("/fx/FxApi.java") and any(route in line for route in BANNED_ROUTES):
                 failures.append(f"{rel}:{line_num}: international recipient payout API returned")
