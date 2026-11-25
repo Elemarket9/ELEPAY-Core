@@ -72,7 +72,7 @@ public class EnterpriseMultiMerchantSplitter {
             // Marketplace commission: percentage bps + fixed fee with minimum floor
             long commission = 0L;
             if (item.commissionBps() != null && item.commissionBps() > 0) {
-                commission = (gross * item.commissionBps()) / 10000L;
+                commission = ProportionalAllocation.basisPoints(gross, item.commissionBps());
             }
             if (item.fixedCommissionPesewas() != null && item.fixedCommissionPesewas() > 0) {
                 commission = Math.addExact(commission, item.fixedCommissionPesewas());
@@ -84,7 +84,7 @@ public class EnterpriseMultiMerchantSplitter {
             // Platform service fee (ELEPAY platform charge)
             long platformFee = 0L;
             if (item.platformFeeBps() != null && item.platformFeeBps() > 0) {
-                platformFee = (gross * item.platformFeeBps()) / 10000L;
+                platformFee = ProportionalAllocation.basisPoints(gross, item.platformFeeBps());
             }
             if (item.fixedPlatformFeePesewas() != null && item.fixedPlatformFeePesewas() > 0) {
                 platformFee = Math.addExact(platformFee, item.fixedPlatformFeePesewas());
@@ -93,7 +93,7 @@ public class EnterpriseMultiMerchantSplitter {
             // Reserve retention
             long reserve = 0L;
             if (item.reserveBps() != null && item.reserveBps() > 0) {
-                reserve = (gross * item.reserveBps()) / 10000L;
+                reserve = ProportionalAllocation.basisPoints(gross, item.reserveBps());
             }
             if (item.fixedReservePesewas() != null && item.fixedReservePesewas() > 0) {
                 reserve = Math.addExact(reserve, item.fixedReservePesewas());
@@ -130,12 +130,12 @@ public class EnterpriseMultiMerchantSplitter {
 
             long commission = 0L;
             if (delivery.marketplaceCommissionBps() != null && delivery.marketplaceCommissionBps() > 0) {
-                commission = (gross * delivery.marketplaceCommissionBps()) / 10000L;
+                commission = ProportionalAllocation.basisPoints(gross, delivery.marketplaceCommissionBps());
             }
 
             long platformFee = 0L;
             if (delivery.platformFeeBps() != null && delivery.platformFeeBps() > 0) {
-                platformFee = (gross * delivery.platformFeeBps()) / 10000L;
+                platformFee = ProportionalAllocation.basisPoints(gross, delivery.platformFeeBps());
             }
 
             long totalDeductions = Math.addExact(commission, platformFee);

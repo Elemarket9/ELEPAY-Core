@@ -4,6 +4,7 @@ import com.elepay.common.ApiException;
 import com.elepay.common.Audit;
 import com.elepay.common.OpsQueue;
 import com.elepay.common.References;
+import com.elepay.common.ProportionalAllocation;
 import com.elepay.ledger.Ledger;
 import com.elepay.ledger.Ledger.Leg;
 import com.elepay.merchant.MerchantAccess;
@@ -299,6 +300,10 @@ class CheckoutService {
             if (a == null || a.merchantId() == null || a.amount() <= 0) {
                 throw ApiException.badRequest("invalid_allocation", "Each allocation needs a merchant and a positive amount");
             }
+            if (a.amount() > maxTotal || a.amount() > maxTotal - subtotal)
+                throw ApiException.badRequest("amount_too_large", "Checkout total exceeds the limit");
+            if (a.reserveBps() != null && (a.reserveBps() < 0 || a.reserveBps() > 5000))
+                throw ApiException.badRequest("invalid_reserve_bps", "Reserve must be 0 to 50%");
             String kind = a.kind() == null ? "sale" : a.kind();
             if (!Set.of("sale", "delivery").contains(kind)) throw ApiException.badRequest("invalid_kind", "Use sale or delivery");
             var recipient = merchants.find(a.merchantId())
@@ -646,8 +651,8 @@ class CheckoutService {
 
     /**
      * How an amount taken back from a line (refund or dispute hold) splits between the seller, ELEPAY's fee
-     * and the marketplace's share, and which bucket each part comes from. Fees return in proportion; the
-     * last part returns whatever remains, so the totals always close exactly.
+     * and the marketplace's share, and which bucket each part comes from. Each reversal is apportioned
+     * over remaining entitlements; deterministic integer rounding cannot overdraw any original share.
      */
     record Take(long seller, long fee, long platform, long sellerFromPending, long sellerFromReserved,
                 long feeFromDeferred, long platformFromPending) {
@@ -657,15 +662,21 @@ class CheckoutService {
     }
 
     static Take take(Allocation a, long amount) {
-        boolean last = a.refunded() + a.disputed() + amount == a.amount();
-        long feeLeft = a.merchantFee() - a.refundedFee() - a.disputedFee();
-        long platformLeft = a.platformFee() - a.refundedPlatformFee() - a.disputedPlatformFee();
-        long fee = last ? feeLeft : Math.min(feeLeft, Math.multiplyExact(a.merchantFee(), amount) / a.amount());
-        long platform = last ? platformLeft
-                : Math.min(platformLeft, Math.multiplyExact(a.platformFee(), amount) / a.amount());
-        fee = Math.min(fee, amount);
-        platform = Math.min(platform, amount - fee);
-        long seller = amount - fee - platform;
+        long remaining = Math.subtractExact(a.amount(), Math.addExact(a.refunded(), a.disputed()));
+        long feeLeft = Math.subtractExact(a.merchantFee(), Math.addExact(a.refundedFee(), a.disputedFee()));
+        long platformLeft = Math.subtractExact(a.platformFee(), Math.addExact(a.refundedPlatformFee(), a.disputedPlatformFee()));
+        long sellerLeft = Math.subtractExact(Math.subtractExact(remaining, feeLeft), platformLeft);
+        if (feeLeft < 0 || platformLeft < 0 || sellerLeft < 0)
+            throw ApiException.conflict("allocation_reconciliation_required",
+                    "Existing allocation reversals exceed an original entitlement; reconciliation is required");
+        if (amount <= 0 || amount > remaining)
+            throw ApiException.badRequest("invalid_reversal_amount", "Reversal must be positive and within remaining allocation");
+        // Allocate against remaining entitlements, not original weights: repeated fractional
+        // refunds or dispute holds must never consume another party's remaining money.
+        List<Long> shares = ProportionalAllocation.allocate(amount, List.of(sellerLeft, feeLeft, platformLeft));
+        long seller = shares.get(0);
+        long fee = shares.get(1);
+        long platform = shares.get(2);
         long sellerFromPending = Math.min(a.pendingAmount(), seller);
         long remainingSeller = seller - sellerFromPending;
         long availableReserve = Math.max(0L, a.reserveAmount() - a.reserveReleased());
@@ -875,11 +886,12 @@ class CheckoutService {
                 .param("c", c.id()).param("l", line).update();
         db.sql("""
                 INSERT INTO dispute (id, checkout_id, line, amount, reason, status, hold_tx, rail_case, opened_by,
-                    seller_part, fee_part, platform_part)
-                VALUES (:id, :c, :l, :amount, :reason, 'open', :tx, :case, :by, :seller, :fee, :platform)""")
+                    seller_part, fee_part, platform_part, seller_from_reserve)
+                VALUES (:id, :c, :l, :amount, :reason, 'open', :tx, :case, :by, :seller, :fee, :platform, :fromReserve)""")
                 .param("id", id).param("c", c.id()).param("l", line).param("amount", amount).param("reason", reason)
                 .param("tx", hold.transactionId()).param("case", providerCase).param("by", actor)
-                .param("seller", t.seller()).param("fee", t.fee()).param("platform", t.platform()).update();
+                .param("seller", t.seller()).param("fee", t.fee()).param("platform", t.platform())
+                .param("fromReserve", t.sellerFromReserved()).update();
         audit.record(actor, "dispute.opened", "checkout:" + reference, Map.of("line", line, "amount", amount));
         outbox.publish("dispute", id, "dispute.opened", Map.of("dispute", id.toString(), "checkout", reference,
                 "line", line, "amount", amount), setOf(a.merchantId(), c.collectorId()));
@@ -889,12 +901,12 @@ class CheckoutService {
 
     @Transactional
     Dispute resolveDispute(String actor, UUID id, String outcome, String note) {
-        record Held(UUID checkout, int line, long amount, String status, long seller, long fee, long platform) {}
+        record Held(UUID checkout, int line, long amount, String status, long seller, long fee, long platform, long fromReserve) {}
         Held d = db.sql("""
-                SELECT d.checkout_id, d.line, d.amount, d.status, d.seller_part, d.fee_part, d.platform_part
+                SELECT d.checkout_id, d.line, d.amount, d.status, d.seller_part, d.fee_part, d.platform_part, d.seller_from_reserve
                 FROM dispute d WHERE d.id = :id FOR UPDATE""").param("id", id)
                 .query((rs, i) -> new Held(rs.getObject(1, UUID.class), rs.getInt(2), rs.getLong(3), rs.getString(4),
-                        rs.getLong(5), rs.getLong(6), rs.getLong(7)))
+                        rs.getLong(5), rs.getLong(6), rs.getLong(7), rs.getLong(8)))
                 .optional().orElseThrow(() -> ApiException.notFound("Dispute not found"));
         if (!d.status().equals("open")) throw ApiException.conflict("dispute_closed", "Dispute is already resolved");
         if (!Set.of("merchant_won", "customer_won").contains(outcome)) {
@@ -917,21 +929,29 @@ class CheckoutService {
         if (outcome.equals("merchant_won")) {
             // Each party gets back exactly what the hold took, into the bucket the line is now in.
             boolean pending = !settled && !legacy;
-            if (seller > 0) legs.add(Leg.credit(Ledger.code("merchant", a.merchantId(), pending ? "pending" : "available", Ledger.GHS), seller));
+            long restoreReserve = d.fromReserve();
+            if (restoreReserve < 0 || restoreReserve > seller || restoreReserve > a.reserveReleased())
+                throw ApiException.conflict("reserve_reconciliation_required", "Dispute reserve provenance is inconsistent");
+            long restoredSeller = seller - restoreReserve;
+            if (restoreReserve > 0) legs.add(Leg.credit(reserved, restoreReserve));
+            if (restoredSeller > 0) legs.add(Leg.credit(Ledger.code("merchant", a.merchantId(), pending ? "pending" : "available", Ledger.GHS), restoredSeller));
             if (fee > 0) legs.add(Leg.credit(pending ? Ledger.DEFERRED_REVENUE : Ledger.REVENUE, fee));
             if (platform > 0) legs.add(Leg.credit(Ledger.code("merchant", c.collectorId(), pending ? "pending" : "available", Ledger.GHS), platform));
             db.sql("""
                     UPDATE checkout_allocation SET disputed = disputed - :amount,
                            disputed_fee = greatest(disputed_fee - :fee, 0),
                            disputed_platform_fee = disputed_platform_fee - :platform,
+                           reserve_released = reserve_released - :restoreReserve,
+                           release_status = CASE WHEN :restoreReserve > 0 THEN CASE WHEN reserve_released = :restoreReserve THEN 'HELD' ELSE 'PARTIALLY_RELEASED' END ELSE release_status END,
                            pending_amount = pending_amount + :p, platform_pending = platform_pending + :pp,
                            fee_deferred = fee_deferred + :fd,
                            settled_amount = settled_amount + :sa, platform_settled = platform_settled + :ps,
                            fee_recognized = fee_recognized + :fr
                     WHERE checkout_id = :c AND line = :l""")
                     .param("amount", d.amount()).param("fee", legacy ? 0 : fee).param("platform", platform)
-                    .param("p", pending ? seller : 0).param("pp", pending ? platform : 0).param("fd", pending ? fee : 0)
-                    .param("sa", pending ? 0 : seller).param("ps", pending ? 0 : platform)
+                    .param("restoreReserve", restoreReserve)
+                    .param("p", pending ? restoredSeller : 0).param("pp", pending ? platform : 0).param("fd", pending ? fee : 0)
+                    .param("sa", pending ? 0 : restoredSeller).param("ps", pending ? 0 : platform)
                     .param("fr", pending || legacy ? 0 : fee)
                     .param("c", c.id()).param("l", a.line()).update();
         } else {
