@@ -468,6 +468,15 @@ public class PosOrderService {
         db.sql("UPDATE pos_checkout_link SET status = 'cancelled' WHERE id = :id").param("id", l.id()).update();
     }
 
+    /** True when {@link #voidOrder} would succeed: pending, nothing paid and no applied digital payment. */
+    public boolean voidable(UUID orderId) {
+        return db.sql("""
+                SELECT count(*) FROM pos_order o
+                WHERE o.id = :id AND o.status = 'PENDING' AND o.paid_pesewas = 0
+                  AND NOT EXISTS (SELECT 1 FROM pos_checkout_link l WHERE l.order_id = o.id AND l.status = 'applied')
+                """).param("id", orderId).query(Long.class).single() > 0;
+    }
+
     @Transactional
     public PosOrder voidOrder(UUID orderId, String actor) {
         PosOrder order = lockOrder(orderId);

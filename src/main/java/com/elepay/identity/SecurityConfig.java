@@ -255,6 +255,12 @@ class SecurityConfig {
                     return;
                 }
 
+                // Waiter phone keys (wd_live_*) reach only the waiter ordering endpoints, nothing else.
+                if ("waiter".equalsIgnoreCase(auth.keyType()) && !WaiterDevicePaths.allowed(request.getMethod(), pathForGates)) {
+                    writeError(response, HttpServletResponse.SC_FORBIDDEN, "waiter_key_restricted", "Waiter device keys can only use the waiter app");
+                    return;
+                }
+
                 // POS terminal keys (pos_live_*) reach only POS terminal/order/cart/shift/NFC/sync endpoints.
                 if ("pos_terminal".equalsIgnoreCase(auth.keyType()) && !PosDevicePaths.allowed(request.getMethod(), pathForGates)) {
                     writeError(response, HttpServletResponse.SC_FORBIDDEN, "pos_terminal_key_restricted", "POS terminal keys can only access POS terminal endpoints");

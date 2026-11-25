@@ -1951,6 +1951,29 @@
         ],
         "type": "object"
       },
+      "Device": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deviceName": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "waiterSubject": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "DeviceEventRequest": {
         "properties": {
           "description": {
@@ -4198,12 +4221,13 @@
           "apiKey": {
             "type": "string"
           },
-          "deviceId": {
+          "branchId": {
             "format": "uuid",
             "type": "string"
           },
-          "hasPrinter": {
-            "type": "boolean"
+          "deviceId": {
+            "format": "uuid",
+            "type": "string"
           },
           "merchantId": {
             "format": "uuid",
@@ -4213,13 +4237,6 @@
             "type": "string"
           },
           "signingSecret": {
-            "type": "string"
-          },
-          "stationId": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "stationName": {
             "type": "string"
           }
         },
@@ -4237,8 +4254,7 @@
           "merchantCode": {
             "type": "string"
           },
-          "stationId": {
-            "format": "uuid",
+          "waiterSubject": {
             "type": "string"
           }
         },
@@ -4252,6 +4268,14 @@
           },
           "stationId": {
             "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PairingRequest": {
+        "properties": {
+          "waiterSubject": {
             "type": "string"
           }
         },
@@ -6969,6 +6993,15 @@
         ],
         "type": "object"
       },
+      "TaxSetting": {
+        "properties": {
+          "taxBasisPoints": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "TenderPaymentRequest": {
         "properties": {
           "amountPesewas": {
@@ -7573,6 +7606,29 @@
         },
         "type": "object"
       },
+      "WaiterMe": {
+        "properties": {
+          "branchId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "merchantId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "merchantName": {
+            "type": "string"
+          },
+          "taxBasisPoints": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "waiter": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "WaiterMenuItem": {
         "properties": {
           "category": {
@@ -7638,6 +7694,9 @@
           "kitchenStatus": {
             "type": "string"
           },
+          "mine": {
+            "type": "boolean"
+          },
           "orderId": {
             "format": "uuid",
             "type": "string"
@@ -7648,8 +7707,19 @@
           "orderStatus": {
             "type": "string"
           },
+          "subtotalPesewas": {
+            "format": "int64",
+            "type": "integer"
+          },
           "tableNumber": {
             "type": "string"
+          },
+          "takenBy": {
+            "type": "string"
+          },
+          "taxPesewas": {
+            "format": "int64",
+            "type": "integer"
           },
           "ticketId": {
             "format": "uuid",
@@ -16313,7 +16383,7 @@
     },
     "/v1/public/kitchen/pair": {
       "post": {
-        "operationId": "pair",
+        "operationId": "pair_1",
         "requestBody": {
           "content": {
             "application/json": {
@@ -16484,6 +16554,36 @@
         },
         "tags": [
           "public-checkouts"
+        ]
+      }
+    },
+    "/v1/public/waiter/pair": {
+      "post": {
+        "operationId": "pair",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paired"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "waiter-pairing-controller"
         ]
       }
     },
@@ -17897,6 +17997,155 @@
         ]
       }
     },
+    "/v1/restaurant/waiter/{merchant}/devices": {
+      "get": {
+        "operationId": "waiterDevices",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Device"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "waiter-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/waiter/{merchant}/devices/pairing-codes": {
+      "post": {
+        "operationId": "waiterPairingCode",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingCode"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "waiter-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/waiter/{merchant}/devices/{device}": {
+      "delete": {
+        "operationId": "waiterRevokeDevice",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "device",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "waiter-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/waiter/{merchant}/me": {
+      "get": {
+        "operationId": "waiterMe",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaiterMe"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "waiter-controller"
+        ]
+      }
+    },
     "/v1/restaurant/waiter/{merchant}/menu": {
       "get": {
         "operationId": "waiterMenu",
@@ -18161,6 +18410,76 @@
         ],
         "responses": {
           "200": {
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "waiter-controller"
+        ]
+      }
+    },
+    "/v1/restaurant/waiter/{merchant}/settings": {
+      "get": {
+        "operationId": "waiterSettings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaxSetting"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "waiter-controller"
+        ]
+      },
+      "put": {
+        "operationId": "waiterUpdateSettings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaxSetting"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaxSetting"
+                }
+              }
+            },
             "description": "OK"
           }
         },

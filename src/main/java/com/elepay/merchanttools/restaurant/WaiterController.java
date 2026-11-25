@@ -26,11 +26,15 @@ public class WaiterController {
     private final PosOrderService orders;
     private final KdsService kitchen;
     private final Idempotency idempotency;
+    private final WaiterDeviceService devices;
+    private final RestaurantSettingsService settings;
 
     public WaiterController(JdbcClient db, MerchantAccess merchants, MerchantToolAccess access,
-            ProductCatalogService catalog, PosOrderService orders, KdsService kitchen, Idempotency idempotency) {
+            ProductCatalogService catalog, PosOrderService orders, KdsService kitchen, Idempotency idempotency,
+            WaiterDeviceService devices, RestaurantSettingsService settings) {
         this.db = db; this.merchants = merchants; this.access = access; this.catalog = catalog;
         this.orders = orders; this.kitchen = kitchen; this.idempotency = idempotency;
+        this.devices = devices; this.settings = settings;
     }
 
     public record WaiterTable(UUID id, String tableNumber, int capacity, String status, UUID currentOrderId) {}
@@ -38,16 +42,46 @@ public class WaiterController {
     public record WaiterLine(UUID variantId, int quantity, String notes) {}
     public record WaiterOrderRequest(UUID tableId, List<WaiterLine> items, String notes) {}
     public record WaiterOrderResult(UUID orderId, UUID ticketId, String orderNumber, long totalPesewas) {}
+    /**
+     * One live order at the waiter's branch. Every waiter on the branch sees every order so a shift handover or
+     * a colleague covering a table works; {@code takenBy}/{@code mine} show who took it.
+     */
     public record WaiterOrderView(UUID orderId, UUID ticketId, String tableNumber, String orderNumber,
-            String orderStatus, String kitchenStatus, long totalPesewas, boolean billRequested) {}
+            String orderStatus, String kitchenStatus, long subtotalPesewas, long taxPesewas, long totalPesewas,
+            boolean billRequested, String takenBy, boolean mine) {}
     public record WaiterBranchAssignment(UUID branchId) {}
+    public record WaiterMe(UUID merchantId, String merchantName, UUID branchId, String waiter, int taxBasisPoints) {}
 
-    private MerchantAccess.Access waiter(UUID merchant) {
-        var caller = merchants.require(merchant, MerchantAccess.Permission.RESTAURANT_ORDER);
-        if (!"waiter".equals(caller.role()) || caller.branchId() == null || caller.actor().isApiKey())
-            throw ApiException.forbidden("A branch-assigned waiter account is required");
-        access.branch(merchant, caller.branchId());
-        return caller;
+    /**
+     * The waiter a request acts for. Either the waiter's own sign-in (role waiter with a branch), or a paired
+     * waiter phone, which acts for the waiter it was paired to and stops working as soon as that person is no
+     * longer a branch waiter here or the device is revoked.
+     */
+    private WaiterDeviceService.Waiter waiter(UUID merchant) {
+        var actor = com.elepay.identity.Actor.current();
+        WaiterDeviceService.Waiter waiter;
+        if (actor.isApiKey()) {
+            if (!actor.isWaiterDeviceKey() || !merchant.equals(actor.apiKeyMerchant()))
+                throw ApiException.forbidden("A branch-assigned waiter account is required");
+            waiter = devices.resolve(merchant, actor.apiKeyCredentialId())
+                    .orElseThrow(() -> ApiException.forbidden("This phone is no longer paired to a waiter; ask a manager to pair it again"));
+            var m = merchants.find(merchant).orElseThrow(() -> ApiException.notFound("Merchant not found"));
+            if (!"active".equals(m.status())) throw ApiException.conflict("merchant_not_active", "The merchant account is " + m.status());
+        } else {
+            var caller = merchants.require(merchant, MerchantAccess.Permission.RESTAURANT_ORDER);
+            if (!"waiter".equals(caller.role()) || caller.branchId() == null)
+                throw ApiException.forbidden("A branch-assigned waiter account is required");
+            waiter = new WaiterDeviceService.Waiter(actor.subject(), caller.branchId());
+        }
+        access.branch(merchant, waiter.branchId());
+        return waiter;
+    }
+
+    @GetMapping("/{merchant}/me")
+    public WaiterMe waiterMe(@PathVariable UUID merchant) {
+        var caller = waiter(merchant);
+        var m = merchants.find(merchant).orElseThrow(() -> ApiException.notFound("Merchant not found"));
+        return new WaiterMe(merchant, m.tradingName(), caller.branchId(), caller.subject(), settings.taxBasisPoints(merchant));
     }
 
     @PutMapping("/{merchant}/tables/{table}/branch")
@@ -93,11 +127,11 @@ public class WaiterController {
         if (req.tableId() == null || req.items() == null || req.items().isEmpty() || req.items().size() > 100
                 || (req.notes() != null && req.notes().length() > 500))
             throw ApiException.badRequest("invalid_order", "Choose a table and 1 to 100 items; notes max 500 characters");
-        return idempotency.execute("waiter:" + merchant + ":" + Idempotency.sha256(caller.actor().subject()),
+        return idempotency.execute("waiter:" + merchant + ":" + Idempotency.sha256(caller.subject()),
                 key, req, WaiterOrderResult.class, () -> create(merchant, caller, req));
     }
 
-    private WaiterOrderResult create(UUID merchant, MerchantAccess.Access caller, WaiterOrderRequest req) {
+    private WaiterOrderResult create(UUID merchant, WaiterDeviceService.Waiter caller, WaiterOrderRequest req) {
         WaiterTable table = db.sql("""
                 SELECT id, table_number, capacity, status, current_order_id FROM restaurant_table
                 WHERE id = :t AND merchant_id = :m AND waiter_branch_id = :b FOR UPDATE
@@ -116,7 +150,10 @@ public class WaiterController {
             return new PosOrderService.OrderItemInput(row.variantId(), label(row), BigDecimal.valueOf(line.quantity()),
                     row.retailPricePesewas(), 0, 0, null, null, "MAIN", line.notes());
         }).toList();
-        var order = orders.createOrder(merchant, caller.branchId(), null, null, null, items, 0, 0, 0, "DINE_IN");
+        long subtotal = 0;
+        for (var item : items) subtotal = Math.addExact(subtotal, Math.multiplyExact(item.unitPricePesewas(), item.quantity().longValueExact()));
+        long tax = settings.taxOn(merchant, subtotal);
+        var order = orders.createOrder(merchant, caller.branchId(), null, null, null, items, 0, tax, 0, "DINE_IN");
         var kitchenItems = orders.listOrderItems(order.id()).stream().map(item ->
                 new KdsService.KdsItemInput(item.id(), item.itemName(), item.quantity(), item.notes(), "MAIN")).toList();
         var ticket = kitchen.createTicket(merchant, order.id(), table.id(), DiningMode.DINE_IN, null,
@@ -127,7 +164,7 @@ public class WaiterController {
                 INSERT INTO restaurant_waiter_order(order_id, merchant_id, table_id, waiter_subject, ticket_id)
                 VALUES (:o, :m, :t, :s, :k)
                 """).param("o", order.id()).param("m", merchant).param("t", table.id())
-                .param("s", caller.actor().subject()).param("k", ticket.id()).update();
+                .param("s", caller.subject()).param("k", ticket.id()).update();
         return new WaiterOrderResult(order.id(), ticket.id(), order.orderNumber(), order.totalPesewas());
     }
 
@@ -136,23 +173,25 @@ public class WaiterController {
         var caller = waiter(merchant);
         return db.sql("""
                 SELECT o.id AS order_id, w.ticket_id, t.table_number, o.order_number,
-                    o.status AS order_status, k.status AS kitchen_status, o.total_pesewas,
-                    w.bill_requested_at IS NOT NULL AS bill_requested
+                    o.status AS order_status, k.status AS kitchen_status, o.subtotal_pesewas, o.tax_pesewas,
+                    o.total_pesewas, w.bill_requested_at IS NOT NULL AS bill_requested,
+                    w.waiter_subject AS taken_by, w.waiter_subject = :s AS mine
                 FROM restaurant_waiter_order w JOIN pos_order o ON o.id = w.order_id
                 JOIN restaurant_table t ON t.id = w.table_id JOIN restaurant_kds_ticket k ON k.id = w.ticket_id
-                WHERE w.merchant_id = :m AND w.waiter_subject = :s AND o.branch_id = :b
-                  AND t.current_order_id = o.id ORDER BY o.created_at DESC
-                """).param("m", merchant).param("s", caller.actor().subject()).param("b", caller.branchId())
+                WHERE w.merchant_id = :m AND o.branch_id = :b AND t.waiter_branch_id = :b
+                  AND t.current_order_id = o.id ORDER BY (w.waiter_subject = :s) DESC, o.created_at DESC
+                """).param("m", merchant).param("s", caller.subject()).param("b", caller.branchId())
                 .query(WaiterOrderView.class).list();
     }
 
-    private UUID ownedTicket(UUID merchant, MerchantAccess.Access caller, UUID order) {
+    /** Any live waiter order at the caller's branch: waiters cover each other's tables. */
+    private UUID ownedTicket(UUID merchant, WaiterDeviceService.Waiter caller, UUID order) {
         return db.sql("""
                 SELECT w.ticket_id FROM restaurant_waiter_order w JOIN pos_order o ON o.id = w.order_id
                 JOIN restaurant_table t ON t.id = w.table_id
-                WHERE w.order_id = :o AND w.merchant_id = :m AND w.waiter_subject = :s
-                    AND o.branch_id = :b AND t.current_order_id = o.id
-                """).param("o", order).param("m", merchant).param("s", caller.actor().subject())
+                WHERE w.order_id = :o AND w.merchant_id = :m
+                    AND o.branch_id = :b AND t.waiter_branch_id = :b AND t.current_order_id = o.id
+                """).param("o", order).param("m", merchant)
                 .param("b", caller.branchId()).query(UUID.class).optional()
                 .orElseThrow(() -> ApiException.notFound("Order not found"));
     }
@@ -191,6 +230,47 @@ public class WaiterController {
                 FROM pos_order o WHERE t.current_order_id = o.id AND o.id = :o AND o.status = 'PAID'
                 """).param("o", order).update();
         if (changed != 1) throw ApiException.conflict("not_paid", "Cashier payment is required before closing the table");
+    }
+
+    // ---- Manager: restaurant tax and waiter phones -------------------------------------------------------
+
+    public record TaxSetting(Integer taxBasisPoints) {}
+    public record PairingRequest(String waiterSubject) {}
+
+    @GetMapping("/{merchant}/settings")
+    public TaxSetting waiterSettings(@PathVariable UUID merchant) {
+        access.manage(merchant);
+        return new TaxSetting(settings.taxBasisPoints(merchant));
+    }
+
+    @PutMapping("/{merchant}/settings")
+    public TaxSetting waiterUpdateSettings(@PathVariable UUID merchant, @RequestBody TaxSetting req) {
+        access.manage(merchant);
+        if (req == null || req.taxBasisPoints() == null || req.taxBasisPoints() < 0 || req.taxBasisPoints() > 5000)
+            throw ApiException.badRequest("invalid_tax", "Tax must be between 0 and 5000 basis points (0% to 50%)");
+        settings.setTaxBasisPoints(merchant, req.taxBasisPoints(), com.elepay.identity.Actor.current().subject());
+        return new TaxSetting(req.taxBasisPoints());
+    }
+
+    @PostMapping("/{merchant}/devices/pairing-codes")
+    public WaiterDeviceService.PairingCode waiterPairingCode(@PathVariable UUID merchant, @RequestBody PairingRequest req) {
+        access.manage(merchant);
+        if (req == null || req.waiterSubject() == null || req.waiterSubject().isBlank())
+            throw ApiException.badRequest("waiter_required", "Choose the waiter this phone is for");
+        return devices.createCode(merchant, req.waiterSubject().strip(), com.elepay.identity.Actor.current().subject());
+    }
+
+    @GetMapping("/{merchant}/devices")
+    public List<WaiterDeviceService.Device> waiterDevices(@PathVariable UUID merchant) {
+        access.manage(merchant);
+        return devices.list(merchant);
+    }
+
+    @DeleteMapping("/{merchant}/devices/{device}")
+    public Map<String, String> waiterRevokeDevice(@PathVariable UUID merchant, @PathVariable UUID device) {
+        access.manage(merchant);
+        devices.revoke(merchant, device);
+        return Map.of("status", "revoked");
     }
 
     public record WaiterCashierClaim(UUID terminalId, UUID cashierId) {}

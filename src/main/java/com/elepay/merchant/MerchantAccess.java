@@ -94,6 +94,17 @@ public class MerchantAccess {
         return access;
     }
 
+    /** A staff member's current role and branch at a merchant, if they are still a member. */
+    public record Membership(String role, UUID branchId) {}
+
+    public Optional<Membership> membership(UUID merchantId, String subject) {
+        if (merchantId == null || subject == null || subject.isBlank()) return Optional.empty();
+        return db.sql("SELECT role, branch_id FROM merchant_member WHERE merchant_id = :m AND subject = :s")
+                .param("m", merchantId).param("s", subject)
+                .query((rs, i) -> new Membership(rs.getString(1), rs.getObject(2, UUID.class)))
+                .optional();
+    }
+
     public Optional<Merchant> find(UUID id) {
         return db.sql("""
                 SELECT id, trading_name, kind, status, merchant_code, fee_bps, fee_fixed, settlement_delay_hours
