@@ -261,6 +261,38 @@ export class ElepayClient {
     });
   }
 
+  /** Requests password reset codes sent to both Email and SMS. */
+  async requestPasswordReset(identifier: string): Promise<{
+    challengeId: string;
+    purpose: string;
+    channels: string[];
+    maskedEmail: string | null;
+    maskedPhone: string | null;
+    expiresInSeconds: number;
+    emailVerified: boolean;
+    smsVerified: boolean;
+  }> {
+    return this.call("/v1/auth/forgot-password", {
+      method: "POST",
+      anonymous: true,
+      body: { identifier: identifier.trim() },
+    });
+  }
+
+  /** Completes password reset using both Email and SMS 6-digit codes. */
+  async resetPassword(input: {
+    challengeId: string;
+    emailCode: string;
+    smsCode: string;
+    newPassword: string;
+  }): Promise<{ reset: boolean }> {
+    return this.call("/v1/auth/reset-password", {
+      method: "POST",
+      anonymous: true,
+      body: input,
+    });
+  }
+
   /** Confirm a settlement destination using the 6-digit Email/SMS OOB code. */
   async confirmDestinationOob(merchantId: string, destinationId: string, token: string): Promise<void> {
     await this.call(`/v1/merchants/${merchantId}/settlement-destinations/${destinationId}/confirm-oob`, {

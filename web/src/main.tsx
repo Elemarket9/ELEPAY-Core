@@ -21,18 +21,76 @@ const Kitchen = lazy(() => import("./Kitchen").then((m) => ({ default: m.Kitchen
 const DeveloperPortal = lazy(() => import("./Developer").then((m) => ({ default: m.DeveloperPortal })));
 import "./styles.css";
 
-function SignedIn({ children, roles = [] }: { children: React.ReactNode; roles?: string[] }) {
-  const [ready, setReady] = useState<boolean | null>(null);
+function tokenHasAnyRole(token: string, required: string[]): boolean {
+  if (required.length === 0) return true;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return true;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded)) as { roles?: string[]; realm_access?: { roles?: string[] } };
+    const roles = payload.roles ?? payload.realm_access?.roles ?? [];
+    return required.some((r) => roles.includes(r) || (r === "ops" && roles.includes("ops_admin")));
+  } catch {
+    return true;
+  }
+}
+
+function SignedIn({
+  children,
+  roles = [],
+  onAuthChange,
+}: {
+  children: React.ReactNode;
+  roles?: string[];
+  onAuthChange?: (signedIn: boolean) => void;
+}) {
+  const [token, setToken] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     getToken()
-      .then((t) => setReady(!!t))
-      .catch(() => setReady(false));
-  }, []);
+      .then((t) => {
+        setToken(t);
+        onAuthChange?.(!!t);
+      })
+      .catch(() => {
+        setToken(null);
+        onAuthChange?.(false);
+      });
+  }, [onAuthChange]);
 
-  if (ready === null) return null;
-  if (!ready) {
-    return <LoginScreen roles={roles} onAuthenticated={() => setReady(true)} />;
+  if (token === undefined) return null;
+  if (!token) {
+    return (
+      <LoginScreen
+        roles={roles}
+        onAuthenticated={() => {
+          void getToken().then((t) => {
+            setToken(t);
+            onAuthChange?.(!!t);
+          });
+        }}
+      />
+    );
+  }
+  if (!tokenHasAnyRole(token, roles)) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <h1>Operations Access Required</h1>
+          <p className="notice error">
+            Your signed-in account does not have the <code>ops</code> role required for the Operations Console.
+          </p>
+          <button
+            type="button"
+            className="large full-width"
+            onClick={() => void signOut().then(() => window.location.assign("/"))}
+          >
+            Sign out &amp; switch account
+          </button>
+        </div>
+      </div>
+    );
   }
   return (
     <Suspense fallback={<main className="narrow"><p className="muted">Loading workspace…</p></main>}>
@@ -45,6 +103,12 @@ function App() {
   const path = window.location.pathname;
   const [callbackDone, setCallbackDone] = useState(false);
   const [callbackError, setCallbackError] = useState<string | null>(null);
+  const [hasSession, setHasSession] = useState(false);
+
+  useEffect(() => {
+    void getToken().then((t) => setHasSession(!!t)).catch(() => setHasSession(false));
+  }, [callbackDone]);
+
   useEffect(() => {
     if (path === "/app/callback") {
       completeSignIn()
@@ -101,19 +165,21 @@ function App() {
         <a href="/kitchen" className={navItemClass("/kitchen")}>Kitchen</a>
         <a href="/developer" className={navItemClass("/developer")}>Developer</a>
         <a href="/ops" className={navItemClass("/ops")}>Operations</a>
-        <button
-          className="link nav-signout"
-          onClick={() => void signOut().then(() => window.location.assign("/"))}
-        >
-          Sign out
-        </button>
+        {hasSession && (
+          <button
+            className="link nav-signout"
+            onClick={() => void signOut().then(() => window.location.assign("/"))}
+          >
+            Sign out
+          </button>
+        )}
       </nav>
     </header>
   );
-  if (path.startsWith("/merchant")) return <>{header}<SignedIn><MerchantDashboard /></SignedIn></>;
-  if (path.startsWith("/developer")) return <>{header}<SignedIn><DeveloperPortal /></SignedIn></>;
-  if (path.startsWith("/ops")) return <>{header}<SignedIn roles={["ops"]}><OpsConsole /></SignedIn></>;
-  if (path.startsWith("/app")) return <>{header}<SignedIn><Wallet /></SignedIn></>;
+  if (path.startsWith("/merchant")) return <>{header}<SignedIn onAuthChange={setHasSession}><MerchantDashboard /></SignedIn></>;
+  if (path.startsWith("/developer")) return <>{header}<SignedIn onAuthChange={setHasSession}><DeveloperPortal /></SignedIn></>;
+  if (path.startsWith("/ops")) return <>{header}<SignedIn roles={["ops"]} onAuthChange={setHasSession}><OpsConsole /></SignedIn></>;
+  if (path.startsWith("/app")) return <>{header}<SignedIn onAuthChange={setHasSession}><Wallet /></SignedIn></>;
   return (
     <>
       {header}

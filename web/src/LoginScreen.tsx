@@ -344,15 +344,26 @@ export function LoginScreen({
             </label>
             <label>
               Password (min. 8 characters)
-              <input
-                type={showPassword ? "text" : "password"}
-                autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Create a strong password"
-                minLength={8}
-                required
-              />
+              <div style={{ display: "flex", gap: "0.4rem" }}>
+                <input
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Create a strong password"
+                  minLength={8}
+                  style={{ flex: 1 }}
+                  required
+                />
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setShowPassword((v) => !v)}
+                  style={{ whiteSpace: "nowrap" }}
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
             </label>
             <label>
               Confirm Password
@@ -513,6 +524,19 @@ export function LoginScreen({
             <button type="submit" className="large full-width" disabled={busy} style={{ marginTop: "0.5rem" }}>
               {busy ? "Updating password…" : "Update Password"}
             </button>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: "0.75rem" }}>
+              <button type="button" className="link small" disabled={busy} onClick={() => void handleResend()}>
+                Resend Email &amp; SMS codes
+              </button>
+              <button
+                type="button"
+                className="link small"
+                disabled={busy}
+                onClick={() => { setMode("login"); setChallenge(null); setError(null); setNotice(null); }}
+              >
+                Back to sign in
+              </button>
+            </div>
           </form>
         )}
 
