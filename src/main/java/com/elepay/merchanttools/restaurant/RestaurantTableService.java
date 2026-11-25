@@ -115,14 +115,15 @@ public class RestaurantTableService {
 
     @Transactional
     public RestaurantTable seatTable(UUID tableId, UUID orderId) {
-        db.sql("""
+        int changed = db.sql("""
             UPDATE restaurant_table
             SET status = 'OCCUPIED', current_order_id = :orderId
-            WHERE id = :id
+            WHERE id = :id AND (current_order_id IS NULL OR current_order_id = :orderId)
             """)
             .param("orderId", orderId)
             .param("id", tableId)
             .update();
+        if (changed != 1) throw com.elepay.common.ApiException.conflict("table_in_use", "Table already has an order");
 
         return getTable(tableId).orElseThrow();
     }

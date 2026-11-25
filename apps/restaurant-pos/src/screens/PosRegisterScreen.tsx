@@ -177,7 +177,8 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
     if (!t.currentOrderId) { setTableId(t.id); return; }
     setLoadingExisting(true);
     try {
-      const existing = await client.call<PosOrder>(`/v1/pos/orders/${t.currentOrderId}`);
+      if (!selectedTerminal || !cashier || !shift || shift.cashierId !== cashier.id) throw new Error("Authenticate a cashier and open a shift first.");
+      const existing = await client.call<PosOrder>(`/v1/restaurant/waiter/${merchant.id}/orders/${t.currentOrderId}/cashier`, {body:{terminalId:selectedTerminal.id,cashierId:cashier.id}});
       if (existing.status !== "PENDING" || existing.paidPesewas !== 0) throw new Error("Order is not an unpaid pending order.");
       const items = await client.call<PosOrderItem[]>(`/v1/pos/orders/${existing.id}/items`);
       setOrder(existing); setTableId(t.id); setOrderType("DINE_IN"); setKdsSent(true);

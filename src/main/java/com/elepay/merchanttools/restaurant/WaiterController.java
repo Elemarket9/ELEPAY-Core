@@ -10,7 +10,6 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -121,7 +120,7 @@ public class WaiterController {
         var kitchenItems = orders.listOrderItems(order.id()).stream().map(item ->
                 new KdsService.KdsItemInput(item.id(), item.itemName(), item.quantity(), item.notes(), "MAIN")).toList();
         var ticket = kitchen.createTicket(merchant, order.id(), table.id(), DiningMode.DINE_IN, null,
-                "MAIN", kitchenItems, req.notes(), "waiter:" + order.id());
+                "MAIN", kitchenItems, req.notes(), "pos:" + order.id());
         db.sql("UPDATE restaurant_table SET status = 'OCCUPIED', current_order_id = :o WHERE id = :t")
                 .param("o", order.id()).param("t", table.id()).update();
         db.sql("""
@@ -180,12 +179,51 @@ public class WaiterController {
                 .param("o", order).update();
     }
 
+    @PostMapping("/{merchant}/orders/{order}/close-table")
+    @Transactional
+    public void closeTable(@PathVariable UUID merchant, @PathVariable UUID order) {
+        var caller = waiter(merchant);
+        UUID ticket = ownedTicket(merchant, caller, order);
+        if (!"SERVED".equals(kitchen.getTicket(ticket).orElseThrow().status()))
+            throw ApiException.conflict("not_served", "Food must be served before closing the table");
+        int changed = db.sql("""
+                UPDATE restaurant_table t SET status = 'DIRTY', current_order_id = NULL
+                FROM pos_order o WHERE t.current_order_id = o.id AND o.id = :o AND o.status = 'PAID'
+                """).param("o", order).update();
+        if (changed != 1) throw ApiException.conflict("not_paid", "Cashier payment is required before closing the table");
+    }
+
+    public record Claim(UUID terminalId, UUID cashierId) {}
+
+    @PostMapping("/{merchant}/orders/{order}/cashier")
+    @Transactional
+    public PosOrderService.PosOrder claim(@PathVariable UUID merchant, @PathVariable UUID order, @RequestBody Claim req) {
+        var caller = access.operateAccess(merchant);
+        access.belongs(merchant, MerchantToolAccess.Resource.ORDER, order);
+        access.belongs(merchant, MerchantToolAccess.Resource.TERMINAL, req.terminalId());
+        access.belongs(merchant, MerchantToolAccess.Resource.CASHIER, req.cashierId());
+        access.requireTerminal(caller, req.terminalId());
+        access.requireOrderBranch(caller, order);
+        int changed = db.sql("""
+                UPDATE pos_order o SET terminal_id = :t, cashier_id = :c
+                WHERE o.id = :o AND o.merchant_id = :m AND o.status = 'PENDING' AND o.paid_pesewas = 0
+                AND (o.terminal_id IS NULL OR (o.terminal_id = :t AND o.cashier_id = :c))
+                AND EXISTS (SELECT 1 FROM pos_terminal t JOIN pos_shift s ON s.terminal_id = t.id
+                    JOIN pos_cashier c ON c.id = s.cashier_id
+                    WHERE t.id = :t AND t.branch_id = o.branch_id AND t.merchant_id = :m
+                      AND t.status <> 'REVOKED' AND c.is_active AND s.cashier_id = :c AND s.status = 'OPEN')
+                """).param("t", req.terminalId()).param("c", req.cashierId()).param("o", order)
+                .param("m", merchant).update();
+        if (changed != 1) throw ApiException.conflict("cashier_claim_failed", "An active shift in the order branch is required; another cashier may have claimed this order");
+        return orders.getOrder(order).orElseThrow();
+    }
+
     @GetMapping("/{merchant}/bill-requests")
     public List<UUID> billRequests(@PathVariable UUID merchant) {
         var caller = access.operateAccess(merchant);
         return db.sql("""
                 SELECT w.order_id FROM restaurant_waiter_order w JOIN pos_order o ON o.id = w.order_id
-                WHERE w.merchant_id = :m AND w.bill_requested_at IS NOT NULL AND o.status = 'PENDING'
+                WHERE w.merchant_id = :m AND w.bill_requested_at IS NOT NULL AND o.status IN ('PENDING', 'PARTIAL')
                 AND (CAST(:b AS uuid) IS NULL OR o.branch_id = :b)
                 """).param("m", merchant).param("b", caller.branchId()).query(UUID.class).list();
     }

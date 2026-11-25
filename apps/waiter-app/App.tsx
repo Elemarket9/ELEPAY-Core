@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import * as SecureStore from "expo-secure-store";
-import { ElepayClient, MerchantView, formatMoney, newKey } from "@elepay/mobile-core";
+import { ApiError, ElepayClient, MerchantView, formatMoney, newKey } from "@elepay/mobile-core";
 
 type Table = { id: string; tableNumber: string; capacity: number; status: string; currentOrderId: string | null };
 type Menu = { variantId: string; name: string; category: string | null; pricePesewas: number };
@@ -84,16 +84,21 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
       await SecureStore.deleteItemAsync(PENDING);
       setPending(null);setLines([]);setTable("");setNotes("");setTab("track");
       setNotice("Sent to kitchen: "+result.orderNumber+" · "+formatMoney(result.totalPesewas));
-    } catch(e) {setError(message(e)+" — if submission was attempted, retry the same order to avoid duplicates.");}
+     } catch(e) {
+      if(e instanceof ApiError && (e.status===400 || (e.status===409 && e.code==="table_in_use"))) {
+        try {await SecureStore.deleteItemAsync(PENDING);setPending(null);} catch(storageError){setError(message(storageError));}
+      }
+      setError(message(e)+" — retry the same order if submission remains pending.");
+    }
     finally {sending.current=false;setBusy(false);}
   }
-  async function action(order:Order,kind:"served"|"bill") {
+  async function action(order:Order,kind:"served"|"bill"|"close-table") {
     if(sending.current)return;
     sending.current=true;setBusy(true);setError("");
     try {
       await client.call(prefix+"/orders/"+order.orderId+"/"+kind,{method:"POST",idempotencyKey:newKey()});
-      setOrders(old=>old.map(x=>x.orderId===order.orderId?{...x,...(kind==="served"?{kitchenStatus:"SERVED"}:{billRequested:true})}:x));
-      setNotice(kind==="served"?"Marked served":"Bill requested from cashier");
+      setOrders(old=>kind==="close-table"?old.filter(x=>x.orderId!==order.orderId):old.map(x=>x.orderId===order.orderId?{...x,...(kind==="served"?{kitchenStatus:"SERVED"}:{billRequested:true})}:x));
+      setNotice(kind==="served"?"Marked served":kind==="bill"?"Bill requested from cashier":"Table closed; ready for cleaning");
     } catch(e){setError(message(e));} finally{sending.current=false;setBusy(false);}
   }
   const total=lines.reduce((sum,line)=>sum+(menu.find(x=>x.variantId===line.variantId)?.pricePesewas??0)*line.quantity,0);
@@ -123,6 +128,7 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
         {!orders.length&&<Text>No active orders.</Text>}
         {orders.map(o=><View key={o.orderId} style={s.card}><Text style={s.title}>Table {o.tableNumber} · {o.kitchenStatus}</Text><Text>{o.orderNumber} · {formatMoney(o.totalPesewas)} · {o.orderStatus}</Text>
           {o.kitchenStatus==="READY"&&<Button label="Mark food served" disabled={busy} onPress={()=>void action(o,"served")}/>}
+          {o.kitchenStatus==="SERVED"&&o.orderStatus==="PAID"&&<Button label="Close paid table" disabled={busy} onPress={()=>void action(o,"close-table")}/>}
           <Button label={o.billRequested?"Bill requested":"Request bill"} disabled={busy||o.billRequested||o.orderStatus!=="PENDING"} onPress={()=>void action(o,"bill")}/>
         </View>)}
       </>}
