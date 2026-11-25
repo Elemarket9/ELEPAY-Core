@@ -86,21 +86,19 @@ public class PosSplitBillService {
             itemsSum = Math.addExact(itemsSum, sub);
         }
 
-        long adjustment = Math.subtractExact(order.totalPesewas(), itemsSum);
-        long distributed = 0L;
         List<SeatSplitGroup> groups = new ArrayList<>(entries.size());
-        for (int i = 0; i < entries.size(); i++) {
-            long share;
-            if (i == entries.size() - 1) {
-                share = Math.subtractExact(adjustment, distributed);
-            } else if (itemsSum > 0) {
-                share = (adjustment * seatBases[i]) / itemsSum;
+        if (!entries.isEmpty()) {
+            long[] seatTotals;
+            if (itemsSum > 0) {
+                seatTotals = com.elepay.common.ProportionalAllocation.allocate(order.totalPesewas(), seatBases);
             } else {
-                share = adjustment / entries.size();
+                long[] equalWeights = new long[entries.size()];
+                java.util.Arrays.fill(equalWeights, 1L);
+                seatTotals = com.elepay.common.ProportionalAllocation.allocate(order.totalPesewas(), equalWeights);
             }
-            distributed = Math.addExact(distributed, share);
-            long seatTotal = Math.max(0L, Math.addExact(seatBases[i], share));
-            groups.add(new SeatSplitGroup(entries.get(i).getKey(), seatTotal, entries.get(i).getValue()));
+            for (int i = 0; i < entries.size(); i++) {
+                groups.add(new SeatSplitGroup(entries.get(i).getKey(), seatTotals[i], entries.get(i).getValue()));
+            }
         }
 
         return new SeatSplitResult(orderId, order.totalPesewas(), groups);

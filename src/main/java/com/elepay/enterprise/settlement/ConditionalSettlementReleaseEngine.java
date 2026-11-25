@@ -151,7 +151,7 @@ public class ConditionalSettlementReleaseEngine {
 
         SettlementRule rule = getSettlementRule(enterpriseId, null, cur);
 
-        // 1. Fetch eligible delivered items and unconfirmed held items
+        // 1. Fetch eligible delivered items and unconfirmed held items (bounded per batch for 1M+ scale)
         List<DeliveryEscrowRecord> allHeld = db.sql("""
                 SELECT id, enterprise_id, order_reference, item_reference, merchant_id,
                        gross_amount_pesewas, net_payable_pesewas, commission_pesewas,
@@ -160,6 +160,7 @@ public class ConditionalSettlementReleaseEngine {
                 FROM enterprise_delivery_escrow
                 WHERE enterprise_id = :enterpriseId AND escrow_status = 'HELD' AND currency = :cur
                 ORDER BY created_at ASC, id ASC
+                LIMIT 500
                 FOR UPDATE SKIP LOCKED
                 """)
                 .param("cur", cur)

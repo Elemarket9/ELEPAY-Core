@@ -320,6 +320,9 @@ class CheckoutService {
             long commission = 0;
             long processing = 0;
             long reserve = 0;
+            if (a.reserveBps() != null && (a.reserveBps() < 0 || a.reserveBps() > 5000)) {
+                throw ApiException.badRequest("invalid_reserve_bps", "Reserve must be 0 to 50%");
+            }
             if (marketplaceLine && kind.equals("sale")) {
                 FeeRule rule = feeRule(collectorId, category);
                 commission = rule.commission(a.amount());
@@ -547,8 +550,8 @@ class CheckoutService {
             if (a.reserveAmount() > 0) {
                 legs.add(Leg.credit(ledger.open("merchant", a.merchantId(), "reserved", Ledger.GHS), a.reserveAmount()));
             }
-            platform += a.platformFee();
-            deferred += a.merchantFee();
+            platform = Math.addExact(platform, a.platformFee());
+            deferred = Math.addExact(deferred, a.merchantFee());
             held |= a.holdUntilDelivered();
         }
         if (platform > 0) {
@@ -1030,6 +1033,7 @@ class CheckoutService {
                   AND (CAST(:merchant AS uuid) IS NULL OR a.merchant_id = CAST(:merchant AS uuid))
                   AND (CAST(:checkout AS uuid) IS NULL OR a.checkout_id = CAST(:checkout AS uuid))
                 ORDER BY a.merchant_id, a.checkout_id, a.line
+                LIMIT 500
                 FOR UPDATE OF a SKIP LOCKED""")
                 .param("merchant", onlyMerchant).param("checkout", onlyCheckout)
                 .query((rs, i) -> new Candidate(rs.getObject(1, UUID.class), rs.getInt(2), rs.getObject(3, UUID.class),
@@ -1255,16 +1259,18 @@ class CheckoutService {
                 .describedAs("Reserve release for checkout " + reference + " line " + line)
                 .withMetadata(Map.of("checkout", reference, "line", String.valueOf(line), "merchant", a.merchantId().toString())));
 
+        String releaseStatus = (a.reserveReleased() + amount >= a.reserveAmount()) ? "RELEASED" : "PARTIALLY_RELEASED";
         db.sql("""
                 UPDATE checkout_allocation
                 SET reserve_released = reserve_released + :amt,
                     pending_amount = pending_amount + :pendingInc,
                     settled_amount = settled_amount + :settledInc,
-                    release_status = CASE WHEN reserve_released + :amt >= reserve_amount THEN 'RELEASED' ELSE 'PARTIALLY_RELEASED' END
+                    release_status = :rstat
                 WHERE checkout_id = :c AND line = :l""")
                 .param("amt", amount)
                 .param("pendingInc", settled ? 0L : amount)
                 .param("settledInc", settled ? amount : 0L)
+                .param("rstat", releaseStatus)
                 .param("c", c.id()).param("l", line).update();
 
         db.sql("""
@@ -1278,7 +1284,7 @@ class CheckoutService {
         outbox.publish("checkout", reference, "checkout.reserve.released",
                 Map.of("reference", reference, "line", line, "amount", amount), setOf(a.merchantId(), c.collectorId()));
 
-        return new ReserveRelease(releaseId, c.id(), line, a.merchantId(), amount, posted.transactionId(), "RELEASED");
+        return new ReserveRelease(releaseId, c.id(), line, a.merchantId(), amount, posted.transactionId(), releaseStatus);
     }
 
     @Scheduled(fixedDelayString = "${elepay.checkout.job-ms:60000}")
@@ -1288,7 +1294,14 @@ class CheckoutService {
         if (jobLock != null && !jobLock.tryLockInCurrentTx("checkout-jobs")) return;
         settleDue(false, null, null);
         db.sql("""
-                UPDATE checkout SET status = 'expired' WHERE status = 'open' AND expires_at < now()""").update();
+                UPDATE checkout SET status = 'expired'
+                WHERE id IN (
+                    SELECT id FROM checkout
+                    WHERE status = 'open' AND expires_at < now()
+                    ORDER BY expires_at ASC
+                    LIMIT 1000
+                    FOR UPDATE SKIP LOCKED
+                )""").update();
     }
 
     private static Set<UUID> setOf(UUID... ids) {

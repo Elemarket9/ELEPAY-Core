@@ -17,7 +17,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Enterprise Refund Orchestration Service.
@@ -28,6 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Service
 public class EnterpriseRefundService {
+    private static final int MAX_CACHE_ENTRIES = 10_000;
+    private static final int LOCK_STRIPES = 256;
 
     private final Ledger ledger;
     private final EnterpriseItemRefundCalculator refundCalculator;
@@ -36,10 +40,37 @@ public class EnterpriseRefundService {
     private final ExternalWalletEngine walletEngine;
     private final JdbcClient db;
 
-    // Concurrent lookup caches for fast lookup and unit tests
-    private final Map<UUID, EnterpriseRefundResult> refundsById = new ConcurrentHashMap<>();
-    private final Map<String, EnterpriseRefundResult> refundsByIdempotency = new ConcurrentHashMap<>();
-    private final Map<String, OrderRefundState> orderRefundStates = new ConcurrentHashMap<>();
+    // Bounded LRU caches (prevent unbounded heap growth / OOM at 1M+ refunds)
+    private final Map<UUID, EnterpriseRefundResult> refundsById = boundedLru(MAX_CACHE_ENTRIES);
+    private final Map<String, EnterpriseRefundResult> refundsByTenantIdempotency = boundedLru(MAX_CACHE_ENTRIES);
+    private final Map<String, EnterpriseRefundResult> refundsByIdempotency = boundedLru(MAX_CACHE_ENTRIES);
+    private final Map<String, OrderRefundState> orderRefundStates = boundedLru(MAX_CACHE_ENTRIES);
+    private final ReentrantLock[] orderLocks = initLocks();
+
+    private static <K, V> Map<K, V> boundedLru(int maxEntries) {
+        return Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+                return size() > maxEntries;
+            }
+        });
+    }
+
+    private static ReentrantLock[] initLocks() {
+        ReentrantLock[] locks = new ReentrantLock[LOCK_STRIPES];
+        for (int i = 0; i < LOCK_STRIPES; i++) {
+            locks[i] = new ReentrantLock();
+        }
+        return locks;
+    }
+
+    private ReentrantLock lockForOrder(String key) {
+        return orderLocks[Math.floorMod(key.hashCode(), LOCK_STRIPES)];
+    }
+
+    private static String tenantIdemKey(UUID enterpriseId, String idempotencyKey) {
+        return enterpriseId + ":" + idempotencyKey;
+    }
 
     private record OrderRefundState(
             UUID enterpriseId,
@@ -97,12 +128,14 @@ public class EnterpriseRefundService {
     public EnterpriseRefundResult processRefund(EnterpriseItemRefundRequest request) {
         Objects.requireNonNull(request, "request cannot be null");
 
-        // 1. Idempotency Check (in-memory cache, then authoritative DB)
-        EnterpriseRefundResult existing = refundsByIdempotency.get(request.idempotencyKey());
+        // 1. Idempotency Check (tenant-scoped in-memory cache, then authoritative DB)
+        String scopedIdemKey = tenantIdemKey(request.enterpriseId(), request.idempotencyKey());
+        EnterpriseRefundResult existing = refundsByTenantIdempotency.get(scopedIdemKey);
         if (existing == null && db != null) {
             existing = findRefundInDbByIdempotencyKey(request.enterpriseId(), request.idempotencyKey()).orElse(null);
             if (existing != null) {
                 refundsById.put(existing.refundId(), existing);
+                refundsByTenantIdempotency.put(scopedIdemKey, existing);
                 refundsByIdempotency.put(request.idempotencyKey(), existing);
             }
         }
@@ -141,8 +174,12 @@ public class EnterpriseRefundService {
             );
         }
 
-        synchronized (orderKey(request.enterpriseId(), request.orderReference()).intern()) {
+        ReentrantLock lock = lockForOrder(orderKey(request.enterpriseId(), request.orderReference()));
+        lock.lock();
+        try {
             return doProcessRefund(request);
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -475,14 +512,34 @@ public class EnterpriseRefundService {
                 now
         );
 
-        refundsById.put(refundId, result);
-        refundsByIdempotency.put(request.idempotencyKey(), result);
+        Runnable cachePut = () -> {
+            refundsById.put(refundId, result);
+            refundsByTenantIdempotency.put(tenantIdemKey(request.enterpriseId(), request.idempotencyKey()), result);
+            refundsByIdempotency.put(request.idempotencyKey(), result);
+        };
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    cachePut.run();
+                }
+            });
+        } else {
+            cachePut.run();
+        }
 
         return result;
     }
 
     public Optional<EnterpriseRefundResult> findRefundById(UUID refundId) {
         return Optional.ofNullable(refundsById.get(refundId));
+    }
+
+    public Optional<EnterpriseRefundResult> findRefundByIdempotencyKey(UUID enterpriseId, String idempotencyKey) {
+        if (enterpriseId == null || idempotencyKey == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(refundsByTenantIdempotency.get(tenantIdemKey(enterpriseId, idempotencyKey)));
     }
 
     public Optional<EnterpriseRefundResult> findRefundByIdempotencyKey(String idempotencyKey) {

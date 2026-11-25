@@ -52,6 +52,10 @@ public class EnterpriseItemRefundCalculator {
             reserveReversal = item.customReserveReversalPesewas() != null ? item.customReserveReversalPesewas() : 0L;
             merchantReversal = item.customMerchantReversalPesewas();
 
+            if (merchantReversal < 0 || commissionReversal < 0 || platformFeeReversal < 0 || reserveReversal < 0) {
+                throw new IllegalArgumentException("Custom refund reversal components cannot be negative");
+            }
+
             long sum = Math.addExact(
                     Math.addExact(merchantReversal, commissionReversal),
                     Math.addExact(Math.addExact(platformFeeReversal, reserveReversal), taxReversal)
@@ -60,7 +64,7 @@ public class EnterpriseItemRefundCalculator {
                 throw new IllegalArgumentException("Custom refund breakdown (" + sum + ") does not equal gross (" + gross + ")");
             }
         } else {
-            // Proportional integer math calculation
+            // Proportional integer math calculation (BigInteger prevents 64-bit overflow on large gross)
             int commBps = item.commissionBps() != null ? item.commissionBps() : 0;
             int platBps = item.platformFeeBps() != null ? item.platformFeeBps() : 0;
             int resBps = item.reserveBps() != null ? item.reserveBps() : 0;
@@ -69,9 +73,11 @@ public class EnterpriseItemRefundCalculator {
                 throw new IllegalArgumentException("Basis points must be between 0 and 10000");
             }
 
-            commissionReversal = (gross * commBps) / 10000L;
-            platformFeeReversal = (gross * platBps) / 10000L;
-            reserveReversal = (gross * resBps) / 10000L;
+            java.math.BigInteger grossBig = java.math.BigInteger.valueOf(gross);
+            java.math.BigInteger bpsDenom = java.math.BigInteger.valueOf(10_000L);
+            commissionReversal = grossBig.multiply(java.math.BigInteger.valueOf(commBps)).divide(bpsDenom).longValueExact();
+            platformFeeReversal = grossBig.multiply(java.math.BigInteger.valueOf(platBps)).divide(bpsDenom).longValueExact();
+            reserveReversal = grossBig.multiply(java.math.BigInteger.valueOf(resBps)).divide(bpsDenom).longValueExact();
 
             long totalDeductions = Math.addExact(
                     Math.addExact(commissionReversal, platformFeeReversal),
@@ -83,7 +89,7 @@ public class EnterpriseItemRefundCalculator {
                         + ") exceed item gross (" + gross + ")");
             }
 
-            merchantReversal = gross - totalDeductions;
+            merchantReversal = Math.subtractExact(gross, totalDeductions);
         }
 
         return new CalculatedItemRefund(

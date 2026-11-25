@@ -2,6 +2,7 @@ package com.elepay.enterprise.checkout;
 
 import com.elepay.common.ApiException;
 import com.elepay.common.ProportionalAllocation;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -28,6 +29,17 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class EnterpriseMultiMerchantSplitter {
+    private static final BigInteger BPS_DENOMINATOR = BigInteger.valueOf(10_000L);
+
+    private static long bpsOf(long gross, int bps) {
+        if (bps <= 0 || gross <= 0) {
+            return 0L;
+        }
+        return BigInteger.valueOf(gross)
+                .multiply(BigInteger.valueOf(bps))
+                .divide(BPS_DENOMINATOR)
+                .longValueExact();
+    }
 
     /**
      * Splits an enterprise checkout request deterministically across all participants.
@@ -72,7 +84,7 @@ public class EnterpriseMultiMerchantSplitter {
             // Marketplace commission: percentage bps + fixed fee with minimum floor
             long commission = 0L;
             if (item.commissionBps() != null && item.commissionBps() > 0) {
-                commission = (gross * item.commissionBps()) / 10000L;
+                commission = bpsOf(gross, item.commissionBps());
             }
             if (item.fixedCommissionPesewas() != null && item.fixedCommissionPesewas() > 0) {
                 commission = Math.addExact(commission, item.fixedCommissionPesewas());
@@ -84,7 +96,7 @@ public class EnterpriseMultiMerchantSplitter {
             // Platform service fee (ELEPAY platform charge)
             long platformFee = 0L;
             if (item.platformFeeBps() != null && item.platformFeeBps() > 0) {
-                platformFee = (gross * item.platformFeeBps()) / 10000L;
+                platformFee = bpsOf(gross, item.platformFeeBps());
             }
             if (item.fixedPlatformFeePesewas() != null && item.fixedPlatformFeePesewas() > 0) {
                 platformFee = Math.addExact(platformFee, item.fixedPlatformFeePesewas());
@@ -93,7 +105,7 @@ public class EnterpriseMultiMerchantSplitter {
             // Reserve retention
             long reserve = 0L;
             if (item.reserveBps() != null && item.reserveBps() > 0) {
-                reserve = (gross * item.reserveBps()) / 10000L;
+                reserve = bpsOf(gross, item.reserveBps());
             }
             if (item.fixedReservePesewas() != null && item.fixedReservePesewas() > 0) {
                 reserve = Math.addExact(reserve, item.fixedReservePesewas());
@@ -130,12 +142,12 @@ public class EnterpriseMultiMerchantSplitter {
 
             long commission = 0L;
             if (delivery.marketplaceCommissionBps() != null && delivery.marketplaceCommissionBps() > 0) {
-                commission = (gross * delivery.marketplaceCommissionBps()) / 10000L;
+                commission = bpsOf(gross, delivery.marketplaceCommissionBps());
             }
 
             long platformFee = 0L;
             if (delivery.platformFeeBps() != null && delivery.platformFeeBps() > 0) {
-                platformFee = (gross * delivery.platformFeeBps()) / 10000L;
+                platformFee = bpsOf(gross, delivery.platformFeeBps());
             }
 
             long totalDeductions = Math.addExact(commission, platformFee);

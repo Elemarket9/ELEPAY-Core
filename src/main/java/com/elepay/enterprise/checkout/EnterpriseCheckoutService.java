@@ -6,11 +6,12 @@ import com.elepay.ledger.Ledger.Leg;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Enterprise Externally Collected Payment & Multi-Merchant Split Service.
@@ -22,14 +23,25 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class EnterpriseCheckoutService {
+    private static final int MAX_CACHE_ENTRIES = 10_000;
 
     private final Ledger ledger;
     private final EnterpriseMultiMerchantSplitter splitter;
     private final JdbcClient db;
 
-    // Concurrent lookup indices for processed enterprise checkouts
-    private final Map<UUID, EnterpriseCheckoutResult> checkoutsById = new ConcurrentHashMap<>();
-    private final Map<String, EnterpriseCheckoutResult> checkoutsByOrderRef = new ConcurrentHashMap<>();
+    // Bounded LRU caches (prevent unbounded heap growth / OOM at 1M+ orders)
+    private final Map<UUID, EnterpriseCheckoutResult> checkoutsById = boundedLru(MAX_CACHE_ENTRIES);
+    private final Map<String, EnterpriseCheckoutResult> checkoutsByTenantOrderRef = boundedLru(MAX_CACHE_ENTRIES);
+    private final Map<String, EnterpriseCheckoutResult> checkoutsByOrderRef = boundedLru(MAX_CACHE_ENTRIES);
+
+    private static <K, V> Map<K, V> boundedLru(int maxEntries) {
+        return Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+                return size() > maxEntries;
+            }
+        });
+    }
 
     @Autowired
     public EnterpriseCheckoutService(Ledger ledger, EnterpriseMultiMerchantSplitter splitter,
@@ -182,8 +194,21 @@ public class EnterpriseCheckoutService {
                 posted.replay()
         );
 
-        checkoutsById.put(checkoutId, result);
-        checkoutsByOrderRef.put(request.orderReference(), result);
+        Runnable cachePut = () -> {
+            checkoutsById.put(checkoutId, result);
+            checkoutsByTenantOrderRef.put(tenantOrderKey(request.enterpriseId(), request.orderReference()), result);
+            checkoutsByOrderRef.put(request.orderReference(), result);
+        };
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    cachePut.run();
+                }
+            });
+        } else {
+            cachePut.run();
+        }
 
         return result;
     }
@@ -203,10 +228,25 @@ public class EnterpriseCheckoutService {
     }
 
     /**
+     * Tenant-scoped lookup by enterprise ID and external order reference.
+     */
+    public Optional<EnterpriseCheckoutResult> findCheckoutByOrderReference(UUID enterpriseId, String orderReference) {
+        if (enterpriseId == null || orderReference == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(checkoutsByTenantOrderRef.get(tenantOrderKey(enterpriseId, orderReference)));
+    }
+
+    /**
      * Looks up an ingested checkout by external order reference.
+     * Prefer {@link #findCheckoutByOrderReference(UUID, String)} for multi-tenant isolation.
      */
     public Optional<EnterpriseCheckoutResult> findCheckoutByOrderReference(String orderReference) {
         return Optional.ofNullable(checkoutsByOrderRef.get(orderReference));
+    }
+
+    private static String tenantOrderKey(UUID enterpriseId, String orderReference) {
+        return enterpriseId + ":" + orderReference;
     }
 
     private static String sanitizeCode(String input) {

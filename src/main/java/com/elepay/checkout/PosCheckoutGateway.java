@@ -62,7 +62,6 @@ public class PosCheckoutGateway {
                 "POS payment", 30, actor, orderRef).reference();
     }
 
-    @Transactional
     public RailStartResult startAndSubmitRail(String reference, String method, String msisdn, String network, String email) {
         var started = checkouts.startRailPayment(reference, method, msisdn, network, email, payUrl(reference));
         if (started != null && started.attemptId() != null) {

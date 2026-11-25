@@ -46,10 +46,13 @@ public class DeliveryEscrowService {
         String cur = currency != null ? currency : "GHS";
 
         List<DeliveryEscrowRecord> records = new ArrayList<>();
+        Set<String> usedRefs = new HashSet<>();
 
-        for (CalculatedMerchantAllocation alloc : allocations) {
+        for (int idx = 0; idx < allocations.size(); idx++) {
+            CalculatedMerchantAllocation alloc = allocations.get(idx);
             UUID id = UUID.randomUUID();
-            String itemRef = alloc.description() != null ? alloc.description() : "item-" + alloc.merchantId();
+            String baseRef = alloc.description() != null ? alloc.description() : "item-" + alloc.merchantId();
+            String itemRef = usedRefs.add(baseRef) ? baseRef : baseRef + "#" + idx;
 
             db.sql("""
                     INSERT INTO enterprise_delivery_escrow (

@@ -8,20 +8,22 @@ import java.security.SecureRandom;
  */
 public final class References {
     private static final char[] ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ".toCharArray();
-    private static final SecureRandom RANDOM = new SecureRandom();
+    private static final ThreadLocal<SecureRandom> RANDOM = ThreadLocal.withInitial(SecureRandom::new);
 
     private References() {}
 
     public static String next(String prefix) {
-        StringBuilder sb = new StringBuilder(prefix).append('-');
-        for (int i = 0; i < 8; i++) sb.append(ALPHABET[RANDOM.nextInt(ALPHABET.length)]);
+        SecureRandom rng = RANDOM.get();
+        StringBuilder sb = new StringBuilder(prefix.length() + 13).append(prefix).append('-');
+        for (int i = 0; i < 12; i++) sb.append(ALPHABET[rng.nextInt(ALPHABET.length)]);
         return sb.toString();
     }
 
     public static String digits(int length) {
-        StringBuilder sb = new StringBuilder();
-        sb.append((char) ('1' + RANDOM.nextInt(9)));
-        for (int i = 1; i < length; i++) sb.append((char) ('0' + RANDOM.nextInt(10)));
+        SecureRandom rng = RANDOM.get();
+        StringBuilder sb = new StringBuilder(length);
+        sb.append((char) ('1' + rng.nextInt(9)));
+        for (int i = 1; i < length; i++) sb.append((char) ('0' + rng.nextInt(10)));
         return sb.toString();
     }
 

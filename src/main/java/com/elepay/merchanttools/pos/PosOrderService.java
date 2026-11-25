@@ -604,6 +604,16 @@ public class PosOrderService {
     @EventListener
     @Transactional
     public void onCheckoutPaid(PosCheckoutGateway.CheckoutPaidEvent event) {
+        Optional<UUID> orderIdOpt = db.sql("""
+                SELECT order_id
+                FROM pos_checkout_link
+                WHERE checkout_ref = :ref
+                """).param("ref", event.reference()).query(UUID.class).optional();
+        if (orderIdOpt.isEmpty()) {
+            return; // Not a POS checkout
+        }
+        // Acquire pos_order lock BEFORE pos_checkout_link lock to match voidOrder() and prevent AB-BA deadlocks.
+        PosOrder order = lockOrder(orderIdOpt.get());
         Optional<Link> linkOpt = db.sql("""
                 SELECT id, order_id, checkout_ref, amount, status, split_key
                 FROM pos_checkout_link
@@ -611,13 +621,12 @@ public class PosOrderService {
                 FOR UPDATE
                 """).param("ref", event.reference()).query(Link.class).optional();
         if (linkOpt.isEmpty()) {
-            return; // Not a POS checkout
+            return;
         }
         Link l = linkOpt.get();
         if (!"open".equals(l.status())) {
             return; // Already applied or cancelled
         }
-        PosOrder order = lockOrder(l.orderId());
         if (!PAYABLE_STATUSES.contains(order.status())) {
             opsQueue.raise("pos_overpayment", "high", "pos-checkout:" + l.checkoutRef(), Map.of(
                     "orderId", order.id().toString(),

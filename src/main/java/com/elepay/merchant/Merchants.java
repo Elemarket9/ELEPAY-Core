@@ -167,9 +167,17 @@ class Merchants {
     public List<MerchantView> mine() {
         Actor actor = Actor.current();
         if (actor.isApiKey()) return List.of(view(actor.apiKeyMerchant(), "api_key"));
-        return db.sql("SELECT merchant_id, role FROM merchant_member WHERE subject = :s ORDER BY created_at")
+        return db.sql("""
+                SELECT m.id, m.legal_name, m.trading_name, m.kind, m.status, m.merchant_code,
+                       m.fee_bps, m.fee_fixed, m.settlement_delay_hours, mm.role
+                FROM merchant_member mm
+                JOIN merchant m ON m.id = mm.merchant_id
+                WHERE mm.subject = :s
+                ORDER BY mm.created_at""")
                 .param("s", actor.subject())
-                .query((rs, i) -> view(rs.getObject(1, UUID.class), rs.getString(2))).list();
+                .query((rs, i) -> new MerchantView(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5), rs.getString(6), rs.getInt(7), rs.getLong(8),
+                        rs.getInt(9), rs.getString(10))).list();
     }
 
     @GetMapping("/merchants/{id}")
@@ -191,11 +199,19 @@ class Merchants {
     public List<MerchantView> queue(@RequestParam(required = false) String status) {
         Actor.current().requireOps();
         if (status == null || status.isBlank() || "all".equalsIgnoreCase(status)) {
-            return db.sql("SELECT id FROM merchant ORDER BY created_at DESC LIMIT 200")
-                    .query(UUID.class).list().stream().map(id -> view(id, "ops")).toList();
+            return db.sql("""
+                    SELECT id, legal_name, trading_name, kind, status, merchant_code, fee_bps, fee_fixed, settlement_delay_hours
+                    FROM merchant ORDER BY created_at DESC LIMIT 200""")
+                    .query((rs, i) -> new MerchantView(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
+                            rs.getString(4), rs.getString(5), rs.getString(6), rs.getInt(7), rs.getLong(8),
+                            rs.getInt(9), "ops")).list();
         }
-        return db.sql("SELECT id FROM merchant WHERE status = :s ORDER BY created_at DESC LIMIT 200").param("s", status)
-                .query(UUID.class).list().stream().map(id -> view(id, "ops")).toList();
+        return db.sql("""
+                SELECT id, legal_name, trading_name, kind, status, merchant_code, fee_bps, fee_fixed, settlement_delay_hours
+                FROM merchant WHERE status = :s ORDER BY created_at DESC LIMIT 200""").param("s", status)
+                .query((rs, i) -> new MerchantView(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5), rs.getString(6), rs.getInt(7), rs.getLong(8),
+                        rs.getInt(9), "ops")).list();
     }
 
     @PostMapping("/ops/merchants/{id}/review")
@@ -414,7 +430,8 @@ class Merchants {
         var rowOpt = db.sql("""
                 SELECT oob_token_hash, cooling_off_until, COALESCE(oob_attempts, 0), oob_expires_at
                 FROM settlement_destination
-                WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'""")
+                WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'
+                FOR UPDATE""")
                 .param("d", destination).param("m", id)
                 .query((rs, i) -> new Object[]{rs.getString(1), rs.getObject(2, java.time.OffsetDateTime.class),
                         rs.getInt(3), rs.getObject(4, java.time.OffsetDateTime.class)})

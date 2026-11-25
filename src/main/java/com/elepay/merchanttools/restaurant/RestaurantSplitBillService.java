@@ -58,6 +58,7 @@ public class RestaurantSplitBillService {
             seatSubtotals.add(seatItemTotal);
         }
 
+        long[] allocatedDiscounts = allocateLargestRemainder(order.discountPesewas(), seatSubtotals, grandItemsTotal);
         long[] allocatedTaxes = allocateLargestRemainder(order.taxPesewas(), seatSubtotals, grandItemsTotal);
         long[] allocatedTips = allocateLargestRemainder(order.tipPesewas(), seatSubtotals, grandItemsTotal);
 
@@ -65,9 +66,10 @@ public class RestaurantSplitBillService {
         for (int i = 0; i < seats.size(); i++) {
             int seat = seats.get(i);
             long seatItemTotal = seatSubtotals.get(i);
+            long seatDiscount = allocatedDiscounts[i];
             long seatTax = allocatedTaxes[i];
             long seatTip = allocatedTips[i];
-            long seatTotal = Math.addExact(Math.addExact(seatItemTotal, seatTax), seatTip);
+            long seatTotal = Math.addExact(Math.addExact(Math.subtractExact(seatItemTotal, seatDiscount), seatTax), seatTip);
             bills.add(new SeatBill(seat, seatItemTotal, seatTax, seatTip, seatTotal, seatMap.get(seat)));
         }
 
