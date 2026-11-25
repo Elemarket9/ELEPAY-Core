@@ -229,12 +229,12 @@ class Operations {
                        rt.currency,
                        rt.status AS transaction_status,
                        CASE
-                           WHEN rt.direction = 'charge' THEN COALESCE(rt.request->>'collector', 'ELEPAY Collection')
+                           WHEN rt.direction = 'charge' THEN COALESCE(NULLIF(rt.request->>'description', ''), 'ELEPAY Collection')
                            ELSE COALESCE(NULLIF(rt.request->>'accountName', ''), rt.msisdn, 'MTN Recipient')
                        END AS credit_customer_name,
                        CASE
-                           WHEN rt.direction = 'charge' THEN COALESCE(rt.msisdn, 'MTN Payer')
-                           ELSE COALESCE(rt.request->>'merchant', 'ELEPAY Disbursement')
+                           WHEN rt.direction = 'charge' THEN COALESCE(NULLIF(rt.request->>'customerName', ''), rt.msisdn, 'MTN Payer')
+                           ELSE COALESCE(NULLIF(rt.request->>'customerName', ''), 'ELEPAY Disbursement')
                        END AS debit_customer_name,
                        rt.failure_reason
                 FROM rail_transaction rt

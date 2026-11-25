@@ -642,9 +642,19 @@ public class MtnProductionRail implements PaymentRail {
                 return new AccountBalance(false, 0L, "GHS", "MTN balance failed: HTTP " + response.status());
             }
             JsonNode node = json.readTree(response.body());
-            String rawAmount = node.path("availableBalance").asString("");
+            JsonNode balNode = node.path("availableBalance");
+            BigDecimal amountMajor;
+            if (balNode.isNumber()) {
+                amountMajor = balNode.decimalValue();
+            } else {
+                String rawAmount = balNode.asString("").trim();
+                if (rawAmount.isEmpty()) {
+                    return new AccountBalance(false, 0L, "GHS", "MTN balance missing availableBalance field");
+                }
+                amountMajor = new BigDecimal(rawAmount);
+            }
             String currency = node.path("currency").asString("GHS");
-            long pesewas = new BigDecimal(rawAmount).movePointRight(2).longValueExact();
+            long pesewas = amountMajor.movePointRight(2).setScale(0, java.math.RoundingMode.HALF_UP).longValueExact();
             return new AccountBalance(true, pesewas, currency, "MTN " + product + " balance retrieved");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

@@ -210,15 +210,20 @@ export function OpsConsole() {
 
               {tabs.includes(tab) && (
                 <>
-                  {tab === "Overview" && <Overview />}
+                  {tab === "Overview" && <Overview canManageFinance={me.permissions.canManageFinance ?? false} />}
                   {tab === "Merchant Controls" && <MerchantControls perms={me.permissions} />}
                   {tab === "Maker-Checker" && <MakerChecker canApprove={me.permissions.canApproveMakerChecker ?? false} />}
                   {tab === "Kill Switches" && <KillSwitches />}
-                  {tab === "Custodian Trust" && <CustodianTrust />}
+                  {tab === "Custodian Trust" && <CustodianTrust canManageFinance={me.permissions.canManageFinance ?? false} />}
                   {tab === "System Health" && <SystemHealth />}
                   {tab === "Exceptions" && <Exceptions />}
                   {tab === "Onboarding" && <Onboarding />}
-                  {tab === "Disputes" && <Disputes />}
+                  {tab === "Disputes" && (
+                    <Disputes
+                      canOpen={me.permissions.canManageSupport ?? false}
+                      canResolve={me.permissions.canManageFinance ?? false}
+                    />
+                  )}
                   {tab === "Reconciliation" && <Reconciliation />}
                 </>
               )}
@@ -287,23 +292,22 @@ function SystemHealth() {
     setLoading(true);
     setError(null);
     try {
-      const results = await Promise.all(
-        MONITORED_RAILS.map((r) =>
-          api<RailHealth>(`/v1/ops/rails/health/${r}`).catch(() => ({
-            rail: r,
-            circuitState: "UNKNOWN",
-            totalRequests: 0,
-            successfulRequests: 0,
-            failedRequests: 0,
-            timeoutRequests: 0,
-            errorRate: 0,
-            averageLatencyMs: 0,
-          })),
-        ),
+      const settled = await Promise.allSettled(
+        MONITORED_RAILS.map((r) => api<RailHealth>(`/v1/ops/rails/health/${r}`)),
       );
-      setRails(results);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const okRails: RailHealth[] = [];
+      const failedRails: string[] = [];
+      settled.forEach((res, idx) => {
+        if (res.status === "fulfilled") {
+          okRails.push(res.value);
+        } else {
+          failedRails.push(`${MONITORED_RAILS[idx].toUpperCase()}: ${res.reason instanceof Error ? res.reason.message : String(res.reason)}`);
+        }
+      });
+      setRails(okRails);
+      if (failedRails.length > 0) {
+        setError(`Rail telemetry errors — ${failedRails.join(" · ")}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -376,7 +380,7 @@ interface OpenRailTx {
   createdAt: string;
 }
 
-function Overview() {
+function Overview({ canManageFinance }: { canManageFinance: boolean }) {
   const [o, setO] = useState<Record<string, number> | null>(null);
   const [integrity, setIntegrity] = useState<Integrity | null>(null);
   const [openRails, setOpenRails] = useState<OpenRailTx[]>([]);
@@ -471,19 +475,21 @@ function Overview() {
           </span>
         </div>
       )}
-      <div className="panel" style={{ marginTop: "1rem" }}>
-        <h3>Operational Recovery &amp; Batch Jobs</h3>
-        <div className="ops-action-bar" style={{ marginTop: "0.5rem" }}>
-          <button disabled={busy} onClick={() => void runAction("/v1/ops/rails/recover", undefined, "Rail recovery run")}>
-            <IconRefresh size={15} />
-            {busy ? "Running…" : "Recover Pending Rail Results"}
-          </button>
-          <button className="secondary" disabled={busy} onClick={() => void runAction("/v1/ops/settlements/run", {}, "Settlement run complete")}>
-            <IconLandmark size={15} />
-            {busy ? "Running…" : "Run Due Settlements"}
-          </button>
+      {canManageFinance && (
+        <div className="panel" style={{ marginTop: "1rem" }}>
+          <h3>Operational Recovery &amp; Batch Jobs</h3>
+          <div className="ops-action-bar" style={{ marginTop: "0.5rem" }}>
+            <button disabled={busy} onClick={() => void runAction("/v1/ops/rails/recover", undefined, "Rail recovery run")}>
+              <IconRefresh size={15} />
+              {busy ? "Running…" : "Recover Pending Rail Results"}
+            </button>
+            <button className="secondary" disabled={busy} onClick={() => void runAction("/v1/ops/settlements/run", {}, "Settlement run complete")}>
+              <IconLandmark size={15} />
+              {busy ? "Running…" : "Run Due Settlements"}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="panel" style={{ marginTop: "1rem" }}>
         <div className="flex-between" style={{ marginBottom: "0.65rem" }}>
@@ -718,7 +724,7 @@ export function formatDualControlOutcome(res: unknown, completedMessage: string)
 // -------------------------------------------------------------------------------------------------
 // Disputes
 // -------------------------------------------------------------------------------------------------
-function Disputes() {
+function Disputes({ canOpen, canResolve }: { canOpen: boolean; canResolve: boolean }) {
   const [rows, setRows] = useState<Record<string, string | number>[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [msg, setMsg] = useState<string | null>(null);
@@ -796,11 +802,13 @@ function Disputes() {
     <>
       <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
         <span className="small muted">{rows.length} open dispute{rows.length === 1 ? "" : "s"}</span>
-        <button type="button" className="small" onClick={() => setOpening(!opening)}>
-          {opening ? "Close Form" : "+ Open Dispute"}
-        </button>
+        {canOpen && (
+          <button type="button" className="small" onClick={() => setOpening(!opening)}>
+            {opening ? "Close Form" : "+ Open Dispute"}
+          </button>
+        )}
       </div>
-      {opening && (
+      {canOpen && opening && (
         <form className="panel" style={{ marginBottom: "1rem" }} onSubmit={(e) => void openDispute(e)}>
           <h4 style={{ marginTop: 0 }}>Open Chargeback / Dispute</h4>
           <div className="grid-2">
@@ -830,8 +838,14 @@ function Disputes() {
                   <td className="num mono">{formatMoney(Number(d.amount))}</td>
                   <td>{d.reason}</td>
                   <td className="num" style={{ whiteSpace: "nowrap" }}>
-                    <button className="small" disabled={busy} onClick={() => void resolve(id, "merchant_won")}>Merchant won</button>
-                    <button className="small secondary" disabled={busy} onClick={() => void resolve(id, "customer_won")}>Customer won</button>
+                    {canResolve ? (
+                      <>
+                        <button className="small" disabled={busy} onClick={() => void resolve(id, "merchant_won")}>Merchant won</button>
+                        <button className="small secondary" disabled={busy} onClick={() => void resolve(id, "customer_won")}>Customer won</button>
+                      </>
+                    ) : (
+                      <span className="small muted">Finance required</span>
+                    )}
                   </td>
                 </tr>
               );
@@ -1239,22 +1253,30 @@ interface TrustAccountConfig {
   outflowFrozen: boolean;
 }
 
-function CustodianTrust() {
+function CustodianTrust({ canManageFinance }: { canManageFinance: boolean }) {
   const [report, setReport] = useState<CustodianSafeguardReport | null>(null);
   const [config, setConfig] = useState<TrustAccountConfig | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = async () => {
     setLoading(true);
-    Promise.all([
-      api<CustodianSafeguardReport>("/v1/ops/custodian/safeguard-report"),
-      api<TrustAccountConfig>("/v1/ops/custodian/config"),
-    ])
-      .then(([r, c]) => { setReport(r); setConfig(c); setError(null); })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
-  }, []);
+    try {
+      const [r, c] = await Promise.all([
+        api<CustodianSafeguardReport>("/v1/ops/custodian/safeguard-report"),
+        api<TrustAccountConfig>("/v1/ops/custodian/config"),
+      ]);
+      setReport(r);
+      setConfig(c);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
 
   const outflowPct = report && report.dailyOutflowCapPesewas > 0
     ? Math.min(100, Math.round((report.todayTotalOutflowPesewas / report.dailyOutflowCapPesewas) * 100))
@@ -1321,7 +1343,7 @@ function CustodianTrust() {
               <dd className="mono">{formatMoney(config.minReserveFloorPesewas)}</dd>
             </div>
           </dl>
-          <CustodianConfigEditor config={config} />
+          {canManageFinance && <CustodianConfigEditor config={config} onUpdated={load} />}
         </section>
       )}
 
@@ -1330,7 +1352,7 @@ function CustodianTrust() {
   );
 }
 
-function CustodianConfigEditor({ config }: { config: TrustAccountConfig }) {
+function CustodianConfigEditor({ config, onUpdated }: { config: TrustAccountConfig; onUpdated: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [dailyCap, setDailyCap] = useState((config.dailyOutflowCapPesewas / 100).toFixed(2));
   const [perPayoutCap, setPerPayoutCap] = useState((config.perPayoutCapPesewas / 100).toFixed(2));
@@ -1340,6 +1362,13 @@ function CustodianConfigEditor({ config }: { config: TrustAccountConfig }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDailyCap((config.dailyOutflowCapPesewas / 100).toFixed(2));
+    setPerPayoutCap((config.perPayoutCapPesewas / 100).toFixed(2));
+    setMinReserve((config.minReserveFloorPesewas / 100).toFixed(2));
+    setOutflowFrozen(config.outflowFrozen);
+  }, [config]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -1366,7 +1395,9 @@ function CustodianConfigEditor({ config }: { config: TrustAccountConfig }) {
         },
       });
       setMsg(formatDualControlOutcome(res, "Custodian trust configuration updated."));
+      setBankBalance("");
       setOpen(false);
+      await onUpdated();
     } catch (e2) {
       setErr(e2 instanceof Error ? e2.message : String(e2));
     } finally {
