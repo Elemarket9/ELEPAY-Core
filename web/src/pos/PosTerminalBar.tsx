@@ -286,18 +286,17 @@ export function PosTerminalBar({
   }
 
   return (
-    <div className="panel" style={{ marginBottom: "1rem" }}>
-      <div className="flex-between" style={{ flexWrap: "wrap", gap: ".5rem" }}>
-        <div className="flex-row" style={{ flexWrap: "wrap", gap: ".5rem", alignItems: "center" }}>
-          <label className="small" style={{ margin: 0 }}>
-            Terminal:
+    <div className="pos-terminal-bar">
+      <div className="flex-between">
+        <div className="pos-terminal-meta">
+          <label className="pos-terminal-select">
+            Terminal
             <select
               value={terminalId ?? ""}
               onChange={(e) => {
                 const found = terminals.find((t) => t.id === e.target.value) ?? null;
                 onSelectTerminal(found);
               }}
-              style={{ marginLeft: ".4rem", width: "auto" }}
             >
               <option value="">-- Select terminal --</option>
               {terminals.map((t) => (
@@ -308,36 +307,36 @@ export function PosTerminalBar({
             </select>
           </label>
           <span className="small muted">
-            Cashier: <strong>{authBadgeLabel ?? (cashierId ? cashierId.slice(0, 8) : "Not signed in")}</strong>
+            Cashier: <strong style={{ color: "var(--ink)" }}>{authBadgeLabel ?? (cashierId ? cashierId.slice(0, 8) : "Not signed in")}</strong>
           </span>
           <span className={`tag ${shift ? "active" : "pending"}`}>
             {shift ? `Shift OPEN (${formatMoney(shift.openingBalancePesewas)})` : "No active shift"}
           </span>
         </div>
 
-        <div className="flex-row" style={{ flexWrap: "wrap", gap: ".4rem" }}>
-          <button type="button" className="secondary small" onClick={() => setPanel(panel === "register-terminal" ? "none" : "register-terminal")}>
+        <div className="flex-row" style={{ gap: "0.35rem" }}>
+          <button type="button" className={panel === "register-terminal" ? "small" : "secondary small"} onClick={() => setPanel(panel === "register-terminal" ? "none" : "register-terminal")}>
             + Terminal
           </button>
-          <button type="button" className="secondary small" onClick={() => setPanel(panel === "pair-terminal" ? "none" : "pair-terminal")}>
+          <button type="button" className={panel === "pair-terminal" ? "small" : "secondary small"} onClick={() => setPanel(panel === "pair-terminal" ? "none" : "pair-terminal")}>
             Pair
           </button>
-          <button type="button" className="secondary small" onClick={() => setPanel(panel === "cashier" ? "none" : "cashier")}>
+          <button type="button" className={panel === "cashier" ? "small" : "secondary small"} onClick={() => setPanel(panel === "cashier" ? "none" : "cashier")}>
             Cashier PIN
           </button>
-          <button type="button" className="secondary small" onClick={() => setPanel(panel === "shift" ? "none" : "shift")}>
+          <button type="button" className={panel === "shift" ? "small" : "secondary small"} onClick={() => setPanel(panel === "shift" ? "none" : "shift")}>
             {shift ? "Close Shift" : "Open Shift"}
           </button>
         </div>
       </div>
 
-      {error && <p className="error" style={{ marginTop: ".5rem" }}>{error}</p>}
-      {statusMsg && <p className="notice ok" style={{ marginTop: ".5rem" }}>{statusMsg}</p>}
+      {error && <p className="notice error" style={{ marginTop: "0.65rem", marginBottom: 0 }}>{error}</p>}
+      {statusMsg && <p className="notice ok" style={{ marginTop: "0.65rem", marginBottom: 0 }}>{statusMsg}</p>}
 
       {panel === "register-terminal" && (
-        <form onSubmit={registerTerminal} style={{ marginTop: ".8rem" }}>
+        <form onSubmit={registerTerminal} className="pos-drawer">
           <div className="grid-2">
-            <label>Serial Number<input value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} required placeholder="SN-ACCRA-001" /></label>
+            <label>Serial Number<input className="mono" value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} required placeholder="SN-ACCRA-001" /></label>
             <label>Model<input value={model} onChange={(e) => setModel(e.target.value)} required /></label>
             <label>Device Name<input value={deviceName} onChange={(e) => setDeviceName(e.target.value)} placeholder="Front Counter 1" /></label>
             <label>City<input value={city} onChange={(e) => setCity(e.target.value)} /></label>
@@ -347,30 +346,30 @@ export function PosTerminalBar({
       )}
 
       {panel === "pair-terminal" && (
-        <form onSubmit={pairTerminal} style={{ marginTop: ".8rem" }}>
+        <form onSubmit={pairTerminal} className="pos-drawer">
           <div className="grid-2">
-            <label>Serial Number<input value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} required /></label>
-            <label>Pairing Code<input value={pairingCode} onChange={(e) => setPairingCode(e.target.value)} required /></label>
-            <label>Hardware Fingerprint (optional)<input value={hardwareFp} onChange={(e) => setHardwareFp(e.target.value)} /></label>
+            <label>Serial Number<input className="mono" value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} required /></label>
+            <label>Pairing Code<input className="mono" value={pairingCode} onChange={(e) => setPairingCode(e.target.value)} required /></label>
+            <label>Hardware Fingerprint (optional)<input className="mono" value={hardwareFp} onChange={(e) => setHardwareFp(e.target.value)} /></label>
           </div>
           <button type="submit" disabled={busy}>{busy ? "Pairing…" : "Pair Terminal"}</button>
         </form>
       )}
 
       {panel === "cashier" && (
-        <div style={{ marginTop: ".8rem" }}>
+        <div className="pos-drawer">
           <form onSubmit={authenticateCashier} className="grid-2">
-            <label>Badge Number<input value={cashierBadge} onChange={(e) => setCashierBadge(e.target.value)} required placeholder="B-001" /></label>
+            <label>Badge Number<input className="mono" value={cashierBadge} onChange={(e) => setCashierBadge(e.target.value)} required placeholder="B-001" /></label>
             <label>PIN<input type="password" inputMode="numeric" value={cashierPin} onChange={(e) => setCashierPin(e.target.value)} required placeholder="••••" /></label>
             <div className="flex-row">
               <button type="submit" disabled={busy}>{busy ? "Verifying…" : "Verify PIN"}</button>
             </div>
           </form>
-          <details style={{ marginTop: ".6rem" }}>
-            <summary className="small muted">Register new cashier</summary>
-            <form onSubmit={registerCashier} className="grid-2" style={{ marginTop: ".5rem" }}>
+          <details style={{ marginTop: "0.75rem" }}>
+            <summary className="small muted" style={{ cursor: "pointer", fontWeight: 600 }}>Register new cashier</summary>
+            <form onSubmit={registerCashier} className="grid-2" style={{ marginTop: "0.5rem" }}>
               <label>Cashier Name<input value={cashierName} onChange={(e) => setCashierName(e.target.value)} required /></label>
-              <label>Badge Number<input value={cashierBadge} onChange={(e) => setCashierBadge(e.target.value)} required /></label>
+              <label>Badge Number<input className="mono" value={cashierBadge} onChange={(e) => setCashierBadge(e.target.value)} required /></label>
               <label>PIN (4-6 digits)<input type="password" inputMode="numeric" value={cashierPin} onChange={(e) => setCashierPin(e.target.value)} required minLength={4} /></label>
               <div className="flex-row" style={{ alignItems: "end" }}>
                 <button type="submit" className="secondary" disabled={busy}>Register Cashier</button>
@@ -381,12 +380,12 @@ export function PosTerminalBar({
       )}
 
       {panel === "shift" && (
-        <form onSubmit={shift ? closeShift : openShift} style={{ marginTop: ".8rem" }}>
+        <form onSubmit={shift ? closeShift : openShift} className="pos-drawer">
           <div className="grid-2">
             {shift ? (
-              <label>Closing Cash Count (GH₵)<input inputMode="decimal" value={closingCash} onChange={(e) => setClosingCash(e.target.value)} required /></label>
+              <label>Closing Cash Count (GH₵)<input className="mono" inputMode="decimal" value={closingCash} onChange={(e) => setClosingCash(e.target.value)} required /></label>
             ) : (
-              <label>Opening Float (GH₵)<input inputMode="decimal" value={openingCash} onChange={(e) => setOpeningCash(e.target.value)} required /></label>
+              <label>Opening Float (GH₵)<input className="mono" inputMode="decimal" value={openingCash} onChange={(e) => setOpeningCash(e.target.value)} required /></label>
             )}
             <label>Notes<input value={shiftNotes} onChange={(e) => setShiftNotes(e.target.value)} placeholder="Optional shift notes" /></label>
           </div>

@@ -21,6 +21,7 @@ import {
 } from "./pos/posHelpers";
 import { PosTerminalBar } from "./pos/PosTerminalBar";
 import { PosTenderPanel } from "./pos/PosTenderPanel";
+import { IconCheckCircle, IconChefHat, IconPrinter, IconSearch } from "./ui/Icons";
 
 /*
  * Merchant tools backed by the ELEPAY server. Nothing here is sample data or kept only in the browser:
@@ -214,6 +215,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [cashier, setCashier] = useState<{ id: string; badgeNumber: string; name?: string } | null>(null);
 
   const [search, setSearch] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
   const [cart, setCart] = useState<PosCartLine[]>([]);
   const [orderType, setOrderType] = useState<OrderType>("RETAIL");
   const [tableId, setTableId] = useState<string>("");
@@ -238,7 +240,16 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const taxRate = Number(taxPercent);
   const taxValid = Number.isFinite(taxRate) && taxRate >= 0 && taxRate <= 100;
   const { subtotal, effectiveDiscount, tax, total } = computeCartTotals(cart, discountP, taxRate);
-  const shown = catalog.filter((r) => `${itemLabel(r)} ${r.sku} ${r.barcode ?? ""}`.toLowerCase().includes(search.toLowerCase()));
+  const categories = useMemo(
+    () => Array.from(new Set(catalog.map((r) => r.categoryName).filter((c): c is string => Boolean(c)))).sort(),
+    [catalog],
+  );
+  const cartQtyByVariant = useMemo(() => new Map(cart.map((c) => [c.variantId, c.qty])), [cart]);
+  const shown = catalog.filter((r) => {
+    const matchCategory = selectedCategory === "ALL" || r.categoryName === selectedCategory;
+    const matchQuery = `${itemLabel(r)} ${r.sku} ${r.barcode ?? ""}`.toLowerCase().includes(search.toLowerCase());
+    return matchCategory && matchQuery;
+  });
 
   useEffect(() => { try { localStorage.setItem(TAX_KEY(merchant.id), taxPercent); } catch { /* ignore */ } }, [taxPercent, merchant.id]);
 
@@ -452,13 +463,29 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
 
   if (receipt) {
     return (
-      <div className="panel">
-        <h3>Sale complete</h3>
-        <p>Order {receipt.order.orderNumber} · {formatMoney(receipt.order.totalPesewas)}
-          {receipt.order.changePesewas > 0 && <> · <strong>Change {formatMoney(receipt.order.changePesewas)}</strong></>}
-          {kdsTicket && <> · <span className="tag active">{formatKdsStatusLabel(kdsTicket.status)}</span></>}</p>
+      <div className="panel" style={{ maxWidth: "560px" }}>
+        <div className="checkout-status-card paid" style={{ textAlign: "left", marginTop: 0 }}>
+          <div className="flex-row" style={{ gap: "0.75rem" }}>
+            <span className="checkout-status-icon" style={{ margin: 0, color: "var(--ok)" }}>
+              <IconCheckCircle size={22} />
+            </span>
+            <div>
+              <h3 style={{ margin: 0, color: "inherit" }}>Sale complete</h3>
+              <p className="small" style={{ margin: "0.15rem 0 0" }}>
+                Order <strong className="mono">{receipt.order.orderNumber}</strong> · <strong className="mono">{formatMoney(receipt.order.totalPesewas)}</strong>
+                {receipt.order.changePesewas > 0 && <> · <strong>Change {formatMoney(receipt.order.changePesewas)}</strong></>}
+                {kdsTicket && <> · <span className="tag active">{formatKdsStatusLabel(kdsTicket.status)}</span></>}
+              </p>
+            </div>
+          </div>
+        </div>
         <pre className="receipt">{receipt.receipt.escposFormattedText}</pre>
-        <button onClick={() => { setReceipt(null); setKdsTicket(null); }}>New sale</button>
+        <div className="flex-row">
+          <button onClick={() => { setReceipt(null); setKdsTicket(null); }}>New sale</button>
+          <button type="button" className="secondary" onClick={() => window.print()}>
+            <IconPrinter size={15} /> Print receipt
+          </button>
+        </div>
       </div>
     );
   }
@@ -476,56 +503,121 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
 
       <div className="pos-layout">
         <div>
-          <h3>Products</h3>
-          {loadError && <p className="error">{loadError}</p>}
-          <input placeholder="Search or scan barcode" value={search} onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { const hit = catalog.find((r) => r.barcode === search.trim() || r.sku === search.trim()); if (hit) { add(hit); setSearch(""); } } }} />
-          {catalog.length === 0 && !loadError && <p className="muted">No products yet. Add them in <strong>Inventory &amp; Stock</strong>.</p>}
-          <div className="pos-items">
-            {shown.map((r) => (
-              <button key={r.variantId} className="secondary pos-item" disabled={!!order} onClick={() => add(r)}>
-                <span>{itemLabel(r)}</span><strong>{formatMoney(r.retailPricePesewas)}</strong>
-                {r.trackInventory && <span className="small muted">{Number(r.onHand)} in stock</span>}
+          <div className="flex-between" style={{ marginBottom: "0.65rem" }}>
+            <h3 style={{ margin: 0 }}>Products</h3>
+            <span className="small muted">{shown.length} of {catalog.length} items</span>
+          </div>
+          {loadError && <p className="notice error">{loadError}</p>}
+          <div className="pos-search-wrap">
+            <IconSearch size={16} />
+            <input
+              placeholder="Search product or scan barcode (Enter to add)"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const hit = catalog.find((r) => r.barcode === search.trim() || r.sku === search.trim());
+                  if (hit) { add(hit); setSearch(""); }
+                }
+              }}
+            />
+          </div>
+          {categories.length > 0 && (
+            <div className="category-pills">
+              <button
+                type="button"
+                className={`category-pill ${selectedCategory === "ALL" ? "active" : ""}`}
+                onClick={() => setSelectedCategory("ALL")}
+              >
+                All
               </button>
-            ))}
+              {categories.map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  className={`category-pill ${selectedCategory === cat ? "active" : ""}`}
+                  onClick={() => setSelectedCategory(cat)}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          )}
+          {catalog.length === 0 && !loadError && (
+            <div className="panel">
+              <p className="muted" style={{ margin: 0 }}>No products yet. Add them in <strong>Inventory &amp; Stock</strong> to start ringing up sales.</p>
+            </div>
+          )}
+          <div className="pos-items">
+            {shown.map((r) => {
+              const inCartQty = cartQtyByVariant.get(r.variantId) ?? 0;
+              const isLow = r.trackInventory && Number(r.onHand) <= Number(r.reorderPoint);
+              return (
+                <button
+                  key={r.variantId}
+                  type="button"
+                  className={`pos-item ${inCartQty > 0 ? "in-cart" : ""}`}
+                  disabled={!!order}
+                  onClick={() => add(r)}
+                >
+                  {inCartQty > 0 && <span className="pos-item-badge">{inCartQty}</span>}
+                  <span className="pos-item-name">{itemLabel(r)}</span>
+                  <div>
+                    <div className="pos-item-price">{formatMoney(r.retailPricePesewas)}</div>
+                    {r.trackInventory && (
+                      <div className={`pos-item-stock ${isLow ? "low" : ""}`}>
+                        {Number(r.onHand)} in stock
+                      </div>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
           </div>
 
           {heldCarts.length > 0 && (
             <div className="panel" style={{ marginTop: "1rem" }}>
               <h4>Held Carts ({heldCarts.length})</h4>
-              <table className="grid">
-                <tbody>
-                  {heldCarts.map((hc) => (
-                    <tr key={hc.id}>
-                      <td>{hc.customerName ?? "Walk-in"}</td>
-                      <td>{formatMoney(hc.totalPesewas)}</td>
-                      <td>
-                        <button type="button" className="secondary small" disabled={busy} onClick={() => void recallCart(hc)}>
-                          Recall
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="table-wrap" style={{ margin: 0 }}>
+                <table className="grid">
+                  <tbody>
+                    {heldCarts.map((hc) => (
+                      <tr key={hc.id}>
+                        <td><strong>{hc.customerName ?? "Walk-in"}</strong></td>
+                        <td className="num mono">{formatMoney(hc.totalPesewas)}</td>
+                        <td className="num">
+                          <button type="button" className="secondary small" disabled={busy} onClick={() => void recallCart(hc)}>
+                            Recall
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
 
-        <div className="panel">
-          <div className="flex-between">
-            <h3>Sale</h3>
-            {kdsTicket && <span className="tag active">{formatKdsStatusLabel(kdsTicket.status)}</span>}
+        <div className="panel pos-cart-panel">
+          <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
+            <h3 style={{ margin: 0 }}>Current Sale</h3>
+            <div className="flex-row" style={{ gap: "0.4rem" }}>
+              {cart.length > 0 && <span className="tag info">{cart.reduce((n, c) => n + c.qty, 0)} items</span>}
+              {kdsTicket && <span className="tag active">{formatKdsStatusLabel(kdsTicket.status)}</span>}
+            </div>
           </div>
 
-          <div className="grid-2" style={{ marginBottom: ".6rem" }}>
-            <label>Order Type
+          <div className="grid-2" style={{ marginBottom: "0.75rem" }}>
+            <label style={{ margin: 0 }}>
+              Order Type
               <select value={orderType} disabled={!!order} onChange={(e) => setOrderType(e.target.value as OrderType)}>
                 {ORDER_TYPES.map((ot) => <option key={ot.value} value={ot.value}>{ot.label}</option>)}
               </select>
             </label>
             {orderType === "DINE_IN" && (
-              <label>Table
+              <label style={{ margin: 0 }}>
+                Table
                 <select value={tableId} disabled={!!order} onChange={(e) => setTableId(e.target.value)}>
                   <option value="">-- Select table --</option>
                   {tables.map((t) => (
@@ -538,102 +630,116 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
             )}
           </div>
 
-          {cart.length === 0 ? <p className="muted">Tap products to add them.</p> : (
-            <table className="grid">
-              <tbody>
-                {cart.map((c) => (
-                  <tr key={c.variantId}>
-                    <td>
-                      {c.label}
-                      {orderType === "DINE_IN" && (
-                        <input
-                          type="number"
-                          min={1}
-                          placeholder="Seat #"
-                          value={c.seatNumber ?? ""}
-                          disabled={!!order}
-                          onChange={(e) => setSeat(c.variantId, e.target.value ? Number(e.target.value) : null)}
-                          style={{ width: "4.5rem", marginLeft: ".4rem" }}
-                        />
-                      )}
-                    </td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      <button className="secondary small" disabled={!!order} onClick={() => setQty(c.variantId, c.qty - 1)}>−</button>
-                      {c.qty}
-                      <button className="secondary small" disabled={!!order} onClick={() => setQty(c.variantId, c.qty + 1)}>+</button>
-                    </td>
-                    <td>{formatMoney(c.unitPricePesewas * c.qty)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {cart.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "1.75rem 1rem", background: "var(--surface-alt)", borderRadius: "var(--radius-sm)", border: "1px dashed var(--line-strong)" }}>
+              <p className="muted small" style={{ margin: 0 }}>Tap products on the left or scan a barcode to build the order.</p>
+            </div>
+          ) : (
+            <div className="table-wrap" style={{ margin: "0 0 0.75rem" }}>
+              <table className="grid">
+                <tbody>
+                  {cart.map((c) => (
+                    <tr key={c.variantId}>
+                      <td>
+                        <strong style={{ fontSize: "0.85rem" }}>{c.label}</strong>
+                        {orderType === "DINE_IN" && (
+                          <input
+                            type="number"
+                            min={1}
+                            placeholder="Seat #"
+                            value={c.seatNumber ?? ""}
+                            disabled={!!order}
+                            onChange={(e) => setSeat(c.variantId, e.target.value ? Number(e.target.value) : null)}
+                            style={{ width: "4.8rem", marginTop: "0.25rem", padding: "0.25rem 0.45rem", fontSize: "0.78rem" }}
+                          />
+                        )}
+                      </td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <div className="qty-stepper">
+                          <button type="button" disabled={!!order} onClick={() => setQty(c.variantId, c.qty - 1)} aria-label="Decrease quantity">−</button>
+                          <span>{c.qty}</span>
+                          <button type="button" disabled={!!order} onClick={() => setQty(c.variantId, c.qty + 1)} aria-label="Increase quantity">+</button>
+                        </div>
+                      </td>
+                      <td className="num mono" style={{ fontWeight: 600 }}>{formatMoney(c.unitPricePesewas * c.qty)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
 
           <div className="grid-2">
-            <label>Discount (GH₵)<input inputMode="decimal" value={discount} disabled={!!order} onChange={(e) => setDiscount(e.target.value)} placeholder="0.00" /></label>
-            <label>Tax %<input inputMode="decimal" value={taxPercent} disabled={!!order} onChange={(e) => setTaxPercent(e.target.value)} /></label>
+            <label style={{ margin: 0 }}>Discount (GH₵)<input className="mono" inputMode="decimal" value={discount} disabled={!!order} onChange={(e) => setDiscount(e.target.value)} placeholder="0.00" /></label>
+            <label style={{ margin: 0 }}>Tax %<input className="mono" inputMode="decimal" value={taxPercent} disabled={!!order} onChange={(e) => setTaxPercent(e.target.value)} /></label>
           </div>
-          <dl className="confirm">
-            <dt>Subtotal</dt><dd>{formatMoney(subtotal)}</dd>
-            {tax > 0 && <><dt>Tax</dt><dd>{formatMoney(tax)}</dd></>}
-            <dt><strong>Total</strong></dt><dd><strong>{formatMoney(total)}</strong></dd>
-          </dl>
 
-          {error && <p className="error">{error}</p>}
+          <div className="pos-totals-box">
+            <dl className="confirm">
+              <dt>Subtotal</dt><dd className="mono">{formatMoney(subtotal)}</dd>
+              {effectiveDiscount > 0 && <><dt>Discount</dt><dd className="mono">-{formatMoney(effectiveDiscount)}</dd></>}
+              {tax > 0 && <><dt>Tax ({taxPercent}%)</dt><dd className="mono">{formatMoney(tax)}</dd></>}
+              <dt><strong style={{ color: "var(--ink)", fontSize: "0.95rem" }}>Total</strong></dt>
+              <dd><strong className="mono" style={{ color: "var(--green-deep)", fontSize: "1.15rem" }}>{formatMoney(total)}</strong></dd>
+            </dl>
+          </div>
+
+          {error && <p className="notice error" role="alert">{error}</p>}
 
           {cart.length > 0 && !order && (
-            <div className="flex-row" style={{ marginBottom: ".6rem", flexWrap: "wrap" }}>
+            <div className="flex-row" style={{ marginBottom: "0.65rem" }}>
               <input
                 placeholder="Hold name / table"
                 value={holdCustomer}
                 onChange={(e) => setHoldCustomer(e.target.value)}
-                style={{ width: "auto", flex: "1 1 120px" }}
+                style={{ width: "auto", flex: "1 1 120px", margin: 0 }}
               />
-              <button type="button" className="secondary small" disabled={busy} onClick={() => void holdCurrentCart()}>
+              <button type="button" className="secondary small" style={{ margin: 0 }} disabled={busy} onClick={() => void holdCurrentCart()}>
                 Hold Cart
               </button>
               {orderType !== "RETAIL" && (
                 <button
                   type="button"
                   className="secondary small"
+                  style={{ margin: 0 }}
                   disabled={busy}
                   onClick={() => void ensureOrder().then(sendToKitchen).catch((e) => setError(message(e)))}
                 >
-                  Send to Kitchen
+                  <IconChefHat size={14} /> Send to Kitchen
                 </button>
               )}
             </div>
           )}
 
           {cart.length > 0 && (
-            <details style={{ marginBottom: ".6rem" }}>
-              <summary className="small muted">Split Bill</summary>
-              <div className="flex-row" style={{ marginTop: ".4rem", flexWrap: "wrap" }}>
+            <details style={{ marginBottom: "0.6rem" }}>
+              <summary className="small muted" style={{ cursor: "pointer", fontWeight: 600 }}>Split Bill</summary>
+              <div className="flex-row" style={{ marginTop: "0.5rem" }}>
                 <input
                   type="number"
                   min={2}
                   value={splitCount}
                   onChange={(e) => setSplitCount(e.target.value)}
-                  style={{ width: "4rem" }}
+                  style={{ width: "4.5rem", margin: 0 }}
                 />
-                <button type="button" className="secondary small" disabled={busy} onClick={() => void runEvenSplit()}>
+                <button type="button" className="secondary small" style={{ margin: 0 }} disabled={busy} onClick={() => void runEvenSplit()}>
                   Split Evenly
                 </button>
-                <button type="button" className="secondary small" disabled={busy} onClick={() => void runSeatSplit()}>
+                <button type="button" className="secondary small" style={{ margin: 0 }} disabled={busy} onClick={() => void runSeatSplit()}>
                   Split by Seat
                 </button>
               </div>
               {evenSplit && (
-                <ul className="small" style={{ marginTop: ".4rem" }}>
+                <ul className="small" style={{ marginTop: "0.5rem", paddingLeft: "1.2rem" }}>
                   {evenSplit.portions.map((p) => (
-                    <li key={p.portionIndex}>Portion {p.portionIndex}: <strong>{formatMoney(p.amountPesewas)}</strong></li>
+                    <li key={p.portionIndex}>Portion {p.portionIndex}: <strong className="mono">{formatMoney(p.amountPesewas)}</strong></li>
                   ))}
                 </ul>
               )}
               {seatSplit && (
-                <ul className="small" style={{ marginTop: ".4rem" }}>
+                <ul className="small" style={{ marginTop: "0.5rem", paddingLeft: "1.2rem" }}>
                   {seatSplit.seatGroups.map((g) => (
-                    <li key={g.seatNumber}>Seat {g.seatNumber}: <strong>{formatMoney(g.subtotalPesewas)}</strong> ({g.items.length} items)</li>
+                    <li key={g.seatNumber}>Seat {g.seatNumber}: <strong className="mono">{formatMoney(g.subtotalPesewas)}</strong> ({g.items.length} items)</li>
                   ))}
                 </ul>
               )}
@@ -693,21 +799,48 @@ export function FloorPlanView({ merchantId }: { merchantId: string }) {
     } catch (err) { setError(message(err)); }
   }
 
+  const statusCounts = {
+    AVAILABLE: tables.filter((t) => t.status === "AVAILABLE").length,
+    OCCUPIED: tables.filter((t) => t.status === "OCCUPIED").length,
+    RESERVED: tables.filter((t) => t.status === "RESERVED").length,
+    DIRTY: tables.filter((t) => t.status === "DIRTY").length,
+  };
+
   return (
     <div>
-      {(plansError || tablesError || error) && <p className="error">{plansError ?? tablesError ?? error}</p>}
-      {plans.length === 0 && <p className="muted">No floor plan yet. Add your sections (e.g. Inside, Terrace) and then your tables.</p>}
+      {(plansError || tablesError || error) && <p className="notice error">{plansError ?? tablesError ?? error}</p>}
+      {tables.length > 0 && (
+        <div className="floor-summary">
+          <span className="floor-stat-pill"><span className="tag active">{statusCounts.AVAILABLE}</span> Available</span>
+          <span className="floor-stat-pill"><span className="tag pending">{statusCounts.OCCUPIED}</span> Occupied</span>
+          <span className="floor-stat-pill"><span className="tag info">{statusCounts.RESERVED}</span> Reserved</span>
+          <span className="floor-stat-pill"><span className="tag failed">{statusCounts.DIRTY}</span> Needs cleaning</span>
+        </div>
+      )}
+      {plans.length === 0 && (
+        <div className="panel" style={{ marginBottom: "1rem" }}>
+          <p className="muted" style={{ margin: 0 }}>No floor plan yet. Add your sections (e.g. Inside, Terrace) and then add your tables below.</p>
+        </div>
+      )}
       {plans.map((p) => {
         const mine = tables.filter((t) => t.sectionId === p.id);
         return (
-          <div key={p.id} style={{ marginBottom: "1rem" }}>
-            <h4>{p.name}</h4>
-            {mine.length === 0 ? <p className="muted small">No tables in this section.</p> : (
+          <div key={p.id} className="panel" style={{ marginBottom: "1rem" }}>
+            <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
+              <h4 style={{ margin: 0 }}>{p.name}</h4>
+              <span className="small muted">{mine.length} table{mine.length === 1 ? "" : "s"}</span>
+            </div>
+            {mine.length === 0 ? <p className="muted small" style={{ margin: 0 }}>No tables in this section yet.</p> : (
               <div className="table-grid">
                 {mine.map((t) => (
                   <div key={t.id} className={`dining-table ${t.status.toLowerCase()}`}>
-                    <strong>{t.tableNumber}</strong>
-                    <span className="small">{t.capacity} seats · {t.status.toLowerCase()}</span>
+                    <div className="flex-between">
+                      <strong style={{ fontSize: "1rem" }}>{t.tableNumber}</strong>
+                      <span className={`tag ${t.status === "AVAILABLE" ? "active" : t.status === "OCCUPIED" ? "pending" : t.status === "RESERVED" ? "info" : "failed"}`}>
+                        {t.status === "DIRTY" ? "Clean" : t.status.toLowerCase()}
+                      </span>
+                    </div>
+                    <span className="small muted">{t.capacity} seats</span>
                     <select value={t.status} onChange={(e) => void setStatus(t, e.target.value as DiningTable["status"])} aria-label={`Status of ${t.tableNumber}`}>
                       <option value="AVAILABLE">Available</option><option value="OCCUPIED">Occupied</option>
                       <option value="RESERVED">Reserved</option><option value="DIRTY">Needs cleaning</option>

@@ -2,6 +2,16 @@ import { lazy, StrictMode, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Checkout, StartFromLink } from "./Checkout";
 import { completeSignIn, getToken, oidcEnabled, signIn, signOut } from "./auth";
+import {
+  BrandMark,
+  IconActivity,
+  IconChefHat,
+  IconKey,
+  IconLock,
+  IconMonitor,
+  IconQrCode,
+  IconWallet,
+} from "./ui/Icons";
 
 // Dashboards load on demand so the checkout page stays small on slow connections.
 const MerchantDashboard = lazy(() => import("./Merchant").then((m) => ({ default: m.MerchantDashboard })));
@@ -29,47 +39,73 @@ function SignedIn({ children, roles = [] }: { children: React.ReactNode; roles?:
   if (ready === null) return null;
   if (!ready) {
     return (
-      <main className="narrow">
-        <h1>Sign in</h1>
-        {error && <p className="error">{error}</p>}
-        {oidcEnabled ? (
-          <button
-            disabled={busy}
-            onClick={() => {
-              setError(null);
-              setBusy(true);
-              void signIn()
-                .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-                .finally(() => setBusy(false));
-            }}
-          >
-            {busy ? "Signing in…" : "Sign in with ELEPAY"}
-          </button>
-        ) : (
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              setError(null);
-              setBusy(true);
-              try {
-                await signIn(subject, roles);
-                setReady(true);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : String(err));
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            <p className="muted small">Development sign-in (dev and test profiles only).</p>
-            <label>Subject<input value={subject} onChange={(e) => setSubject(e.target.value)} required /></label>
-            <button type="submit" disabled={busy}>{busy ? "Signing in…" : "Continue"}</button>
-          </form>
-        )}
-      </main>
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="auth-brand-row">
+            <BrandMark size={30} />
+            <div>
+              <h1 style={{ fontSize: "1.25rem", margin: 0 }}>Sign in to ELEPAY</h1>
+              <p className="small muted" style={{ margin: 0 }}>
+                {roles.includes("ops") ? "Operations & Risk Command Center" : "Merchant & Account Portal"}
+              </p>
+            </div>
+          </div>
+          {error && <p className="notice error" role="alert">{error}</p>}
+          {oidcEnabled ? (
+            <button
+              className="large full-width"
+              disabled={busy}
+              onClick={() => {
+                setError(null);
+                setBusy(true);
+                void signIn()
+                  .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              <IconLock size={16} />
+              {busy ? "Signing in…" : "Sign in with ELEPAY"}
+            </button>
+          ) : (
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setError(null);
+                setBusy(true);
+                try {
+                  await signIn(subject, roles);
+                  setReady(true);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : String(err));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              <p className="small muted">Development sign-in (dev and test profiles only).</p>
+              <label>
+                Subject
+                <input
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  placeholder={roles.includes("ops") ? "ops-admin@elepay.gh" : "merchant-owner@elepay.gh"}
+                  required
+                />
+              </label>
+              <button type="submit" className="large full-width" disabled={busy} style={{ marginTop: "0.5rem" }}>
+                {busy ? "Signing in…" : "Continue"}
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
     );
   }
-  return <Suspense fallback={<p>Loading…</p>}>{children}</Suspense>;
+  return (
+    <Suspense fallback={<main className="narrow"><p className="muted">Loading workspace…</p></main>}>
+      {children}
+    </Suspense>
+  );
 }
 
 function App() {
@@ -90,14 +126,24 @@ function App() {
   }, [path]);
   if (path === "/app/callback" && callbackError) {
     return (
-      <main className="narrow">
-        <h1>Sign-in failed</h1>
-        <p className="error">{callbackError}</p>
-        <a href="/">Return home</a>
-      </main>
+      <div className="auth-shell">
+        <div className="auth-card">
+          <h1>Sign-in failed</h1>
+          <p className="notice error">{callbackError}</p>
+          <a href="/">Return home</a>
+        </div>
+      </div>
     );
   }
-  if (path === "/app/callback" && !callbackDone) return <p>Signing in…</p>;
+  if (path === "/app/callback" && !callbackDone) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <p className="muted">Completing secure sign-in…</p>
+        </div>
+      </div>
+    );
+  }
 
   let m: RegExpMatchArray | null;
   if ((m = path.match(/^\/pay\/l\/([\w-]+)$/))) return <StartFromLink slug={m[1]} />;
@@ -107,11 +153,28 @@ function App() {
   // Kitchen screens run full-screen on tablets, without the site header.
   if (path.startsWith("/kitchen")) return <Suspense fallback={null}><Kitchen /></Suspense>;
 
+  const navItemClass = (prefix: string) => (path.startsWith(prefix) ? "nav-active" : undefined);
+
   const header = (
-    <header>
-      <a href="/" className="brand">ELEPAY</a>
-      <nav><a href="/app">Wallet</a><a href="/merchant">Merchant</a><a href="/developer">Developer</a><a href="/ops">Operations</a>
-        <button className="link" onClick={() => void signOut().then(() => window.location.assign("/"))}>Sign out</button></nav>
+    <header className="app-header">
+      <a href="/" className="brand">
+        <BrandMark size={26} />
+        <span>ELEPAY</span>
+        <span className="brand-sub">GH</span>
+      </a>
+      <nav aria-label="Primary">
+        <a href="/app" className={navItemClass("/app")}>Wallet</a>
+        <a href="/merchant" className={navItemClass("/merchant")}>Merchant</a>
+        <a href="/kitchen" className={navItemClass("/kitchen")}>Kitchen</a>
+        <a href="/developer" className={navItemClass("/developer")}>Developer</a>
+        <a href="/ops" className={navItemClass("/ops")}>Operations</a>
+        <button
+          className="link nav-signout"
+          onClick={() => void signOut().then(() => window.location.assign("/"))}
+        >
+          Sign out
+        </button>
+      </nav>
     </header>
   );
   if (path.startsWith("/merchant")) return <>{header}<SignedIn><MerchantDashboard /></SignedIn></>;
@@ -119,15 +182,64 @@ function App() {
   if (path.startsWith("/ops")) return <>{header}<SignedIn roles={["ops"]}><OpsConsole /></SignedIn></>;
   if (path.startsWith("/app")) return <>{header}<SignedIn><Wallet /></SignedIn></>;
   return (
-    <>{header}
-      <main className="narrow">
-        <h1>ELEPAY</h1>
-        <p>Wallets, payments and payouts for Ghana. Pay a merchant with a link, QR or merchant code.</p>
-        <form onSubmit={(e) => { e.preventDefault(); const code = new FormData(e.currentTarget).get("code"); window.location.assign(`/pay/m/${code}`); }}>
-          <label>Merchant code<input name="code" inputMode="numeric" pattern="\d{6}" required /></label>
-          <button type="submit">Pay</button>
-        </form>
-      </main>
+    <>
+      {header}
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="auth-brand-row">
+            <BrandMark size={32} />
+            <div>
+              <h1 style={{ fontSize: "1.35rem", margin: 0 }}>Pay a Merchant</h1>
+              <p className="small muted" style={{ margin: 0 }}>Wallets, payments and payouts for Ghana</p>
+            </div>
+          </div>
+          <p className="small muted">
+            Enter a 6-digit ELEPAY merchant code to pay directly with MoMo, Card, GhQR, or your ELEPAY Wallet.
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const code = new FormData(e.currentTarget).get("code");
+              window.location.assign(`/pay/m/${code}`);
+            }}
+          >
+            <label>
+              Merchant code
+              <input
+                name="code"
+                className="mono"
+                inputMode="numeric"
+                pattern="\d{6}"
+                maxLength={6}
+                placeholder="123456"
+                required
+              />
+            </label>
+            <button type="submit" className="large full-width" style={{ marginTop: "0.5rem" }}>
+              <IconQrCode size={17} />
+              Continue to Pay
+            </button>
+          </form>
+
+          <div className="portal-links-grid">
+            <a href="/merchant" className="portal-link-tile">
+              <IconMonitor size={16} /> Merchant &amp; POS
+            </a>
+            <a href="/kitchen" className="portal-link-tile">
+              <IconChefHat size={16} /> Kitchen Display
+            </a>
+            <a href="/app" className="portal-link-tile">
+              <IconWallet size={16} /> Customer Wallet
+            </a>
+            <a href="/ops" className="portal-link-tile">
+              <IconActivity size={16} /> Ops Console
+            </a>
+            <a href="/developer" className="portal-link-tile" style={{ gridColumn: "1 / -1" }}>
+              <IconKey size={16} /> Developer API &amp; Webhooks
+            </a>
+          </div>
+        </div>
+      </div>
     </>
   );
 }

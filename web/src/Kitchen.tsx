@@ -6,6 +6,7 @@ import {
   applySync, backoff, bump, cancel, elapsed, load, save, settle, stationStatus, storageKey, urgency, visible,
   nextStatus, type BumpResult, type KdsState, type QueuedAction, type Status, type SyncResult, type TicketView,
 } from "./kds/engine";
+import { BrandMark, IconAlertTriangle, IconChefHat, IconPrinter, IconWifi, IconWifiOff } from "./ui/Icons";
 
 interface MerchantView { id: string; tradingName: string; role: string }
 interface Station { id: string; name: string; output: "SCREEN" | "PRINTER" | "BOTH"; printerAddress: string | null }
@@ -81,13 +82,30 @@ export function Kitchen() {
   if (!started) {
     return (
       <main className="kitchen-start">
-        <h1>{setup.merchantName}</h1>
-        <p className="kitchen-station-name">{setup.stationName}</p>
-        <button className="kitchen-big" onClick={() => { unlockAudio(); void keepAwake(); setStarted(true); }}>Start kitchen screen</button>
-        <button className="link" onClick={() => { try { store()?.removeItem(SETUP_KEY); } catch { /* ignore */ } setSetup(null); }}>
-          Change station
-        </button>
-        {device && <p className="muted small">Paired device: {device.merchantName}. <button className="link" onClick={unpair}>Unpair</button></p>}
+        <div className="kitchen-start-card">
+          <div className="flex-row" style={{ gap: "0.7rem", marginBottom: "1rem" }}>
+            <BrandMark size={32} />
+            <span className="small" style={{ color: "#9cb0a7", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              ELEPAY Kitchen Display
+            </span>
+          </div>
+          <h1>{setup.merchantName}</h1>
+          <p className="kitchen-station-name">{setup.stationName}</p>
+          <button className="kitchen-big" onClick={() => { unlockAudio(); void keepAwake(); setStarted(true); }}>
+            <IconChefHat size={22} />
+            Start Kitchen Screen
+          </button>
+          <div className="flex-between" style={{ marginTop: "1rem" }}>
+            <button className="link" onClick={() => { try { store()?.removeItem(SETUP_KEY); } catch { /* ignore */ } setSetup(null); }}>
+              Change station
+            </button>
+            {device && (
+              <span className="small" style={{ color: "#9cb0a7" }}>
+                Paired: {device.merchantName} · <button className="link" onClick={unpair}>Unpair</button>
+              </span>
+            )}
+          </div>
+        </div>
       </main>
     );
   }
@@ -103,22 +121,34 @@ function PairScreen({ onPaired }: { onPaired: (d: DeviceCredential) => void }) {
   const [error, setError] = useState<string | null>(null);
   return (
     <main className="kitchen-start">
-      <h1>Pair this kitchen screen</h1>
-      <p>In the ELEPAY merchant dashboard, open <b>Restaurant &amp; KDS → Kitchen Display System</b> and tap <b>Pair a kitchen device</b>.
-        Enter the two codes shown there. You only do this once.</p>
-      {error && <p className="error">{error}</p>}
-      <form onSubmit={async (e) => {
-        e.preventDefault(); setBusy(true); setError(null);
-        try { onPaired(await pairDevice(merchantCode.trim(), code.replace(/\s/g, ""), name)); }
-        catch (err) { setError(err instanceof ApiError && err.status === 400 ? "Those codes did not work. Check them, or ask the manager for a new pairing code." : "Could not reach ELEPAY. Check the internet and try again."); }
-        finally { setBusy(false); }
-      }}>
-        <label>Merchant code<input inputMode="numeric" pattern="\d{6}" maxLength={6} value={merchantCode} onChange={(e) => setMerchantCode(e.target.value)} required /></label>
-        <label>Pairing code<input inputMode="numeric" pattern="[\d ]{6,7}" maxLength={7} value={code} onChange={(e) => setCode(e.target.value)} required /></label>
-        <label>Name for this device<input value={name} maxLength={64} onChange={(e) => setName(e.target.value)} /></label>
-        <button className="kitchen-big" type="submit" disabled={busy}>{busy ? "Pairing…" : "Pair"}</button>
-      </form>
-      <p className="muted small">Staff with an ELEPAY login can <a href="/merchant">sign in</a> instead, then come back to /kitchen.</p>
+      <div className="kitchen-start-card">
+        <div className="flex-row" style={{ gap: "0.7rem", marginBottom: "1rem" }}>
+          <BrandMark size={30} />
+          <span className="small" style={{ color: "#9cb0a7", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+            ELEPAY Kitchen Display
+          </span>
+        </div>
+        <h1>Pair this kitchen screen</h1>
+        <p className="small" style={{ marginBottom: "1.25rem" }}>
+          In the ELEPAY merchant dashboard, open <b>Restaurant &amp; KDS → Kitchen Display System</b> and tap <b>Pair a kitchen device</b>.
+          Enter the two codes shown there. You only do this once.
+        </p>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <form onSubmit={async (e) => {
+          e.preventDefault(); setBusy(true); setError(null);
+          try { onPaired(await pairDevice(merchantCode.trim(), code.replace(/\s/g, ""), name)); }
+          catch (err) { setError(err instanceof ApiError && err.status === 400 ? "Those codes did not work. Check them, or ask the manager for a new pairing code." : "Could not reach ELEPAY. Check the internet and try again."); }
+          finally { setBusy(false); }
+        }}>
+          <label>Merchant code<input className="mono" inputMode="numeric" pattern="\d{6}" maxLength={6} placeholder="123456" value={merchantCode} onChange={(e) => setMerchantCode(e.target.value)} required /></label>
+          <label>Pairing code<input className="mono" inputMode="numeric" pattern="[\d ]{6,7}" maxLength={7} placeholder="000 000" value={code} onChange={(e) => setCode(e.target.value)} required /></label>
+          <label>Name for this device<input value={name} maxLength={64} onChange={(e) => setName(e.target.value)} /></label>
+          <button className="kitchen-big" type="submit" disabled={busy}>{busy ? "Pairing…" : "Pair Device"}</button>
+        </form>
+        <p className="small" style={{ color: "#8fa39a", marginTop: "1rem" }}>
+          Staff with an ELEPAY login can <a href="/merchant">sign in</a> instead, then come back to /kitchen.
+        </p>
+      </div>
     </main>
   );
 }
@@ -146,27 +176,35 @@ function SetupScreen({ client, device, onDone }: { client: KitchenCall; device: 
   const merchant = merchants.find((m) => m.id === merchantId);
   return (
     <main className="kitchen-start">
-      <h1>Set up this kitchen screen</h1>
-      {error && <p className="error">{error}</p>}
-      {merchants.length > 1 && (
-        <label>Restaurant
-          <select value={merchantId} onChange={(e) => setMerchantId(e.target.value)}>
-            {merchants.map((m) => <option key={m.id} value={m.id}>{m.tradingName}</option>)}
-          </select>
-        </label>
-      )}
-      {merchant && (
-        <div className="kitchen-choices">
-          <p>Which station is this screen for?</p>
-          <button className="kitchen-big" onClick={() => onDone({ merchantId, merchantName: merchant.tradingName, stationId: null,
-            stationName: "All orders (expo / pass)", hasPrinter: false })}>All orders (expo / pass)</button>
-          {stations.map((s) => (
-            <button key={s.id} className="kitchen-big secondary" onClick={() => onDone({ merchantId, merchantName: merchant.tradingName,
-              stationId: s.id, stationName: s.name, hasPrinter: !!s.printerAddress })}>{s.name}</button>
-          ))}
-          {stations.length === 0 && <p className="muted">No stations yet. A manager can add Kitchen, Grill, Drinks… in Restaurant & KDS.</p>}
+      <div className="kitchen-start-card">
+        <div className="flex-row" style={{ gap: "0.7rem", marginBottom: "1rem" }}>
+          <BrandMark size={30} />
+          <span className="small" style={{ color: "#9cb0a7", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+            Station Setup
+          </span>
         </div>
-      )}
+        <h1>Set up this kitchen screen</h1>
+        {error && <p className="notice error">{error}</p>}
+        {merchants.length > 1 && (
+          <label>Restaurant
+            <select value={merchantId} onChange={(e) => setMerchantId(e.target.value)}>
+              {merchants.map((m) => <option key={m.id} value={m.id}>{m.tradingName}</option>)}
+            </select>
+          </label>
+        )}
+        {merchant && (
+          <div className="kitchen-choices" style={{ marginTop: "1rem" }}>
+            <p className="small">Which station is this screen for?</p>
+            <button className="kitchen-big" onClick={() => onDone({ merchantId, merchantName: merchant.tradingName, stationId: null,
+              stationName: "All orders (expo / pass)", hasPrinter: false })}>All orders (expo / pass)</button>
+            {stations.map((s) => (
+              <button key={s.id} className="kitchen-big secondary" onClick={() => onDone({ merchantId, merchantName: merchant.tradingName,
+                stationId: s.id, stationName: s.name, hasPrinter: !!s.printerAddress })}>{s.name}</button>
+            ))}
+            {stations.length === 0 && <p className="small" style={{ color: "#8fa39a" }}>No stations yet. A manager can add Kitchen, Grill, Drinks… in Restaurant &amp; KDS.</p>}
+          </div>
+        )}
+      </div>
     </main>
   );
 }
@@ -283,26 +321,36 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
   return (
     <div className="kitchen">
       <div className="kitchen-bar">
+        <BrandMark size={26} />
         <strong>{setup.stationName}</strong>
         <span className="muted">{setup.merchantName}</span>
-        <span className="kitchen-count">{tickets.length} open</span>
-        <span className={`kitchen-net ${online ? "on" : "off"}`}>
-          {online ? "● Online" : "● No internet"}
-          {waiting > 0 && ` · ${waiting} update${waiting > 1 ? "s" : ""} waiting to send`}
-          {!online && lastSync !== null && ` · last update ${ago(lastSync)}`}
-        </span>
-        <span className="kitchen-clock">{new Date(now).toLocaleTimeString("en-GH", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Accra" })}</span>
+        <div className="kitchen-telemetry">
+          <span className="kitchen-pill kitchen-count">{tickets.length} open</span>
+          <span className={`kitchen-pill kitchen-net ${online ? "on" : "off"}`}>
+            {online ? <IconWifi size={15} /> : <IconWifiOff size={15} />}
+            {online ? "Online" : "No internet"}
+            {waiting > 0 && ` · ${waiting} queued`}
+            {!online && lastSync !== null && ` · ${ago(lastSync)}`}
+          </span>
+          <span className="kitchen-clock">{new Date(now).toLocaleTimeString("en-GH", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Accra" })}</span>
+        </div>
       </div>
       {signedOut && (paired
-        ? <div className="kitchen-alert">This device was removed in the dashboard. <button className="link" onClick={onUnpair}>Pair it again</button></div>
-        : <div className="kitchen-alert">This screen has been signed out. Sign in again to keep receiving orders.</div>)}
+        ? <div className="kitchen-alert"><IconAlertTriangle size={18} /> This device was removed in the dashboard. <button className="link" onClick={onUnpair}>Pair it again</button></div>
+        : <div className="kitchen-alert"><IconAlertTriangle size={18} /> This screen has been signed out. Sign in again to keep receiving orders.</div>)}
       {state.printerFailures.map((f) => (
         <div key={f.id} className="kitchen-alert">
+          <IconPrinter size={18} />
           Printer problem at {f.stationName}: {f.lastError ?? "not printing"}. Check paper and power, then reprint.
         </div>
       ))}
       {notice && <div className="kitchen-notice">{notice}</div>}
-      {tickets.length === 0 && <p className="kitchen-empty">No open orders</p>}
+      {tickets.length === 0 && (
+        <div className="kitchen-empty">
+          <IconChefHat size={48} strokeWidth={1.5} />
+          <span>No open orders — kitchen is clear</span>
+        </div>
+      )}
       <div className="kitchen-grid">
         {tickets.map((v) => {
           const status = stationStatus(v, setup.stationId);
@@ -315,7 +363,7 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
                 <span className="kitchen-mode">{v.ticket.diningMode.replace("_", " ")}</span>
                 <span className="kitchen-time">{elapsed(v, now)}</span>
               </header>
-              {v.ticket.serverName && <p className="kitchen-server">{v.ticket.serverName}</p>}
+              {v.ticket.serverName && <p className="kitchen-server">Server: {v.ticket.serverName}</p>}
               <ul>
                 {mine.filter((i) => i.itemStatus !== "CANCELLED").map((i) => (
                   <li key={i.id} className={i.itemStatus === "READY" || i.itemStatus === "SERVED" ? "done" : ""}>
@@ -335,7 +383,7 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
               </footer>
               {menuFor === v.ticket.id && (
                 <div className="kitchen-menu">
-                  {setup.hasPrinter && <button className="secondary" onClick={() => void reprint(v.ticket.id)}>Reprint</button>}
+                  {setup.hasPrinter && <button className="secondary" onClick={() => void reprint(v.ticket.id)}><IconPrinter size={15} /> Reprint</button>}
                   {confirmCancel === v.ticket.id
                     ? <button className="danger" onClick={() => { update((s) => cancel(s, v.ticket.id, null, newKey())); setMenuFor(null); }}>Tap again to cancel order</button>
                     : <button className="secondary" onClick={() => setConfirmCancel(v.ticket.id)}>Cancel order</button>}

@@ -1,6 +1,21 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api } from "./api";
 import { formatMoney } from "./money";
+import {
+  IconActivity,
+  IconAlertTriangle,
+  IconArrowLeftRight,
+  IconLandmark,
+  IconLayoutGrid,
+  IconPower,
+  IconRefresh,
+  IconSearch,
+  IconShieldAlert,
+  IconShieldCheck,
+  IconSliders,
+  IconUserCheck,
+  IconX,
+} from "./ui/Icons";
 
 interface Item { id: string; kind: string; severity: string; subject: string; details: string; createdAt: string }
 interface MerchantView { id: string; legalName: string; tradingName: string; kind: string; status: string }
@@ -20,7 +35,6 @@ interface OpsMe {
   permissions: OpsPermissions;
 }
 
-
 interface PromptRequest {
   title: string;
   defaultValue?: string;
@@ -38,6 +52,19 @@ const ALL_TABS = [
   "Onboarding", "Disputes", "Reconciliation", "Exceptions", "System Health"
 ] as const;
 export type OpsTab = (typeof ALL_TABS)[number];
+
+const TAB_ICONS: Record<OpsTab, ReactNode> = {
+  Overview: <IconLayoutGrid size={15} />,
+  "Merchant Controls": <IconSliders size={15} />,
+  "Maker-Checker": <IconShieldCheck size={15} />,
+  "Kill Switches": <IconPower size={15} />,
+  "Custodian Trust": <IconLandmark size={15} />,
+  Onboarding: <IconUserCheck size={15} />,
+  Disputes: <IconShieldAlert size={15} />,
+  Reconciliation: <IconArrowLeftRight size={15} />,
+  Exceptions: <IconAlertTriangle size={15} />,
+  "System Health": <IconActivity size={15} />,
+};
 
 export function visibleTabsFor(perms: OpsPermissions | null): OpsTab[] {
   if (!perms) return [];
@@ -111,98 +138,150 @@ export function OpsConsole() {
 
   return (
     <OpsPromptContext.Provider value={askPrompt}>
-    <main>
-      <div className="flex-between" style={{ gap: "1rem", flexWrap: "wrap" }}>
-        <div>
-          <h1 style={{ marginBottom: "0.25rem" }}>Operations console</h1>
-          {me && (
-            <p className="small muted" style={{ margin: 0 }}>
-              Signed in as <strong>{me.subject}</strong> · Role: <span className="tag active">{me.primaryRole}</span>
-            </p>
-          )}
-        </div>
-        {(me?.permissions.canFreezeRisk ?? false) && !globalFrozen && (
-          <button
-            style={{ background: "#b91c1c", color: "#fff" }}
-            disabled={freezingGlobal}
-            onClick={() => void quickEmergencyFreeze()}
-          >
-            {freezingGlobal ? "Freezing…" : "Emergency Freeze All Payouts"}
-          </button>
+      <main className="workspace-main">
+        {meLoading && (
+          <div className="panel" style={{ maxWidth: "480px", margin: "2rem auto", textAlign: "center" }}>
+            <p className="muted" style={{ margin: 0 }}>Loading operator permissions…</p>
+          </div>
         )}
-      </div>
+        {meError && <p className="notice error" role="alert">Failed to load operator permissions: {meError}</p>}
 
-      {killSwitchError && <p className="error">Kill switch status error: {killSwitchError}</p>}
-      {globalFrozen && (
-        <p className="notice warn" style={{ marginTop: "0.75rem" }}>
-          <strong>GLOBAL PAYOUT FREEZE ACTIVE</strong> — All merchant payouts are paused. Unfreezing requires Maker-Checker dual approval.
-        </p>
-      )}
-      {bannerError && <p className="error">{bannerError}</p>}
-      {bannerMsg && <p className="notice ok">{bannerMsg}</p>}
+        {!meLoading && !meError && me && (
+          <div className="workspace-shell">
+            <aside className="workspace-sidebar" aria-label="Operations navigation">
+              <div className="sidebar-context">
+                <div className="sidebar-context-title">Operations Console</div>
+                <div className="sidebar-context-meta">
+                  <span className="tag active">{me.primaryRole}</span>
+                  <span className="mono" style={{ fontSize: "0.72rem" }}>{me.subject}</span>
+                </div>
+              </div>
 
-      {meLoading && <p className="muted">Loading operator permissions…</p>}
-      {meError && <p className="error">Failed to load operator permissions: {meError}</p>}
+              <div className="sidebar-group">
+                <div className="sidebar-group-label">Command Modules</div>
+                <nav className="sidebar-nav">
+                  {tabs.map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      className={`sidebar-btn ${t === tab ? "active" : ""}`}
+                      onClick={() => setTab(t)}
+                    >
+                      {TAB_ICONS[t]}
+                      <span>{t}</span>
+                    </button>
+                  ))}
+                </nav>
+              </div>
+            </aside>
 
-      {!meLoading && !meError && me && (
-        <>
-          <nav className="tabs" style={{ marginTop: "1rem" }}>
-            {tabs.map((t) => <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}
-          </nav>
+            <section className="workspace-content">
+              <div className="page-header">
+                <div>
+                  <h1 style={{ marginBottom: "0.15rem" }}>{tab}</h1>
+                  <p className="page-header-subtitle">
+                    Operator <strong>{me.subject}</strong> · Role: <strong>{me.primaryRole}</strong>
+                  </p>
+                </div>
+                {(me.permissions.canFreezeRisk ?? false) && !globalFrozen && (
+                  <button
+                    type="button"
+                    className="btn-danger"
+                    disabled={freezingGlobal}
+                    onClick={() => void quickEmergencyFreeze()}
+                  >
+                    <IconPower size={15} />
+                    {freezingGlobal ? "Freezing…" : "Emergency Freeze All Payouts"}
+                  </button>
+                )}
+              </div>
 
-          {tabs.includes(tab) && (
-            <>
-              {tab === "Overview" && <Overview />}
-              {tab === "Merchant Controls" && <MerchantControls perms={me.permissions} />}
-              {tab === "Maker-Checker" && <MakerChecker canApprove={me.permissions.canApproveMakerChecker ?? false} />}
-              {tab === "Kill Switches" && <KillSwitches />}
-              {tab === "Custodian Trust" && <CustodianTrust />}
-              {tab === "System Health" && <SystemHealth />}
-              {tab === "Exceptions" && <Exceptions />}
-              {tab === "Onboarding" && <Onboarding />}
-              {tab === "Disputes" && <Disputes />}
-              {tab === "Reconciliation" && <Reconciliation />}
-            </>
-          )}
-        </>
-      )}
-      {promptReq && (
-        <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-          <form className="panel" style={{ width: "min(440px, 92vw)", background: "#fff", padding: "1.25rem", borderRadius: "8px" }}
-            onSubmit={(e) => { e.preventDefault(); const r = promptReq; setPromptReq(null); r.resolve(promptInput); }}>
-            <h4 style={{ marginTop: 0 }}>{promptReq.title}</h4>
-            <input autoFocus value={promptInput} onChange={(e) => setPromptInput(e.target.value)} style={{ width: "100%", marginBottom: "1rem" }} />
-            <div className="flex-row" style={{ justifyContent: "flex-end", gap: "0.5rem" }}>
-              <button type="button" className="secondary" onClick={() => { const r = promptReq; setPromptReq(null); r.resolve(null); }}>Cancel</button>
-              <button type="submit">Confirm</button>
-            </div>
-          </form>
-        </div>
-      )}
-    </main>
+              {killSwitchError && <p className="notice error">Kill switch status error: {killSwitchError}</p>}
+              {globalFrozen && (
+                <div className="ops-freeze-banner" role="alert">
+                  <IconAlertTriangle size={20} />
+                  <div>
+                    <strong>GLOBAL PAYOUT FREEZE ACTIVE</strong> — All merchant payouts are paused. Unfreezing requires Maker-Checker dual approval.
+                  </div>
+                </div>
+              )}
+              {bannerError && <p className="notice error" role="alert">{bannerError}</p>}
+              {bannerMsg && <p className="notice ok">{bannerMsg}</p>}
+
+              {tabs.includes(tab) && (
+                <>
+                  {tab === "Overview" && <Overview />}
+                  {tab === "Merchant Controls" && <MerchantControls perms={me.permissions} />}
+                  {tab === "Maker-Checker" && <MakerChecker canApprove={me.permissions.canApproveMakerChecker ?? false} />}
+                  {tab === "Kill Switches" && <KillSwitches />}
+                  {tab === "Custodian Trust" && <CustodianTrust />}
+                  {tab === "System Health" && <SystemHealth />}
+                  {tab === "Exceptions" && <Exceptions />}
+                  {tab === "Onboarding" && <Onboarding />}
+                  {tab === "Disputes" && <Disputes />}
+                  {tab === "Reconciliation" && <Reconciliation />}
+                </>
+              )}
+            </section>
+          </div>
+        )}
+
+        {promptReq && (
+          <div role="dialog" aria-modal="true" className="modal-backdrop">
+            <form
+              className="modal-content"
+              style={{ maxWidth: "460px" }}
+              onSubmit={(e) => { e.preventDefault(); const r = promptReq; setPromptReq(null); r.resolve(promptInput); }}
+            >
+              <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
+                <h3 style={{ margin: 0 }}>{promptReq.title}</h3>
+                <button
+                  type="button"
+                  className="small ghost"
+                  aria-label="Cancel"
+                  onClick={() => { const r = promptReq; setPromptReq(null); r.resolve(null); }}
+                >
+                  <IconX size={16} />
+                </button>
+              </div>
+              <input
+                autoFocus
+                value={promptInput}
+                onChange={(e) => setPromptInput(e.target.value)}
+                style={{ marginBottom: "1.1rem" }}
+              />
+              <div className="flex-row" style={{ justifyContent: "flex-end" }}>
+                <button type="button" className="secondary" onClick={() => { const r = promptReq; setPromptReq(null); r.resolve(null); }}>Cancel</button>
+                <button type="submit">Confirm</button>
+              </div>
+            </form>
+          </div>
+        )}
+      </main>
     </OpsPromptContext.Provider>
   );
 }
 
-
-
 // -------------------------------------------------------------------------------------------------
-// 4. System Health Status
+// System Health Status
 // -------------------------------------------------------------------------------------------------
 function SystemHealth() {
   return (
-    <div>
-      <h3>Infrastructure and payment rails</h3>
-      <p className="muted">No authenticated live telemetry is connected to this screen. Rail uptime, ledger integrity, database health, queue backlog and webhook reliability are unavailable rather than assumed healthy.</p>
-      <p className="small muted">For operational decisions, use verified runtime health metrics and reconciliation evidence.</p>
+    <div className="panel">
+      <h3>Infrastructure and Payment Rails</h3>
+      <p className="muted">
+        No authenticated live telemetry is connected to this screen. Rail uptime, ledger integrity, database health, queue backlog and webhook reliability are unavailable rather than assumed healthy.
+      </p>
+      <p className="small muted" style={{ margin: 0 }}>
+        For operational decisions, use verified runtime health metrics and reconciliation evidence.
+      </p>
     </div>
   );
 }
 
 // -------------------------------------------------------------------------------------------------
-// Existing Ops Views
+// Overview
 // -------------------------------------------------------------------------------------------------
-
 function Overview() {
   const [o, setO] = useState<Record<string, number> | null>(null);
   const [integrity, setIntegrity] = useState<Integrity | null>(null);
@@ -245,37 +324,71 @@ function Overview() {
     }
   };
 
+  const ledgerHealthy = integrity ? integrity.accountsWithDrift === 0 && integrity.unbalancedTransactions === 0 : null;
+
   return (
     <>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
       {loading && !o && <p className="muted">Loading overview…</p>}
       {o && (
-        <div className="cards">
-          <div className="card"><div className="muted">Paid last 24h</div><div className="big">{formatMoney(Number(o.paid_24h))}</div>
-            <div className="small">{o.checkouts_24h} checkouts</div></div>
-          <div className="card"><div className="muted">Open exceptions</div><div className="big">{o.open_items}</div></div>
-          <div className="card"><div className="muted">Rail transactions awaiting result</div><div className="big">{o.rail_open}</div></div>
-          <div className="card"><div className="muted">Outbox backlog / dead webhooks</div><div className="big">{o.outbox_backlog} / {o.webhooks_dead}</div></div>
-          <div className="card"><div className="muted">Merchants to review / open disputes</div><div className="big">{o.merchants_pending_review} / {o.disputes_open}</div></div>
+        <div className="kpi-grid">
+          <div className="kpi-card primary">
+            <div className="kpi-label">Paid Last 24h</div>
+            <div className="kpi-value">{formatMoney(Number(o.paid_24h))}</div>
+            <div className="kpi-meta">{o.checkouts_24h} completed checkouts</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Open Exceptions</div>
+            <div className="kpi-value">{o.open_items}</div>
+            <div className="kpi-meta">Requires operator triage</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Pending Rail Results</div>
+            <div className="kpi-value">{o.rail_open}</div>
+            <div className="kpi-meta">Awaiting upstream confirmation</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Outbox / Dead Webhooks</div>
+            <div className="kpi-value">{o.outbox_backlog} / {o.webhooks_dead}</div>
+            <div className="kpi-meta">Delivery queue status</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Reviews / Disputes</div>
+            <div className="kpi-value">{o.merchants_pending_review} / {o.disputes_open}</div>
+            <div className="kpi-meta">Onboarding &amp; chargebacks</div>
+          </div>
         </div>
       )}
       {integrity && (
-        <p className={integrity.accountsWithDrift === 0 && integrity.unbalancedTransactions === 0 ? "notice ok" : "notice warn"}>
-          Ledger integrity: {integrity.accountsWithDrift} accounts with drift, {integrity.unbalancedTransactions} unbalanced transactions,
-          net by currency {Object.entries(integrity.netByCurrency).map(([c, v]) => `${c} ${v}`).join(", ")}
-        </p>
+        <div className={ledgerHealthy ? "notice ok" : "notice warn"}>
+          <strong>{ledgerHealthy ? "Ledger Integrity Verified" : "Ledger Integrity Alert"}</strong>
+          <span>
+            {integrity.accountsWithDrift} accounts with drift · {integrity.unbalancedTransactions} unbalanced transactions ·
+            Net by currency: <span className="mono">{Object.entries(integrity.netByCurrency).map(([c, v]) => `${c} ${v}`).join(", ") || "—"}</span>
+          </span>
+        </div>
       )}
-      <button disabled={busy} onClick={() => void runAction("/v1/ops/rails/recover", undefined, "Rail recovery run")}>
-        {busy ? "Running…" : "Recover pending rail results"}
-      </button>
-      <button disabled={busy} onClick={() => void runAction("/v1/ops/settlements/run", {}, "Settlement run complete")}>
-        {busy ? "Running…" : "Run due settlements"}
-      </button>
+      <div className="panel" style={{ marginTop: "1rem" }}>
+        <h3>Operational Recovery &amp; Batch Jobs</h3>
+        <div className="ops-action-bar" style={{ marginTop: "0.5rem" }}>
+          <button disabled={busy} onClick={() => void runAction("/v1/ops/rails/recover", undefined, "Rail recovery run")}>
+            <IconRefresh size={15} />
+            {busy ? "Running…" : "Recover Pending Rail Results"}
+          </button>
+          <button className="secondary" disabled={busy} onClick={() => void runAction("/v1/ops/settlements/run", {}, "Settlement run complete")}>
+            <IconLandmark size={15} />
+            {busy ? "Running…" : "Run Due Settlements"}
+          </button>
+        </div>
+      </div>
     </>
   );
 }
 
+// -------------------------------------------------------------------------------------------------
+// Exceptions
+// -------------------------------------------------------------------------------------------------
 function Exceptions() {
   const askPrompt = useOpsPrompt();
   const [items, setItems] = useState<Item[]>([]);
@@ -323,35 +436,40 @@ function Exceptions() {
 
   return (
     <>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
       {loading && items.length === 0 && <p className="muted">Loading exceptions…</p>}
-      <table className="grid">
-        <thead><tr><th>Severity</th><th>Kind</th><th>Subject</th><th>Details</th><th>Opened</th><th /></tr></thead>
-        <tbody>
-          {items.map((i) => (
-            <tr key={i.id}>
-              <td className={`sev-${i.severity}`}>{i.severity}</td>
-              <td>{i.kind}</td>
-              <td>{i.subject}</td>
-              <td className="small mono">{i.details}</td>
-              <td className="small">{new Date(i.createdAt).toLocaleString()}</td>
-              <td>
-                <button className="small" disabled={busyId === i.id} onClick={() => void resolveItem(i.id)}>
-                  {busyId === i.id ? "Resolving…" : "Resolve"}
-                </button>
-              </td>
-            </tr>
-          ))}
-          {!loading && items.length === 0 && (
-            <tr><td colSpan={6} className="muted">No open exceptions.</td></tr>
-          )}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className="grid">
+          <thead><tr><th>Severity</th><th>Kind</th><th>Subject</th><th>Details</th><th>Opened</th><th /></tr></thead>
+          <tbody>
+            {items.map((i) => (
+              <tr key={i.id}>
+                <td><span className={`sev-${i.severity}`}>{i.severity}</span></td>
+                <td><strong>{i.kind}</strong></td>
+                <td>{i.subject}</td>
+                <td className="small mono">{i.details}</td>
+                <td className="small muted">{new Date(i.createdAt).toLocaleString()}</td>
+                <td className="num">
+                  <button className="small" disabled={busyId === i.id} onClick={() => void resolveItem(i.id)}>
+                    {busyId === i.id ? "Resolving…" : "Resolve"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!loading && items.length === 0 && (
+              <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No open exceptions.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
 
+// -------------------------------------------------------------------------------------------------
+// Onboarding
+// -------------------------------------------------------------------------------------------------
 function Onboarding() {
   const askPrompt = useOpsPrompt();
   const [merchants, setMerchants] = useState<MerchantView[]>([]);
@@ -409,33 +527,35 @@ function Onboarding() {
 
   return (
     <>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
       {loading && merchants.length === 0 && <p className="muted">Loading merchants…</p>}
-      <table className="grid">
-        <thead><tr><th>Trading name</th><th>Legal name</th><th>Type</th><th>Status</th><th /></tr></thead>
-        <tbody>
-          {merchants.map((m) => {
-            const canReview = m.status === "pending_review";
-            const busy = busyId === m.id;
-            return (
-              <tr key={m.id}>
-                <td>{m.tradingName}</td>
-                <td>{m.legalName}</td>
-                <td>{m.kind}</td>
-                <td><span className={`tag ${m.status === "active" ? "active" : m.status === "pending_review" ? "pending" : "failed"}`}>{m.status}</span></td>
-                <td>
-                  <button className="small" disabled={!canReview || busy} onClick={() => void review(m, "approve")}>Approve</button>
-                  <button className="small secondary" disabled={!canReview || busy} onClick={() => void review(m, "reject")}>Reject</button>
-                </td>
-              </tr>
-            );
-          })}
-          {!loading && merchants.length === 0 && (
-            <tr><td colSpan={5} className="muted">No merchants found for onboarding review.</td></tr>
-          )}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className="grid">
+          <thead><tr><th>Trading name</th><th>Legal name</th><th>Type</th><th>Status</th><th /></tr></thead>
+          <tbody>
+            {merchants.map((m) => {
+              const canReview = m.status === "pending_review";
+              const busy = busyId === m.id;
+              return (
+                <tr key={m.id}>
+                  <td><strong>{m.tradingName}</strong></td>
+                  <td className="muted">{m.legalName}</td>
+                  <td>{m.kind}</td>
+                  <td><span className={`tag ${m.status === "active" ? "active" : m.status === "pending_review" ? "pending" : "failed"}`}>{m.status}</span></td>
+                  <td className="num" style={{ whiteSpace: "nowrap" }}>
+                    <button className="small" disabled={!canReview || busy} onClick={() => void review(m, "approve")}>Approve</button>
+                    <button className="small secondary" disabled={!canReview || busy} onClick={() => void review(m, "reject")}>Reject</button>
+                  </td>
+                </tr>
+              );
+            })}
+            {!loading && merchants.length === 0 && (
+              <tr><td colSpan={5} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No merchants found for onboarding review.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
@@ -453,6 +573,9 @@ export function formatDualControlOutcome(res: unknown, completedMessage: string)
   return completedMessage;
 }
 
+// -------------------------------------------------------------------------------------------------
+// Disputes
+// -------------------------------------------------------------------------------------------------
 function Disputes() {
   const [rows, setRows] = useState<Record<string, string | number>[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -494,37 +617,42 @@ function Disputes() {
 
   return (
     <>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
       {loading && rows.length === 0 && <p className="muted">Loading disputes…</p>}
-      <table className="grid">
-        <thead><tr><th>Checkout</th><th>Merchant</th><th className="num">Amount</th><th>Reason</th><th /></tr></thead>
-        <tbody>
-          {rows.map((d) => {
-            const id = String(d.id);
-            const busy = busyId === id;
-            return (
-              <tr key={id}>
-                <td>{d.checkout} #{d.line}</td>
-                <td>{d.merchant}</td>
-                <td className="num">{formatMoney(Number(d.amount))}</td>
-                <td>{d.reason}</td>
-                <td>
-                  <button className="small" disabled={busy} onClick={() => void resolve(id, "merchant_won")}>Merchant won</button>
-                  <button className="small secondary" disabled={busy} onClick={() => void resolve(id, "customer_won")}>Customer won</button>
-                </td>
-              </tr>
-            );
-          })}
-          {!loading && rows.length === 0 && (
-            <tr><td colSpan={5} className="muted">No open disputes.</td></tr>
-          )}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className="grid">
+          <thead><tr><th>Checkout</th><th>Merchant</th><th className="num">Amount</th><th>Reason</th><th /></tr></thead>
+          <tbody>
+            {rows.map((d) => {
+              const id = String(d.id);
+              const busy = busyId === id;
+              return (
+                <tr key={id}>
+                  <td className="mono small">{d.checkout} #{d.line}</td>
+                  <td><strong>{d.merchant}</strong></td>
+                  <td className="num mono">{formatMoney(Number(d.amount))}</td>
+                  <td>{d.reason}</td>
+                  <td className="num" style={{ whiteSpace: "nowrap" }}>
+                    <button className="small" disabled={busy} onClick={() => void resolve(id, "merchant_won")}>Merchant won</button>
+                    <button className="small secondary" disabled={busy} onClick={() => void resolve(id, "customer_won")}>Customer won</button>
+                  </td>
+                </tr>
+              );
+            })}
+            {!loading && rows.length === 0 && (
+              <tr><td colSpan={5} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No open disputes.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
 
+// -------------------------------------------------------------------------------------------------
+// Reconciliation
+// -------------------------------------------------------------------------------------------------
 function Reconciliation() {
   const [runs, setRuns] = useState<Record<string, string>[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -540,29 +668,34 @@ function Reconciliation() {
 
   return (
     <>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
       {loading && runs.length === 0 && <p className="muted">Loading reconciliation runs…</p>}
-      <table className="grid">
-        <thead><tr><th>Source</th><th>Period</th><th>Summary</th><th>By</th><th>When</th></tr></thead>
-        <tbody>
-          {runs.map((r) => (
-            <tr key={r.id}>
-              <td>{r.rail}</td>
-              <td>{r.period}</td>
-              <td className="mono small">{r.summary}</td>
-              <td>{r.imported_by}</td>
-              <td className="small">{new Date(r.created_at).toLocaleString()}</td>
-            </tr>
-          ))}
-          {!loading && !error && runs.length === 0 && (
-            <tr><td colSpan={5} className="muted">No reconciliation runs found.</td></tr>
-          )}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className="grid">
+          <thead><tr><th>Source</th><th>Period</th><th>Summary</th><th>By</th><th>When</th></tr></thead>
+          <tbody>
+            {runs.map((r) => (
+              <tr key={r.id}>
+                <td><strong>{r.rail}</strong></td>
+                <td className="mono small">{r.period}</td>
+                <td className="mono small">{r.summary}</td>
+                <td>{r.imported_by}</td>
+                <td className="small muted">{new Date(r.created_at).toLocaleString()}</td>
+              </tr>
+            ))}
+            {!loading && !error && runs.length === 0 && (
+              <tr><td colSpan={5} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No reconciliation runs found.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
 
+// -------------------------------------------------------------------------------------------------
+// Maker-Checker Dual Control
+// -------------------------------------------------------------------------------------------------
 interface MakerCheckerProposal {
   id: string;
   actionType: string;
@@ -646,59 +779,68 @@ function MakerChecker({ canApprove }: { canApprove: boolean }) {
 
   return (
     <div>
-      <div className="flex-between">
-        <h3>Maker-Checker Dual Control</h3>
-        <label className="choice">
-          Status:
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: "auto" }}>
+      <div className="panel" style={{ padding: "0.85rem 1rem", marginBottom: "0.85rem" }}>
+        <div className="flex-between">
+          <div>
+            <strong style={{ fontSize: "0.92rem" }}>Dual-Control Approval Queue</strong>
+            <div className="small muted">Sensitive actions require a second independent ops_admin approval.</div>
+          </div>
+          <select aria-label="Filter proposal status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: "auto", margin: 0 }}>
             <option value="PENDING">Pending</option>
             <option value="APPROVED">Approved</option>
             <option value="REJECTED">Rejected</option>
             <option value="ALL">All</option>
           </select>
-        </label>
+        </div>
       </div>
+
       {!canApprove && <p className="notice warn">View-only: Only an Operations Administrator (ops_admin) can approve dual-control proposals.</p>}
-      {error && <p className="error">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
       {loading && proposals.length === 0 && <p className="muted">Loading proposals…</p>}
-      <table className="grid" style={{ marginTop: "1rem" }}>
-        <thead>
-          <tr><th>Action</th><th>Resource</th><th>Reason</th><th>Proposed By</th><th>Status</th><th>Actions</th></tr>
-        </thead>
-        <tbody>
-          {proposals.map((p) => (
-            <tr key={p.id}>
-              <td className="small"><strong>{ACTION_LABELS[p.actionType] ?? p.actionType}</strong></td>
-              <td className="mono small">{p.resourceType}:{p.resourceId}</td>
-              <td className="small">{p.reason ?? "—"}</td>
-              <td className="small">{p.proposedBy}</td>
-              <td><span className={`tag ${p.status === "APPROVED" ? "active" : p.status === "PENDING" ? "pending" : "failed"}`}>{p.status}</span></td>
-              <td>
-                {p.status === "PENDING" ? (
-                  canApprove ? (
-                    <>
-                      <button className="small" disabled={busyId === p.id} onClick={() => void review(p.id, "approve")}>Approve</button>
-                      <button className="small secondary" disabled={busyId === p.id} onClick={() => void review(p.id, "reject")}>Reject</button>
-                    </>
+
+      <div className="table-wrap">
+        <table className="grid">
+          <thead>
+            <tr><th>Action</th><th>Resource</th><th>Reason</th><th>Proposed By</th><th>Status</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            {proposals.map((p) => (
+              <tr key={p.id}>
+                <td className="small"><strong>{ACTION_LABELS[p.actionType] ?? p.actionType}</strong></td>
+                <td className="mono small">{p.resourceType}:{p.resourceId}</td>
+                <td className="small">{p.reason ?? "—"}</td>
+                <td className="small">{p.proposedBy}</td>
+                <td><span className={`tag ${p.status === "APPROVED" ? "active" : p.status === "PENDING" ? "pending" : "failed"}`}>{p.status}</span></td>
+                <td className="num" style={{ whiteSpace: "nowrap" }}>
+                  {p.status === "PENDING" ? (
+                    canApprove ? (
+                      <>
+                        <button className="small" disabled={busyId === p.id} onClick={() => void review(p.id, "approve")}>Approve</button>
+                        <button className="small secondary" disabled={busyId === p.id} onClick={() => void review(p.id, "reject")}>Reject</button>
+                      </>
+                    ) : (
+                      <span className="small muted">Awaiting ops_admin</span>
+                    )
                   ) : (
-                    <span className="small muted">Awaiting ops_admin</span>
-                  )
-                ) : (
-                  <span className="small muted">{p.reviewedBy ?? "—"}</span>
-                )}
-              </td>
-            </tr>
-          ))}
-          {!loading && proposals.length === 0 && (
-            <tr><td colSpan={6} className="muted">No maker-checker proposals found.</td></tr>
-          )}
-        </tbody>
-      </table>
+                    <span className="small muted">{p.reviewedBy ?? "—"}</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {!loading && proposals.length === 0 && (
+              <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No maker-checker proposals found.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
+// -------------------------------------------------------------------------------------------------
+// Kill Switches
+// -------------------------------------------------------------------------------------------------
 interface KillSwitchStatus {
   globalFrozen: boolean;
   globalFreezeReason: string | null;
@@ -786,67 +928,83 @@ function KillSwitches() {
 
   return (
     <div>
-      <h3>Stage 1 Kill Switches</h3>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
 
-      <label>Reason / Audit Note
-        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Incident or maintenance reason" />
-      </label>
+      <div className="panel" style={{ marginBottom: "1rem" }}>
+        <label style={{ margin: 0 }}>
+          Audit Reason / Incident Note
+          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Incident ticket or maintenance reason (attached to all actions below)" />
+        </label>
+      </div>
 
       {loading && !status && <p className="muted">Loading kill switch status…</p>}
 
       {status && (
         <>
-          <section className="panel" style={{ marginTop: "1rem" }}>
-            <h4>Global Payout Kill Switch</h4>
-            <p>
-              Current state:{" "}
-              <span className={`tag ${status.globalFrozen ? "failed" : "active"}`}>
-                {status.globalFrozen ? "FROZEN" : "ACTIVE"}
-              </span>
-              {status.globalFreezeReason && <span className="small muted"> — {status.globalFreezeReason}</span>}
-            </p>
-            <button disabled={busy} onClick={() => void toggleGlobal(!status.globalFrozen)}>
-              {status.globalFrozen ? "Unfreeze Global Payouts" : "Freeze Global Payouts"}
-            </button>
-          </section>
+          <div className="grid-2" style={{ marginBottom: "1rem" }}>
+            <section className="panel">
+              <div className="flex-between" style={{ marginBottom: "0.65rem" }}>
+                <h3 style={{ margin: 0 }}>Global Payout Kill Switch</h3>
+                <span className={`tag ${status.globalFrozen ? "failed" : "active"}`}>
+                  {status.globalFrozen ? "FROZEN" : "ACTIVE"}
+                </span>
+              </div>
+              {status.globalFreezeReason && <p className="small muted">Reason: {status.globalFreezeReason}</p>}
+              <button
+                className={status.globalFrozen ? "secondary" : "btn-danger"}
+                disabled={busy}
+                onClick={() => void toggleGlobal(!status.globalFrozen)}
+              >
+                <IconPower size={15} />
+                {status.globalFrozen ? "Unfreeze Global Payouts" : "Freeze Global Payouts"}
+              </button>
+            </section>
 
-          <section className="panel" style={{ marginTop: "1rem" }}>
-            <h4>Merchant Payout Kill Switch</h4>
-            <div className="flex-row">
-              <input value={merchantId} onChange={(e) => setMerchantId(e.target.value)} placeholder="Merchant UUID" />
-              <button disabled={busy} onClick={() => void toggleMerchant(merchantId, true)}>Freeze Merchant</button>
-              <button className="secondary" disabled={busy} onClick={() => void toggleMerchant(merchantId, false)}>Unfreeze Merchant</button>
+            <section className="panel">
+              <h3 style={{ marginBottom: "0.65rem" }}>Merchant Payout Kill Switch</h3>
+              <div className="flex-row">
+                <input
+                  className="mono"
+                  value={merchantId}
+                  onChange={(e) => setMerchantId(e.target.value)}
+                  placeholder="Merchant UUID"
+                  style={{ flex: "1 1 180px", margin: 0 }}
+                />
+                <button className="btn-danger small" style={{ margin: 0 }} disabled={busy} onClick={() => void toggleMerchant(merchantId, true)}>Freeze</button>
+                <button className="secondary small" style={{ margin: 0 }} disabled={busy} onClick={() => void toggleMerchant(merchantId, false)}>Unfreeze</button>
+              </div>
+              {status.frozenMerchants.length > 0 && (
+                <p className="small muted mono" style={{ marginTop: "0.65rem", marginBottom: 0 }}>
+                  Frozen: {status.frozenMerchants.join(", ")}
+                </p>
+              )}
+            </section>
+          </div>
+
+          <section className="panel">
+            <h3>Module Route Kill Switches</h3>
+            <div className="table-wrap" style={{ margin: 0 }}>
+              <table className="grid">
+                <thead><tr><th>Module</th><th>State</th><th /></tr></thead>
+                <tbody>
+                  {moduleEntries.map(([mod, enabled]) => (
+                    <tr key={mod}>
+                      <td className="mono small"><strong>{mod}</strong></td>
+                      <td><span className={`tag ${enabled ? "active" : "failed"}`}>{enabled ? "ENABLED" : "DISABLED"}</span></td>
+                      <td className="num">
+                        <button className="small secondary" disabled={busy} onClick={() => void toggleModule(mod, !enabled)}>
+                          {enabled ? "Disable" : "Enable"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {moduleEntries.length === 0 && (
+                    <tr><td colSpan={3} className="muted" style={{ textAlign: "center", padding: "1.25rem" }}>No module switches configured.</td></tr>
+                  )}
+                </tbody>
+              </table>
             </div>
-            {status.frozenMerchants.length > 0 && (
-              <p className="small muted" style={{ marginTop: ".5rem" }}>
-                Frozen merchants: {status.frozenMerchants.join(", ")}
-              </p>
-            )}
-          </section>
-
-          <section className="panel" style={{ marginTop: "1rem" }}>
-            <h4>Module Route Kill Switches</h4>
-            <table className="grid">
-              <thead><tr><th>Module</th><th>State</th><th>Action</th></tr></thead>
-              <tbody>
-                {moduleEntries.map(([mod, enabled]) => (
-                  <tr key={mod}>
-                    <td className="mono small">{mod}</td>
-                    <td><span className={`tag ${enabled ? "active" : "failed"}`}>{enabled ? "ENABLED" : "DISABLED"}</span></td>
-                    <td>
-                      <button className="small secondary" disabled={busy} onClick={() => void toggleModule(mod, !enabled)}>
-                        {enabled ? "Disable" : "Enable"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {moduleEntries.length === 0 && (
-                  <tr><td colSpan={3} className="muted">No module switches configured.</td></tr>
-                )}
-              </tbody>
-            </table>
           </section>
         </>
       )}
@@ -854,6 +1012,9 @@ function KillSwitches() {
   );
 }
 
+// -------------------------------------------------------------------------------------------------
+// Custodian Trust Safeguarding
+// -------------------------------------------------------------------------------------------------
 interface CustodianSafeguardReport {
   trustAccountCode: string;
   currency: string;
@@ -899,34 +1060,70 @@ function CustodianTrust() {
       .finally(() => setLoading(false));
   }, []);
 
+  const outflowPct = report && report.dailyOutflowCapPesewas > 0
+    ? Math.min(100, Math.round((report.todayTotalOutflowPesewas / report.dailyOutflowCapPesewas) * 100))
+    : 0;
+
   return (
     <div>
-      <h3>Custodian Trust Safeguarding</h3>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
       {loading && !report && <p className="muted">Loading custodian safeguarding report…</p>}
       {report && (
         <>
-          <p className={report.safeguardingSatisfied ? "notice ok" : "notice warn"}>
-            Trust Safeguarding ({report.trustAccountCode} / {report.currency}):{" "}
-            <strong>{report.safeguardingSatisfied ? "SATISFIED" : "DEFICIT / REVIEW REQUIRED"}</strong>
-            {report.outflowFrozen && " — OUTFLOW FROZEN"}
-          </p>
-          <div className="cards">
-            <div className="card"><div className="muted">Total Trust Assets</div><div className="big">{formatMoney(report.totalTrustAssetsPesewas)}</div></div>
-            <div className="card"><div className="muted">Safeguarded Liabilities</div><div className="big">{formatMoney(report.totalSafeguardedLiabilitiesPesewas)}</div></div>
-            <div className="card"><div className="muted">Today's Outflow / Cap</div><div className="big">{formatMoney(report.todayTotalOutflowPesewas)} / {formatMoney(report.dailyOutflowCapPesewas)}</div></div>
-            <div className="card"><div className="muted">Rejected Outflows Today</div><div className="big">{report.todayRejectedOutflowCount}</div></div>
+          <div className={report.safeguardingSatisfied ? "notice ok" : "notice warn"}>
+            <strong>
+              Trust Safeguarding ({report.trustAccountCode} / {report.currency}):{" "}
+              {report.safeguardingSatisfied ? "SATISFIED" : "DEFICIT / REVIEW REQUIRED"}
+              {report.outflowFrozen && " — OUTFLOW FROZEN"}
+            </strong>
+          </div>
+          <div className="kpi-grid">
+            <div className="kpi-card primary">
+              <div className="kpi-label">Total Trust Assets</div>
+              <div className="kpi-value">{formatMoney(report.totalTrustAssetsPesewas)}</div>
+              <div className="kpi-meta">Reconciled bank &amp; clearing</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Safeguarded Liabilities</div>
+              <div className="kpi-value">{formatMoney(report.totalSafeguardedLiabilitiesPesewas)}</div>
+              <div className="kpi-meta">Merchant escrow, available &amp; reserved</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Daily Outflow Utilization</div>
+              <div className="kpi-value">{outflowPct}%</div>
+              <div className="progress-bar" style={{ margin: "0.35rem 0" }}>
+                <div className={`progress-fill ${outflowPct >= 90 ? "danger" : outflowPct >= 75 ? "warn" : ""}`} style={{ width: `${outflowPct}%` }} />
+              </div>
+              <div className="kpi-meta mono">{formatMoney(report.todayTotalOutflowPesewas)} / {formatMoney(report.dailyOutflowCapPesewas)}</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Rejected Outflows Today</div>
+              <div className="kpi-value">{report.todayRejectedOutflowCount}</div>
+              <div className="kpi-meta">Blocked by cap or floor rules</div>
+            </div>
           </div>
         </>
       )}
       {config && (
         <section className="panel" style={{ marginTop: "1rem" }}>
-          <h4>Primary Trust Account Config</h4>
-          <dl>
-            <dt>Account Code</dt><dd className="mono">{config.accountCode}</dd>
-            <dt>Bank / Account</dt><dd className="mono">{config.bankCode} — {config.bankAccountNumber}</dd>
-            <dt>Per-Payout Cap</dt><dd>{formatMoney(config.perPayoutCapPesewas)}</dd>
-            <dt>Min Reserve Floor</dt><dd>{formatMoney(config.minReserveFloorPesewas)}</dd>
+          <h3>Primary Trust Account Configuration</h3>
+          <dl className="ops-dl-grid">
+            <div className="ops-dl-item">
+              <dt>Account Code</dt>
+              <dd className="mono">{config.accountCode}</dd>
+            </div>
+            <div className="ops-dl-item">
+              <dt>Bank / Account</dt>
+              <dd className="mono">{config.bankCode} — {config.bankAccountNumber}</dd>
+            </div>
+            <div className="ops-dl-item">
+              <dt>Per-Payout Cap</dt>
+              <dd className="mono">{formatMoney(config.perPayoutCapPesewas)}</dd>
+            </div>
+            <div className="ops-dl-item">
+              <dt>Min Reserve Floor</dt>
+              <dd className="mono">{formatMoney(config.minReserveFloorPesewas)}</dd>
+            </div>
           </dl>
         </section>
       )}
@@ -934,6 +1131,9 @@ function CustodianTrust() {
   );
 }
 
+// -------------------------------------------------------------------------------------------------
+// Merchant Controls & Overrides
+// -------------------------------------------------------------------------------------------------
 interface MerchantSearchRow {
   id: string;
   merchant_code: string | null;
@@ -1043,109 +1243,130 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
 
   return (
     <div>
-      <h3>Merchant Controls &amp; Overrides</h3>
       <form
-        className="flex-row"
-        style={{ marginBottom: "1rem" }}
+        className="panel"
+        style={{ padding: "0.85rem 1rem", marginBottom: "0.85rem" }}
         onSubmit={(e) => {
           e.preventDefault();
           void search(query);
         }}
       >
-        <input
-          aria-label="Search merchants by name, ID, email, or phone"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search merchant by name, phone, code, or UUID"
-        />
-        <button type="submit" disabled={searching}>{searching ? "Searching…" : "Search"}</button>
+        <div className="flex-row">
+          <div className="pos-search-wrap" style={{ margin: 0, flex: "1 1 260px" }}>
+            <IconSearch size={15} />
+            <input
+              aria-label="Search merchants by name, ID, email, or phone"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search merchant by name, phone, code, or UUID"
+            />
+          </div>
+          <button type="submit" style={{ margin: 0 }} disabled={searching}>{searching ? "Searching…" : "Search"}</button>
+        </div>
       </form>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
 
-      <table className="grid">
-        <thead>
-          <tr><th>Merchant</th><th>Phone</th><th>Status</th><th>Payouts</th><th>Fee</th><th></th></tr>
-        </thead>
-        <tbody>
-          {results.map((m) => (
-            <tr key={m.id}>
-              <td><strong>{m.trading_name}</strong><div className="small muted">{m.legal_name}</div></td>
-              <td className="small">{m.contact_phone ?? "—"}</td>
-              <td><span className={`tag ${m.status === "active" ? "active" : "pending"}`}>{m.status}</span></td>
-              <td><span className={`tag ${m.frozen ? "failed" : "active"}`}>{m.frozen ? "FROZEN" : "ACTIVE"}</span></td>
-              <td className="small">{(m.fee_bps / 100).toFixed(2)}%</td>
-              <td><button className="small" disabled={loadingDetail} onClick={() => void openMerchant(m.id)}>Inspect</button></td>
-            </tr>
-          ))}
-          {!searching && results.length === 0 && <tr><td colSpan={6} className="muted">No merchants matched.</td></tr>}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className="grid">
+          <thead>
+            <tr><th>Merchant</th><th>Phone</th><th>Status</th><th>Payouts</th><th className="num">Fee</th><th /></tr>
+          </thead>
+          <tbody>
+            {results.map((m) => (
+              <tr key={m.id}>
+                <td><strong>{m.trading_name}</strong><div className="small muted">{m.legal_name}</div></td>
+                <td className="small mono">{m.contact_phone ?? "—"}</td>
+                <td><span className={`tag ${m.status === "active" ? "active" : "pending"}`}>{m.status}</span></td>
+                <td><span className={`tag ${m.frozen ? "failed" : "active"}`}>{m.frozen ? "FROZEN" : "ACTIVE"}</span></td>
+                <td className="num mono small">{(m.fee_bps / 100).toFixed(2)}%</td>
+                <td className="num"><button className="small secondary" disabled={loadingDetail} onClick={() => void openMerchant(m.id)}>Inspect</button></td>
+              </tr>
+            ))}
+            {!searching && results.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No merchants matched.</td></tr>}
+          </tbody>
+        </table>
+      </div>
 
       {loadingDetail && <p className="muted">Loading merchant controls…</p>}
 
       {selected && (
         <section className="panel" style={{ marginTop: "1.25rem" }}>
-          <div className="flex-between">
-            <h4>{selected.merchant.trading_name} ({selected.merchant.status})</h4>
-            {canFreeze && (
-              <button
-                className={selected.merchant.frozen ? "secondary" : ""}
-                disabled={busy}
-                onClick={() => void toggleFreeze(selected.merchant.id, !selected.merchant.frozen)}
-              >
-                {selected.merchant.frozen ? "Unfreeze Merchant Payouts" : "Freeze Merchant Payouts"}
+          <div className="flex-between" style={{ paddingBottom: "0.75rem", borderBottom: "1px solid var(--line)" }}>
+            <div>
+              <h3 style={{ margin: 0 }}>{selected.merchant.trading_name}</h3>
+              <p className="small muted" style={{ margin: "0.15rem 0 0" }}>
+                {selected.merchant.legal_name} · Status: <strong>{selected.merchant.status}</strong>
+              </p>
+            </div>
+            <div className="flex-row">
+              {canFreeze && (
+                <button
+                  className={selected.merchant.frozen ? "secondary" : "btn-danger"}
+                  disabled={busy}
+                  onClick={() => void toggleFreeze(selected.merchant.id, !selected.merchant.frozen)}
+                >
+                  <IconPower size={15} />
+                  {selected.merchant.frozen ? "Unfreeze Merchant Payouts" : "Freeze Merchant Payouts"}
+                </button>
+              )}
+              <button type="button" className="ghost small" aria-label="Close inspection" onClick={() => setSelected(null)}>
+                <IconX size={16} />
               </button>
-            )}
+            </div>
           </div>
 
-          <div className="cards" style={{ marginTop: "0.75rem" }}>
+          <div className="kpi-grid" style={{ marginTop: "1rem" }}>
             {selected.balances.map((b) => (
-              <div className="card" key={`${b.currency}-${b.bucket}`}>
-                <div className="muted">{b.currency} {b.bucket}</div>
-                <div className="big">{formatMoney(b.balance)}</div>
+              <div className="kpi-card" key={`${b.currency}-${b.bucket}`}>
+                <div className="kpi-label">{b.currency} {b.bucket}</div>
+                <div className="kpi-value">{formatMoney(b.balance)}</div>
               </div>
             ))}
             {selected.balances.length === 0 && <p className="small muted">No ledger accounts opened yet.</p>}
           </div>
 
-          <h4 style={{ marginTop: "1rem" }}>API Keys</h4>
-          <table className="grid">
-            <thead><tr><th>Prefix</th><th>Tier</th><th>Label</th><th>Status</th><th></th></tr></thead>
-            <tbody>
-              {selected.apiKeys.map((k) => (
-                <tr key={k.id}>
-                  <td className="mono small">{k.key_prefix}…</td>
-                  <td className="small">{k.key_type}</td>
-                  <td className="small">{k.label ?? "—"}</td>
-                  <td><span className={`tag ${k.status === "active" ? "active" : "failed"}`}>{k.status}</span></td>
-                  <td>
-                    {k.status === "active" && canFreeze && (
-                      <button className="small secondary" disabled={busy} onClick={() => void revokeKey(k.id, selected.merchant.id)}>
-                        Revoke Key
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {selected.apiKeys.length === 0 && <tr><td colSpan={5} className="muted">No API keys.</td></tr>}
-            </tbody>
-          </table>
+          <h4 style={{ marginTop: "1.25rem" }}>API Keys</h4>
+          <div className="table-wrap">
+            <table className="grid">
+              <thead><tr><th>Prefix</th><th>Tier</th><th>Label</th><th>Status</th><th /></tr></thead>
+              <tbody>
+                {selected.apiKeys.map((k) => (
+                  <tr key={k.id}>
+                    <td className="mono small">{k.key_prefix}…</td>
+                    <td className="small">{k.key_type}</td>
+                    <td className="small">{k.label ?? "—"}</td>
+                    <td><span className={`tag ${k.status === "active" ? "active" : "failed"}`}>{k.status}</span></td>
+                    <td className="num">
+                      {k.status === "active" && canFreeze && (
+                        <button className="small secondary" disabled={busy} onClick={() => void revokeKey(k.id, selected.merchant.id)}>
+                          Revoke Key
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {selected.apiKeys.length === 0 && <tr><td colSpan={5} className="muted">No API keys.</td></tr>}
+              </tbody>
+            </table>
+          </div>
 
-          <h4 style={{ marginTop: "1rem" }}>POS Terminals</h4>
-          <table className="grid">
-            <thead><tr><th>Serial</th><th>Model</th><th>Status</th></tr></thead>
-            <tbody>
-              {selected.terminals.map((t) => (
-                <tr key={t.id}>
-                  <td className="mono small">{t.serial_number}</td>
-                  <td className="small">{t.model}</td>
-                  <td><span className={`tag ${t.status === "ACTIVE" ? "active" : "pending"}`}>{t.status}</span></td>
-                </tr>
-              ))}
-              {selected.terminals.length === 0 && <tr><td colSpan={3} className="muted">No POS terminals registered.</td></tr>}
-            </tbody>
-          </table>
+          <h4 style={{ marginTop: "1.25rem" }}>POS Terminals</h4>
+          <div className="table-wrap" style={{ marginBottom: 0 }}>
+            <table className="grid">
+              <thead><tr><th>Serial</th><th>Model</th><th>Status</th></tr></thead>
+              <tbody>
+                {selected.terminals.map((t) => (
+                  <tr key={t.id}>
+                    <td className="mono small">{t.serial_number}</td>
+                    <td className="small">{t.model}</td>
+                    <td><span className={`tag ${t.status === "ACTIVE" ? "active" : "pending"}`}>{t.status}</span></td>
+                  </tr>
+                ))}
+                {selected.terminals.length === 0 && <tr><td colSpan={3} className="muted">No POS terminals registered.</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
     </div>

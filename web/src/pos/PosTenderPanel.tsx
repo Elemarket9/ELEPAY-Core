@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { api, ApiError, newKey } from "../api";
 import { formatMoney, normalizeGhanaPhone, parseMoney } from "../money";
+import { IconBanknote, IconCreditCard, IconExternalLink, IconQrCode, IconSmartphone } from "../ui/Icons";
 import {
   isFeatureNotEnabled,
   isTerminalStatusFailed,
@@ -394,38 +395,62 @@ export function PosTenderPanel({
     setNfcResult(null);
   }
 
+  const parsedCash = parseMoney(cashInput);
+  const cashChange = parsedCash !== null && parsedCash >= totalPesewas ? parsedCash - totalPesewas : null;
+
   return (
-    <div style={{ marginTop: "1rem" }}>
-      <div className="tabs" style={{ marginBottom: ".8rem" }}>
-        <button type="button" className={mode === "CASH" ? "active" : ""} onClick={() => { setMode("CASH"); setError(null); }}>Cash</button>
-        <button type="button" className={mode === "MOMO" ? "active" : ""} onClick={() => { setMode("MOMO"); setError(null); }}>MoMo Push</button>
-        <button type="button" className={mode === "GHQR" ? "active" : ""} onClick={() => { setMode("GHQR"); setError(null); }}>GhQR</button>
-        <button type="button" className={mode === "NFC_CARD" ? "active" : ""} onClick={() => { setMode("NFC_CARD"); setError(null); }}>Card / NFC Tap</button>
+    <div style={{ marginTop: "0.9rem", paddingTop: "0.9rem", borderTop: "1px solid var(--line)" }}>
+      <div className="tender-tabs" role="tablist" aria-label="Payment tender">
+        <button type="button" className={mode === "CASH" ? "active" : ""} onClick={() => { setMode("CASH"); setError(null); }}>
+          <IconBanknote size={17} />
+          Cash
+        </button>
+        <button type="button" className={mode === "MOMO" ? "active" : ""} onClick={() => { setMode("MOMO"); setError(null); }}>
+          <IconSmartphone size={17} />
+          MoMo
+        </button>
+        <button type="button" className={mode === "GHQR" ? "active" : ""} onClick={() => { setMode("GHQR"); setError(null); }}>
+          <IconQrCode size={17} />
+          GhQR
+        </button>
+        <button type="button" className={mode === "NFC_CARD" ? "active" : ""} onClick={() => { setMode("NFC_CARD"); setError(null); }}>
+          <IconCreditCard size={17} />
+          Card / NFC
+        </button>
       </div>
 
-      {error && <p className="error">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
 
       {pendingRef ? (
-        <div className="notice">
-          <p>
-            Awaiting live rail confirmation · Ref <strong className="mono">{pendingRef}</strong>
-            {pollStatus && <> · Status: <strong>{pollStatus}</strong></>}
-          </p>
-          <p className="small muted">Auto-polling every 3 seconds…</p>
-          {qrImage && <img src={qrImage} alt="EMVCo GhQR code" width={220} height={220} style={{ display: "block", margin: ".5rem 0" }} />}
-          {qrReference && (
-            <p className="small mono">
-              GhQR Ref: {qrReference}
-            </p>
+        <div className="checkout-status-card processing" style={{ textAlign: "left" }}>
+          <div className="flex-row" style={{ marginBottom: "0.5rem" }}>
+            <span className="spinner" />
+            <div>
+              <strong>Awaiting live rail confirmation</strong>
+              <div className="small">
+                Ref <span className="mono">{pendingRef}</span>
+                {pollStatus && <> · Status: <strong>{pollStatus}</strong></>}
+              </div>
+            </div>
+          </div>
+          <p className="small muted" style={{ marginBottom: "0.65rem" }}>Auto-polling every 3 seconds…</p>
+          {qrImage && (
+            <div className="qr-frame" style={{ margin: "0.65rem 0" }}>
+              <img src={qrImage} alt="EMVCo GhQR code" width={200} height={200} />
+              {qrReference && <p className="small mono" style={{ margin: "0.25rem 0 0" }}>GhQR Ref: {qrReference}</p>}
+            </div>
           )}
           {qrPayload && (
-            <p className="small mono" style={{ wordBreak: "break-all" }}>
-              EMVCo Payload: {qrPayload}
-            </p>
+            <details style={{ marginBottom: "0.65rem" }}>
+              <summary className="small muted" style={{ cursor: "pointer" }}>EMVCo Payload</summary>
+              <p className="small mono" style={{ wordBreak: "break-all", marginTop: "0.3rem" }}>{qrPayload}</p>
+            </details>
           )}
           {cardPayUrl && (
-            <p className="small">
-              <a href={cardPayUrl} target="_blank" rel="noreferrer">Open Card Checkout Link</a>
+            <p className="small" style={{ marginBottom: "0.65rem" }}>
+              <a href={cardPayUrl} target="_blank" rel="noreferrer" className="flex-row" style={{ gap: "0.35rem" }}>
+                Open Card Checkout Link <IconExternalLink size={14} />
+              </a>
             </p>
           )}
           <div className="flex-row">
@@ -443,17 +468,18 @@ export function PosTenderPanel({
         <>
           {mode === "CASH" && (
             <div>
-              <label>
+              <label style={{ marginTop: 0 }}>
                 Cash received (GH₵)
                 <input
+                  className="mono"
                   inputMode="decimal"
                   value={cashInput}
                   onChange={(e) => setCashInput(e.target.value)}
                   placeholder={(totalPesewas / 100).toFixed(2)}
                 />
               </label>
-              <div className="flex-row" style={{ marginBottom: ".6rem", flexWrap: "wrap" }}>
-                <button type="button" className="secondary small" onClick={() => setCashInput((totalPesewas / 100).toFixed(2))}>
+              <div className="flex-row" style={{ marginBottom: "0.65rem", gap: "0.35rem" }}>
+                <button type="button" className="secondary small" style={{ margin: 0 }} onClick={() => setCashInput((totalPesewas / 100).toFixed(2))}>
                   Exact ({formatMoney(totalPesewas)})
                 </button>
                 {[1000, 2000, 5000, 10000].map((add) => (
@@ -461,18 +487,25 @@ export function PosTenderPanel({
                     key={add}
                     type="button"
                     className="secondary small"
+                    style={{ margin: 0 }}
                     onClick={() => setCashInput(((totalPesewas + add) / 100).toFixed(2))}
                   >
                     +{formatMoney(add)}
                   </button>
                 ))}
               </div>
+              {cashChange !== null && (
+                <div className="change-banner">
+                  <span>Change due</span>
+                  <strong className="mono">{formatMoney(cashChange)}</strong>
+                </div>
+              )}
               <div className="flex-row">
-                <button type="button" onClick={() => void payCash()} disabled={busy}>
+                <button type="button" className="large" style={{ flex: 1, margin: 0 }} onClick={() => void payCash()} disabled={busy}>
                   {busy ? "Recording…" : `Charge Cash ${formatMoney(totalPesewas)}`}
                 </button>
                 {!hasOrder && onClearCart && (
-                  <button type="button" className="secondary" onClick={onClearCart}>Clear</button>
+                  <button type="button" className="secondary large" style={{ margin: 0 }} onClick={onClearCart}>Clear</button>
                 )}
               </div>
             </div>
@@ -481,7 +514,7 @@ export function PosTenderPanel({
           {mode === "MOMO" && (
             <div>
               <div className="grid-2">
-                <label>
+                <label style={{ marginTop: 0 }}>
                   Network
                   <select value={momoNetwork} onChange={(e) => setMomoNetwork(e.target.value as MomoNetwork)}>
                     {MOMO_NETWORKS.map((n) => (
@@ -489,9 +522,10 @@ export function PosTenderPanel({
                     ))}
                   </select>
                 </label>
-                <label>
+                <label style={{ marginTop: 0 }}>
                   Customer MoMo Phone
                   <input
+                    className="mono"
                     inputMode="tel"
                     value={momoPhone}
                     onChange={(e) => setMomoPhone(e.target.value)}
@@ -499,7 +533,7 @@ export function PosTenderPanel({
                   />
                 </label>
               </div>
-              <button type="button" onClick={() => void startMomoPush()} disabled={busy}>
+              <button type="button" className="large full-width" onClick={() => void startMomoPush()} disabled={busy} style={{ marginTop: "0.5rem" }}>
                 {busy ? "Sending Prompt…" : `Send MoMo Push (${formatMoney(totalPesewas)})`}
               </button>
             </div>
@@ -508,7 +542,8 @@ export function PosTenderPanel({
           {mode === "GHQR" && (
             <div>
               <p className="small muted">Generate a dynamic EMVCo GhQR code for the customer to scan with any Ghana bank or MoMo app.</p>
-              <button type="button" onClick={() => void startGhQr()} disabled={busy}>
+              <button type="button" className="large full-width" onClick={() => void startGhQr()} disabled={busy}>
+                <IconQrCode size={17} />
                 {busy ? "Generating GhQR…" : `Display GhQR (${formatMoney(totalPesewas)})`}
               </button>
             </div>
@@ -519,45 +554,49 @@ export function PosTenderPanel({
               <p className="small muted">
                 Pay via online Card Checkout, or submit hardware DUKPT/EMV NFC tap data{terminalId ? ` (Terminal ${terminalId.slice(0, 8)})` : ""}.
               </p>
-              <div style={{ marginBottom: ".8rem" }}>
-                <button type="button" onClick={() => void startCardCheckout()} disabled={busy}>
-                  {busy ? "Creating Card Checkout…" : `Charge Card via Checkout (${formatMoney(totalPesewas)})`}
-                </button>
-              </div>
-              <div className="grid-2">
-                <label>
-                  DUKPT KSN
-                  <input
-                    className="mono"
-                    value={nfcKsn}
-                    onChange={(e) => setNfcKsn(e.target.value)}
-                    placeholder="FFFF9876543210E00001"
-                  />
-                </label>
-                <label>
-                  Masked PAN (optional)
-                  <input
-                    className="mono"
-                    value={nfcMaskedPan}
-                    onChange={(e) => setNfcMaskedPan(e.target.value)}
-                    placeholder="411111******1111"
-                  />
-                </label>
-              </div>
-              <label>
-                Redacted EMV TLV Hex
-                <input
-                  className="mono"
-                  value={nfcEmvTlvHex}
-                  onChange={(e) => setNfcEmvTlvHex(e.target.value)}
-                  placeholder="9F02060000000010005F2A020936..."
-                />
-              </label>
-              <button type="button" className="secondary" onClick={() => void initiateNfcTap()} disabled={busy}>
-                {busy ? "Authorizing Tap…" : `Initiate NFC Tap-to-Pay (${formatMoney(totalPesewas)})`}
+              <button type="button" className="large full-width" onClick={() => void startCardCheckout()} disabled={busy} style={{ marginBottom: "0.85rem" }}>
+                <IconCreditCard size={17} />
+                {busy ? "Creating Card Checkout…" : `Charge Card via Checkout (${formatMoney(totalPesewas)})`}
               </button>
+              <details>
+                <summary className="small muted" style={{ cursor: "pointer", fontWeight: 600 }}>Hardware NFC Tap-to-Pay (DUKPT / EMV TLV)</summary>
+                <div style={{ marginTop: "0.6rem" }}>
+                  <div className="grid-2">
+                    <label>
+                      DUKPT KSN
+                      <input
+                        className="mono"
+                        value={nfcKsn}
+                        onChange={(e) => setNfcKsn(e.target.value)}
+                        placeholder="FFFF9876543210E00001"
+                      />
+                    </label>
+                    <label>
+                      Masked PAN (optional)
+                      <input
+                        className="mono"
+                        value={nfcMaskedPan}
+                        onChange={(e) => setNfcMaskedPan(e.target.value)}
+                        placeholder="411111******1111"
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    Redacted EMV TLV Hex
+                    <input
+                      className="mono"
+                      value={nfcEmvTlvHex}
+                      onChange={(e) => setNfcEmvTlvHex(e.target.value)}
+                      placeholder="9F02060000000010005F2A020936..."
+                    />
+                  </label>
+                  <button type="button" className="secondary" onClick={() => void initiateNfcTap()} disabled={busy}>
+                    {busy ? "Authorizing Tap…" : `Initiate NFC Tap-to-Pay (${formatMoney(totalPesewas)})`}
+                  </button>
+                </div>
+              </details>
               {nfcResult && (
-                <p className="notice" style={{ marginTop: ".6rem" }}>
+                <p className="notice" style={{ marginTop: "0.6rem" }}>
                   Backend Status: <strong>{nfcResult.status}</strong>
                   {nfcResult.authCode && <> · Auth: <span className="mono">{nfcResult.authCode}</span></>}
                   {nfcResult.cardScheme && <> · Scheme: {nfcResult.cardScheme}</>}

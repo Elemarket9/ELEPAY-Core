@@ -1,8 +1,32 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import QRCode from "qrcode";
 import { api, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
 import { BusinessAccounting, CustomersAndLoyalty, FloorPlanView, InventoryAndStock, InvoicesAndQuotes, PayrollAndEmployees, PosRegister } from "./MerchantTools";
+import {
+  IconArrowLeftRight,
+  IconBook,
+  IconCheck,
+  IconChefHat,
+  IconCopy,
+  IconExternalLink,
+  IconFileText,
+  IconHeart,
+  IconLandmark,
+  IconLayoutGrid,
+  IconMonitor,
+  IconPackage,
+  IconPrinter,
+  IconQrCode,
+  IconReceipt,
+  IconRotateCcw,
+  IconSearch,
+  IconSend,
+  IconShieldAlert,
+  IconUsers,
+  IconUtensils,
+  IconX,
+} from "./ui/Icons";
 
 interface MerchantView { id: string; tradingName: string; kind: string; status: string; merchantCode: string; role: string }
 interface Balances { pending: number; available: number; reserved: number }
@@ -19,11 +43,52 @@ const TABS = [
   "Transactions", "Settlements", "Refunds", "Disputes", "Payouts", "Collect"
 ] as const;
 
+type MerchantTab = (typeof TABS)[number];
+
+const NAV_GROUPS: { label: string; items: { tab: MerchantTab; icon: ReactNode }[] }[] = [
+  {
+    label: "Core",
+    items: [
+      { tab: "Overview", icon: <IconLayoutGrid size={15} /> },
+      { tab: "Collect", icon: <IconQrCode size={15} /> },
+    ],
+  },
+  {
+    label: "Point of Sale",
+    items: [
+      { tab: "POS Register", icon: <IconMonitor size={15} /> },
+      { tab: "Restaurant & KDS", icon: <IconUtensils size={15} /> },
+      { tab: "Orders & Receipts", icon: <IconReceipt size={15} /> },
+    ],
+  },
+  {
+    label: "Operations",
+    items: [
+      { tab: "Inventory & Stock", icon: <IconPackage size={15} /> },
+      { tab: "Invoices & Quotes", icon: <IconFileText size={15} /> },
+      { tab: "Customers & Loyalty", icon: <IconHeart size={15} /> },
+    ],
+  },
+  {
+    label: "Finance & Team",
+    items: [
+      { tab: "Transactions", icon: <IconArrowLeftRight size={15} /> },
+      { tab: "Settlements", icon: <IconLandmark size={15} /> },
+      { tab: "Payouts", icon: <IconSend size={15} /> },
+      { tab: "Refunds", icon: <IconRotateCcw size={15} /> },
+      { tab: "Disputes", icon: <IconShieldAlert size={15} /> },
+      { tab: "Payroll & Employees", icon: <IconUsers size={15} /> },
+      { tab: "Business Accounting", icon: <IconBook size={15} /> },
+    ],
+  },
+];
+
 /** Merchant BackOffice & Business Management Dashboard */
 export function MerchantDashboard() {
   const [merchants, setMerchants] = useState<MerchantView[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
-  const [tab, setTab] = useState<(typeof TABS)[number]>("Overview");
+  const [tab, setTab] = useState<MerchantTab>("Overview");
+  const [copiedCode, setCopiedCode] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -32,36 +97,110 @@ export function MerchantDashboard() {
   }, []);
 
   const merchant = merchants.find((m) => m.id === current);
+
+  function copyMerchantCode(code: string) {
+    void navigator.clipboard?.writeText(code).then(() => {
+      setCopiedCode(true);
+      window.setTimeout(() => setCopiedCode(false), 1800);
+    }).catch(() => {});
+  }
+
   return (
-    <main>
-      <h1>Merchant dashboard</h1>
-      {error && <p className="error">{error}</p>}
-      {merchants.length > 1 && (
-        <select value={current ?? ""} onChange={(e) => setCurrent(e.target.value)}>
-          {merchants.map((m) => <option key={m.id} value={m.id}>{m.tradingName} ({m.role})</option>)}
-        </select>
+    <main className="workspace-main">
+      {error && <p className="notice error" role="alert">{error}</p>}
+      {!merchant && !error && (
+        <div className="panel" style={{ maxWidth: "480px", margin: "2rem auto", textAlign: "center" }}>
+          <p className="muted" style={{ margin: 0 }}>Loading merchant workspace…</p>
+        </div>
       )}
       {merchant && (
-        <>
-          <p className="muted">{merchant.tradingName} · code {merchant.merchantCode} · {merchant.status} · your role: {merchant.role}</p>
-          <nav className="tabs">{TABS.map((t) => <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}</nav>
+        <div className="workspace-shell">
+          <aside className="workspace-sidebar" aria-label="Merchant navigation">
+            <div className="sidebar-context">
+              <div className="sidebar-context-title">{merchant.tradingName}</div>
+              <div className="sidebar-context-meta">
+                <span className={`tag ${merchant.status === "active" ? "active" : "pending"}`}>{merchant.status}</span>
+                <button
+                  type="button"
+                  className="code-chip"
+                  title="Copy merchant code"
+                  onClick={() => copyMerchantCode(merchant.merchantCode)}
+                >
+                  {copiedCode ? <IconCheck size={12} /> : <IconCopy size={12} />}
+                  {merchant.merchantCode}
+                </button>
+              </div>
+              {merchants.length > 1 && (
+                <select
+                  aria-label="Switch merchant"
+                  value={current ?? ""}
+                  onChange={(e) => setCurrent(e.target.value)}
+                  style={{ marginTop: "0.65rem", padding: "0.42rem 0.6rem", fontSize: "0.82rem" }}
+                >
+                  {merchants.map((m) => <option key={m.id} value={m.id}>{m.tradingName} ({m.role})</option>)}
+                </select>
+              )}
+            </div>
 
-          {tab === "Overview" && <Overview id={merchant.id} />}
-          {tab === "POS Register" && <PosRegister merchant={merchant} />}
-          {tab === "Orders & Receipts" && <OrdersAndReceipts merchantId={merchant.id} />}
-          {tab === "Inventory & Stock" && <InventoryAndStock merchantId={merchant.id} />}
-          {tab === "Restaurant & KDS" && <RestaurantAndKds merchantId={merchant.id} />}
-          {tab === "Invoices & Quotes" && <InvoicesAndQuotes merchantId={merchant.id} />}
-          {tab === "Payroll & Employees" && <PayrollAndEmployees merchantId={merchant.id} />}
-          {tab === "Customers & Loyalty" && <CustomersAndLoyalty merchantId={merchant.id} />}
-          {tab === "Business Accounting" && <BusinessAccounting merchantId={merchant.id} />}
-          {tab === "Transactions" && <Transactions id={merchant.id} />}
-          {tab === "Settlements" && <Rows id={merchant.id} path="settlements" columns={["reference", "amount", "lines", "createdAt"]} />}
-          {tab === "Refunds" && <Rows id={merchant.id} path="refunds" columns={["reference", "checkout", "line", "amount", "status", "reason"]} />}
-          {tab === "Disputes" && <Rows id={merchant.id} path="disputes" columns={["checkout", "line", "amount", "reason", "status"]} />}
-          {tab === "Payouts" && <Payouts id={merchant.id} />}
-          {tab === "Collect" && <Collect merchant={merchant} />}
-        </>
+            {NAV_GROUPS.map((group) => (
+              <div key={group.label} className="sidebar-group">
+                <div className="sidebar-group-label">{group.label}</div>
+                <nav className="sidebar-nav">
+                  {group.items.map((item) => (
+                    <button
+                      key={item.tab}
+                      type="button"
+                      className={`sidebar-btn ${tab === item.tab ? "active" : ""}`}
+                      onClick={() => setTab(item.tab)}
+                    >
+                      {item.icon}
+                      <span>{item.tab}</span>
+                    </button>
+                  ))}
+                </nav>
+              </div>
+            ))}
+          </aside>
+
+          <section className="workspace-content">
+            <div className="page-header">
+              <div>
+                <h1 style={{ marginBottom: "0.15rem" }}>{tab}</h1>
+                <p className="page-header-subtitle">
+                  {merchant.tradingName} · Code <span className="mono">{merchant.merchantCode}</span> · Role: <strong>{merchant.role}</strong>
+                </p>
+              </div>
+              <div className="flex-row" style={{ gap: "0.45rem" }}>
+                {tab !== "POS Register" && (
+                  <button type="button" className="secondary small" onClick={() => setTab("POS Register")}>
+                    <IconMonitor size={14} /> Open POS
+                  </button>
+                )}
+                {tab !== "Collect" && (
+                  <button type="button" className="small" onClick={() => setTab("Collect")}>
+                    <IconQrCode size={14} /> Collect Payment
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {tab === "Overview" && <Overview id={merchant.id} onNavigate={setTab} />}
+            {tab === "POS Register" && <PosRegister merchant={merchant} />}
+            {tab === "Orders & Receipts" && <OrdersAndReceipts merchantId={merchant.id} />}
+            {tab === "Inventory & Stock" && <InventoryAndStock merchantId={merchant.id} />}
+            {tab === "Restaurant & KDS" && <RestaurantAndKds merchantId={merchant.id} />}
+            {tab === "Invoices & Quotes" && <InvoicesAndQuotes merchantId={merchant.id} />}
+            {tab === "Payroll & Employees" && <PayrollAndEmployees merchantId={merchant.id} />}
+            {tab === "Customers & Loyalty" && <CustomersAndLoyalty merchantId={merchant.id} />}
+            {tab === "Business Accounting" && <BusinessAccounting merchantId={merchant.id} />}
+            {tab === "Transactions" && <Transactions id={merchant.id} />}
+            {tab === "Settlements" && <Rows id={merchant.id} path="settlements" columns={["reference", "amount", "lines", "createdAt"]} />}
+            {tab === "Refunds" && <Rows id={merchant.id} path="refunds" columns={["reference", "checkout", "line", "amount", "status", "reason"]} />}
+            {tab === "Disputes" && <Rows id={merchant.id} path="disputes" columns={["checkout", "line", "amount", "reason", "status"]} />}
+            {tab === "Payouts" && <Payouts id={merchant.id} />}
+            {tab === "Collect" && <Collect merchant={merchant} />}
+          </section>
+        </div>
       )}
     </main>
   );
@@ -91,78 +230,94 @@ function OrdersAndReceipts({ merchantId }: { merchantId: string }) {
 
   return (
     <div>
-      <div className="flex-between">
-        <div className="flex-row">
-          <label className="choice">Filter:
-            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={{ width: "auto" }}>
+      <div className="panel" style={{ padding: "0.85rem 1rem", marginBottom: "0.85rem" }}>
+        <div className="flex-between">
+          <div className="flex-row" style={{ flex: 1 }}>
+            <div className="pos-search-wrap" style={{ margin: 0, flex: "1 1 240px", maxWidth: "340px" }}>
+              <IconSearch size={15} />
+              <input
+                placeholder="Search receipt ref or item…"
+                value={searchRef}
+                onChange={(e) => setSearchRef(e.target.value)}
+              />
+            </div>
+            <select
+              aria-label="Filter by status"
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              style={{ width: "auto", margin: 0 }}
+            >
               <option value="all">All Orders</option>
               <option value="settled">Settled</option>
               <option value="pending">Pending</option>
               <option value="refunded">Refunded</option>
             </select>
-          </label>
-          <input
-            placeholder="Search receipt ref or item…"
-            value={searchRef}
-            onChange={(e) => setSearchRef(e.target.value)}
-            style={{ width: "240px" }}
-          />
+          </div>
+          <span className="small muted">{filtered.length} receipt{filtered.length === 1 ? "" : "s"}</span>
         </div>
       </div>
 
-      <table className="grid" style={{ marginTop: "1rem" }}>
-        <thead>
-          <tr>
-            <th>Receipt Ref</th>
-            <th>Description</th>
-            <th>Payer</th>
-            <th className="num">Gross</th>
-            <th className="num">Fee</th>
-            <th className="num">Net</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.map((o) => (
-            <tr key={o.reference + o.line}>
-              <td className="mono">{o.reference}</td>
-              <td>{o.kind} {o.description || "Order item"}</td>
-              <td>{o.collector}</td>
-              <td className="num">{formatMoney(o.amount)}</td>
-              <td className="num">{formatMoney(o.fee)}</td>
-              <td className="num">{formatMoney(o.net)}</td>
-              <td><span className={`tag ${o.status === "settled" ? "active" : "pending"}`}>{o.status}</span></td>
-              <td>
-                <button className="small secondary" onClick={() => setSelectedReceipt(o)}>View Receipt</button>
-              </td>
+      <div className="table-wrap">
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>Receipt Ref</th>
+              <th>Description</th>
+              <th>Payer</th>
+              <th className="num">Gross</th>
+              <th className="num">Fee</th>
+              <th className="num">Net</th>
+              <th>Status</th>
+              <th>Actions</th>
             </tr>
-          ))}
-          {filtered.length === 0 && (
-            <tr><td colSpan={8} className="muted">No orders match the current filter.</td></tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {filtered.map((o) => (
+              <tr key={o.reference + o.line}>
+                <td className="mono small">{o.reference}</td>
+                <td><strong>{o.kind}</strong> <span className="muted">{o.description || "Order item"}</span></td>
+                <td>{o.collector}</td>
+                <td className="num mono">{formatMoney(o.amount)}</td>
+                <td className="num mono muted">{formatMoney(o.fee)}</td>
+                <td className="num mono" style={{ fontWeight: 600 }}>{formatMoney(o.net)}</td>
+                <td><span className={`tag ${o.status === "settled" ? "active" : "pending"}`}>{o.status}</span></td>
+                <td>
+                  <button className="small secondary" onClick={() => setSelectedReceipt(o)}>View Receipt</button>
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No orders match the current filter.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {selectedReceipt && (
         <div className="modal-backdrop">
-          <div className="modal-content" style={{ maxWidth: "450px" }}>
-            <div className="flex-between">
-              <h3>Receipt Details</h3>
-              <button className="small secondary" onClick={() => setSelectedReceipt(null)}>✕</button>
+          <div className="modal-content" style={{ maxWidth: "460px" }}>
+            <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
+              <h3 style={{ margin: 0 }}>Receipt Details</h3>
+              <button type="button" className="small ghost" aria-label="Close" onClick={() => setSelectedReceipt(null)}>
+                <IconX size={16} />
+              </button>
             </div>
-            <p className="mono small">Reference: {selectedReceipt.reference}</p>
-            <table className="lines">
-              <tbody>
-                <tr><td>Item Description</td><td className="num">{selectedReceipt.description || "Sales Item"}</td></tr>
-                <tr><td>Gross Amount</td><td className="num">{formatMoney(selectedReceipt.amount)}</td></tr>
-                <tr><td>Platform & Processing Fee</td><td className="num">{formatMoney(selectedReceipt.fee)}</td></tr>
-                <tr className="total"><td>Merchant Net Receivable</td><td className="num">{formatMoney(selectedReceipt.net)}</td></tr>
-              </tbody>
-            </table>
-            <div style={{ marginTop: "1rem" }}>
-              <button onClick={() => window.print()}>Print Receipt</button>
-              <button className="secondary" onClick={() => setSelectedReceipt(null)}>Close</button>
+            <p className="mono small muted" style={{ marginBottom: "0.85rem" }}>Reference: {selectedReceipt.reference}</p>
+            <div className="checkout-summary-box">
+              <table className="lines">
+                <tbody>
+                  <tr><td>Item Description</td><td className="num">{selectedReceipt.description || "Sales Item"}</td></tr>
+                  <tr><td>Gross Amount</td><td className="num mono">{formatMoney(selectedReceipt.amount)}</td></tr>
+                  <tr><td>Platform &amp; Processing Fee</td><td className="num mono">{formatMoney(selectedReceipt.fee)}</td></tr>
+                  <tr className="total"><td>Merchant Net Receivable</td><td className="num mono">{formatMoney(selectedReceipt.net)}</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="flex-row" style={{ justifyContent: "flex-end" }}>
+              <button type="button" className="secondary" onClick={() => setSelectedReceipt(null)}>Close</button>
+              <button type="button" onClick={() => window.print()}>
+                <IconPrinter size={15} /> Print Receipt
+              </button>
             </div>
           </div>
         </div>
@@ -180,13 +335,18 @@ function RestaurantAndKds({ merchantId }: { merchantId: string }) {
 
   return (
     <div>
-      <div className="flex-row" style={{ marginBottom: "1rem" }}>
-        <button className={subTab === "floor" ? "" : "secondary"} onClick={() => setSubTab("floor")}>
-          🍽️ Table Floor Plan
-        </button>
-        <button className={subTab === "kds" ? "" : "secondary"} onClick={() => setSubTab("kds")}>
-          👨‍🍳 Kitchen Display System (KDS)
-        </button>
+      <div className="flex-between" style={{ marginBottom: "1rem" }}>
+        <div className="segmented" role="tablist">
+          <button type="button" className={subTab === "floor" ? "active" : ""} onClick={() => setSubTab("floor")}>
+            <IconUtensils size={14} /> Table Floor Plan
+          </button>
+          <button type="button" className={subTab === "kds" ? "active" : ""} onClick={() => setSubTab("kds")}>
+            <IconChefHat size={14} /> Kitchen Display System (KDS)
+          </button>
+        </div>
+        <a href="/kitchen" target="_blank" rel="noreferrer" className="code-chip" style={{ textDecoration: "none" }}>
+          <IconExternalLink size={13} /> Launch Full-Screen KDS
+        </a>
       </div>
 
       {subTab === "floor" && <FloorPlanView merchantId={merchantId} />}
@@ -246,115 +406,174 @@ function KitchenSetup({ merchantId }: { merchantId: string }) {
   }
 
   const screenState = (s: KitchenStation) => {
-    if (s.output === "PRINTER") return "Printer only";
-    if (!s.lastSeenAt) return "Screen not connected yet";
+    if (s.output === "PRINTER") return { label: "Printer only", tone: "info" };
+    if (!s.lastSeenAt) return { label: "Not connected yet", tone: "pending" };
     const mins = Math.round((Date.now() - Date.parse(s.lastSeenAt)) / 60000);
-    return mins < 3 ? "Screen online" : `Screen last seen ${mins} min ago`;
+    return mins < 3 ? { label: "Online", tone: "active" } : { label: `Last seen ${mins}m ago`, tone: "pending" };
   };
 
   return (
     <div>
-      <div className="panel">
-        <h3>Kitchen screen</h3>
-        <p>Open <a href="/kitchen" target="_blank" rel="noreferrer"><strong>{window.location.origin}/kitchen</strong></a> on a tablet or POS screen in the kitchen and choose its station.
-          It keeps working when the internet drops and sends updates when it returns. Add it to the home screen to run full-screen.</p>
+      <div className="panel" style={{ background: "linear-gradient(135deg, #f2f9f5 0%, #ffffff 100%)", borderColor: "var(--ok-border)" }}>
+        <div className="flex-between">
+          <div>
+            <h3 style={{ marginBottom: "0.25rem" }}>Live Kitchen Display</h3>
+            <p className="small muted" style={{ margin: 0 }}>
+              Open <a href="/kitchen" target="_blank" rel="noreferrer"><strong>{window.location.origin}/kitchen</strong></a> on a kitchen tablet or screen.
+              Works offline when internet drops and syncs automatically on reconnect.
+            </p>
+          </div>
+          <a href="/kitchen" target="_blank" rel="noreferrer">
+            <button type="button" className="small"><IconExternalLink size={14} /> Open /kitchen</button>
+          </a>
+        </div>
       </div>
-      {error && <p className="error">{error}</p>}
-      <div className="panel">
-        <h3>Kitchen devices</h3>
-        <p className="muted small">Pair a tablet or the kitchen printer phone once; it keeps working after restarts without anyone signing in.
-          A paired device can only use the kitchen display.</p>
-        <div className="flex-row">
-          <select value={pairStation} onChange={(e) => setPairStation(e.target.value)} style={{ maxWidth: "16rem" }}>
+
+      {error && <p className="notice error" role="alert">{error}</p>}
+
+      <div className="panel" style={{ marginTop: "1rem" }}>
+        <h3>Paired Kitchen Devices</h3>
+        <p className="muted small">Pair a tablet or printer phone once; it stays signed in to the kitchen display after restarts.</p>
+        <div className="flex-row" style={{ marginBottom: "0.75rem" }}>
+          <select value={pairStation} onChange={(e) => setPairStation(e.target.value)} style={{ maxWidth: "18rem", margin: 0 }}>
             <option value="">Station: choose on the device</option>
             {stations.map((s) => <option key={s.id} value={s.id}>Station: {s.name}</option>)}
           </select>
-          <button onClick={() => void newPairingCode()}>Pair a kitchen device</button>
+          <button type="button" style={{ margin: 0 }} onClick={() => void newPairingCode()}>Pair a kitchen device</button>
         </div>
         {pairing && (
           <div className="kitchen-pair-codes">
-            <p>On the device, open <strong>{window.location.origin}/kitchen</strong> (or the ELEPAY Kitchen app) and enter:</p>
-            <dl className="confirm">
-              <dt>Merchant code</dt><dd className="big-code">{pairing.merchantCode}</dd>
-              <dt>Pairing code</dt><dd className="big-code">{pairing.code.slice(0, 3)} {pairing.code.slice(3)}</dd>
+            <p style={{ marginBottom: "0.5rem" }}>On the device, open <strong>{window.location.origin}/kitchen</strong> and enter:</p>
+            <dl className="confirm" style={{ maxWidth: "360px" }}>
+              <dt>Merchant code</dt><dd className="big-code" style={{ textAlign: "left" }}>{pairing.merchantCode}</dd>
+              <dt>Pairing code</dt><dd className="big-code" style={{ textAlign: "left" }}>{pairing.code.slice(0, 3)} {pairing.code.slice(3)}</dd>
             </dl>
-            <p className="muted small">Works once, until {new Date(pairing.expiresAt).toLocaleTimeString("en-GH", { hour: "2-digit", minute: "2-digit" })}.</p>
+            <p className="muted small" style={{ margin: 0 }}>Single-use code, expires at {new Date(pairing.expiresAt).toLocaleTimeString("en-GH", { hour: "2-digit", minute: "2-digit" })}.</p>
           </div>
         )}
-        <table className="grid">
-          <tbody>
-            {devices.map((d) => (
-              <tr key={d.id}>
-                <td>{d.label}</td>
-                <td className="small muted">paired {new Date(d.createdAt).toLocaleDateString("en-GH")}</td>
-                <td>{d.revokedAt ? <span className="tag failed">removed</span>
-                  : <button className="secondary small" onClick={() => void revokeDevice(d.id)}>Remove</button>}</td>
-              </tr>
-            ))}
-            {devices.length === 0 && <tr><td className="muted small">No paired devices yet.</td></tr>}
-          </tbody>
-        </table>
+        <div className="table-wrap" style={{ margin: "0.75rem 0 0" }}>
+          <table className="grid">
+            <thead><tr><th>Device</th><th>Paired</th><th /></tr></thead>
+            <tbody>
+              {devices.map((d) => (
+                <tr key={d.id}>
+                  <td><strong>{d.label}</strong></td>
+                  <td className="small muted">{new Date(d.createdAt).toLocaleDateString("en-GH")}</td>
+                  <td className="num">
+                    {d.revokedAt ? <span className="tag failed">removed</span>
+                      : <button className="secondary small" onClick={() => void revokeDevice(d.id)}>Remove</button>}
+                  </td>
+                </tr>
+              ))}
+              {devices.length === 0 && <tr><td colSpan={3} className="muted small">No paired devices yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
       </div>
-      <h3>Stations</h3>
-      <table className="grid">
-        <thead><tr><th>Station</th><th>Output</th><th>Printer</th><th>Status</th><th /></tr></thead>
-        <tbody>
-          {stations.map((s) => (
-            <tr key={s.id}>
-              <td>{s.name}{s.isDefault && <span className="tag info" style={{ marginLeft: ".4rem" }}>default</span>}</td>
-              <td>{s.output === "BOTH" ? "Screen + printer" : s.output === "PRINTER" ? "Printer" : "Screen"}</td>
-              <td className="small">{s.printerAddress ?? "—"}{s.printerAddress && ` · ${s.paperWidth} cols`}</td>
-              <td className="small">{screenState(s)}</td>
-              <td><button className="secondary small" onClick={() => void remove(s.id)}>Remove</button></td>
-            </tr>
-          ))}
-          {stations.length === 0 && <tr><td colSpan={5} className="muted">No stations yet. Without stations every order shows on every kitchen screen.</td></tr>}
-        </tbody>
-      </table>
+
+      <div className="panel" style={{ marginTop: "1rem" }}>
+        <h3>Stations</h3>
+        <div className="table-wrap" style={{ margin: 0 }}>
+          <table className="grid">
+            <thead><tr><th>Station</th><th>Output</th><th>Printer</th><th>Status</th><th /></tr></thead>
+            <tbody>
+              {stations.map((s) => {
+                const st = screenState(s);
+                return (
+                  <tr key={s.id}>
+                    <td><strong>{s.name}</strong>{s.isDefault && <span className="tag info" style={{ marginLeft: "0.45rem" }}>default</span>}</td>
+                    <td>{s.output === "BOTH" ? "Screen + printer" : s.output === "PRINTER" ? "Printer" : "Screen"}</td>
+                    <td className="small mono">{s.printerAddress ?? "—"}{s.printerAddress && ` · ${s.paperWidth} cols`}</td>
+                    <td><span className={`tag ${st.tone}`}>{st.label}</span></td>
+                    <td className="num"><button className="secondary small" onClick={() => void remove(s.id)}>Remove</button></td>
+                  </tr>
+                );
+              })}
+              {stations.length === 0 && <tr><td colSpan={5} className="muted">No stations yet. Without stations every order shows on every kitchen screen.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <form onSubmit={add} className="panel" style={{ marginTop: "1rem" }}>
         <h3>Add a station</h3>
-        <label>Name<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Kitchen, Grill, Drinks…" required /></label>
-        <label>Shows orders on
-          <select value={form.output} onChange={(e) => setForm({ ...form, output: e.target.value as KitchenStation["output"] })}>
-            <option value="SCREEN">Screen</option><option value="BOTH">Screen and printer</option><option value="PRINTER">Printer only</option>
-          </select>
+        <div className="grid-2">
+          <label>Name<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Kitchen, Grill, Drinks…" required /></label>
+          <label>Shows orders on
+            <select value={form.output} onChange={(e) => setForm({ ...form, output: e.target.value as KitchenStation["output"] })}>
+              <option value="SCREEN">Screen</option><option value="BOTH">Screen and printer</option><option value="PRINTER">Printer only</option>
+            </select>
+          </label>
+          <label>Printer address {form.output === "SCREEN" && <span className="muted small">(optional fallback)</span>}
+            <input className="mono" value={form.printerAddress} onChange={(e) => setForm({ ...form, printerAddress: e.target.value })}
+              placeholder="tcp://192.168.1.50:9100" required={form.output !== "SCREEN"} />
+          </label>
+          <label>Paper width
+            <select value={form.paperWidth} onChange={(e) => setForm({ ...form, paperWidth: Number(e.target.value) })}>
+              <option value={32}>58mm (32 characters)</option><option value={42}>80mm (42 characters)</option><option value={48}>80mm wide (48 characters)</option>
+            </select>
+          </label>
+        </div>
+        <label className="choice" style={{ marginTop: "0.5rem" }}>
+          <input type="checkbox" checked={form.isDefault} onChange={(e) => setForm({ ...form, isDefault: e.target.checked })} />
+          Default station for items without an assigned station
         </label>
-        <label>Printer address {form.output === "SCREEN" && <span className="muted small">(optional: prints automatically if the screen goes off)</span>}
-          <input value={form.printerAddress} onChange={(e) => setForm({ ...form, printerAddress: e.target.value })}
-            placeholder="tcp://192.168.1.50:9100 or bt://AA:BB:CC:DD:EE:FF" required={form.output !== "SCREEN"} />
-        </label>
-        <label>Paper
-          <select value={form.paperWidth} onChange={(e) => setForm({ ...form, paperWidth: Number(e.target.value) })}>
-            <option value={32}>58mm (32 characters)</option><option value={42}>80mm (42 characters)</option><option value={48}>80mm wide (48 characters)</option>
-          </select>
-        </label>
-        <label className="choice"><input type="checkbox" style={{ width: "auto" }} checked={form.isDefault}
-          onChange={(e) => setForm({ ...form, isDefault: e.target.checked })} /> Default station for items without a station</label>
-        <button type="submit">Add station</button>
+        <div style={{ marginTop: "0.75rem" }}>
+          <button type="submit">Add station</button>
+        </div>
       </form>
     </div>
   );
 }
 
 // -------------------------------------------------------------------------------------------------
-// 8. Business Accounting (P&L and Balance Sheet)
-// -------------------------------------------------------------------------------------------------
-// -------------------------------------------------------------------------------------------------
-// Existing Merchant Views (Overview, Transactions, Rows, Payouts, Collect)
+// Merchant Views (Overview, Transactions, Rows, Payouts, Collect)
 // -------------------------------------------------------------------------------------------------
 
-function Overview({ id }: { id: string }) {
+function Overview({ id, onNavigate }: { id: string; onNavigate: (tab: MerchantTab) => void }) {
   const [b, setB] = useState<Balances | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { api<Balances>(`/v1/merchants/${id}/balances`).then(setB).catch((e) => setErr(e.message)); }, [id]);
-  if (err) return <p className="muted">{err}</p>;
-  if (!b) return <p>Loading…</p>;
+  if (err) return <p className="notice error">{err}</p>;
+  if (!b) return <p className="muted">Loading balances…</p>;
   return (
-    <div className="cards">
-      <div className="card"><div className="muted">Pending settlement</div><div className="big">{formatMoney(b.pending)}</div></div>
-      <div className="card"><div className="muted">Available</div><div className="big">{formatMoney(b.available)}</div></div>
-      <div className="card"><div className="muted">Reserved (payouts, disputes)</div><div>{formatMoney(b.reserved)}</div></div>
-    </div>
+    <>
+      <div className="kpi-grid">
+        <div className="kpi-card primary">
+          <div className="kpi-label">Available Balance</div>
+          <div className="kpi-value">{formatMoney(b.available)}</div>
+          <div className="kpi-meta">Ready for instant withdrawal</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Pending Settlement</div>
+          <div className="kpi-value">{formatMoney(b.pending)}</div>
+          <div className="kpi-meta">Clearing into available balance</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Reserved</div>
+          <div className="kpi-value">{formatMoney(b.reserved)}</div>
+          <div className="kpi-meta">Payouts in progress &amp; active disputes</div>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginTop: "1rem" }}>
+        <h3>Quick Actions</h3>
+        <div className="flex-row">
+          <button type="button" onClick={() => onNavigate("POS Register")}>
+            <IconMonitor size={15} /> Open POS Register
+          </button>
+          <button type="button" className="secondary" onClick={() => onNavigate("Collect")}>
+            <IconQrCode size={15} /> Create Payment Link
+          </button>
+          <button type="button" className="secondary" onClick={() => onNavigate("Payouts")}>
+            <IconSend size={15} /> Request Withdrawal
+          </button>
+          <button type="button" className="secondary" onClick={() => onNavigate("Restaurant & KDS")}>
+            <IconChefHat size={15} /> Floor Plan &amp; KDS
+          </button>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -425,39 +644,50 @@ function Transactions({ id }: { id: string }) {
 
   return (
     <>
-      {error && <p className="error" role="alert">{error}</p>}
+      {error && <p className="notice error" role="alert">{error}</p>}
       {msg && <p className="notice ok">{msg}</p>}
-      <table className="grid">
-        <thead><tr><th>Receipt</th><th>Line</th><th>From</th><th className="num">Amount</th><th className="num">Fee</th>
-          <th className="num">Refunded</th><th>Status</th><th /></tr></thead>
-        <tbody>
-          {lines.map((l) => (
-            <tr key={l.reference + l.line}><td>{l.reference}</td><td>{l.kind} {l.description ?? ""}</td><td>{l.collector}</td>
-              <td className="num">{formatMoney(l.amount)}</td><td className="num">{formatMoney(l.fee)}</td>
-              <td className="num">{formatMoney(l.refunded)}</td><td>{l.status}</td>
-              <td>{l.refunded + l.disputed < l.amount && <button className="small" onClick={() => openRefundModal(l)}>Refund</button>}</td></tr>
-          ))}
-          {lines.length === 0 && (
-            <tr><td colSpan={8} className="muted">No transactions found.</td></tr>
-          )}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className="grid">
+          <thead><tr><th>Receipt</th><th>Line</th><th>From</th><th className="num">Amount</th><th className="num">Fee</th>
+            <th className="num">Refunded</th><th>Status</th><th /></tr></thead>
+          <tbody>
+            {lines.map((l) => (
+              <tr key={l.reference + l.line}>
+                <td className="mono small">{l.reference}</td>
+                <td><strong>{l.kind}</strong> <span className="muted">{l.description ?? ""}</span></td>
+                <td>{l.collector}</td>
+                <td className="num mono">{formatMoney(l.amount)}</td>
+                <td className="num mono muted">{formatMoney(l.fee)}</td>
+                <td className="num mono">{formatMoney(l.refunded)}</td>
+                <td><span className={`tag ${l.status === "settled" ? "active" : "pending"}`}>{l.status}</span></td>
+                <td className="num">{l.refunded + l.disputed < l.amount && <button className="small secondary" onClick={() => openRefundModal(l)}>Refund</button>}</td>
+              </tr>
+            ))}
+            {lines.length === 0 && (
+              <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No transactions found.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {refundTarget && (
         <div className="modal-backdrop">
           <div className="modal-content" style={{ maxWidth: "460px" }}>
-            <div className="flex-between">
-              <h3>Issue Refund</h3>
-              <button type="button" className="small secondary" disabled={busy} onClick={() => setRefundTarget(null)}>✕</button>
+            <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
+              <h3 style={{ margin: 0 }}>Issue Refund</h3>
+              <button type="button" className="small ghost" aria-label="Close" disabled={busy} onClick={() => setRefundTarget(null)}>
+                <IconX size={16} />
+              </button>
             </div>
             <p className="small muted">
               Receipt <code className="mono">{refundTarget.reference}</code> · Max refundable:{" "}
-              <strong>{formatMoney(refundTarget.amount - refundTarget.refunded - refundTarget.disputed)}</strong>
+              <strong className="mono">{formatMoney(refundTarget.amount - refundTarget.refunded - refundTarget.disputed)}</strong>
             </p>
             {refundError && <p className="notice error" role="alert">{refundError}</p>}
             <form onSubmit={(e) => void submitRefund(e)}>
               <label>Refund Amount (GH₵)
                 <input
+                  className="mono"
                   inputMode="decimal"
                   value={refundAmount}
                   onChange={(e) => setRefundAmount(e.target.value)}
@@ -473,9 +703,9 @@ function Transactions({ id }: { id: string }) {
                   required
                 />
               </label>
-              <div style={{ marginTop: "1rem" }}>
-                <button type="submit" disabled={busy}>{busy ? "Recording…" : "Submit Refund"}</button>
+              <div className="flex-row" style={{ justifyContent: "flex-end", marginTop: "1rem" }}>
                 <button type="button" className="secondary" disabled={busy} onClick={() => setRefundTarget(null)}>Cancel</button>
+                <button type="submit" disabled={busy}>{busy ? "Recording…" : "Submit Refund"}</button>
               </div>
             </form>
           </div>
@@ -499,22 +729,26 @@ function Rows({ id, path, columns }: { id: string; path: string; columns: string
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [id, path]);
-  if (err) return <p className="error" role="alert">{err}</p>;
+  if (err) return <p className="notice error" role="alert">{err}</p>;
   return (
-    <table className="grid">
-      <thead><tr>{columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
-      <tbody>
-        {loading && (
-          <tr><td colSpan={columns.length} className="muted">Loading {path}…</td></tr>
-        )}
-        {!loading && rows.length === 0 && (
-          <tr><td colSpan={columns.length} className="muted">No {path} found.</td></tr>
-        )}
-        {!loading && rows.map((r, i) => <tr key={i}>{columns.map((c) => (
-          <td key={c} className={c === "amount" ? "num" : ""}>{c === "amount" ? formatMoney(Number(r[c])) : String(r[c] ?? "")}</td>
-        ))}</tr>)}
-      </tbody>
-    </table>
+    <div className="table-wrap">
+      <table className="grid">
+        <thead><tr>{columns.map((c) => <th key={c} className={c === "amount" ? "num" : ""}>{c}</th>)}</tr></thead>
+        <tbody>
+          {loading && (
+            <tr><td colSpan={columns.length} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>Loading {path}…</td></tr>
+          )}
+          {!loading && rows.length === 0 && (
+            <tr><td colSpan={columns.length} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No {path} found.</td></tr>
+          )}
+          {!loading && rows.map((r, i) => <tr key={i}>{columns.map((c) => (
+            <td key={c} className={c === "amount" ? "num mono" : c === "reference" || c === "checkout" ? "mono small" : ""}>
+              {c === "amount" ? formatMoney(Number(r[c])) : c === "status" ? <span className={`tag ${String(r[c]).toLowerCase()}`}>{String(r[c] ?? "")}</span> : String(r[c] ?? "")}
+            </td>
+          ))}</tr>)}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -565,28 +799,42 @@ function Payouts({ id }: { id: string }) {
 
   return (
     <>
-      <section className="panel">
-        <h3>Withdraw</h3>
-        <label>Destination<select value={destination} onChange={(e) => setDestination(e.target.value)}>
-          <option value="">-- Select verified destination --</option>
-          {destinations.map((d) => <option key={d.id} value={d.id} disabled={d.verification !== "verified"}>
-            {d.type} {d.network} {d.accountNumber} — {d.accountName} ({d.verification})</option>)}
-        </select></label>
-        <label>Amount (GH₵)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="50.00" /></label>
-        <button disabled={busy} onClick={() => void withdraw()}>{busy ? "Submitting…" : "Withdraw"}</button>
-        {error && <p className="error" role="alert">{error}</p>}
+      <section className="panel" style={{ marginBottom: "1rem" }}>
+        <h3>Request Withdrawal</h3>
+        <div className="grid-2">
+          <label>Destination<select value={destination} onChange={(e) => setDestination(e.target.value)}>
+            <option value="">-- Select verified destination --</option>
+            {destinations.map((d) => <option key={d.id} value={d.id} disabled={d.verification !== "verified"}>
+              {d.type} {d.network} {d.accountNumber} — {d.accountName} ({d.verification})</option>)}
+          </select></label>
+          <label>Amount (GH₵)<input className="mono" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="50.00" /></label>
+        </div>
+        <button disabled={busy} onClick={() => void withdraw()}>
+          <IconSend size={15} />
+          {busy ? "Submitting…" : "Withdraw Funds"}
+        </button>
+        {error && <p className="notice error" role="alert">{error}</p>}
         {msg && <p className="notice ok">{msg}</p>}
       </section>
-      <table className="grid">
-        <thead><tr><th>Reference</th><th>Item</th><th className="num">Amount</th><th>Status</th><th>Reason</th></tr></thead>
-        <tbody>
-          {payouts.map((p) => <tr key={p.reference}><td>{p.reference}</td><td>{p.clientReference}</td>
-            <td className="num">{formatMoney(p.amount)}</td><td>{p.status}</td><td>{p.failureReason}</td></tr>)}
-          {payouts.length === 0 && (
-            <tr><td colSpan={5} className="muted">No payouts recorded yet.</td></tr>
-          )}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className="grid">
+          <thead><tr><th>Reference</th><th>Item</th><th className="num">Amount</th><th>Status</th><th>Reason</th></tr></thead>
+          <tbody>
+            {payouts.map((p) => (
+              <tr key={p.reference}>
+                <td className="mono small">{p.reference}</td>
+                <td>{p.clientReference}</td>
+                <td className="num mono" style={{ fontWeight: 600 }}>{formatMoney(p.amount)}</td>
+                <td><span className={`tag ${p.status === "paid" || p.status === "completed" ? "active" : p.status === "failed" ? "failed" : "pending"}`}>{p.status}</span></td>
+                <td className="small muted">{p.failureReason ?? "—"}</td>
+              </tr>
+            ))}
+            {payouts.length === 0 && (
+              <tr><td colSpan={5} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No payouts recorded yet.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
@@ -594,6 +842,7 @@ function Payouts({ id }: { id: string }) {
 function Collect({ merchant }: { merchant: MerchantView }) {
   const [amount, setAmount] = useState("");
   const [link, setLink] = useState<string | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [qr, setQr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -623,17 +872,44 @@ function Collect({ merchant }: { merchant: MerchantView }) {
   }
 
   return (
-    <div className="cards">
+    <div className="grid-2">
       <section className="panel">
-        <h3>Request a payment</h3>
-        <label>Amount (GH₵)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="25.00" /></label>
-        <button disabled={busy} onClick={() => void create()}>{busy ? "Creating…" : "Create payment link"}</button>
-        {link && <p><a href={link}>{link}</a></p>}
-        {msg && <p className="error" role="alert">{msg}</p>}
+        <h3>Request a Payment</h3>
+        <p className="small muted">Generate a hosted ELEPAY checkout link for MoMo, Card, GhQR, or Wallet payment.</p>
+        <label>Amount (GH₵)<input className="mono" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="25.00" /></label>
+        <button disabled={busy} onClick={() => void create()}>{busy ? "Creating…" : "Create Payment Link"}</button>
+        {link && (
+          <div className="notice ok" style={{ marginTop: "1rem" }}>
+            <div className="flex-between">
+              <strong className="small">Payment link ready</strong>
+              <button
+                type="button"
+                className="code-chip"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(link).then(() => {
+                    setCopiedLink(true);
+                    window.setTimeout(() => setCopiedLink(false), 1800);
+                  }).catch(() => {});
+                }}
+              >
+                {copiedLink ? <><IconCheck size={12} /> Copied</> : <><IconCopy size={12} /> Copy link</>}
+              </button>
+            </div>
+            <a href={link} className="mono small" style={{ wordBreak: "break-all" }}>{link}</a>
+          </div>
+        )}
+        {msg && <p className="notice error" role="alert">{msg}</p>}
       </section>
-      <section className="panel">
-        <h3>Shop QR · code {merchant.merchantCode}</h3>
-        {qr ? <img src={qr} alt={`QR code for merchant ${merchant.merchantCode}`} width={220} height={220} /> : <p className="muted">QR unavailable</p>}
+      <section className="panel" style={{ textAlign: "center" }}>
+        <h3>Shop QR Code</h3>
+        <p className="small muted">Merchant Code <strong className="mono">{merchant.merchantCode}</strong></p>
+        {qr ? (
+          <div className="qr-frame" style={{ margin: "0.75rem auto 0", maxWidth: "260px" }}>
+            <img src={qr} alt={`QR code for merchant ${merchant.merchantCode}`} width={200} height={200} />
+          </div>
+        ) : (
+          <p className="muted">QR unavailable</p>
+        )}
       </section>
     </div>
   );
