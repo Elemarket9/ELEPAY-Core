@@ -1,0 +1,19 @@
+name: MTN sandbox benchmark prerequisites
+on: [push]
+permissions: {}
+jobs:
+  sandbox-access:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Docker and MTN sandbox access
+        env:
+          COLLECTION_USER: ${{ secrets.ELEPAY_MTN_COLLECTION_USER }}
+          COLLECTION_KEY: ${{ secrets.ELEPAY_MTN_COLLECTION_KEY }}
+          COLLECTION_SUBSCRIPTION: ${{ secrets.ELEPAY_MTN_COLLECTION_SUBSCRIPTION }}
+        run: |
+          docker version
+          curl --silent --show-error --max-time 15 --output /dev/null --write-out 'MTN endpoint HTTP %{http_code}\n' https://sandbox.momodeveloper.mtn.com/
+          for field in COLLECTION_USER COLLECTION_KEY COLLECTION_SUBSCRIPTION; do
+            if [ -z "${!field}" ]; then echo "::error::Missing ELEPAY_MTN_$field"; missing=1; fi
+          done
+          exit "${missing:-0}"
