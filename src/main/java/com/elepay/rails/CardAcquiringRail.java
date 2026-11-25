@@ -186,8 +186,8 @@ public class CardAcquiringRail implements PaymentRail {
                 return new Result(Status.FAILED, null, null, null, null, null, "Card token is missing or inactive");
             }
             var card = cardOpt.get();
-            if (java.time.YearMonth.of(card.expiryYear(), card.expiryMonth()).isBefore(java.time.YearMonth.now())) {
-                return new Result(Status.FAILED, null, null, null, null, null, "Card token is expired");
+            if (isCardExpiredOrInvalid(card.expiryYear(), card.expiryMonth())) {
+                return new Result(Status.FAILED, null, null, null, null, null, "Card token is expired or has invalid expiry");
             }
             maskedCardRef = card.maskedPan();
         } else if ("nfc".equalsIgnoreCase(charge.channel()) && networkTokenService != null && tokenRef != null && !tokenRef.isBlank()) {
@@ -199,8 +199,8 @@ public class CardAcquiringRail implements PaymentRail {
             if (netToken.status() != com.elepay.cards.TokenStatus.ACTIVE) {
                 return new Result(Status.FAILED, null, null, null, null, null, "Network token is " + netToken.status());
             }
-            if (java.time.YearMonth.of(netToken.expiryYear(), netToken.expiryMonth()).isBefore(java.time.YearMonth.now())) {
-                return new Result(Status.FAILED, null, null, null, null, null, "Network token is expired");
+            if (isCardExpiredOrInvalid(netToken.expiryYear(), netToken.expiryMonth())) {
+                return new Result(Status.FAILED, null, null, null, null, null, "Network token is expired or has invalid expiry");
             }
             maskedCardRef = "net:" + netToken.id();
         }
@@ -400,6 +400,17 @@ public class CardAcquiringRail implements PaymentRail {
             }
             default -> Result.unknown("Unrecognized card acquirer status: " + statusStr);
         };
+    }
+
+    private static boolean isCardExpiredOrInvalid(int year, int month) {
+        if (month < 1 || month > 12 || year < 2000 || year > 2100) {
+            return true;
+        }
+        try {
+            return java.time.YearMonth.of(year, month).isBefore(java.time.YearMonth.now());
+        } catch (java.time.DateTimeException e) {
+            return true;
+        }
     }
 
     private static String readBoundedBody(HttpResponse<InputStream> response) throws Exception {
