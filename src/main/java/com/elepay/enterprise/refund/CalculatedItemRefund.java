@@ -29,6 +29,9 @@ public record CalculatedItemRefund(
         if (grossRefundPesewas <= 0) {
             throw new IllegalArgumentException("grossRefundPesewas must be strictly positive: " + grossRefundPesewas);
         }
+        if (merchantReversalPesewas < 0 || commissionReversalPesewas < 0 || platformFeeReversalPesewas < 0
+                || reserveReversalPesewas < 0 || taxReversalPesewas < 0)
+            throw new IllegalArgumentException("Refund components must be non-negative");
         long sum = Math.addExact(
                 Math.addExact(merchantReversalPesewas, commissionReversalPesewas),
                 Math.addExact(
