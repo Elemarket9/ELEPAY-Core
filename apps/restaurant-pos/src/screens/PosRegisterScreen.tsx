@@ -76,6 +76,7 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
   const [refreshing, setRefreshing] = useState(false);
   const [moduleDisabled, setModuleDisabled] = useState(false);
   const [loadingExisting, setLoadingExisting] = useState(false);
+  const [existingSelection, setExistingSelection] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -83,7 +84,7 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
     if (preselectedTableId) {
       setOrderType("DINE_IN");
       // Existing table orders are selected in the register to load their server balance.
-      setTableId(preselectedTableId);
+      setExistingSelection(preselectedTableId);
       onClearPreselectedTable();
     }
   }, [preselectedTableId, onClearPreselectedTable]);
@@ -178,7 +179,11 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
     setLoadingExisting(true);
     try {
       if (!selectedTerminal || !cashier || !shift || shift.cashierId !== cashier.id) throw new Error("Authenticate a cashier and open a shift first.");
-      const existing = await client.call<PosOrder>(`/v1/restaurant/waiter/${merchant.id}/orders/${t.currentOrderId}/cashier`, {body:{terminalId:selectedTerminal.id,cashierId:cashier.id}});
+      const current = await client.call<PosOrder & {terminalId?:string|null;cashierId?:string|null}>(`/v1/pos/orders/${t.currentOrderId}`);
+      if (current.status !== "PENDING" || current.paidPesewas !== 0) throw new Error("Order is not an unpaid pending order.");
+      const existing = current.terminalId === selectedTerminal.id && current.cashierId === cashier.id
+        ? current
+        : await client.call<PosOrder>(`/v1/restaurant/waiter/${merchant.id}/orders/${t.currentOrderId}/cashier`, {body:{terminalId:selectedTerminal.id,cashierId:cashier.id}});
       if (existing.status !== "PENDING" || existing.paidPesewas !== 0) throw new Error("Order is not an unpaid pending order.");
       const items = await client.call<PosOrderItem[]>(`/v1/pos/orders/${existing.id}/items`);
       setOrder(existing); setTableId(t.id); setOrderType("DINE_IN"); setKdsSent(true);
@@ -187,6 +192,14 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setLoadingExisting(false); }
   }
+
+  useEffect(() => {
+    if (!existingSelection || !tables.length) return;
+    const selected = tables.find(t => t.id === existingSelection);
+    setExistingSelection(null);
+    if (selected) void openTableOrder(selected);
+    // The selection is consumed once after tables are loaded.
+  }, [existingSelection, tables]);
 
   async function ensureOrder(): Promise<PosOrder> {
     if (loadingExisting) throw new Error("Wait for table order to load.");

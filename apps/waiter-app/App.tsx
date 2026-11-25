@@ -28,6 +28,7 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
   const [search,setSearch] = useState("");
   const [pending,setPending] = useState<Draft|null>(null);
   const [booted,setBooted] = useState(false);
+  const [storageBlocked,setStorageBlocked] = useState(false);
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState("");
   const [notice,setNotice] = useState("");
@@ -42,7 +43,7 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
       const draft = JSON.parse(raw) as Draft;
       if (draft.merchant !== merchant.id) throw new Error("Another restaurant has an unresolved order on this device.");
       setPending(draft); setTable(draft.tableId); setLines(draft.items); setNotes(draft.notes);
-    }).catch(e => { if (alive) setError(message(e)); }).finally(() => { if (alive) setBooted(true); });
+    }).catch(e => { if (alive) { setStorageBlocked(true); setError(message(e)); } }).finally(() => { if (alive) setBooted(true); });
     return () => { alive = false; };
   }, [merchant.id]);
 
@@ -74,7 +75,7 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
     });
   }
   async function submit() {
-    if (sending.current || !booted || (!pending && (!table || !lines.length))) return;
+    if (sending.current || !booted || storageBlocked || (!pending && (!table || !lines.length))) return;
     sending.current=true;setBusy(true);setError("");
     const draft=pending??{merchant:merchant.id,tableId:table,items:lines,notes,key:newKey()};
     try {
@@ -85,7 +86,7 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
       setPending(null);setLines([]);setTable("");setNotes("");setTab("track");
       setNotice("Sent to kitchen: "+result.orderNumber+" · "+formatMoney(result.totalPesewas));
      } catch(e) {
-      if(e instanceof ApiError && (e.status===400 || (e.status===409 && e.code==="table_in_use"))) {
+      if(e instanceof ApiError && (["invalid_order","invalid_item","table_in_use"].includes(e.code))) {
         try {await SecureStore.deleteItemAsync(PENDING);setPending(null);} catch(storageError){setError(message(storageError));}
       }
       setError(message(e)+" — retry the same order if submission remains pending.");
@@ -122,7 +123,7 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
         {lines.map(l=><View key={l.variantId} style={s.card}><Text>{menu.find(x=>x.variantId===l.variantId)?.name??l.variantId} × {l.quantity}</Text><TextInput style={s.input} accessibilityLabel="Item instructions" placeholder="Item instructions" value={l.notes} maxLength={200} editable={!busy&&!pending} onChangeText={v=>setLines(old=>old.map(x=>x.variantId===l.variantId?{...x,notes:v}:x))}/></View>)}
         <TextInput style={s.input} accessibilityLabel="Order notes" placeholder="Order notes" maxLength={500} value={notes} editable={!busy&&!pending} onChangeText={setNotes}/>
         <Text style={s.title}>Estimated total: {formatMoney(total)}</Text>
-        <Button label={pending?"Retry same submission":busy?"Sending…":"Send to kitchen"} disabled={!booted||busy||(!pending&&(!table||!lines.length))} onPress={()=>void submit()}/>
+        <Button label={pending?"Retry same submission":busy?"Sending…":"Send to kitchen"} disabled={!booted||storageBlocked||busy||(!pending&&(!table||!lines.length))} onPress={()=>void submit()}/>
       </>:<>
         <Text style={s.title}>My active tables and orders</Text>
         {!orders.length&&<Text>No active orders.</Text>}

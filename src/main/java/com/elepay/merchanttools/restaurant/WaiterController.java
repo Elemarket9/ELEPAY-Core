@@ -33,14 +33,14 @@ public class WaiterController {
         this.orders = orders; this.kitchen = kitchen; this.idempotency = idempotency;
     }
 
-    public record Table(UUID id, String tableNumber, int capacity, String status, UUID currentOrderId) {}
-    public record MenuItem(UUID variantId, String name, String category, long pricePesewas) {}
-    public record Line(UUID variantId, int quantity, String notes) {}
-    public record Submit(UUID tableId, List<Line> items, String notes) {}
-    public record Result(UUID orderId, UUID ticketId, String orderNumber, long totalPesewas) {}
-    public record OrderView(UUID orderId, UUID ticketId, String tableNumber, String orderNumber,
+    public record WaiterTable(UUID id, String tableNumber, int capacity, String status, UUID currentOrderId) {}
+    public record WaiterMenuItem(UUID variantId, String name, String category, long pricePesewas) {}
+    public record WaiterLine(UUID variantId, int quantity, String notes) {}
+    public record WaiterOrderRequest(UUID tableId, List<WaiterLine> items, String notes) {}
+    public record WaiterOrderResult(UUID orderId, UUID ticketId, String orderNumber, long totalPesewas) {}
+    public record WaiterOrderView(UUID orderId, UUID ticketId, String tableNumber, String orderNumber,
             String orderStatus, String kitchenStatus, long totalPesewas, boolean billRequested) {}
-    public record BranchAssignment(UUID branchId) {}
+    public record WaiterBranchAssignment(UUID branchId) {}
 
     private MerchantAccess.Access waiter(UUID merchant) {
         var caller = merchants.require(merchant, MerchantAccess.Permission.RESTAURANT_ORDER);
@@ -52,8 +52,8 @@ public class WaiterController {
 
     @PutMapping("/{merchant}/tables/{table}/branch")
     @Transactional
-    public Map<String, String> assignTable(@PathVariable UUID merchant, @PathVariable UUID table,
-            @RequestBody BranchAssignment assignment) {
+    public Map<String, String> waiterAssignTable(@PathVariable UUID merchant, @PathVariable UUID table,
+            @RequestBody WaiterBranchAssignment assignment) {
         access.manage(merchant);
         access.belongs(merchant, MerchantToolAccess.Resource.TABLE, table);
         if (assignment.branchId() == null) throw ApiException.badRequest("branch_required", "Select a branch");
@@ -65,12 +65,12 @@ public class WaiterController {
     }
 
     @GetMapping("/{merchant}/tables")
-    public List<Table> tables(@PathVariable UUID merchant) {
+    public List<WaiterTable> waiterTables(@PathVariable UUID merchant) {
         var caller = waiter(merchant);
         return db.sql("""
                 SELECT id, table_number, capacity, status, current_order_id FROM restaurant_table
                 WHERE merchant_id = :m AND waiter_branch_id = :b ORDER BY table_number
-                """).param("m", merchant).param("b", caller.branchId()).query(Table.class).list();
+                """).param("m", merchant).param("b", caller.branchId()).query(WaiterTable.class).list();
     }
 
     private static String label(ProductCatalogService.CatalogRow row) {
@@ -79,30 +79,30 @@ public class WaiterController {
     }
 
     @GetMapping("/{merchant}/menu")
-    public List<MenuItem> menu(@PathVariable UUID merchant) {
+    public List<WaiterMenuItem> waiterMenu(@PathVariable UUID merchant) {
         waiter(merchant);
         return catalog.listCatalog(merchant).stream().map(row ->
-                new MenuItem(row.variantId(), label(row), row.categoryName(), row.retailPricePesewas())).toList();
+                new WaiterMenuItem(row.variantId(), label(row), row.categoryName(), row.retailPricePesewas())).toList();
     }
 
     @PostMapping("/{merchant}/orders")
     @Transactional
-    public Result submit(@PathVariable UUID merchant, @RequestHeader("Idempotency-Key") String key,
-            @RequestBody Submit req) {
+    public WaiterOrderResult waiterSubmitOrder(@PathVariable UUID merchant, @RequestHeader("Idempotency-Key") String key,
+            @RequestBody WaiterOrderRequest req) {
         var caller = waiter(merchant);
         if (req.tableId() == null || req.items() == null || req.items().isEmpty() || req.items().size() > 100
                 || (req.notes() != null && req.notes().length() > 500))
             throw ApiException.badRequest("invalid_order", "Choose a table and 1 to 100 items; notes max 500 characters");
         return idempotency.execute("waiter:" + merchant + ":" + Idempotency.sha256(caller.actor().subject()),
-                key, req, Result.class, () -> create(merchant, caller, req));
+                key, req, WaiterOrderResult.class, () -> create(merchant, caller, req));
     }
 
-    private Result create(UUID merchant, MerchantAccess.Access caller, Submit req) {
-        Table table = db.sql("""
+    private WaiterOrderResult create(UUID merchant, MerchantAccess.Access caller, WaiterOrderRequest req) {
+        WaiterTable table = db.sql("""
                 SELECT id, table_number, capacity, status, current_order_id FROM restaurant_table
                 WHERE id = :t AND merchant_id = :m AND waiter_branch_id = :b FOR UPDATE
                 """).param("t", req.tableId()).param("m", merchant).param("b", caller.branchId())
-                .query(Table.class).optional().orElseThrow(() -> ApiException.notFound("Table not found"));
+                .query(WaiterTable.class).optional().orElseThrow(() -> ApiException.notFound("Table not found"));
         if (table.currentOrderId() != null || !"AVAILABLE".equals(table.status()))
             throw ApiException.conflict("table_in_use", "Table is not available");
         var menu = catalog.listCatalog(merchant).stream()
@@ -128,11 +128,11 @@ public class WaiterController {
                 VALUES (:o, :m, :t, :s, :k)
                 """).param("o", order.id()).param("m", merchant).param("t", table.id())
                 .param("s", caller.actor().subject()).param("k", ticket.id()).update();
-        return new Result(order.id(), ticket.id(), order.orderNumber(), order.totalPesewas());
+        return new WaiterOrderResult(order.id(), ticket.id(), order.orderNumber(), order.totalPesewas());
     }
 
     @GetMapping("/{merchant}/orders")
-    public List<OrderView> list(@PathVariable UUID merchant) {
+    public List<WaiterOrderView> waiterListOrders(@PathVariable UUID merchant) {
         var caller = waiter(merchant);
         return db.sql("""
                 SELECT o.id AS order_id, w.ticket_id, t.table_number, o.order_number,
@@ -143,7 +143,7 @@ public class WaiterController {
                 WHERE w.merchant_id = :m AND w.waiter_subject = :s AND o.branch_id = :b
                   AND t.current_order_id = o.id ORDER BY o.created_at DESC
                 """).param("m", merchant).param("s", caller.actor().subject()).param("b", caller.branchId())
-                .query(OrderView.class).list();
+                .query(WaiterOrderView.class).list();
     }
 
     private UUID ownedTicket(UUID merchant, MerchantAccess.Access caller, UUID order) {
@@ -159,7 +159,7 @@ public class WaiterController {
 
     @PostMapping("/{merchant}/orders/{order}/served")
     @Transactional
-    public void served(@PathVariable UUID merchant, @PathVariable UUID order, @RequestHeader("Idempotency-Key") String key) {
+    public void waiterMarkServed(@PathVariable UUID merchant, @PathVariable UUID order, @RequestHeader("Idempotency-Key") String key) {
         var caller = waiter(merchant);
         UUID ticket = ownedTicket(merchant, caller, order);
         var current = kitchen.getTicket(ticket).orElseThrow(() -> ApiException.notFound("Ticket not found"));
@@ -172,7 +172,7 @@ public class WaiterController {
 
     @PostMapping("/{merchant}/orders/{order}/bill")
     @Transactional
-    public void bill(@PathVariable UUID merchant, @PathVariable UUID order) {
+    public void waiterRequestBill(@PathVariable UUID merchant, @PathVariable UUID order) {
         var caller = waiter(merchant);
         ownedTicket(merchant, caller, order);
         db.sql("UPDATE restaurant_waiter_order SET bill_requested_at = COALESCE(bill_requested_at, now()) WHERE order_id = :o")
@@ -181,10 +181,10 @@ public class WaiterController {
 
     @PostMapping("/{merchant}/orders/{order}/close-table")
     @Transactional
-    public void closeTable(@PathVariable UUID merchant, @PathVariable UUID order) {
+    public void waiterCloseTable(@PathVariable UUID merchant, @PathVariable UUID order) {
         var caller = waiter(merchant);
         UUID ticket = ownedTicket(merchant, caller, order);
-        if (!"SERVED".equals(kitchen.getTicket(ticket).orElseThrow().status()))
+        if (!"SERVED".equals(kitchen.getTicket(ticket).orElseThrow(() -> ApiException.notFound("Ticket not found")).status()))
             throw ApiException.conflict("not_served", "Food must be served before closing the table");
         int changed = db.sql("""
                 UPDATE restaurant_table t SET status = 'DIRTY', current_order_id = NULL
@@ -193,11 +193,11 @@ public class WaiterController {
         if (changed != 1) throw ApiException.conflict("not_paid", "Cashier payment is required before closing the table");
     }
 
-    public record Claim(UUID terminalId, UUID cashierId) {}
+    public record WaiterCashierClaim(UUID terminalId, UUID cashierId) {}
 
     @PostMapping("/{merchant}/orders/{order}/cashier")
     @Transactional
-    public PosOrderService.PosOrder claim(@PathVariable UUID merchant, @PathVariable UUID order, @RequestBody Claim req) {
+    public PosOrderService.PosOrder waiterClaimOrder(@PathVariable UUID merchant, @PathVariable UUID order, @RequestBody WaiterCashierClaim req) {
         var caller = access.operateAccess(merchant);
         access.belongs(merchant, MerchantToolAccess.Resource.ORDER, order);
         access.belongs(merchant, MerchantToolAccess.Resource.TERMINAL, req.terminalId());
@@ -208,10 +208,12 @@ public class WaiterController {
                 UPDATE pos_order o SET terminal_id = :t, cashier_id = :c
                 WHERE o.id = :o AND o.merchant_id = :m AND o.status = 'PENDING' AND o.paid_pesewas = 0
                 AND (o.terminal_id IS NULL OR (o.terminal_id = :t AND o.cashier_id = :c))
+                AND EXISTS (SELECT 1 FROM restaurant_waiter_order w JOIN restaurant_table rt ON rt.id = w.table_id
+                    WHERE w.order_id = o.id AND rt.current_order_id = o.id)
                 AND EXISTS (SELECT 1 FROM pos_terminal t JOIN pos_shift s ON s.terminal_id = t.id
                     JOIN pos_cashier c ON c.id = s.cashier_id
                     WHERE t.id = :t AND t.branch_id = o.branch_id AND t.merchant_id = :m
-                      AND t.status <> 'REVOKED' AND c.is_active AND s.cashier_id = :c AND s.status = 'OPEN')
+                      AND t.status <> 'REVOKED' AND c.merchant_id = :m AND c.is_active AND s.cashier_id = :c AND s.status = 'OPEN')
                 """).param("t", req.terminalId()).param("c", req.cashierId()).param("o", order)
                 .param("m", merchant).update();
         if (changed != 1) throw ApiException.conflict("cashier_claim_failed", "An active shift in the order branch is required; another cashier may have claimed this order");
@@ -219,7 +221,7 @@ public class WaiterController {
     }
 
     @GetMapping("/{merchant}/bill-requests")
-    public List<UUID> billRequests(@PathVariable UUID merchant) {
+    public List<UUID> waiterBillRequests(@PathVariable UUID merchant) {
         var caller = access.operateAccess(merchant);
         return db.sql("""
                 SELECT w.order_id FROM restaurant_waiter_order w JOIN pos_order o ON o.id = w.order_id
