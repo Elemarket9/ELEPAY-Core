@@ -50,4 +50,40 @@ class CardAcquiringRailTest {
         assertThatThrownBy(() -> rail.verifyCallback(java.util.Map.of(), "{}"))
                 .isInstanceOf(PaymentRail.InvalidCallbackException.class);
     }
+
+    @Test
+    void nonLiveCallbacksAreNeverAuthoritative() {
+        CardAcquiringRail rail = new CardAcquiringRail(
+                CardAcquiringRail.ExecutionMode.PARTNER_TEST,
+                URI.create("https://acquirer.example.com"), "acq-1", "sec-1", "wh-secret",
+                null, null, null, null,
+                new ObjectMapper(), null
+        );
+        assertThat(rail.callbacksAreAuthoritative()).isFalse();
+    }
+
+    @Test
+    void rejectsExpiredCardTokenWithoutCallingAcquirer() {
+        CardTokenVault mockVault = org.mockito.Mockito.mock(CardTokenVault.class);
+        var expiredCard = new CardTokenVault.TokenizedCard(
+                java.util.UUID.randomUUID(), "tok_card_expired", null,
+                "408408******4081", "visa", "debit", "Test Bank",
+                1, 2020, "Test User", "active", java.time.OffsetDateTime.now()
+        );
+        org.mockito.Mockito.when(mockVault.findByToken("tok_card_expired"))
+                .thenReturn(java.util.Optional.of(expiredCard));
+
+        CardAcquiringRail rail = new CardAcquiringRail(
+                CardAcquiringRail.ExecutionMode.LIVE,
+                URI.create("https://acquirer.example.com"), "acq-1", "sec-1", "wh-sec",
+                mockVault, null, null, null,
+                new ObjectMapper(), null
+        );
+        PaymentRail.Result res = rail.charge(new PaymentRail.Charge(
+                "ref-exp", 5000L, "GHS", "card", null, "tok_card_expired", "a@b.com", "Kwame", "Test", null
+        ));
+        assertThat(res.status()).isEqualTo(PaymentRail.Status.FAILED);
+        assertThat(res.message()).contains("expired");
+        org.mockito.Mockito.verify(mockVault, org.mockito.Mockito.never()).decryptPanForRail(org.mockito.Mockito.anyString());
+    }
 }

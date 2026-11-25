@@ -199,23 +199,25 @@ public class NetworkTokenService {
         }
         try {
             var lockedOpt = db.sql("""
-                SELECT token_pan, expiry_month, expiry_year, status, last_atc
-                FROM network_card_token
-                WHERE id = ?
-                FOR UPDATE
+                SELECT t.token_pan, t.expiry_month, t.expiry_year, t.status, t.last_atc, c.status AS card_status
+                FROM network_card_token t
+                JOIN card_registry c ON c.id = t.card_id
+                WHERE t.id = ?
+                FOR UPDATE OF t
             """).param(tokenId).query((rs, rowNum) -> new Object() {
                 final String tokenPan = rs.getString("token_pan");
                 final int expiryMonth = rs.getInt("expiry_month");
                 final int expiryYear = rs.getInt("expiry_year");
                 final TokenStatus status = TokenStatus.valueOf(rs.getString("status"));
                 final long lastAtc = rs.getLong("last_atc");
+                final String cardStatus = rs.getString("card_status");
             }).optional();
 
             if (lockedOpt.isEmpty()) {
                 return false;
             }
             var locked = lockedOpt.get();
-            if (locked.status != TokenStatus.ACTIVE) {
+            if (locked.status != TokenStatus.ACTIVE || !"ACTIVE".equalsIgnoreCase(locked.cardStatus)) {
                 return false;
             }
             if (YearMonth.of(locked.expiryYear, locked.expiryMonth).isBefore(YearMonth.now())) {

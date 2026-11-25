@@ -199,7 +199,7 @@ public class CardTokenVault {
 
         UUID id = UUID.randomUUID();
         String token = "tok_card_" + UUID.randomUUID().toString().replace("-", "");
-        String encryptedPan = encrypt(cleanPan);
+        String encryptedPan = encrypt(cleanPan, token);
 
         db.sql("""
                 INSERT INTO card_token (id, token, customer_id, masked_pan, fingerprint, scheme, card_type,
@@ -268,11 +268,14 @@ public class CardTokenVault {
         if (!"active".equals(card.status())) {
             throw ApiException.unprocessable("token_inactive", "Card token is " + card.status());
         }
+        if (YearMonth.of(card.expiryYear(), card.expiryMonth()).isBefore(YearMonth.now())) {
+            throw ApiException.unprocessable("card_expired", "Card token is expired");
+        }
         String encrypted = db.sql("SELECT encrypted_pan FROM card_token WHERE token = :t")
                 .param("t", token)
                 .query(String.class)
                 .single();
-        return decrypt(encrypted);
+        return decrypt(encrypted, token);
     }
 
     /** The subject that tokenized the card ("merchant:<id>" for API keys), if recorded. */
@@ -290,7 +293,8 @@ public class CardTokenVault {
         record Legacy(UUID id, String encrypted) {}
         List<Legacy> rows = db.sql("""
                 SELECT id, encrypted_pan FROM card_token
-                WHERE fingerprint_version < 2 OR encrypted_pan NOT LIKE 'v2:%' FOR UPDATE SKIP LOCKED""")
+                WHERE fingerprint_version < 2 OR (encrypted_pan NOT LIKE 'v2:%' AND encrypted_pan NOT LIKE 'v3:%')
+                FOR UPDATE SKIP LOCKED""")
                 .query((rs, i) -> new Legacy(rs.getObject(1, UUID.class), rs.getString(2))).list();
         int upgraded = 0;
         for (Legacy row : rows) {
@@ -352,32 +356,52 @@ public class CardTokenVault {
         return "card";
     }
 
+    private static final String V3 = "v3:";
+    private static final byte[] AAD = "elepay:card_token:pan:v2".getBytes(StandardCharsets.UTF_8);
+
+    private static byte[] aadForToken(String token) {
+        return ("elepay:card_token:pan:v3:" + token).getBytes(StandardCharsets.UTF_8);
+    }
+
     private String encrypt(String plainText) {
+        return encryptWithAad(plainText, V2, AAD);
+    }
+
+    private String encrypt(String plainText, String token) {
+        return encryptWithAad(plainText, V3, aadForToken(token));
+    }
+
+    private String encryptWithAad(String plainText, String prefix, byte[] aad) {
         try {
             byte[] iv = new byte[GCM_IV_LENGTH];
             rng.nextBytes(iv);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(vaultKey, "AES"), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
-            cipher.updateAAD(AAD);
+            cipher.updateAAD(aad);
             byte[] cipherText = cipher.doFinal(plainText.getBytes(StandardCharsets.UTF_8));
             byte[] combined = new byte[iv.length + cipherText.length];
             System.arraycopy(iv, 0, combined, 0, iv.length);
             System.arraycopy(cipherText, 0, combined, iv.length, cipherText.length);
-            return V2 + Base64.getEncoder().encodeToString(combined);
+            return prefix + Base64.getEncoder().encodeToString(combined);
         } catch (Exception e) {
             throw new IllegalStateException("Vault encryption failure", e);
         }
     }
 
-    private static final byte[] AAD = "elepay:card_token:pan:v2".getBytes(StandardCharsets.UTF_8);
-
     private String decrypt(String stored) {
-        boolean current = stored.startsWith(V2);
+        return decrypt(stored, null);
+    }
+
+    private String decrypt(String stored, String token) {
+        boolean isV3 = stored.startsWith(V3);
+        boolean isV2 = stored.startsWith(V2);
+        boolean current = isV3 || isV2;
         if (!current && legacyKey == null) {
             throw new IllegalStateException(
                     "Legacy card tokens require an externally supplied migration key; refusing fallback decryption");
         }
-        String base64Combined = current ? stored.substring(V2.length()) : stored;
+        String base64Combined = isV3 ? stored.substring(V3.length())
+                : isV2 ? stored.substring(V2.length()) : stored;
         try {
             byte[] combined = Base64.getDecoder().decode(base64Combined);
             if (combined.length < GCM_IV_LENGTH) throw new IllegalArgumentException("Invalid ciphertext");
@@ -386,7 +410,14 @@ public class CardTokenVault {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(current ? vaultKey : legacyKey, "AES"),
                     new GCMParameterSpec(GCM_TAG_LENGTH, iv));
-            if (current) cipher.updateAAD(AAD);
+            if (isV3) {
+                if (token == null || token.isBlank()) {
+                    throw new IllegalStateException("Token binding required to decrypt v3 ciphertext");
+                }
+                cipher.updateAAD(aadForToken(token));
+            } else if (isV2) {
+                cipher.updateAAD(AAD);
+            }
             byte[] plainText = cipher.doFinal(cipherText);
             return new String(plainText, StandardCharsets.UTF_8);
         } catch (Exception e) {

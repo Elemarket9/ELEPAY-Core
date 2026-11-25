@@ -46,7 +46,7 @@ class CardVaultSecurityIT extends PostgresTestBase {
         record Row(String encrypted, String fingerprint, int version) {}
         Row row = db.sql("SELECT encrypted_pan, fingerprint, fingerprint_version FROM card_token WHERE token = :t")
                 .param("t", token).query((rs, i) -> new Row(rs.getString(1), rs.getString(2), rs.getInt(3))).single();
-        assertThat(row.encrypted()).startsWith("v2:").doesNotContain("4111111111111111");
+        assertThat(row.encrypted()).startsWith("v3:").doesNotContain("4111111111111111");
         assertThat(row.version()).isEqualTo(2);
         // The old fingerprint was an unkeyed hash anyone could recompute from a guessed card number.
         assertThat(row.fingerprint()).isNotEqualTo(Idempotency.sha256("elepay:card:fingerprint:4111111111111111"));

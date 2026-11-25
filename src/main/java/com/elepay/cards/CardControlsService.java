@@ -26,19 +26,19 @@ public class CardControlsService {
 
     @Transactional
     public void freezeCard(UUID cardId, String reason) {
-        int rows = db.sql("UPDATE card_registry SET status = 'FROZEN', updated_at = now() WHERE id = ?")
+        int rows = db.sql("UPDATE card_registry SET status = 'FROZEN', updated_at = now() WHERE id = ? AND status = 'ACTIVE'")
                 .param(cardId).update();
         if (rows == 0) {
-            throw new IllegalArgumentException("Card not found: " + cardId);
+            throw new IllegalStateException("Card not found or not ACTIVE: " + cardId);
         }
     }
 
     @Transactional
     public void unfreezeCard(UUID cardId) {
-        int rows = db.sql("UPDATE card_registry SET status = 'ACTIVE', updated_at = now() WHERE id = ?")
+        int rows = db.sql("UPDATE card_registry SET status = 'ACTIVE', updated_at = now() WHERE id = ? AND status = 'FROZEN'")
                 .param(cardId).update();
         if (rows == 0) {
-            throw new IllegalArgumentException("Card not found: " + cardId);
+            throw new IllegalStateException("Card not found or not FROZEN: " + cardId);
         }
     }
 

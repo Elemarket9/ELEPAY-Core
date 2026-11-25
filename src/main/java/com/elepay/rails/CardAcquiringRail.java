@@ -177,7 +177,7 @@ public class CardAcquiringRail implements PaymentRail {
             return Result.unavailable("Card acquirer is not configured for " + mode.name().toLowerCase(Locale.ROOT) + " mode");
         }
 
-        // Resolve tokenized card PAN within the vault boundary if a vault token was provided
+        // Validate tokenized card within the vault boundary (never decrypt PAN unless transmitted)
         String tokenRef = charge.network();
         String maskedCardRef = null;
         if (tokenRef != null && tokenRef.startsWith("tok_card_") && cardTokenVault != null) {
@@ -185,15 +185,24 @@ public class CardAcquiringRail implements PaymentRail {
             if (cardOpt.isEmpty() || !"active".equalsIgnoreCase(cardOpt.get().status())) {
                 return new Result(Status.FAILED, null, null, null, null, null, "Card token is missing or inactive");
             }
-            maskedCardRef = cardOpt.get().maskedPan();
-            // Decrypt strictly inside the rail execution boundary for acquirer transmission
-            cardTokenVault.decryptPanForRail(tokenRef);
+            var card = cardOpt.get();
+            if (java.time.YearMonth.of(card.expiryYear(), card.expiryMonth()).isBefore(java.time.YearMonth.now())) {
+                return new Result(Status.FAILED, null, null, null, null, null, "Card token is expired");
+            }
+            maskedCardRef = card.maskedPan();
         } else if ("nfc".equalsIgnoreCase(charge.channel()) && networkTokenService != null && tokenRef != null && !tokenRef.isBlank()) {
             var netOpt = networkTokenService.findByTokenPan(tokenRef);
             if (netOpt.isEmpty()) {
                 return new Result(Status.FAILED, null, null, null, null, null, "Network token not found");
             }
-            maskedCardRef = "net:" + netOpt.get().id();
+            var netToken = netOpt.get();
+            if (netToken.status() != com.elepay.cards.TokenStatus.ACTIVE) {
+                return new Result(Status.FAILED, null, null, null, null, null, "Network token is " + netToken.status());
+            }
+            if (java.time.YearMonth.of(netToken.expiryYear(), netToken.expiryMonth()).isBefore(java.time.YearMonth.now())) {
+                return new Result(Status.FAILED, null, null, null, null, null, "Network token is expired");
+            }
+            maskedCardRef = "net:" + netToken.id();
         }
 
         long startMs = System.currentTimeMillis();
@@ -293,7 +302,8 @@ public class CardAcquiringRail implements PaymentRail {
             return Result.unavailable("Card acquirer is not configured for status query");
         }
         try {
-            HttpRequest req = HttpRequest.newBuilder(acquirerBaseUri.resolve("/v1/acquiring/transactions/" + reference))
+            String encodedRef = java.net.URLEncoder.encode(reference, StandardCharsets.UTF_8);
+            HttpRequest req = HttpRequest.newBuilder(acquirerBaseUri.resolve("/v1/acquiring/transactions/" + encodedRef))
                     .timeout(Duration.ofSeconds(10))
                     .header("Accept", "application/json")
                     .header("X-Acquirer-Id", acquirerId)
@@ -337,7 +347,7 @@ public class CardAcquiringRail implements PaymentRail {
 
     @Override
     public boolean callbacksAreAuthoritative() {
-        return webhookSecret != null && !webhookSecret.isBlank();
+        return mode == ExecutionMode.LIVE && webhookSecret != null && !webhookSecret.isBlank();
     }
 
     private Result interpretAcquirerResponse(int statusCode, String body, Long expectedAmount, String expectedCurrency) {
@@ -368,11 +378,12 @@ public class CardAcquiringRail implements PaymentRail {
         String message = root.path("message").asString("Card acquirer status: " + statusStr);
 
         return switch (statusStr) {
-            case "PENDING", "3DS_REQUIRED", "CHALLENGE" ->
+            // AUTHORIZED is an uncaptured hold — never book as settled SUCCEEDED until CAPTURED/SUCCEEDED.
+            case "PENDING", "3DS_REQUIRED", "CHALLENGE", "AUTHORIZED" ->
                     new Result(Status.PENDING, railRef.isBlank() ? null : railRef, null, null, null, redirectUrl, message);
             case "FAILED", "DECLINED", "REJECTED" ->
                     new Result(Status.FAILED, railRef.isBlank() ? null : railRef, null, null, null, null, message);
-            case "SUCCEEDED", "CAPTURED", "AUTHORIZED" -> {
+            case "SUCCEEDED", "CAPTURED" -> {
                 if (mode != ExecutionMode.LIVE) {
                     // Never present non-live responses as live settlement success
                     yield new Result(Status.PENDING, railRef.isBlank() ? null : railRef, null, null, null, redirectUrl,

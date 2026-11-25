@@ -207,8 +207,17 @@ public class PosNfcPaymentService {
                 ? req.cardScheme().trim().toUpperCase(Locale.ROOT)
                 : emv.cardScheme();
 
+        if (req.encryptedPinBlock() != null && !req.encryptedPinBlock().isBlank()
+                && !req.encryptedPinBlock().trim().matches("^[0-9A-Fa-f]{16,32}$")) {
+            throw ApiException.badRequest("invalid_pin_block",
+                    "encryptedPinBlock must be a 16-32 hex-character encrypted PIN block (plaintext PINs are forbidden)");
+        }
+
         // 4. Submit real card rail attempt through ELEPAY Checkout & RailTransactions (never fabricate local auth codes)
-        var railRes = checkoutGateway.startAndSubmitRail(checkoutRef, "card", null, scheme.toLowerCase(Locale.ROOT), null);
+        String railNetwork = (req.cardToken() != null && !req.cardToken().isBlank())
+                ? req.cardToken().trim()
+                : scheme.toLowerCase(Locale.ROOT);
+        var railRes = checkoutGateway.startAndSubmitRail(checkoutRef, "card", null, railNetwork, null);
         if (railRes != null && "failed".equalsIgnoreCase(railRes.railStatus())) {
             throw ApiException.unprocessable("card_rail_declined",
                     railRes.message() != null ? railRes.message() : "Card acquiring rail declined NFC tap");
