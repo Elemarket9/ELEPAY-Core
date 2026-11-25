@@ -36,8 +36,13 @@ export function WithdrawScreen({ client, merchant }: Props) {
   const [amount, setAmount] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [oobCodes, setOobCodes] = useState<Record<string, string>>({});
+  const [oobBusyId, setOobBusyId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const isOobPending = (d: SettlementDestination) =>
+    Boolean(d.oobVerificationStatus && d.oobVerificationStatus !== "confirmed");
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -52,7 +57,9 @@ export function WithdrawScreen({ client, merchant }: Props) {
       setPayouts(p);
       setSelectedDest((prev) => {
         const isEligible = (d: SettlementDestination) =>
-          d.verification === "verified" && !(d.coolingOffUntil && Date.parse(d.coolingOffUntil) > Date.now());
+          d.verification === "verified"
+          && !(d.coolingOffUntil && Date.parse(d.coolingOffUntil) > Date.now())
+          && !isOobPending(d);
         return prev && dests.some((d) => d.id === prev && isEligible(d))
           ? prev
           : (dests.find(isEligible)?.id ?? "");
@@ -70,6 +77,41 @@ export function WithdrawScreen({ client, merchant }: Props) {
   }, [load]);
 
   const withdrawKeys = React.useRef(createAttemptKeys()).current;
+
+  async function confirmOob(destId: string) {
+    const code = (oobCodes[destId] ?? "").trim();
+    if (code.length < 6) {
+      setError("Enter the 6-digit Email/SMS confirmation code.");
+      return;
+    }
+    setError(null);
+    setMsg(null);
+    setOobBusyId(destId);
+    try {
+      await client.confirmDestinationOob(merchant.id, destId, code);
+      setOobCodes((prev) => ({ ...prev, [destId]: "" }));
+      setMsg("Settlement destination confirmed via Email/SMS code.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOobBusyId(null);
+    }
+  }
+
+  async function resendOob(destId: string) {
+    setError(null);
+    setMsg(null);
+    setOobBusyId(destId);
+    try {
+      await client.resendDestinationOob(merchant.id, destId);
+      setMsg("Fresh confirmation code sent to your email and SMS.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOobBusyId(null);
+    }
+  }
 
   async function submitWithdraw() {
     if (busy) return;
@@ -129,38 +171,68 @@ export function WithdrawScreen({ client, merchant }: Props) {
             {destinations.map((d) => {
               const verified = d.verification === "verified";
               const inCoolingOff = Boolean(d.coolingOffUntil && Date.parse(d.coolingOffUntil) > Date.now());
-              const oobPending = Boolean(d.oobVerificationStatus && d.oobVerificationStatus !== "verified");
-              const selectable = verified && !inCoolingOff;
+              const oobPending = isOobPending(d);
+              const selectable = verified && !inCoolingOff && !oobPending;
               const active = selectedDest === d.id;
               return (
-                <Pressable
-                  key={d.id}
-                  disabled={!selectable}
-                  style={[styles.destItem, active && styles.destItemActive, !selectable && { opacity: 0.55 }]}
-                  onPress={() => setSelectedDest(d.id)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.destTitle}>
-                      {d.network.toUpperCase()} · {d.accountNumber}
-                    </Text>
-                    <Text style={styles.destSub}>
-                      {d.accountName} ({d.type})
-                    </Text>
-                    {inCoolingOff && (
-                      <Text style={styles.warnSub}>
-                        Cooling off until {new Date(d.coolingOffUntil!).toUTCString()}
+                <View key={d.id} style={{ gap: 6 }}>
+                  <Pressable
+                    disabled={!selectable}
+                    style={[styles.destItem, active && styles.destItemActive, !selectable && { opacity: 0.55 }]}
+                    onPress={() => setSelectedDest(d.id)}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.destTitle}>
+                        {d.network.toUpperCase()} · {d.accountNumber}
                       </Text>
-                    )}
-                    {oobPending && (
-                      <Text style={styles.warnSub}>OOB verification: {d.oobVerificationStatus}</Text>
-                    )}
-                  </View>
-                  <View style={[styles.tag, selectable ? styles.tagOk : styles.tagWarn]}>
-                    <Text style={[styles.tagText, selectable ? styles.tagTextOk : styles.tagTextWarn]}>
-                      {inCoolingOff ? "COOLING OFF" : d.verification.toUpperCase()}
-                    </Text>
-                  </View>
-                </Pressable>
+                      <Text style={styles.destSub}>
+                        {d.accountName} ({d.type})
+                      </Text>
+                      {inCoolingOff && (
+                        <Text style={styles.warnSub}>
+                          Cooling off until {new Date(d.coolingOffUntil!).toUTCString()}
+                        </Text>
+                      )}
+                      {oobPending && (
+                        <Text style={styles.warnSub}>Email/SMS verification required ({d.oobVerificationStatus})</Text>
+                      )}
+                    </View>
+                    <View style={[styles.tag, selectable ? styles.tagOk : styles.tagWarn]}>
+                      <Text style={[styles.tagText, selectable ? styles.tagTextOk : styles.tagTextWarn]}>
+                        {oobPending ? "VERIFY OOB" : inCoolingOff ? "COOLING OFF" : d.verification.toUpperCase()}
+                      </Text>
+                    </View>
+                  </Pressable>
+                  {oobPending && (
+                    <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+                      <TextInput
+                        style={[styles.amountInput, { flex: 1, fontSize: 15, paddingVertical: 8 }]}
+                        keyboardType="number-pad"
+                        maxLength={6}
+                        placeholder="6-digit Email/SMS code"
+                        placeholderTextColor={colors.subtle}
+                        value={oobCodes[d.id] ?? ""}
+                        onChangeText={(v) => setOobCodes((prev) => ({ ...prev, [d.id]: v.replace(/\D/g, "").slice(0, 6) }))}
+                      />
+                      <Pressable
+                        disabled={oobBusyId === d.id}
+                        style={[styles.tag, styles.tagOk, { paddingVertical: 10, paddingHorizontal: 12 }]}
+                        onPress={() => void confirmOob(d.id)}
+                      >
+                        <Text style={[styles.tagText, styles.tagTextOk]}>
+                          {oobBusyId === d.id ? "…" : "CONFIRM"}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        disabled={oobBusyId === d.id}
+                        style={[styles.tag, styles.tagWarn, { paddingVertical: 10, paddingHorizontal: 10 }]}
+                        onPress={() => void resendOob(d.id)}
+                      >
+                        <Text style={[styles.tagText, styles.tagTextWarn]}>RESEND</Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
               );
             })}
           </View>

@@ -172,6 +172,7 @@ class SecurityConfig {
                             }).permitAll()
                             .requestMatchers("/actuator/**").hasAnyRole("ops", "ops_admin")
                             .requestMatchers("/v1/public/**").permitAll()
+                            .requestMatchers(HttpMethod.POST, "/v1/auth/**").permitAll()
                             .requestMatchers(HttpMethod.GET, "/v3/api-docs", "/v3/api-docs/**").permitAll()
                             .requestMatchers(HttpMethod.POST, "/v1/rails/*/callbacks/**").permitAll()
                             .requestMatchers(HttpMethod.POST, "/v1/fx/partners/*/callbacks", "/v1/fx/partners/*/inbound").permitAll()

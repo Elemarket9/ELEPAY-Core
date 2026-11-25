@@ -171,6 +171,111 @@ export class ElepayClient {
     return data as T;
   }
 
+  /** Native registration: sends separate 6-digit verification codes to both Email and SMS. */
+  async registerAccount(input: {
+    fullName: string;
+    email: string;
+    phone: string;
+    password: string;
+  }): Promise<{
+    challengeId: string;
+    purpose: string;
+    channels: string[];
+    maskedEmail: string | null;
+    maskedPhone: string | null;
+    expiresInSeconds: number;
+    emailVerified: boolean;
+    smsVerified: boolean;
+  }> {
+    return this.call("/v1/auth/register", {
+      method: "POST",
+      anonymous: true,
+      body: input,
+    });
+  }
+
+  /** Native sign-in: verifies password and sends 6-digit verification codes to both Email and SMS. */
+  async loginWithPassword(identifier: string, password: string): Promise<{
+    challengeId: string;
+    purpose: string;
+    channels: string[];
+    maskedEmail: string | null;
+    maskedPhone: string | null;
+    expiresInSeconds: number;
+    emailVerified: boolean;
+    smsVerified: boolean;
+  }> {
+    return this.call("/v1/auth/login", {
+      method: "POST",
+      anonymous: true,
+      body: { identifier: identifier.trim(), password },
+    });
+  }
+
+  /** Verifies both Email and SMS 6-digit codes and stores the issued Bearer token when complete. */
+  async verifyEmailAndSms(
+    challengeId: string,
+    emailCode: string,
+    smsCode: string,
+  ): Promise<{
+    verified: boolean;
+    emailVerified: boolean;
+    smsVerified: boolean;
+    accessToken: string | null;
+    tokenType: string | null;
+    expiresInSeconds: number;
+  }> {
+    const res = await this.call<{
+      verified: boolean;
+      emailVerified: boolean;
+      smsVerified: boolean;
+      accessToken: string | null;
+      tokenType: string | null;
+      expiresInSeconds: number;
+    }>("/v1/auth/verify", {
+      method: "POST",
+      anonymous: true,
+      body: { challengeId, emailCode: emailCode.trim(), smsCode: smsCode.trim() },
+    });
+    if (res.verified && res.accessToken) {
+      this.token = res.accessToken;
+    }
+    return res;
+  }
+
+  /** Resends fresh Email and SMS verification codes for an active auth challenge. */
+  async resendVerificationCodes(challengeId: string): Promise<{
+    challengeId: string;
+    purpose: string;
+    channels: string[];
+    maskedEmail: string | null;
+    maskedPhone: string | null;
+    expiresInSeconds: number;
+    emailVerified: boolean;
+    smsVerified: boolean;
+  }> {
+    return this.call("/v1/auth/resend", {
+      method: "POST",
+      anonymous: true,
+      body: { challengeId },
+    });
+  }
+
+  /** Confirm a settlement destination using the 6-digit Email/SMS OOB code. */
+  async confirmDestinationOob(merchantId: string, destinationId: string, token: string): Promise<void> {
+    await this.call(`/v1/merchants/${merchantId}/settlement-destinations/${destinationId}/confirm-oob`, {
+      method: "POST",
+      body: { token: token.trim() },
+    });
+  }
+
+  /** Resend a fresh 6-digit Email+SMS OOB code for a pending settlement destination. */
+  async resendDestinationOob(merchantId: string, destinationId: string): Promise<void> {
+    await this.call(`/v1/merchants/${merchantId}/settlement-destinations/${destinationId}/resend-oob`, {
+      method: "POST",
+    });
+  }
+
   /** Development / sandbox profile sign-in using /dev/token. */
   async signInDev(subject: string, roles: string[] = []): Promise<string> {
     const res = await this.call<{ accessToken: string }>("/dev/token", {

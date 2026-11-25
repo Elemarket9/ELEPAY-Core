@@ -324,6 +324,21 @@ button.ghost:hover:not(:disabled) {
   color: var(--ink);
 }
 
+button.link {
+  background: transparent;
+  color: var(--green);
+  border: none;
+  padding: 0.15rem 0.25rem;
+  font-weight: 600;
+  box-shadow: none;
+}
+button.link:hover:not(:disabled) {
+  background: transparent;
+  color: var(--green-hover);
+  text-decoration: underline;
+  box-shadow: none;
+}
+
 button.small {
   padding: 0.36rem 0.72rem;
   font-size: 0.8125rem;

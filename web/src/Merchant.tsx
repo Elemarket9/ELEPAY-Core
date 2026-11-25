@@ -808,6 +808,8 @@ function Payouts({ id }: { id: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [oobCodes, setOobCodes] = useState<Record<string, string>>({});
+  const [oobBusyId, setOobBusyId] = useState<string | null>(null);
   const withdrawKeyRef = useRef<{ sig: string; key: string } | null>(null);
 
   const load = async () => {
@@ -819,6 +821,45 @@ function Payouts({ id }: { id: string }) {
       : (d.find((x) => isDestinationReady(x))?.id ?? ""));
   };
   useEffect(() => { load().catch((e) => setError(e instanceof Error ? e.message : String(e))); }, [id]);
+
+  async function confirmDestinationOob(destId: string) {
+    const code = (oobCodes[destId] ?? "").trim();
+    if (code.length < 6) {
+      setError("Enter the 6-digit confirmation code sent to your email and SMS.");
+      return;
+    }
+    setError(null);
+    setMsg(null);
+    setOobBusyId(destId);
+    try {
+      await api(`/v1/merchants/${id}/settlement-destinations/${destId}/confirm-oob`, {
+        body: { token: code },
+      });
+      setOobCodes((prev) => ({ ...prev, [destId]: "" }));
+      setMsg("Settlement destination confirmed via Email/SMS code.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOobBusyId(null);
+    }
+  }
+
+  async function resendDestinationOob(destId: string) {
+    setError(null);
+    setMsg(null);
+    setOobBusyId(destId);
+    try {
+      await api(`/v1/merchants/${id}/settlement-destinations/${destId}/resend-oob`, {
+        method: "POST",
+      });
+      setMsg("Fresh confirmation code sent to your merchant email and SMS.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOobBusyId(null);
+    }
+  }
 
   async function withdraw() {
     if (busy) return;
@@ -851,8 +892,65 @@ function Payouts({ id }: { id: string }) {
     }
   }
 
+  const pendingOobDestinations = destinations.filter(
+    (d) => d.oobVerificationStatus && d.oobVerificationStatus !== "confirmed",
+  );
+
   return (
     <>
+      {pendingOobDestinations.length > 0 && (
+        <section className="panel" style={{ marginBottom: "1rem" }}>
+          <h3>Confirm Settlement Destination (Email &amp; SMS Code)</h3>
+          <p className="small muted">
+            Enter the 6-digit verification code sent to your merchant contact email and phone to activate withdrawals.
+          </p>
+          {pendingOobDestinations.map((d) => (
+            <div
+              key={d.id}
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: "0.6rem",
+                padding: "0.65rem 0",
+                borderTop: "1px solid var(--line)",
+              }}
+            >
+              <div style={{ flex: "1 1 220px" }}>
+                <strong>{d.type} {d.network} {d.accountNumber}</strong>
+                <div className="small muted">{d.accountName} · Status: {d.oobVerificationStatus}</div>
+              </div>
+              <input
+                className="mono"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="6-digit code"
+                value={oobCodes[d.id] ?? ""}
+                onChange={(e) => setOobCodes((prev) => ({
+                  ...prev,
+                  [d.id]: e.target.value.replace(/\D/g, "").slice(0, 6),
+                }))}
+                style={{ width: 140 }}
+              />
+              <button
+                type="button"
+                disabled={oobBusyId === d.id}
+                onClick={() => void confirmDestinationOob(d.id)}
+              >
+                {oobBusyId === d.id ? "Confirming…" : "Confirm Code"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={oobBusyId === d.id}
+                onClick={() => void resendDestinationOob(d.id)}
+              >
+                Resend Code
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
       <section className="panel" style={{ marginBottom: "1rem" }}>
         <h3>Request Withdrawal</h3>
         <div className="grid-2">

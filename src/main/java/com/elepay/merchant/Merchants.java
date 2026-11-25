@@ -476,6 +476,53 @@ class Merchants {
                 "coolingOffUntil", String.valueOf(coolingOffUntil));
     }
 
+    @PostMapping("/merchants/{id}/settlement-destinations/{destination}/resend-oob")
+    @Transactional
+    public Map<String, Object> resendOob(@PathVariable UUID id, @PathVariable UUID destination) {
+        var a = access.require(id, MANAGE);
+        a.actor().requireUser();
+        var statusOpt = db.sql("""
+                SELECT oob_verification_status
+                FROM settlement_destination
+                WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'
+                FOR UPDATE""")
+                .param("d", destination).param("m", id)
+                .query(String.class).optional();
+        if (statusOpt.isEmpty()) throw ApiException.notFound("Destination not found");
+        if ("confirmed".equals(statusOpt.get())) {
+            return Map.of("destinationId", destination, "oobVerificationStatus", "confirmed", "resent", false);
+        }
+        String oobToken = References.digits(6);
+        String oobHash = com.elepay.common.Idempotency.sha256(oobToken);
+        java.time.OffsetDateTime oobExpires = java.time.OffsetDateTime.now().plusMinutes(15);
+        String phone = access.contactPhone(id).orElse(null);
+        String email = db.sql("SELECT contact_email FROM merchant WHERE id = :id").param("id", id)
+                .query(String.class).optional().orElse(null);
+        var receipt = oobDelivery.send(phone, email, oobToken);
+        db.sql("""
+                UPDATE settlement_destination
+                SET oob_token_hash = :oobHash,
+                    oob_expires_at = :oobExp,
+                    oob_attempts = 0,
+                    updated_at = now()
+                WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m""")
+                .param("oobHash", oobHash).param("oobExp", oobExpires)
+                .param("d", destination).param("m", id).update();
+        audit.record(a.actor().subject(), "merchant.destination_oob_resent", "merchant:" + id,
+                Map.of("destination", destination.toString(),
+                        "emailSent", String.valueOf(receipt.emailSent()),
+                        "smsSent", String.valueOf(receipt.smsSent())));
+        return Map.of(
+                "destinationId", destination,
+                "oobVerificationStatus", "pending_oob",
+                "resent", true,
+                "emailSent", receipt.emailSent(),
+                "smsSent", receipt.smsSent(),
+                "maskedEmail", receipt.maskedEmail() == null ? "" : receipt.maskedEmail(),
+                "maskedPhone", receipt.maskedPhone() == null ? "" : receipt.maskedPhone()
+        );
+    }
+
     @DeleteMapping("/merchants/{id}/settlement-destinations/{destination}")
     @Transactional
     public Map<String, String> removeDestination(@PathVariable UUID id, @PathVariable UUID destination) {

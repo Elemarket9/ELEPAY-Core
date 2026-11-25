@@ -139,33 +139,78 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
 
 function Root() {
   const [url,setUrl]=useState("");
+  const [authMode,setAuthMode]=useState<"login"|"token">("login");
+  const [identifier,setIdentifier]=useState("");
+  const [password,setPassword]=useState("");
+  const [challengeId,setChallengeId]=useState<string|null>(null);
+  const [maskedEmail,setMaskedEmail]=useState<string|null>(null);
+  const [maskedPhone,setMaskedPhone]=useState<string|null>(null);
+  const [emailCode,setEmailCode]=useState("");
+  const [smsCode,setSmsCode]=useState("");
   const [token,setToken]=useState("");
   const [session,setSession]=useState<{url:string;token:string}|null>(null);
   const [merchant,setMerchant]=useState<MerchantView|null>(null);
   const [merchants,setMerchants]=useState<MerchantView[]>([]);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
+  const [notice,setNotice]=useState("");
   const client=useMemo(()=>session?new ElepayClient(session.url,session.token):null,[session]);
   useEffect(()=>{let active=true;SecureStore.getItemAsync(SESSION).then(raw=>{if(active&&raw)setSession(JSON.parse(raw));}).catch(e=>setError(message(e)));return()=>{active=false;};},[]);
   useEffect(()=>{if(!client)return;let active=true;client.call<MerchantView[]>("/v1/merchants").then(rows=>{if(active){const allowed=rows.filter(x=>x.role==="waiter");setMerchants(allowed);setMerchant(allowed.length===1?allowed[0]:null);if(!allowed.length)setError("No waiter membership. Ask your manager to assign you.");}}).catch(e=>{if(active)setError(message(e));});return()=>{active=false;};},[client]);
+  async function completeSession(endpoint:string,accessToken:string){
+    const next={url:endpoint,token:accessToken};const c=new ElepayClient(next.url,next.token);
+    const memberships=await c.call<MerchantView[]>("/v1/merchants");
+    if(!memberships.some(m=>m.role==="waiter"))throw new Error("No waiter membership.");
+    await SecureStore.setItemAsync(SESSION,JSON.stringify(next));setSession(next);setToken("");setPassword("");setChallengeId(null);setEmailCode("");setSmsCode("");setNotice("");
+  }
   async function login(){
-    if(busy)return;setBusy(true);setError("");
+    if(busy)return;setBusy(true);setError("");setNotice("");
     try{
       const endpoint=url.trim().replace(/\/+$/,"");
-      if(!/^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(endpoint)||!token.trim())throw new Error("Enter an HTTPS server origin and a valid staff access token.");
-      const next={url:endpoint,token:token.trim()};const c=new ElepayClient(next.url,next.token);
-      const memberships=await c.call<MerchantView[]>("/v1/merchants");
-      if(!memberships.some(m=>m.role==="waiter"))throw new Error("No waiter membership.");
-      await SecureStore.setItemAsync(SESSION,JSON.stringify(next));setSession(next);setToken("");
+      if(!/^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(endpoint))throw new Error("Enter an HTTPS server origin.");
+      const c=new ElepayClient(endpoint);
+      if(challengeId){
+        if(emailCode.trim().length!==6||smsCode.trim().length!==6)throw new Error("Enter both the 6-digit email code and 6-digit SMS code.");
+        const res=await c.verifyEmailAndSms(challengeId,emailCode,smsCode);
+        if(!res.verified||!res.accessToken){setNotice("One channel verified — enter the remaining code.");return;}
+        await completeSession(endpoint,res.accessToken);
+      }else if(authMode==="login"){
+        if(!identifier.trim()||!password)throw new Error("Enter your email or phone number and password.");
+        const ch=await c.loginWithPassword(identifier.trim(),password);
+        setChallengeId(ch.challengeId);setMaskedEmail(ch.maskedEmail);setMaskedPhone(ch.maskedPhone);setEmailCode("");setSmsCode("");
+        setNotice("Verification codes sent to your email and SMS.");
+      }else{
+        if(!token.trim())throw new Error("Enter a valid staff access token.");
+        await completeSession(endpoint,token.trim());
+      }
     }catch(e){setError(message(e));}finally{setBusy(false);}
+  }
+  async function resend(){
+    if(!challengeId||busy)return;setBusy(true);setError("");setNotice("");
+    try{const c=new ElepayClient(url.trim().replace(/\/+$/,""));await c.resendVerificationCodes(challengeId);setEmailCode("");setSmsCode("");setNotice("Fresh Email & SMS codes sent.");}
+    catch(e){setError(message(e));}finally{setBusy(false);}
   }
   async function logout(){try{await SecureStore.deleteItemAsync(SESSION);setSession(null);setMerchant(null);setMerchants([]);setError("");}catch(e){Alert.alert("Sign-out failed",message(e));}}
   if(client&&merchant)return <Waiter key={merchant.id} client={client} merchant={merchant} logout={()=>void logout()}/>;
-  return <SafeAreaView style={s.root}><ScrollView contentContainerStyle={s.content}><Text style={s.title}>ELEPAY Waiter</Text>{!!error&&<Text style={s.error}>{error}</Text>}
+  return <SafeAreaView style={s.root}><ScrollView contentContainerStyle={s.content}><Text style={s.title}>ELEPAY Waiter</Text>{!!notice&&<Text style={s.notice}>{notice}</Text>}{!!error&&<Text style={s.error}>{error}</Text>}
     {client?<>{merchants.map(m=><Button key={m.id} label={m.tradingName} onPress={()=>setMerchant(m)}/>)}<Button label="Sign out" onPress={()=>void logout()}/></>:<>
-      <Text>Sign in with your restaurant staff access token.</Text><TextInput style={s.input} accessibilityLabel="Server URL" autoCapitalize="none" autoCorrect={false} placeholder="https://your-elepay-server" value={url} onChangeText={setUrl}/>
-      <TextInput style={s.input} accessibilityLabel="Staff token" secureTextEntry autoCapitalize="none" autoCorrect={false} placeholder="Access token" value={token} onChangeText={setToken}/>
-      <Button label={busy?"Signing in…":"Sign in"} disabled={busy} onPress={()=>void login()}/>
+      <TextInput style={s.input} accessibilityLabel="Server URL" autoCapitalize="none" autoCorrect={false} editable={!challengeId} placeholder="https://your-elepay-server" value={url} onChangeText={setUrl}/>
+      {!challengeId&&<View style={s.row}><Button label={authMode==="login"?"Email & SMS Login ✓":"Email & SMS Login"} onPress={()=>{setAuthMode("login");setError("");}}/><Button label={authMode==="token"?"Staff Token ✓":"Staff Token"} onPress={()=>{setAuthMode("token");setError("");}}/></View>}
+      {challengeId?<>
+        <Text>Enter the 6-digit codes sent to {maskedEmail??"email"} and {maskedPhone??"SMS"}.</Text>
+        <TextInput style={s.input} accessibilityLabel="Email code" keyboardType="number-pad" maxLength={6} placeholder="6-digit email code" value={emailCode} onChangeText={v=>setEmailCode(v.replace(/\D/g,"").slice(0,6))}/>
+        <TextInput style={s.input} accessibilityLabel="SMS code" keyboardType="number-pad" maxLength={6} placeholder="6-digit SMS code" value={smsCode} onChangeText={v=>setSmsCode(v.replace(/\D/g,"").slice(0,6))}/>
+        <Button label={busy?"Verifying…":"Verify & Sign in"} disabled={busy} onPress={()=>void login()}/>
+        <View style={s.row}><Button label="Resend codes" disabled={busy} onPress={()=>void resend()}/><Button label="Back" disabled={busy} onPress={()=>{setChallengeId(null);setError("");setNotice("");}}/></View>
+      </>:authMode==="login"?<>
+        <TextInput style={s.input} accessibilityLabel="Email or phone" autoCapitalize="none" autoCorrect={false} placeholder="Email or phone (024...)" value={identifier} onChangeText={setIdentifier}/>
+        <TextInput style={s.input} accessibilityLabel="Password" secureTextEntry placeholder="Password" value={password} onChangeText={setPassword}/>
+        <Button label={busy?"Sending codes…":"Continue with Email & SMS Code"} disabled={busy} onPress={()=>void login()}/>
+      </>:<>
+        <Text>Sign in with your restaurant staff access token.</Text>
+        <TextInput style={s.input} accessibilityLabel="Staff token" secureTextEntry autoCapitalize="none" autoCorrect={false} placeholder="Access token" value={token} onChangeText={setToken}/>
+        <Button label={busy?"Signing in…":"Sign in"} disabled={busy} onPress={()=>void login()}/>
+      </>}
     </>}
   </ScrollView></SafeAreaView>;
 }

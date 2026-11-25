@@ -189,13 +189,8 @@ export function Checkout({ reference }: { reference: string }) {
           if (oidcEnabled) {
             await signIn();
             return;
-          } else {
-            const subject = prompt("Sign in (development subject)");
-            if (!subject || !subject.trim()) {
-              return;
-            }
-            await signIn(subject.trim());
           }
+          throw new ApiError(401, "sign_in_required", "Please sign in at /app before paying with your ELEPAY Wallet.");
         }
         await api(`/v1/checkouts/${reference}/pay/wallet`, { method: "POST", idempotencyKey: key });
       } else {

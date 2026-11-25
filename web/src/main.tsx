@@ -1,13 +1,13 @@
 import { lazy, StrictMode, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Checkout, StartFromLink } from "./Checkout";
-import { completeSignIn, getToken, oidcEnabled, signIn, signOut } from "./auth";
+import { completeSignIn, getToken, signOut } from "./auth";
+import { LoginScreen } from "./LoginScreen";
 import {
   BrandMark,
   IconActivity,
   IconChefHat,
   IconKey,
-  IconLock,
   IconMonitor,
   IconQrCode,
   IconWallet,
@@ -23,83 +23,16 @@ import "./styles.css";
 
 function SignedIn({ children, roles = [] }: { children: React.ReactNode; roles?: string[] }) {
   const [ready, setReady] = useState<boolean | null>(null);
-  const [subject, setSubject] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     getToken()
       .then((t) => setReady(!!t))
-      .catch((e) => {
-        setError(e instanceof Error ? e.message : String(e));
-        setReady(false);
-      });
+      .catch(() => setReady(false));
   }, []);
 
   if (ready === null) return null;
   if (!ready) {
-    return (
-      <div className="auth-shell">
-        <div className="auth-card">
-          <div className="auth-brand-row">
-            <BrandMark size={30} />
-            <div>
-              <h1 style={{ fontSize: "1.25rem", margin: 0 }}>Sign in to ELEPAY</h1>
-              <p className="small muted" style={{ margin: 0 }}>
-                {roles.includes("ops") ? "Operations & Risk Command Center" : "Merchant & Account Portal"}
-              </p>
-            </div>
-          </div>
-          {error && <p className="notice error" role="alert">{error}</p>}
-          {oidcEnabled ? (
-            <button
-              className="large full-width"
-              disabled={busy}
-              onClick={() => {
-                setError(null);
-                setBusy(true);
-                void signIn()
-                  .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-                  .finally(() => setBusy(false));
-              }}
-            >
-              <IconLock size={16} />
-              {busy ? "Signing in…" : "Sign in with ELEPAY"}
-            </button>
-          ) : (
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                setError(null);
-                setBusy(true);
-                try {
-                  await signIn(subject, roles);
-                  setReady(true);
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : String(err));
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              <p className="small muted">Development sign-in (dev and test profiles only).</p>
-              <label>
-                Subject
-                <input
-                  value={subject}
-                  onChange={(e) => setSubject(e.target.value)}
-                  placeholder={roles.includes("ops") ? "ops-admin@elepay.gh" : "merchant-owner@elepay.gh"}
-                  required
-                />
-              </label>
-              <button type="submit" className="large full-width" disabled={busy} style={{ marginTop: "0.5rem" }}>
-                {busy ? "Signing in…" : "Continue"}
-              </button>
-            </form>
-          )}
-        </div>
-      </div>
-    );
+    return <LoginScreen roles={roles} onAuthenticated={() => setReady(true)} />;
   }
   return (
     <Suspense fallback={<main className="narrow"><p className="muted">Loading workspace…</p></main>}>
