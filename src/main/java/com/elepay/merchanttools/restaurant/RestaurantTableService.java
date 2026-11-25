@@ -115,14 +115,15 @@ public class RestaurantTableService {
 
     @Transactional
     public RestaurantTable seatTable(UUID tableId, UUID orderId) {
-        db.sql("""
+        int changed = db.sql("""
             UPDATE restaurant_table
             SET status = 'OCCUPIED', current_order_id = :orderId
-            WHERE id = :id
+            WHERE id = :id AND (current_order_id IS NULL OR current_order_id = :orderId)
             """)
             .param("orderId", orderId)
             .param("id", tableId)
             .update();
+        if (changed != 1) throw com.elepay.common.ApiException.conflict("table_in_use", "Table already has an order");
 
         return getTable(tableId).orElseThrow();
     }
@@ -130,14 +131,17 @@ public class RestaurantTableService {
     @Transactional
     public RestaurantTable vacateTable(UUID tableId, boolean markDirty) {
         String newStatus = markDirty ? "DIRTY" : "AVAILABLE";
-        db.sql("""
-            UPDATE restaurant_table
+        int changed = db.sql("""
+            UPDATE restaurant_table t
             SET status = :status, current_order_id = NULL
-            WHERE id = :id
+            WHERE id = :id AND NOT EXISTS (
+                SELECT 1 FROM restaurant_waiter_order w JOIN pos_order o ON o.id = w.order_id
+                WHERE w.order_id = t.current_order_id AND o.status NOT IN ('PAID', 'VOIDED'))
             """)
             .param("status", newStatus)
             .param("id", tableId)
             .update();
+        if (changed != 1) throw com.elepay.common.ApiException.conflict("table_in_use", "Cannot vacate an unpaid waiter order");
 
         return getTable(tableId).orElseThrow();
     }

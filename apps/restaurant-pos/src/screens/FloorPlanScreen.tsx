@@ -18,18 +18,21 @@ const NEXT_STATUS: Record<DiningTable["status"], DiningTable["status"]> = {
 export function FloorPlanScreen({ client, merchant, onStartTableOrder }: Props) {
   const [plans, setPlans] = useState<FloorPlan[]>([]);
   const [tables, setTables] = useState<DiningTable[]>([]);
+  const [billRequests, setBillRequests] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [p, t] = await Promise.all([
+      const [p, t, bills] = await Promise.all([
         client.call<FloorPlan[]>(`/v1/restaurant/floor-plans/merchant/${merchant.id}`),
         client.call<DiningTable[]>(`/v1/restaurant/tables/merchant/${merchant.id}`),
+        client.call<string[]>(`/v1/restaurant/waiter/${merchant.id}/bill-requests`),
       ]);
       setPlans(p);
       setTables(t);
+      setBillRequests(bills);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -104,12 +107,13 @@ export function FloorPlanScreen({ client, merchant, onStartTableOrder }: Props) 
                         <Text style={styles.tableNum}>Table {t.tableNumber}</Text>
                         <Text style={styles.tableSeats}>{t.capacity} seats</Text>
                       </View>
+                      {t.currentOrderId && billRequests.includes(t.currentOrderId) && <Text style={styles.tableStatus}>BILL REQUESTED</Text>}
                       <Text style={styles.tableStatus}>{t.status === "DIRTY" ? "NEEDS CLEANING" : t.status}</Text>
                       <View style={styles.btnRow}>
                         <Pressable style={styles.orderBtn} onPress={() => onStartTableOrder(t.id)}>
                           <Text style={styles.orderBtnText}>Order</Text>
                         </Pressable>
-                        <Pressable style={styles.cycleBtn} onPress={() => void cycleStatus(t)}>
+                        <Pressable style={styles.cycleBtn} disabled={!!t.currentOrderId} onPress={() => void cycleStatus(t)}>
                           <Text style={styles.cycleBtnText}>Status</Text>
                         </Pressable>
                       </View>

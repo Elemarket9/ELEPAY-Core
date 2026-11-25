@@ -26,6 +26,25 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  mobile:
+    name: Mobile Apps Typecheck, Tests & Waiter Android Bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm exec --workspace elepay-waiter-app -- expo export --platform android --output-dir dist
+
   security-scan:
     name: Security & Vulnerability Scanning
     runs-on: ubuntu-latest

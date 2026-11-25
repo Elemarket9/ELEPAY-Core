@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "ELEPAY Waiter",
+    "slug": "elepay-waiter",
+    "version": "1.0.0",
+    "orientation": "default",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "gh.elepay.waiter"
+    },
+    "android": {
+      "package": "gh.elepay.waiter"
+    }
+  }
+}

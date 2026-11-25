@@ -87,7 +87,7 @@ class Merchants {
 
     record BranchRequest(@NotBlank @Size(max = 100) String name) {}
 
-    record Member(@NotBlank @Pattern(regexp = "owner|admin|finance|cashier") String role, UUID branchId) {}
+    record Member(@NotBlank @Pattern(regexp = "owner|admin|finance|cashier|waiter") String role, UUID branchId) {}
 
     record MemberView(String subject, String role, UUID branchId) {}
 
@@ -299,8 +299,8 @@ class Merchants {
     public MemberView putMember(@PathVariable UUID id, @PathVariable String subject, @Valid @RequestBody Member request) {
         var a = access.require(id, MANAGE);
         if (request.role().equals("owner") && !a.role().equals("owner")) throw ApiException.forbidden("Only an owner can add owners");
-        if (request.role().equals("cashier") == (request.branchId() == null)) {
-            throw ApiException.badRequest("branch_required", "Cashiers need a branch; other roles cannot be branch-scoped");
+        if ((request.role().equals("cashier") || request.role().equals("waiter")) == (request.branchId() == null)) {
+            throw ApiException.badRequest("branch_required", "Cashiers and waiters need a branch; other roles cannot be branch-scoped");
         }
         if (request.branchId() != null && !access.branchBelongs(id, request.branchId())) {
             throw ApiException.badRequest("unknown_branch", "Branch not found");

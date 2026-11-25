@@ -20,14 +20,15 @@ import org.springframework.stereotype.Service;
 public class MerchantAccess {
 
     /** WITHDRAW sends to the merchant's own registered destination; PAYOUT pays other parties. */
-    public enum Permission { VIEW, FINANCE_VIEW, COLLECT, REFUND, WITHDRAW, PAYOUT, MANAGE }
+    public enum Permission { VIEW, FINANCE_VIEW, COLLECT, REFUND, WITHDRAW, PAYOUT, MANAGE, RESTAURANT_ORDER }
 
     private static final Map<String, Set<Permission>> ROLES = Map.of(
             "owner", EnumSet.allOf(Permission.class),
             "admin", EnumSet.allOf(Permission.class),
             "finance", EnumSet.of(Permission.VIEW, Permission.FINANCE_VIEW, Permission.REFUND, Permission.WITHDRAW,
                     Permission.PAYOUT, Permission.COLLECT),
-            "cashier", EnumSet.of(Permission.VIEW, Permission.COLLECT));
+            "cashier", EnumSet.of(Permission.VIEW, Permission.COLLECT),
+            "waiter", EnumSet.of(Permission.RESTAURANT_ORDER));
     private static final Map<Permission, String> SCOPE = Map.of(
             Permission.VIEW, "view", Permission.FINANCE_VIEW, "view", Permission.COLLECT, "collect",
             Permission.REFUND, "refund", Permission.WITHDRAW, "withdraw", Permission.PAYOUT, "payouts");
@@ -36,7 +37,7 @@ public class MerchantAccess {
     // parties (PAYOUT), or back to a payer (REFUND) — requires status == "active". A suspended or closed
     // merchant must not be able to push funds out via batch payouts or refunds.
     private static final Set<Permission> REQUIRE_ACTIVE =
-            EnumSet.of(Permission.COLLECT, Permission.WITHDRAW, Permission.PAYOUT, Permission.REFUND);
+            EnumSet.of(Permission.COLLECT, Permission.WITHDRAW, Permission.PAYOUT, Permission.REFUND, Permission.RESTAURANT_ORDER);
 
     private final JdbcClient db;
 

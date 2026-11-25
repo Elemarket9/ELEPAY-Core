@@ -75,13 +75,16 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
   const [showTenderModal, setShowTenderModal] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [moduleDisabled, setModuleDisabled] = useState(false);
+  const [loadingExisting, setLoadingExisting] = useState(false);
+  const [existingSelection, setExistingSelection] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (preselectedTableId) {
       setOrderType("DINE_IN");
-      setTableId(preselectedTableId);
+      // Existing table orders are selected in the register to load their server balance.
+      setExistingSelection(preselectedTableId);
       onClearPreselectedTable();
     }
   }, [preselectedTableId, onClearPreselectedTable]);
@@ -143,7 +146,9 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
 
   const discountP = discount.trim() ? parseMoney(discount) : 0;
   const taxRate = Number(taxPercent);
-  const { subtotal, effectiveDiscount, tax, total } = computeCartTotals(cart, discountP, taxRate);
+  const calculated = computeCartTotals(cart, discountP, taxRate);
+  const { subtotal, effectiveDiscount, tax } = calculated;
+  const total = order ? Math.max(0, order.totalPesewas - order.paidPesewas) : calculated.total;
 
   const addItem = (row: CatalogRow) => {
     if (order) return;
@@ -168,8 +173,41 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
     setCart((prev) => (qty <= 0 ? prev.filter((x) => x.variantId !== variantId) : prev.map((x) => (x.variantId === variantId ? { ...x, qty } : x))));
   };
 
+  async function openTableOrder(t: DiningTable) {
+    if (order || cart.length || loadingExisting) { setError("Finish or clear your current cart first."); return; }
+    if (!t.currentOrderId) { setTableId(t.id); return; }
+    setLoadingExisting(true);
+    try {
+      if (!selectedTerminal || !cashier || !shift || shift.cashierId !== cashier.id) throw new Error("Authenticate a cashier and open a shift first.");
+      const current = await client.call<PosOrder & {terminalId?:string|null;cashierId?:string|null}>(`/v1/pos/orders/${t.currentOrderId}`);
+      if (current.status !== "PENDING" || current.paidPesewas !== 0) throw new Error("Order is not an unpaid pending order.");
+      const existing = current.terminalId === selectedTerminal.id && current.cashierId === cashier.id
+        ? current
+        : await client.call<PosOrder>(`/v1/restaurant/waiter/${merchant.id}/orders/${t.currentOrderId}/cashier`, {body:{terminalId:selectedTerminal.id,cashierId:cashier.id}});
+      if (existing.status !== "PENDING" || existing.paidPesewas !== 0) throw new Error("Order is not an unpaid pending order.");
+      const items = await client.call<PosOrderItem[]>(`/v1/pos/orders/${existing.id}/items`);
+      setOrder(existing); setTableId(t.id); setOrderType("DINE_IN"); setKdsSent(true);
+      setCart(items.map(it => ({variantId: it.variantId, label: it.itemName, qty: it.quantity, unitPricePesewas: it.unitPricePesewas, seatNumber: it.seatNumber})));
+      setNotice("Existing table order loaded; collect payment without recreating it."); setError(null);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setLoadingExisting(false); }
+  }
+
+  useEffect(() => {
+    if (!existingSelection || !tables.length) return;
+    const selected = tables.find(t => t.id === existingSelection);
+    setExistingSelection(null);
+    if (selected) void openTableOrder(selected);
+    // The selection is consumed once after tables are loaded.
+  }, [existingSelection, tables]);
+
   async function ensureOrder(): Promise<PosOrder> {
+    if (loadingExisting) throw new Error("Wait for table order to load.");
     if (order) return order;
+    if (tableId && orderType === "DINE_IN") {
+      const current = await client.call<DiningTable[]>(`/v1/restaurant/tables/merchant/${merchant.id}`);
+      if (current.find(t=>t.id===tableId)?.currentOrderId) throw new Error("Table has an existing order. Open it instead of creating another.");
+    }
     if (discountP === null) throw new Error("Enter discount like 5.00");
     const payload = buildPosOrderPayload({
       merchantId: merchant.id,
@@ -448,12 +486,12 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
           {tables.map((t) => (
             <Pressable
               key={t.id}
-              disabled={!!order}
+              disabled={!!order || loadingExisting}
               style={[styles.tableChip, tableId === t.id && styles.tableChipActive]}
-              onPress={() => setTableId(tableId === t.id ? "" : t.id)}
+              onPress={() => void openTableOrder(t)}
             >
               <Text style={[styles.tableChipText, tableId === t.id && styles.tableChipTextActive]}>
-                T{t.tableNumber} ({t.capacity})
+                T{t.tableNumber} ({t.capacity}){t.currentOrderId ? " · OPEN ORDER" : ""}
               </Text>
             </Pressable>
           ))}

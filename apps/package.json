@@ -6,14 +6,16 @@
     "shared",
     "restaurant-pos",
     "kitchen-kds",
-    "merchant-app"
+    "merchant-app",
+    "waiter-app"
   ],
   "scripts": {
-    "typecheck": "npm run typecheck -w @elepay/mobile-core && npm run typecheck -w elepay-restaurant-pos && npm run typecheck -w elepay-kitchen-kds && npm run typecheck -w elepay-merchant-app",
+    "typecheck": "npm run typecheck -w @elepay/mobile-core && npm run typecheck -w elepay-restaurant-pos && npm run typecheck -w elepay-kitchen-kds && npm run typecheck -w elepay-merchant-app && npm run typecheck -w elepay-waiter-app",
     "test": "npm test -w @elepay/mobile-core",
     "start:pos": "npm run start -w elepay-restaurant-pos",
     "start:kds": "npm run start -w elepay-kitchen-kds",
-    "start:merchant": "npm run start -w elepay-merchant-app"
+    "start:merchant": "npm run start -w elepay-merchant-app",
+    "start:waiter": "npm run start -w elepay-waiter-app"
   },
   "devDependencies": {
     "@types/react": "~18.3.12",
