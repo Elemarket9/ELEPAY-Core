@@ -204,4 +204,46 @@ class Operations {
                 "terminals", terminals
         );
     }
+
+    /**
+     * MML AML Compliance Questionnaire §6B/§6C: exports all MTN MoMo transactions (successful and failed)
+     * with Transaction ID, Transaction Date/Time, Transaction Amount, Transaction Status,
+     * Credit Customer Name, and Debit Customer Name.
+     */
+    @GetMapping("/compliance/mml-transactions")
+    public List<Map<String, Object>> mmlTransactions(
+            @RequestParam(defaultValue = "30") int days,
+            @RequestParam(defaultValue = "500") int limit) {
+        Actor actor = Actor.current();
+        if (!actor.canFreezeRisk() && !actor.canManageFinance() && !actor.isOpsAdmin()) {
+            throw com.elepay.common.ApiException.forbidden("Risk/Compliance, Finance, or Ops Admin role required");
+        }
+        int safeDays = Math.max(1, Math.min(days, 365));
+        int safeLimit = Math.max(1, Math.min(limit, 5000));
+        return db.sql("""
+                SELECT rt.reference AS transaction_id,
+                       rt.rail_reference AS mtn_financial_id,
+                       rt.created_at AS transaction_date_time,
+                       rt.direction,
+                       rt.amount AS amount_pesewas,
+                       rt.currency,
+                       rt.status AS transaction_status,
+                       CASE
+                           WHEN rt.direction = 'charge' THEN COALESCE(rt.request->>'collector', 'ELEPAY Collection')
+                           ELSE COALESCE(NULLIF(rt.request->>'accountName', ''), rt.msisdn, 'MTN Recipient')
+                       END AS credit_customer_name,
+                       CASE
+                           WHEN rt.direction = 'charge' THEN COALESCE(rt.msisdn, 'MTN Payer')
+                           ELSE COALESCE(rt.request->>'merchant', 'ELEPAY Disbursement')
+                       END AS debit_customer_name,
+                       rt.failure_reason
+                FROM rail_transaction rt
+                WHERE rt.rail = 'mtn'
+                  AND rt.created_at >= now() - make_interval(days => :days)
+                ORDER BY rt.created_at DESC
+                LIMIT :lim""")
+                .param("days", safeDays)
+                .param("lim", safeLimit)
+                .query().listOfRows();
+    }
 }

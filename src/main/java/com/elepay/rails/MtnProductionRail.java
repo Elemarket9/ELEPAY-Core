@@ -594,4 +594,132 @@ public class MtnProductionRail implements PaymentRail {
         // No callback authentication contract has been onboarded. Polling alone determines state.
         throw new InvalidCallbackException("MTN callback authentication not configured; use status polling");
     }
+
+    /** MTN MoMo OpenAPI Account Balance inquiry result (UAT Sheet 5: Balance). */
+    public record AccountBalance(boolean available, long availableBalancePesewas, String currency, String message) {}
+
+    /** MTN MoMo OpenAPI Account Holder active check result (UAT Sheet 4: ValidateAccount). */
+    public record AccountValidation(boolean checked, boolean active, String msisdn, String message) {}
+
+    /**
+     * Queries the live MTN Collection or Disbursement account balance (GET /{product}/v1_0/account/balance).
+     * Required by MTN MoMo OpenAPI UAT Sheet 5 and used for pre-disbursement float monitoring.
+     */
+    public AccountBalance getAccountBalance(String direction) {
+        if (!Set.of("charge", "payout").contains(direction)) {
+            return new AccountBalance(false, 0L, "GHS", "Direction must be 'charge' or 'payout'");
+        }
+        if (!isConfigured(direction)) {
+            return new AccountBalance(false, 0L, "GHS", "MTN credentials not configured for " + direction);
+        }
+        long start = System.currentTimeMillis();
+        try {
+            String product = product(direction);
+            Credentials c = credentials(direction);
+            String token = getOrRefreshToken(product, c, false);
+            String balancePath = "/" + product + "/v1_0/account/balance";
+
+            HttpRequest req = buildRequest(balancePath)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Ocp-Apim-Subscription-Key", c.subscription())
+                    .GET().build();
+            Response response = send(req);
+            if (response.status() == 401) {
+                token = getOrRefreshToken(product, c, true);
+                req = buildRequest(balancePath)
+                        .header("Authorization", "Bearer " + token)
+                        .header("Ocp-Apim-Subscription-Key", c.subscription())
+                        .GET().build();
+                response = send(req);
+            }
+            long latency = System.currentTimeMillis() - start;
+            boolean ok = response.status() == 200 && !isNonJsonWafResponse(response);
+            health.record(name(), ok, false, latency);
+            if (isNonJsonWafResponse(response)) {
+                return new AccountBalance(false, 0L, "GHS", "MTN balance unavailable: upstream returned WAF/HTML response");
+            }
+            if (response.status() != 200) {
+                return new AccountBalance(false, 0L, "GHS", "MTN balance failed: HTTP " + response.status());
+            }
+            JsonNode node = json.readTree(response.body());
+            String rawAmount = node.path("availableBalance").asString("");
+            String currency = node.path("currency").asString("GHS");
+            long pesewas = new BigDecimal(rawAmount).movePointRight(2).longValueExact();
+            return new AccountBalance(true, pesewas, currency, "MTN " + product + " balance retrieved");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new AccountBalance(false, 0L, "GHS", "MTN balance request interrupted");
+        } catch (HttpTimeoutException e) {
+            health.record(name(), false, true, System.currentTimeMillis() - start);
+            return new AccountBalance(false, 0L, "GHS", "MTN balance request timed out");
+        } catch (Exception e) {
+            health.record(name(), false, false, System.currentTimeMillis() - start);
+            return new AccountBalance(false, 0L, "GHS", e instanceof AuthenticationWafException
+                    ? "MTN balance authentication rejected by upstream WAF" : "MTN balance unavailable");
+        }
+    }
+
+    /**
+     * Validates whether an MTN Ghana MSISDN is an active MoMo account holder
+     * (GET /{product}/v1_0/accountholder/msisdn/{msisdn}/active).
+     * Required by MTN MoMo OpenAPI UAT Sheet 4 (ValidateAccount).
+     */
+    public AccountValidation validateAccountHolder(String direction, String rawMsisdn) {
+        if (!Set.of("charge", "payout").contains(direction)) {
+            return new AccountValidation(false, false, rawMsisdn, "Direction must be 'charge' or 'payout'");
+        }
+        String normalized = rawMsisdn == null ? "" : rawMsisdn.replaceAll("\\D", "");
+        if (normalized.startsWith("0") && normalized.length() == 10) {
+            normalized = "233" + normalized.substring(1);
+        }
+        if (!normalized.matches("233\\d{9}")) {
+            return new AccountValidation(false, false, normalized, "Invalid Ghana MSISDN (expected 233XXXXXXXXX)");
+        }
+        if (!isConfigured(direction)) {
+            return new AccountValidation(false, false, normalized, "MTN credentials not configured for " + direction);
+        }
+        long start = System.currentTimeMillis();
+        try {
+            String product = product(direction);
+            Credentials c = credentials(direction);
+            String token = getOrRefreshToken(product, c, false);
+            String activePath = "/" + product + "/v1_0/accountholder/msisdn/" + normalized + "/active";
+
+            HttpRequest req = buildRequest(activePath)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Ocp-Apim-Subscription-Key", c.subscription())
+                    .GET().build();
+            Response response = send(req);
+            if (response.status() == 401) {
+                token = getOrRefreshToken(product, c, true);
+                req = buildRequest(activePath)
+                        .header("Authorization", "Bearer " + token)
+                        .header("Ocp-Apim-Subscription-Key", c.subscription())
+                        .GET().build();
+                response = send(req);
+            }
+            long latency = System.currentTimeMillis() - start;
+            boolean ok = response.status() == 200 && !isNonJsonWafResponse(response);
+            health.record(name(), ok, false, latency);
+            if (isNonJsonWafResponse(response)) {
+                return new AccountValidation(false, false, normalized, "MTN validation unavailable: WAF/HTML response");
+            }
+            if (response.status() != 200) {
+                return new AccountValidation(false, false, normalized, "MTN validation failed: HTTP " + response.status());
+            }
+            JsonNode node = json.readTree(response.body());
+            boolean active = node.path("result").asBoolean(false);
+            return new AccountValidation(true, active, normalized, active ? "Active MTN MoMo account" : "Account not active on MTN MoMo");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new AccountValidation(false, false, normalized, "MTN validation interrupted");
+        } catch (HttpTimeoutException e) {
+            health.record(name(), false, true, System.currentTimeMillis() - start);
+            return new AccountValidation(false, false, normalized, "MTN validation timed out");
+        } catch (Exception e) {
+            health.record(name(), false, false, System.currentTimeMillis() - start);
+            return new AccountValidation(false, false, normalized, e instanceof AuthenticationWafException
+                    ? "MTN validation authentication rejected by upstream WAF" : "MTN validation unavailable");
+        }
+    }
 }

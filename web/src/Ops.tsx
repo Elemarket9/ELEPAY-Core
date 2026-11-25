@@ -1131,7 +1131,180 @@ function CustodianTrust() {
           </dl>
         </section>
       )}
+
+      <MtnCompliancePanel />
     </div>
+  );
+}
+
+interface MtnBalanceResponse {
+  available: boolean;
+  availableBalancePesewas: number;
+  currency: string;
+  message: string;
+}
+
+interface MtnAccountValidationResponse {
+  checked: boolean;
+  active: boolean;
+  msisdn: string;
+  message: string;
+}
+
+interface MmlTransactionRow {
+  transaction_id: string;
+  mtn_financial_id: string | null;
+  transaction_date_time: string;
+  direction: string;
+  amount_pesewas: number;
+  currency: string;
+  transaction_status: string;
+  credit_customer_name: string;
+  debit_customer_name: string;
+  failure_reason: string | null;
+}
+
+function csvSafeCell(v: unknown): string {
+  const raw = v === null || v === undefined ? "" : String(v);
+  const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+function MtnCompliancePanel() {
+  const [balMsg, setBalMsg] = useState<string | null>(null);
+  const [msisdn, setMsisdn] = useState("");
+  const [valResult, setValResult] = useState<MtnAccountValidationResponse | null>(null);
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function checkBalance(direction: "charge" | "payout") {
+    setBusy(true);
+    setBalMsg(null);
+    try {
+      const res = await api<MtnBalanceResponse>(`/v1/ops/mtn/balance?direction=${direction}`);
+      setBalMsg(
+        res.available
+          ? `MTN ${direction === "charge" ? "Collection" : "Disbursement"} Float: ${formatMoney(res.availableBalancePesewas, res.currency)}`
+          : res.message,
+      );
+    } catch (e) {
+      setBalMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function validateMsisdn(e: React.FormEvent) {
+    e.preventDefault();
+    if (!msisdn.trim()) return;
+    setBusy(true);
+    setValResult(null);
+    try {
+      const res = await api<MtnAccountValidationResponse>(
+        `/v1/ops/mtn/validate-account?direction=payout&msisdn=${encodeURIComponent(msisdn.trim())}`,
+      );
+      setValResult(res);
+    } catch (err) {
+      setValResult({
+        checked: false,
+        active: false,
+        msisdn: msisdn.trim(),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function downloadMmlCsv() {
+    setBusy(true);
+    setExportMsg(null);
+    try {
+      const rows = await api<MmlTransactionRow[]>("/v1/ops/compliance/mml-transactions?days=30&limit=5000");
+      const header = [
+        "Transaction ID",
+        "MTN Financial ID",
+        "Transaction Date/Time",
+        "Direction",
+        "Transaction Amount (GHS)",
+        "Transaction Status",
+        "Credit Customer Name",
+        "Debit Customer Name",
+        "Failure Reason",
+      ];
+      const csvLines = [
+        header.map(csvSafeCell).join(","),
+        ...rows.map((r) =>
+          [
+            r.transaction_id,
+            r.mtn_financial_id ?? "",
+            r.transaction_date_time,
+            r.direction,
+            (Number(r.amount_pesewas) / 100).toFixed(2),
+            r.transaction_status,
+            r.credit_customer_name,
+            r.debit_customer_name,
+            r.failure_reason ?? "",
+          ]
+            .map(csvSafeCell)
+            .join(","),
+        ),
+      ];
+      const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `elepay_mml_aml_transactions_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setExportMsg(`Exported ${rows.length} MTN transactions in MML AML §6C format.`);
+    } catch (err) {
+      setExportMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: "1rem" }}>
+      <h3>MTN Ghana Rail &amp; MML AML Compliance Tools</h3>
+      <p className="small muted">
+        Live MTN MoMo OpenAPI float checks, subscriber account validation (UAT Sheets 4–5), and MML AML §6C transaction extract.
+      </p>
+      <div className="flex-row" style={{ marginBottom: "0.75rem" }}>
+        <button type="button" className="secondary small" disabled={busy} onClick={() => void checkBalance("charge")}>
+          Check MTN Collection Float
+        </button>
+        <button type="button" className="secondary small" disabled={busy} onClick={() => void checkBalance("payout")}>
+          Check MTN Disbursement Float
+        </button>
+        <button type="button" className="small" disabled={busy} onClick={() => void downloadMmlCsv()}>
+          Export MML AML Transactions (CSV)
+        </button>
+      </div>
+      {balMsg && <p className="notice" style={{ marginTop: 0 }}>{balMsg}</p>}
+      {exportMsg && <p className="notice ok" style={{ marginTop: 0 }}>{exportMsg}</p>}
+
+      <form onSubmit={(e) => void validateMsisdn(e)} className="flex-row" style={{ marginTop: "0.75rem" }}>
+        <input
+          className="mono"
+          value={msisdn}
+          onChange={(e) => setMsisdn(e.target.value)}
+          placeholder="Validate MTN MSISDN (e.g. 0241234567)"
+          style={{ maxWidth: "280px", margin: 0 }}
+        />
+        <button type="submit" className="secondary small" style={{ margin: 0 }} disabled={busy}>
+          Validate Account
+        </button>
+      </form>
+      {valResult && (
+        <p className={`notice ${valResult.checked && valResult.active ? "ok" : "warn"}`} style={{ marginTop: "0.65rem" }}>
+          <strong className="mono">{valResult.msisdn}</strong> — {valResult.message}
+        </p>
+      )}
+    </section>
   );
 }
 
