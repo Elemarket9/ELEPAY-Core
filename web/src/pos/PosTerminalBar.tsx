@@ -42,6 +42,11 @@ export function PosTerminalBar({
   const [closingCash, setClosingCash] = useState("0.00");
   const [shiftNotes, setShiftNotes] = useState("");
   const [knownCashiers, setKnownCashiers] = useState<PosCashier[]>([]);
+  const [registeredPairing, setRegisteredPairing] = useState<{
+    serialNumber: string;
+    pairingCode: string;
+    expiresAt: string | null;
+  } | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -76,8 +81,9 @@ export function PosTerminalBar({
         onModuleDisabled();
         return;
       }
-      if (e instanceof ApiError && e.status === 404) {
-        setShift(null);
+      setShift(null);
+      if (!(e instanceof ApiError && e.status === 404)) {
+        setError(e instanceof ApiError ? e.message : String(e));
       }
     }
   }, [onModuleDisabled]);
@@ -94,6 +100,7 @@ export function PosTerminalBar({
     e.preventDefault();
     setError(null);
     setStatusMsg(null);
+    setRegisteredPairing(null);
     setBusy(true);
     try {
       const created = await api<PosTerminal>("/v1/pos/terminals/register", {
@@ -119,7 +126,16 @@ export function PosTerminalBar({
       setSerialNumber("");
       setDeviceName("");
       setPanel("none");
-      setStatusMsg(`Terminal ${created.serialNumber} registered.`);
+      if (created.pairingCode) {
+        setRegisteredPairing({
+          serialNumber: created.serialNumber,
+          pairingCode: created.pairingCode,
+          expiresAt: created.pairingCodeExpiresAt ?? null,
+        });
+        setStatusMsg(`Terminal ${created.serialNumber} registered. Save the one-time pairing code below.`);
+      } else {
+        setStatusMsg(`Terminal ${created.serialNumber} registered.`);
+      }
       await loadTerminals();
       onSelectTerminal(created);
     } catch (err) {
@@ -332,6 +348,39 @@ export function PosTerminalBar({
 
       {error && <p className="notice error" style={{ marginTop: "0.65rem", marginBottom: 0 }}>{error}</p>}
       {statusMsg && <p className="notice ok" style={{ marginTop: "0.65rem", marginBottom: 0 }}>{statusMsg}</p>}
+      {registeredPairing && (
+        <div className="notice warn" style={{ marginTop: "0.65rem", marginBottom: 0 }}>
+          <div className="flex-between" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
+            <div>
+              <strong>One-time Pairing Code for {registeredPairing.serialNumber}:</strong>{" "}
+              <span className="mono" style={{ fontSize: "1.05rem", fontWeight: 700, letterSpacing: "0.08em" }}>
+                {registeredPairing.pairingCode}
+              </span>
+              {registeredPairing.expiresAt && (
+                <span className="small muted" style={{ marginLeft: "0.5rem" }}>
+                  (expires {new Date(registeredPairing.expiresAt).toLocaleTimeString()})
+                </span>
+              )}
+            </div>
+            <div className="flex-row" style={{ gap: "0.35rem" }}>
+              <button
+                type="button"
+                className="small"
+                onClick={() => {
+                  setSerialNumber(registeredPairing.serialNumber);
+                  setPairingCode(registeredPairing.pairingCode);
+                  setPanel("pair-terminal");
+                }}
+              >
+                Pair Now
+              </button>
+              <button type="button" className="secondary small" onClick={() => setRegisteredPairing(null)}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {panel === "register-terminal" && (
         <form onSubmit={registerTerminal} className="pos-drawer">

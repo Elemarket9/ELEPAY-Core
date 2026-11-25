@@ -7,7 +7,7 @@ import { api, ApiError, type CallOptions } from "../api";
  */
 export interface DeviceCredential {
   apiKey: string; signingSecret: string; deviceId: string; merchantId: string; merchantName: string;
-  stationId: string | null; stationName: string | null;
+  stationId: string | null; stationName: string | null; hasPrinter?: boolean;
 }
 
 const DEVICE_KEY = "elepay.kds.device";

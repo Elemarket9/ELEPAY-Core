@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
 import { colors, ElepayClient, MerchantView, radius, spacing } from "@elepay/mobile-core";
@@ -20,6 +21,7 @@ export default function App() {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_URL);
   const [token, setToken] = useState<string | null>(null);
   const [merchants, setMerchants] = useState<MerchantView[]>([]);
+  const [loadingMerchants, setLoadingMerchants] = useState(false);
   const [merchantId, setMerchantId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("home");
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +32,7 @@ export default function App() {
         if (savedUrl) setBaseUrl(savedUrl);
         if (savedToken) setToken(savedToken);
       })
+      .catch(() => {})
       .finally(() => setBooted(true));
   }, []);
 
@@ -39,97 +42,122 @@ export default function App() {
     if (!token) {
       setMerchants([]);
       setMerchantId(null);
+      setLoadingMerchants(false);
       return;
     }
+    let cancelled = false;
+    setLoadingMerchants(true);
     client
       .call<MerchantView[]>("/v1/merchants")
       .then((list) => {
+        if (cancelled) return;
         setMerchants(list);
         setMerchantId((prev) => (prev && list.some((m) => m.id === prev) ? prev : (list[0]?.id ?? null)));
         setError(null);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingMerchants(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [client, token]);
 
   async function handleSignedIn(url: string, newToken: string) {
     setBaseUrl(url);
     setToken(newToken);
-    await SecureStore.setItemAsync(KEY_URL, url);
-    await SecureStore.setItemAsync(KEY_TOKEN, newToken);
+    await SecureStore.setItemAsync(KEY_URL, url).catch(() => {});
+    await SecureStore.setItemAsync(KEY_TOKEN, newToken).catch(() => {});
   }
 
   async function handleSignOut() {
     setToken(null);
-    await SecureStore.deleteItemAsync(KEY_TOKEN);
+    await SecureStore.deleteItemAsync(KEY_TOKEN).catch(() => {});
   }
 
   if (!booted) return null;
 
   if (!token) {
     return (
-      <SafeAreaView style={styles.root}>
-        <StatusBar style="dark" />
-        <SignInScreen initialBaseUrl={baseUrl} onSignedIn={(u, t) => void handleSignedIn(u, t)} />
-      </SafeAreaView>
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.root}>
+          <StatusBar style="dark" />
+          <SignInScreen initialBaseUrl={baseUrl} onSignedIn={(u, t) => void handleSignedIn(u, t)} />
+        </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
   const merchant = merchants.find((m) => m.id === merchantId) ?? null;
 
   return (
-    <SafeAreaView style={styles.root}>
-      <StatusBar style="light" />
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerBrand}>ELEPAY MERCHANT</Text>
-          <Text style={styles.headerName} numberOfLines={1}>
-            {merchant ? merchant.tradingName : "Loading merchant…"}
-          </Text>
-        </View>
-        {merchants.length > 1 && merchant && (
-          <Pressable
-            style={styles.switchBtn}
-            onPress={() => {
-              const idx = merchants.findIndex((m) => m.id === merchant.id);
-              setMerchantId(merchants[(idx + 1) % merchants.length].id);
-            }}
-          >
-            <Text style={styles.switchBtnText}>Switch</Text>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.root}>
+        <StatusBar style="light" />
+        <View style={styles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerBrand}>ELEPAY MERCHANT</Text>
+            <Text style={styles.headerName} numberOfLines={1}>
+              {merchant ? merchant.tradingName : loadingMerchants ? "Loading merchant…" : "No merchant assigned"}
+            </Text>
+          </View>
+          {merchants.length > 1 && merchant && (
+            <Pressable
+              style={styles.switchBtn}
+              onPress={() => {
+                const idx = merchants.findIndex((m) => m.id === merchant.id);
+                setMerchantId(merchants[(idx + 1) % merchants.length].id);
+              }}
+            >
+              <Text style={styles.switchBtnText}>Switch</Text>
+            </Pressable>
+          )}
+          <Pressable style={styles.signOutBtn} onPress={() => void handleSignOut()}>
+            <Text style={styles.signOutText}>Sign out</Text>
           </Pressable>
+        </View>
+
+        {error && (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
         )}
-        <Pressable style={styles.signOutBtn} onPress={() => void handleSignOut()}>
-          <Text style={styles.signOutText}>Sign out</Text>
-        </Pressable>
-      </View>
 
-      {error && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorText}>{error}</Text>
+        <View style={{ flex: 1, backgroundColor: colors.bg }}>
+          {!loadingMerchants && !merchant && !error && (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>No Merchant Accounts Found</Text>
+              <Text style={styles.emptySub}>
+                This account does not have any merchant memberships assigned yet. Ask an administrator to invite you or sign in with another account.
+              </Text>
+            </View>
+          )}
+          {merchant && tab === "home" && <HomeScreen key={merchant.id} client={client} merchant={merchant} onNavigate={setTab} />}
+          {merchant && tab === "sales" && <SalesScreen key={merchant.id} client={client} merchant={merchant} />}
+          {merchant && tab === "collect" && <CollectScreen key={merchant.id} client={client} merchant={merchant} />}
+          {merchant && tab === "withdraw" && <WithdrawScreen key={merchant.id} client={client} merchant={merchant} />}
         </View>
-      )}
 
-      <View style={{ flex: 1 }}>
-        {merchant && tab === "home" && <HomeScreen client={client} merchant={merchant} onNavigate={setTab} />}
-        {merchant && tab === "sales" && <SalesScreen client={client} merchant={merchant} />}
-        {merchant && tab === "collect" && <CollectScreen client={client} merchant={merchant} />}
-        {merchant && tab === "withdraw" && <WithdrawScreen client={client} merchant={merchant} />}
-      </View>
-
-      <View style={styles.tabBar}>
-        {(
-          [
-            ["home", "Home"],
-            ["sales", "Sales"],
-            ["collect", "Collect"],
-            ["withdraw", "Withdraw"],
-          ] as const
-        ).map(([key, label]) => (
-          <Pressable key={key} style={[styles.tabItem, tab === key && styles.tabItemActive]} onPress={() => setTab(key)}>
-            <Text style={[styles.tabLabel, tab === key && styles.tabLabelActive]}>{label}</Text>
-          </Pressable>
-        ))}
-      </View>
-    </SafeAreaView>
+        <View style={styles.tabBar}>
+          {(
+            [
+              ["home", "Home"],
+              ["sales", "Sales"],
+              ["collect", "Collect"],
+              ["withdraw", "Withdraw"],
+            ] as const
+          ).map(([key, label]) => (
+            <Pressable key={key} style={[styles.tabItem, tab === key && styles.tabItemActive]} onPress={() => setTab(key)}>
+              <Text style={[styles.tabLabel, tab === key && styles.tabLabelActive]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
@@ -162,6 +190,18 @@ const styles = StyleSheet.create({
   signOutText: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: "600" },
   errorBanner: { backgroundColor: colors.dangerBg, padding: 10 },
   errorText: { color: colors.danger, fontSize: 13, fontWeight: "600" },
+  emptyState: {
+    margin: spacing.lg,
+    padding: spacing.lg,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: "center",
+    gap: 8,
+  },
+  emptyTitle: { fontSize: 16, fontWeight: "800", color: colors.ink },
+  emptySub: { fontSize: 13, color: colors.muted, textAlign: "center", lineHeight: 19 },
   tabBar: {
     flexDirection: "row",
     backgroundColor: colors.surface,

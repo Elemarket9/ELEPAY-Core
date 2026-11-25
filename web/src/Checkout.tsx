@@ -25,6 +25,7 @@ interface PublicCheckout {
 interface PaymentStatus {
   reference: string; status: string; method: string | null; fee: number; total: number;
   railStatus: string | null; redirectUrl: string | null; message: string | null;
+  qrPayload?: string | null;
 }
 
 const NETWORKS = [["mtn", "MTN MoMo"], ["telecel", "Telecel Cash"], ["airteltigo", "AT Money"]] as const;
@@ -105,11 +106,17 @@ export function Checkout({ reference }: { reference: string }) {
   const [network, setNetwork] = useState("mtn");
   const [showQr, setShowQr] = useState(false);
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
+  const [railQrPayload, setRailQrPayload] = useState<string | null>(null);
+  const [railQrImage, setRailQrImage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const keyName = `elepay.pay.${reference}`;
 
-  const refresh = useCallback(async () => {
+  const clearIdempotencyKey = useCallback(() => {
+    try { localStorage.removeItem(keyName); } catch { /* ignore */ }
+  }, [keyName]);
+
+  const refresh = useCallback(async (preserveError = false) => {
     try {
       const [c, s] = await Promise.all([
         api<PublicCheckout>(`/v1/public/checkouts/${reference}`, { anonymous: true }),
@@ -118,11 +125,17 @@ export function Checkout({ reference }: { reference: string }) {
       setCheckout(c);
       setMethod((prev) => resolveInitialMethod(c.methods, prev));
       setStatus(s);
-      setError(null);
+      if (s.qrPayload) setRailQrPayload(s.qrPayload);
+      if (s.status === "paid" || s.railStatus === "failed") {
+        clearIdempotencyKey();
+      }
+      if (!preserveError) setError(null);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No connection. Your payment reference is " + reference + ".");
+      if (!preserveError) {
+        setError(e instanceof ApiError ? e.message : "No connection. Your payment reference is " + reference + ".");
+      }
     }
-  }, [reference]);
+  }, [reference, clearIdempotencyKey]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -132,7 +145,7 @@ export function Checkout({ reference }: { reference: string }) {
     return () => clearInterval(timer);
   }, [status?.status, refresh]);
 
-  // Static payment-link QR generator
+  // Browser URL QR for opening checkout on another device
   useEffect(() => {
     if (showQr) {
       const payLink = window.location.href;
@@ -142,7 +155,23 @@ export function Checkout({ reference }: { reference: string }) {
     }
   }, [showQr]);
 
+  // Dynamic rail GhQR payload image during processing
+  const activeQrPayload = status?.qrPayload ?? railQrPayload;
+  useEffect(() => {
+    if (status?.status === "processing" && activeQrPayload) {
+      QRCode.toDataURL(activeQrPayload, { margin: 1, width: 220 })
+        .then(setRailQrImage)
+        .catch(() => setRailQrImage(null));
+    } else {
+      setRailQrImage(null);
+    }
+  }, [status?.status, activeQrPayload]);
+
   const selected = checkout?.methods.find((m) => m.method === method);
+  const isSettledOrProcessing = status?.status === "paid" || status?.status === "processing";
+  const displayMethod = isSettledOrProcessing && status?.method ? status.method : method;
+  const displayFee = isSettledOrProcessing ? status.fee : (selected?.fee ?? 0);
+  const displayTotal = isSettledOrProcessing ? status.total : (selected?.total ?? checkout?.subtotal ?? 0);
 
   async function pay() {
     setBusy(true);
@@ -154,8 +183,13 @@ export function Checkout({ reference }: { reference: string }) {
         if (!(await getToken())) {
           if (oidcEnabled) {
             await signIn();
+            return;
           } else {
-            await signIn(prompt("Sign in (development subject)") ?? undefined);
+            const subject = prompt("Sign in (development subject)");
+            if (!subject || !subject.trim()) {
+              return;
+            }
+            await signIn(subject.trim());
           }
         }
         await api(`/v1/checkouts/${reference}/pay/wallet`, { method: "POST", idempotencyKey: key });
@@ -166,16 +200,19 @@ export function Checkout({ reference }: { reference: string }) {
           method: "POST", anonymous: true, idempotencyKey: key,
           body: method === "momo" ? { method, phone: msisdn, network } : { method },
         });
+        if (result.qrPayload) setRailQrPayload(result.qrPayload);
         const safeUrl = safeRedirectUrl(result.redirectUrl);
         if (safeUrl) window.location.assign(safeUrl);
       }
       await refresh();
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && e.code === "idempotency_conflict") {
-        localStorage.removeItem(keyName);
+        clearIdempotencyKey();
       }
       setError(e instanceof Error ? e.message : String(e));
-      await refresh();
+      if (!(e instanceof ApiError && e.code === "invalid_phone")) {
+        await refresh(true);
+      }
     } finally {
       setBusy(false);
     }
@@ -183,7 +220,7 @@ export function Checkout({ reference }: { reference: string }) {
 
   function downloadSplitReceipt() {
     if (!checkout) return;
-    const content = formatSplitReceipt(checkout, selected?.fee ?? 0, selected?.total ?? checkout.subtotal);
+    const content = formatSplitReceipt(checkout, displayFee, displayTotal);
     const blob = new Blob([content], { type: "text/plain;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -225,7 +262,6 @@ export function Checkout({ reference }: { reference: string }) {
   }
 
   const safeStatusRedirect = safeRedirectUrl(status?.redirectUrl);
-  const displayTotal = selected?.total ?? checkout.subtotal;
 
   return (
     <div className="checkout-shell">
@@ -272,8 +308,8 @@ export function Checkout({ reference }: { reference: string }) {
                     </tr>
                   ))}
                   <tr>
-                    <td className="small muted">Processing fee ({checkoutMethodLabel(method)})</td>
-                    <td className="num small mono muted">{formatMoney(selected?.fee ?? 0)}</td>
+                    <td className="small muted">Processing fee ({checkoutMethodLabel(displayMethod)})</td>
+                    <td className="num small mono muted">{formatMoney(displayFee)}</td>
                   </tr>
                   <tr className="total">
                     <td>Total</td>
@@ -304,6 +340,14 @@ export function Checkout({ reference }: { reference: string }) {
                 </div>
                 <h2 style={{ margin: "0 0 0.3rem", fontSize: "1.1rem", color: "inherit" }}>Waiting for confirmation…</h2>
                 {status.message && <p className="small" style={{ marginBottom: "0.65rem" }}>{status.message}</p>}
+                {railQrImage && (
+                  <div className="qr-frame" style={{ margin: "0.75rem auto" }}>
+                    <img src={railQrImage} alt="GhQR payment code" width={210} height={210} />
+                    <p className="small muted" style={{ margin: "0.35rem 0 0" }}>
+                      Scan with any GhQR banking or MoMo app to approve.
+                    </p>
+                  </div>
+                )}
                 {safeStatusRedirect && (
                   <p style={{ marginBottom: "0.75rem" }}>
                     <a href={safeStatusRedirect} className="tag info" style={{ padding: "0.45rem 0.9rem", fontSize: "0.82rem", textTransform: "none" }}>
@@ -329,20 +373,20 @@ export function Checkout({ reference }: { reference: string }) {
                     Payment method
                   </span>
                   <button type="button" className="small secondary" style={{ margin: 0 }} onClick={() => setShowQr(!showQr)}>
-                    {showQr ? <><IconSmartphone size={14} /> Pay on this device</> : <><IconQrCode size={14} /> Scan QR to pay</>}
+                    {showQr ? <><IconSmartphone size={14} /> Pay on this device</> : <><IconQrCode size={14} /> Open on another device</>}
                   </button>
                 </div>
 
                 {showQr ? (
                   <div className="qr-frame">
-                    <h3 style={{ marginBottom: "0.2rem" }}>Scan with ELEPAY / GhQR</h3>
+                    <h3 style={{ marginBottom: "0.2rem" }}>Open on another device</h3>
                     {qrCodeUrl ? (
-                      <img src={qrCodeUrl} alt="Payment QR Code" width={210} height={210} />
+                      <img src={qrCodeUrl} alt="Checkout link QR Code" width={210} height={210} />
                     ) : (
                       <p className="small muted">Generating QR…</p>
                     )}
                     <p className="small muted" style={{ margin: 0 }}>
-                      Scan using ELEPAY Wallet, MTN MoMo App, or any GhQR banking app.
+                      Scan with your phone&apos;s camera to open this checkout link in another browser.
                     </p>
                   </div>
                 ) : (
@@ -357,7 +401,10 @@ export function Checkout({ reference }: { reference: string }) {
                                 type="radio"
                                 name="method"
                                 checked={isSelected}
-                                onChange={() => setMethod(m.method)}
+                                onChange={() => {
+                                  clearIdempotencyKey();
+                                  setMethod(m.method);
+                                }}
                               />
                               <span className="method-card-icon">{methodIcon(m.method)}</span>
                               <div>
@@ -383,7 +430,10 @@ export function Checkout({ reference }: { reference: string }) {
                                 key={v}
                                 type="button"
                                 className={`network-pill ${network === v ? "active" : ""}`}
-                                onClick={() => setNetwork(v)}
+                                onClick={() => {
+                                  clearIdempotencyKey();
+                                  setNetwork(v);
+                                }}
                               >
                                 {n}
                               </button>
@@ -396,7 +446,10 @@ export function Checkout({ reference }: { reference: string }) {
                             inputMode="tel"
                             autoComplete="tel"
                             value={phone}
-                            onChange={(e) => setPhone(e.target.value)}
+                            onChange={(e) => {
+                              clearIdempotencyKey();
+                              setPhone(e.target.value);
+                            }}
                             placeholder="024 123 4567"
                             required
                           />

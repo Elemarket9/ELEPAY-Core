@@ -15,6 +15,7 @@ import {
   parseHeldCartPayload,
   PosCartLine,
   PosOrder,
+  PosOrderItem,
   PosReceipt,
   PosTerminal,
   SeatSplitResult,
@@ -208,7 +209,7 @@ const TAX_KEY = (merchantId: string) => `elepay.pos.taxPercent.${merchantId}`;
 
 export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [catalog, reloadCatalog, loadError] = useLoad<CatalogRow[]>(`/v1/inventory/catalog/merchant/${merchant.id}`, []);
-  const [tables] = useLoad<PosDiningTable[]>(`/v1/restaurant/tables/merchant/${merchant.id}`, []);
+  const [tables, reloadTables] = useLoad<PosDiningTable[]>(`/v1/restaurant/tables/merchant/${merchant.id}`, []);
   const [moduleDisabled, setModuleDisabled] = useState(false);
 
   const [terminal, setTerminal] = useState<PosTerminal | null>(null);
@@ -291,7 +292,6 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         terminalId: terminal?.id ?? null,
         cashierId: cashier?.id ?? null,
         orderType,
-        tableId: tableId || null,
         lines: cart,
         discountPesewas: effectiveDiscount,
         taxPesewas: tax,
@@ -301,6 +301,14 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         idempotencyKey: orderKey,
       });
       setOrder(created);
+      if (orderType === "DINE_IN" && tableId) {
+        try {
+          await api(`/v1/restaurant/tables/${tableId}/seat?orderId=${encodeURIComponent(created.id)}`, { method: "POST" });
+          void reloadTables();
+        } catch (seatErr) {
+          setError(`Order created, but could not seat table: ${message(seatErr)}`);
+        }
+      }
       return created;
     } catch (e) {
       if (isFeatureNotEnabled(e)) setModuleDisabled(true);
@@ -310,30 +318,57 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
 
   async function sendToKitchen(targetOrder: PosOrder) {
     if (kdsTicket || orderType === "RETAIL") return;
+    setError(null);
     try {
+      const orderItems = await api<PosOrderItem[]>(`/v1/pos/orders/${targetOrder.id}/items`);
       const selectedTable = tables.find((t) => t.id === tableId);
+      const diningMode = orderType === "TAKEAWAY" ? "TAKEOUT" : orderType;
       const created = await api<KdsTicketSummary>("/v1/restaurant/kds/tickets", {
         body: {
           merchantId: merchant.id,
           orderId: targetOrder.id,
-          orderNumber: targetOrder.orderNumber,
-          tableNumber: selectedTable?.tableNumber ?? null,
+          tableId: orderType === "DINE_IN" && tableId ? tableId : null,
+          diningMode,
           serverName: cashier?.name ?? cashier?.badgeNumber ?? null,
           course: "MAIN",
-          items: cart.map((c) => ({
-            orderItemId: c.variantId,
-            itemName: c.label,
-            quantity: c.qty,
-            modifiersJson: "[]",
-            notes: c.seatNumber ? `Seat ${c.seatNumber}` : null,
+          items: orderItems.map((it) => ({
+            orderItemId: it.id,
+            itemName: it.itemName,
+            quantity: Number(it.quantity),
+            modifiers: it.modifiersJson && it.modifiersJson !== "[]" ? it.modifiersJson : null,
+            course: it.course ?? "MAIN",
           })),
-          notes: orderType,
-          stationId: null,
+          notes: selectedTable ? `Table ${selectedTable.tableNumber}` : null,
+          clientRef: `pos:${targetOrder.id}`,
         },
       });
       setKdsTicket(created);
-    } catch {
-      // KDS routing is non-blocking if restaurant stations are not yet configured
+    } catch (e) {
+      if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
+      setError(`Could not send to kitchen: ${message(e)}`);
+    }
+  }
+
+  async function voidCurrentOrder() {
+    if (!order || order.status === "PAID") return;
+    setError(null);
+    setBusy(true);
+    try {
+      await api<PosOrder>(`/v1/pos/orders/${order.id}/void`, { method: "POST" });
+      setOrder(null);
+      setCart([]);
+      setDiscount("");
+      setOrderKey(newKey());
+      setEvenSplit(null);
+      setSeatSplit(null);
+      setKdsTicket(null);
+      setTableId("");
+      void reloadTables();
+    } catch (e) {
+      if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
+      setError(`Could not void order: ${message(e)}`);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -685,6 +720,36 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           </div>
 
           {error && <p className="notice error" role="alert">{error}</p>}
+
+          {order && order.status !== "PAID" && (
+            <div className="flex-between" style={{ marginBottom: "0.65rem", gap: "0.5rem" }}>
+              <span className="small muted">
+                Order <strong className="mono">{order.orderNumber}</strong> ({order.status})
+              </span>
+              <div className="flex-row" style={{ gap: "0.4rem" }}>
+                {orderType !== "RETAIL" && !kdsTicket && (
+                  <button
+                    type="button"
+                    className="secondary small"
+                    style={{ margin: 0 }}
+                    disabled={busy}
+                    onClick={() => void sendToKitchen(order)}
+                  >
+                    <IconChefHat size={14} /> Send to Kitchen
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="secondary small"
+                  style={{ margin: 0 }}
+                  disabled={busy}
+                  onClick={() => void voidCurrentOrder()}
+                >
+                  Void / New Order
+                </button>
+              </div>
+            </div>
+          )}
 
           {cart.length > 0 && !order && (
             <div className="flex-row" style={{ marginBottom: "0.65rem" }}>
@@ -1264,7 +1329,7 @@ export function BusinessAccounting({ merchantId }: { merchantId: string }) {
   const [tb, , tbError] = useLoad<TrialBalance | null>(`/v1/accounting/merchant/${merchantId}/trial-balance?asOf=${to}`, null);
 
   const inPeriod = lines.filter((l) => l.paidAt && l.paidAt.slice(0, 10) >= from && l.paidAt.slice(0, 10) <= to);
-  const sales = inPeriod.filter((l) => l.kind === "sale").reduce((t, l) => t + l.amount, 0);
+  const sales = inPeriod.filter((l) => l.kind === "sale" || l.kind === "delivery").reduce((t, l) => t + l.amount, 0);
   const refunds = inPeriod.reduce((t, l) => t + l.refunded, 0);
   const fees = inPeriod.reduce((t, l) => t + l.fee, 0);
   const error = balError ?? txError ?? plError ?? bsError ?? tbError;

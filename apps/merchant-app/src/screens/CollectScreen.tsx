@@ -36,8 +36,8 @@ export function CollectScreen({ client, merchant }: Props) {
 
   useEffect(() => {
     client
-      .call<{ payload: string }>(`/v1/merchants/${merchant.id}/qr`)
-      .then((r) => setShopQrPayload(r.payload))
+      .call<{ payload?: string; qrPayload?: string }>(`/v1/merchants/${merchant.id}/qr`)
+      .then((r) => setShopQrPayload(r.qrPayload ?? r.payload ?? null))
       .catch(() => setShopQrPayload(null));
   }, [client, merchant.id]);
 

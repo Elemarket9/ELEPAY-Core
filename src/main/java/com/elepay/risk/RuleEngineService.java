@@ -1,10 +1,11 @@
 package com.elepay.risk;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -22,10 +23,16 @@ public class RuleEngineService {
     public static final String ENGINE_VERSION = "2.4.0";
 
     private final JdbcClient db;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
 
     public RuleEngineService(JdbcClient db) {
+        this(db, new ObjectMapper());
+    }
+
+    @Autowired
+    public RuleEngineService(JdbcClient db, @Autowired(required = false) ObjectMapper objectMapper) {
         this.db = db;
+        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
     }
 
     public record RiskContext(
@@ -220,7 +227,7 @@ public class RuleEngineService {
         try {
             jsonHits = objectMapper.writeValueAsString(hits);
             jsonTrace = objectMapper.writeValueAsString(treeTrace);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             jsonHits = "[]";
             jsonTrace = "[]";
         }

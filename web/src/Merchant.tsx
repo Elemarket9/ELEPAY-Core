@@ -86,14 +86,17 @@ const NAV_GROUPS: { label: string; items: { tab: MerchantTab; icon: ReactNode }[
 /** Merchant BackOffice & Business Management Dashboard */
 export function MerchantDashboard() {
   const [merchants, setMerchants] = useState<MerchantView[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [current, setCurrent] = useState<string | null>(null);
   const [tab, setTab] = useState<MerchantTab>("Overview");
   const [copiedCode, setCopiedCode] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api<MerchantView[]>("/v1/merchants").then((m) => { setMerchants(m); setCurrent(m[0]?.id ?? null); })
-      .catch((e) => setError(String(e.message ?? e)));
+    api<MerchantView[]>("/v1/merchants")
+      .then((m) => { setMerchants(m); setCurrent(m[0]?.id ?? null); })
+      .catch((e) => setError(String(e.message ?? e)))
+      .finally(() => setLoaded(true));
   }, []);
 
   const merchant = merchants.find((m) => m.id === current);
@@ -108,9 +111,17 @@ export function MerchantDashboard() {
   return (
     <main className="workspace-main">
       {error && <p className="notice error" role="alert">{error}</p>}
-      {!merchant && !error && (
+      {!loaded && !error && (
         <div className="panel" style={{ maxWidth: "480px", margin: "2rem auto", textAlign: "center" }}>
           <p className="muted" style={{ margin: 0 }}>Loading merchant workspace…</p>
+        </div>
+      )}
+      {loaded && !merchant && !error && (
+        <div className="panel" style={{ maxWidth: "480px", margin: "2rem auto", textAlign: "center" }}>
+          <h3 style={{ marginTop: 0 }}>No merchant workspace</h3>
+          <p className="muted" style={{ marginBottom: 0 }}>
+            No merchant accounts are linked to your profile yet. Ask your business owner to add you, or complete merchant onboarding.
+          </p>
         </div>
       )}
       {merchant && (
@@ -214,15 +225,27 @@ function OrdersAndReceipts({ merchantId }: { merchantId: string }) {
   const [searchRef, setSearchRef] = useState("");
   const [selectedReceipt, setSelectedReceipt] = useState<Line | null>(null);
   const [orders, setOrders] = useState<Line[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
+    setLoadError(null);
     api<Line[]>(`/v1/merchants/${merchantId}/transactions`)
-      .then(setOrders)
-      .catch(() => setOrders([]));
+      .then((rows) => { setOrders(rows); setLoadError(null); })
+      .catch((e) => {
+        setOrders([]);
+        setLoadError(e instanceof Error ? e.message : String(e));
+      });
   }, [merchantId]);
 
   const filtered = orders.filter((o) => {
-    const matchStatus = filterStatus === "all" || o.status.toLowerCase() === filterStatus.toLowerCase();
+    const st = o.status.toLowerCase();
+    const matchStatus =
+      filterStatus === "all"
+      || (filterStatus === "pending"
+        ? st === "pending_settlement" || st === "processing" || st === "awaiting_delivery"
+        : filterStatus === "refunded"
+          ? st === "refunded" || st === "partially_refunded" || st === "partially_refunded_settled"
+          : st === filterStatus.toLowerCase());
     const matchRef = o.reference.toLowerCase().includes(searchRef.toLowerCase()) ||
                      (o.description && o.description.toLowerCase().includes(searchRef.toLowerCase()));
     return matchStatus && matchRef;
@@ -230,6 +253,7 @@ function OrdersAndReceipts({ merchantId }: { merchantId: string }) {
 
   return (
     <div>
+      {loadError && <p className="notice error" role="alert">Could not load orders: {loadError}</p>}
       <div className="panel" style={{ padding: "0.85rem 1rem", marginBottom: "0.85rem" }}>
         <div className="flex-between">
           <div className="flex-row" style={{ flex: 1 }}>

@@ -39,7 +39,7 @@ public class KitchenDeviceService {
     public record PairingCode(String code, String merchantCode, UUID stationId, OffsetDateTime expiresAt) {}
 
     public record Paired(String apiKey, String signingSecret, UUID deviceId, UUID merchantId, String merchantName,
-                         UUID stationId, String stationName) {}
+                         UUID stationId, String stationName, boolean hasPrinter) {}
 
     @Transactional
     public PairingCode createCode(UUID merchantId, UUID stationId, String createdBy) {
@@ -87,9 +87,15 @@ public class KitchenDeviceService {
             UPDATE restaurant_kitchen_pairing SET used_at = now(), credential_id = :c, device_name = :name
             WHERE id = :id AND used_at IS NULL
             """).param("c", credential.id()).param("name", name).param("id", match.get()).update();
-        String stationName = stationId == null ? null : stations.get(stationId).map(KitchenStationService.Station::name).orElse(null);
+        Optional<KitchenStationService.Station> station = stationId == null ? Optional.empty() : stations.get(stationId);
+        String stationName = station.map(KitchenStationService.Station::name).orElse(null);
+        boolean hasPrinter = station.map(s ->
+                (s.printerAddress() != null && !s.printerAddress().isBlank())
+                        || "PRINTER".equalsIgnoreCase(s.output())
+                        || "BOTH".equalsIgnoreCase(s.output())
+        ).orElse(false);
         return new Paired(credential.apiKey(), credential.signingSecret(), credential.id(), merchantId,
-                merchant.tradingName(), stationId, stationName);
+                merchant.tradingName(), stationId, stationName, hasPrinter);
     }
 
     public List<ApiKeys.KitchenDevice> list(UUID merchantId) {

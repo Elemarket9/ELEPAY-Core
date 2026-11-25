@@ -192,7 +192,7 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
         if (retryAfter > 0) response.setHeader("Retry-After", String.valueOf(retryAfter));
         response.setHeader("Connection", status == 503 ? "keep-alive" : "close");
         response.setContentType("application/json");
-        response.getWriter().write("{\"code\":\"" + code + "\",\"message\":\"" + message + "\"}");
+        response.getWriter().write("{\"code\":\"" + code + "\",\"detail\":\"" + message + "\",\"message\":\"" + message + "\",\"status\":" + status + "}");
     }
 
     private void count(String reason) {

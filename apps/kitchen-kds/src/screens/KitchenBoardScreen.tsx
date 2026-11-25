@@ -56,6 +56,8 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
 
   const [state, setState] = useState<KdsState>(emptyKdsState);
   const stateRef = useRef<KdsState>(state);
+  const [hydratedKey, setHydratedKey] = useState<string | null>(null);
+  const kickRef = useRef<(() => void) | null>(null);
   const [online, setOnline] = useState(true);
   const [revoked, setRevoked] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -63,16 +65,31 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
   const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Hydrate cached offline KDS state
+  // Hydrate cached offline KDS state BEFORE starting live sync
   useEffect(() => {
+    let cancelled = false;
+    const empty = emptyKdsState();
+    stateRef.current = empty;
+    setState(empty);
+    setHydratedKey(null);
+
     AsyncStorage.getItem(storageKey)
       .then((raw) => {
-        if (!raw) return;
-        const parsed = { ...emptyKdsState(), ...(JSON.parse(raw) as KdsState) };
-        stateRef.current = parsed;
-        setState(parsed);
+        if (cancelled) return;
+        if (raw) {
+          const parsed = { ...emptyKdsState(), ...(JSON.parse(raw) as KdsState) };
+          stateRef.current = parsed;
+          setState(parsed);
+        }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setHydratedKey(storageKey);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [storageKey]);
 
   const update = useCallback(
@@ -85,9 +102,12 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
     [storageKey],
   );
 
-  // Live sync + offline action queue flush loop
+  // Live sync + offline action queue flush loop (starts only after hydration completes)
   useEffect(() => {
+    if (hydratedKey !== storageKey) return;
     let stopped = false;
+    let inFlight = false;
+    let kickPending = false;
     let failures = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -105,59 +125,104 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
       });
     };
 
-    const flush = async () => {
+    const flush = async (): Promise<boolean> => {
+      let triggeredResync = false;
       while (stateRef.current.queue.length > 0 && !stopped) {
         const action = stateRef.current.queue[0];
         try {
           const result = await sendAction(action);
+          if (stopped) return triggeredResync;
           update((s) => kdsSettle(s, action.actionId, result));
-          if (!result.applied && result.reason === "STATUS_CHANGED") {
+          if (!result.applied && (result.reason === "STATUS_CHANGED" || result.reason === "NOTHING_TO_ADVANCE")) {
             setNotice(`Order ${ticketNum(result.view)} was already updated on another screen.`);
           }
         } catch (e) {
+          if (stopped) return triggeredResync;
           if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 429) {
             update((s) => kdsSettle(s, action.actionId, null));
+            triggeredResync = true;
             setNotice(`Could not update order: ${e.message}`);
           } else {
             throw e;
           }
         }
       }
+      return triggeredResync;
+    };
+
+    const syncFromServer = async () => {
+      let more = true;
+      while (more && !stopped) {
+        const stationQ = setup.stationId ? `&stationId=${setup.stationId}` : "";
+        const since = stateRef.current.cursor;
+        const result = await client.callAsKitchenDevice<KdsSyncResult>(
+          device,
+          `${BASE}/sync?merchantId=${setup.merchantId}&since=${since}${stationQ}`,
+        );
+        if (stopped) return;
+        client.learnServerTime(result.serverTime);
+        update((s) => kdsApplySync(s, result).state);
+        more = result.hasMore;
+      }
     };
 
     const run = async () => {
+      if (stopped) return;
+      if (inFlight) {
+        kickPending = true;
+        return;
+      }
+      inFlight = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
       try {
-        let more = true;
-        while (more && !stopped) {
-          const stationQ = setup.stationId ? `&stationId=${setup.stationId}` : "";
-          const result = await client.callAsKitchenDevice<KdsSyncResult>(
-            device,
-            `${BASE}/sync?merchantId=${setup.merchantId}&since=${stateRef.current.cursor}${stationQ}`,
-          );
-          client.learnServerTime(result.serverTime);
-          update((s) => kdsApplySync(s, result).state);
-          more = result.hasMore;
-        }
+        await syncFromServer();
+        if (stopped) return;
         failures = 0;
         setOnline(true);
         setRevoked(false);
-        await flush();
+        const needsResync = await flush();
+        if (stopped) return;
+        if (needsResync || stateRef.current.needsFullResync) {
+          await syncFromServer();
+          if (stopped) return;
+        }
       } catch (e) {
+        if (stopped) return;
         if (e instanceof ApiError && e.status === 401) setRevoked(true);
         failures++;
         setOnline(false);
+      } finally {
+        inFlight = false;
       }
       if (!stopped) {
-        timer = setTimeout(() => void run(), kdsBackoff(failures));
+        if (kickPending) {
+          kickPending = false;
+          void run();
+        } else {
+          timer = setTimeout(() => void run(), kdsBackoff(failures));
+        }
       }
+    };
+
+    kickRef.current = () => {
+      if (stopped) return;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      void run();
     };
 
     void run();
     return () => {
       stopped = true;
+      kickRef.current = null;
       if (timer) clearTimeout(timer);
     };
-  }, [client, device, setup.merchantId, setup.stationId, update]);
+  }, [client, device, hydratedKey, setup.merchantId, setup.stationId, storageKey, update]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -182,14 +247,12 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
     }
   };
 
+  const canReprint = Boolean(setup.hasPrinter || device.hasPrinter);
   const tickets = kdsVisible(state, setup.stationId);
   const columns = width >= 1024 ? 4 : width >= 720 ? 3 : width >= 480 ? 2 : 1;
-  const cardWidthPercent = `${Math.floor(100 / columns) - 1}%` as const;
-  const clockStr = new Date(now).toLocaleTimeString("en-GH", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Africa/Accra",
-  });
+  const cardWidth: number | "100%" =
+    columns === 1 ? "100%" : Math.max(200, Math.floor((width - spacing.md * 2 - 12 * (columns - 1)) / columns));
+  const clockStr = formatGhanaClock(now);
 
   return (
     <View style={styles.root}>
@@ -265,7 +328,7 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
                 key={v.ticket.id}
                 style={[
                   styles.ticketCard,
-                  { width: cardWidthPercent, borderTopColor: topColor },
+                  { width: cardWidth, borderTopColor: topColor },
                   urg === "warning" && styles.ticketWarn,
                   urg === "critical" && styles.ticketCritical,
                 ]}
@@ -322,7 +385,10 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
                         next === "READY" && { backgroundColor: "#16A34A" },
                         next === "SERVED" && { backgroundColor: "#0284C7" },
                       ]}
-                      onPress={() => update((s) => kdsBump(s, v.ticket.id, setup.stationId, newKey()))}
+                      onPress={() => {
+                        update((s) => kdsBump(s, v.ticket.id, setup.stationId, newKey()));
+                        kickRef.current?.();
+                      }}
                     >
                       <Text style={[styles.bumpBtnText, next === "PREPARING" && { color: colors.ink }]}>
                         {NEXT_LABEL[next]}
@@ -342,7 +408,7 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
 
                 {menuFor === v.ticket.id && (
                   <View style={styles.menuRow}>
-                    {setup.hasPrinter && (
+                    {canReprint && (
                       <Pressable style={styles.menuBtn} onPress={() => void reprint(v.ticket.id)}>
                         <Text style={styles.menuBtnText}>Reprint</Text>
                       </Pressable>
@@ -353,6 +419,7 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
                         onPress={() => {
                           update((s) => kdsCancel(s, v.ticket.id, null, newKey()));
                           setMenuFor(null);
+                          kickRef.current?.();
                         }}
                       >
                         <Text style={styles.menuBtnText}>Tap again to cancel</Text>
@@ -371,6 +438,19 @@ export function KitchenBoardScreen({ client, device, setup, onChangeStation, onU
       </ScrollView>
     </View>
   );
+}
+
+function formatGhanaClock(ts: number): string {
+  try {
+    return new Date(ts).toLocaleTimeString("en-GH", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Africa/Accra",
+    });
+  } catch {
+    const d = new Date(ts);
+    return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+  }
 }
 
 function ticketNum(v: KdsTicketView): string {

@@ -446,6 +446,11 @@ public class ApiKeys {
 
     @Transactional
     public boolean emergencyRevokeById(UUID id, String actor) {
+        return emergencyRevokeById(id, actor, null);
+    }
+
+    @Transactional
+    public boolean emergencyRevokeById(UUID id, String actor, String reason) {
         var rowOpt = db.sql("SELECT secret_hash FROM api_credential WHERE id = :id AND revoked_at IS NULL")
                 .param("id", id).query(String.class).optional();
         int updated = db.sql("UPDATE api_credential SET revoked_at = now() WHERE id = :id AND revoked_at IS NULL")
@@ -453,8 +458,13 @@ public class ApiKeys {
         if (updated == 1) {
             cacheRevocation(id, rowOpt.orElse(null));
             if (audit != null) {
+                Map<String, Object> details = new java.util.LinkedHashMap<>();
+                details.put("keyId", id.toString());
+                if (reason != null && !reason.isBlank()) {
+                    details.put("reason", reason.strip());
+                }
                 audit.record(actor != null ? actor : "system", "api_key.emergency_revoked",
-                        "api_key:" + id, Map.of("keyId", id.toString()));
+                        "api_key:" + id, details);
             }
             return true;
         }

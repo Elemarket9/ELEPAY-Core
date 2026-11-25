@@ -27,6 +27,8 @@ export interface PosTerminal {
   status: string;
   pairedAt: string | null;
   createdAt: string;
+  pairingCode?: string | null;
+  pairingCodeExpiresAt?: string | null;
 }
 
 export interface PosCashier {
@@ -82,6 +84,22 @@ export interface PosOrder {
   orderType?: string;
 }
 
+export interface PosOrderItem {
+  id: string;
+  orderId: string;
+  variantId: string;
+  itemName: string;
+  quantity: number | string;
+  unitPricePesewas: number;
+  discountPesewas: number;
+  taxPesewas?: number;
+  totalPesewas: number;
+  modifiersJson?: string | null;
+  seatNumber?: number | null;
+  course?: string | null;
+  notes?: string | null;
+}
+
 export interface PosReceipt {
   receiptNumber: string;
   escposFormattedText: string;
@@ -102,7 +120,7 @@ export interface EvenSplitResult {
 export interface SeatSplitGroup {
   seatNumber: number;
   subtotalPesewas: number;
-  items: { id: string; itemName: string; quantity: number; lineTotalPesewas: number }[];
+  items: { id: string; itemName: string; quantity: number; totalPesewas: number }[];
 }
 
 export interface SeatSplitResult {
@@ -256,7 +274,6 @@ export function buildPosOrderPayload(params: {
   terminalId: string | null;
   cashierId: string | null;
   orderType: OrderType;
-  tableId?: string | null;
   lines: PosCartLine[];
   discountPesewas: number;
   taxPesewas: number;
@@ -267,7 +284,6 @@ export function buildPosOrderPayload(params: {
     terminalId: params.terminalId,
     cashierId: params.cashierId,
     customerId: null,
-    tableId: params.orderType === "DINE_IN" ? (params.tableId ?? null) : null,
     items: params.lines.map((l) => ({
       variantId: l.variantId,
       itemName: l.label,
@@ -290,13 +306,17 @@ export function buildPosOrderPayload(params: {
 export function isTerminalStatusPaid(status: string | null | undefined): boolean {
   if (!status) return false;
   const norm = status.trim().toUpperCase();
-  return norm === "PAID" || norm === "SUCCEEDED" || norm === "CAPTURED" || norm === "COMPLETED";
+  return norm === "PAID" || norm === "SUCCEEDED" || norm === "CAPTURED" || norm === "COMPLETED" || norm === "SETTLED";
 }
 
 export function isTerminalStatusFailed(status: string | null | undefined): boolean {
   if (!status) return false;
   const norm = status.trim().toUpperCase();
   return norm === "FAILED" || norm === "DECLINED" || norm === "CANCELLED" || norm === "EXPIRED";
+}
+
+export function isPollStatusFailed(st: { status?: string | null; railStatus?: string | null }): boolean {
+  return isTerminalStatusFailed(st.status) || isTerminalStatusFailed(st.railStatus);
 }
 
 export function formatKdsStatusLabel(status: string | null | undefined): string {

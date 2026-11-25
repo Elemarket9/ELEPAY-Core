@@ -29,6 +29,7 @@ import {
   parseMoney,
   PosCartLine,
   PosOrder,
+  PosOrderItem,
   PosReceipt,
   PosShift,
   PosTerminal,
@@ -99,7 +100,7 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
       setCatalog(cat);
       setTables(tbls);
       setTerminals(terms);
-      setSelectedTerminal((prev) => prev ?? terms[0] ?? null);
+      setSelectedTerminal((prev) => (prev && terms.some((t) => t.id === prev.id) ? prev : (terms[0] ?? null)));
       setError(null);
     } catch (e) {
       if (isFeatureNotEnabled(e)) setModuleDisabled(true);
@@ -176,7 +177,6 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
       terminalId: selectedTerminal?.id ?? null,
       cashierId: cashier?.id ?? null,
       orderType,
-      tableId: tableId || null,
       lines: cart,
       discountPesewas: effectiveDiscount,
       taxPesewas: tax,
@@ -186,33 +186,57 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
       body: payload,
     });
     setOrder(created);
+    if (orderType === "DINE_IN" && tableId) {
+      await client
+        .call(`/v1/restaurant/tables/${tableId}/seat?orderId=${encodeURIComponent(created.id)}`, { method: "POST" })
+        .catch((e) => setError(`Order created, but could not seat table: ${e instanceof Error ? e.message : String(e)}`));
+    }
     return created;
   }
 
   async function sendToKitchen(targetOrder: PosOrder) {
     if (kdsSent || orderType === "RETAIL") return;
-    const selectedTable = tables.find((t) => t.id === tableId);
+    const orderItems = await client.call<PosOrderItem[]>(`/v1/pos/orders/${targetOrder.id}/items`);
     await client.call("/v1/restaurant/kds/tickets", {
       body: {
         merchantId: merchant.id,
         orderId: targetOrder.id,
-        orderNumber: targetOrder.orderNumber,
-        tableNumber: selectedTable?.tableNumber ?? null,
+        tableId: orderType === "DINE_IN" && tableId ? tableId : null,
+        diningMode: orderType === "TAKEAWAY" ? "TAKEOUT" : orderType,
         serverName: cashier?.name ?? cashier?.badgeNumber ?? null,
         course: "MAIN",
-        items: cart.map((c) => ({
-          orderItemId: c.variantId,
-          itemName: c.label,
-          quantity: c.qty,
-          modifiersJson: "[]",
-          notes: c.seatNumber ? `Seat ${c.seatNumber}` : null,
+        items: orderItems.map((it) => ({
+          orderItemId: it.id,
+          itemName: it.itemName,
+          quantity: it.quantity,
+          modifiers: it.modifiersJson && it.modifiersJson !== "[]" ? it.modifiersJson : null,
+          course: it.course ?? "MAIN",
         })),
-        notes: orderType,
-        stationId: null,
+        notes: null,
+        clientRef: `pos:${targetOrder.id}`,
       },
     });
     setKdsSent(true);
+    setError(null);
     setNotice("Order sent to Kitchen Display (KDS).");
+  }
+
+  async function voidOrder() {
+    if (!order) return;
+    setError(null);
+    try {
+      await client.call<PosOrder>(`/v1/pos/orders/${order.id}/void`, { method: "POST" });
+      setCart([]);
+      setDiscount("");
+      setOrder(null);
+      setOrderKey(newKey());
+      setKdsSent(false);
+      setTableId("");
+      setNotice("Order voided. Ready for a new order.");
+      void loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   async function holdCart() {
@@ -259,6 +283,7 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
         setTableId(parsed.tableId ?? "");
         setOrder(null);
         setOrderKey(newKey());
+        setKdsSent(false);
       }
       if (selectedTerminal) {
         const list = await client.call<HeldCart[]>(`/v1/pos/carts/held/${selectedTerminal.id}`).catch(() => []);
@@ -270,19 +295,31 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
   }
 
   async function handleOrderPaid(paidOrder: PosOrder) {
-    setShowTenderModal(false);
-    const r = await client.call<PosReceipt>(`/v1/pos/orders/${paidOrder.id}/receipt`, { method: "POST" });
-    const latest = await client.call<PosOrder>(`/v1/pos/orders/${paidOrder.id}`);
-    if (orderType !== "RETAIL" && !kdsSent) {
-      await sendToKitchen(latest).catch(() => {});
+    try {
+      const r = await client.call<PosReceipt>(`/v1/pos/orders/${paidOrder.id}/receipt`, { method: "POST" });
+      const latest = await client.call<PosOrder>(`/v1/pos/orders/${paidOrder.id}`);
+      setShowTenderModal(false);
+      setReceipt({ receipt: r, order: latest });
+      setCart([]);
+      setDiscount("");
+      setOrder(null);
+      setOrderKey(newKey());
+      setKdsSent(false);
+      setTableId("");
+      void loadAll();
+    } catch (e) {
+      setShowTenderModal(false);
+      setError(`Payment recorded, but receipt failed: ${e instanceof Error ? e.message : String(e)}`);
+      if (paidOrder.status === "PAID") {
+        setCart([]);
+        setDiscount("");
+        setOrder(null);
+        setOrderKey(newKey());
+        setKdsSent(false);
+        setTableId("");
+        void loadAll();
+      }
     }
-    setReceipt({ receipt: r, order: latest });
-    setCart([]);
-    setDiscount("");
-    setOrder(null);
-    setOrderKey(newKey());
-    setKdsSent(false);
-    void loadAll();
   }
 
   if (moduleDisabled) {
@@ -482,9 +519,13 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
                 <Text style={styles.secondaryBtnText}>Send to Kitchen</Text>
               </Pressable>
             )}
-            {!order && (
+            {!order ? (
               <Pressable style={[styles.secondaryBtn, { flex: 1 }]} onPress={() => void holdCart()}>
                 <Text style={styles.secondaryBtnText}>Hold Cart</Text>
+              </Pressable>
+            ) : (
+              <Pressable style={[styles.voidBtn, { flex: 1 }]} onPress={() => void voidOrder()}>
+                <Text style={styles.voidBtnText}>Void / New Order</Text>
               </Pressable>
             )}
           </View>
@@ -751,6 +792,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   secondaryBtnText: { fontSize: 13, fontWeight: "700", color: colors.ink },
+  voidBtn: {
+    borderWidth: 1,
+    borderColor: colors.dangerBorder,
+    backgroundColor: colors.dangerBg,
+    paddingVertical: 11,
+    borderRadius: radius.sm,
+    alignItems: "center",
+  },
+  voidBtnText: { fontSize: 13, fontWeight: "700", color: colors.danger },
   chargeBtn: {
     backgroundColor: colors.green,
     paddingVertical: 14,

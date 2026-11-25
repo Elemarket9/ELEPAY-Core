@@ -56,7 +56,11 @@ export function SalesScreen({ client, merchant }: Props) {
   }, [load]);
 
   const filtered = rows.filter((r) => {
-    const matchStatus = statusFilter === "all" || r.status.toLowerCase() === statusFilter;
+    const s = r.status.toLowerCase();
+    const matchStatus =
+      statusFilter === "all" ||
+      (statusFilter === "settled" && (s === "settled" || s === "partially_refunded_settled")) ||
+      (statusFilter === "pending" && (s === "pending_settlement" || s === "processing" || s === "awaiting_delivery"));
     const q = search.trim().toLowerCase();
     const matchQuery = !q || r.reference.toLowerCase().includes(q) || (r.description ?? "").toLowerCase().includes(q);
     return matchStatus && matchQuery;
@@ -178,7 +182,9 @@ export function SalesScreen({ client, merchant }: Props) {
                   <Row label="Net Receivable" value={formatMoney(selected.net)} bold />
                 </View>
 
-                {selected.refunded + selected.disputed < selected.amount && (
+                {merchant.role.toLowerCase() !== "cashier" &&
+                  ["settled", "pending_settlement", "partially_refunded"].includes(selected.status.toLowerCase()) &&
+                  selected.refunded + selected.disputed < selected.amount && (
                   <View style={{ marginTop: spacing.md }}>
                     <Text style={styles.sectionLabel}>Issue Refund</Text>
                     <TextInput

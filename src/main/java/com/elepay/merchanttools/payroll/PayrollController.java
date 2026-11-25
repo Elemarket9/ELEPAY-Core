@@ -97,15 +97,19 @@ public class PayrollController {
     }
 
     @PostMapping("/runs/{runId}/submit")
-    public void submit(@PathVariable UUID runId) {
+    public PayrollManagementService.PayrollRunRow submit(@PathVariable UUID runId) {
         UUID merchantId = access.manage(PAYROLL_RUN, runId);
         guard(() -> payroll.submitPayrollRun(merchantId, runId));
+        return payroll.getRun(merchantId, runId)
+                .orElseThrow(() -> ApiException.notFound("Payroll run not found"));
     }
 
     @PostMapping("/runs/{runId}/approve")
-    public void approve(@PathVariable UUID runId) {
+    public PayrollManagementService.PayrollRunRow approve(@PathVariable UUID runId) {
         UUID merchantId = access.manage(PAYROLL_RUN, runId);
         guard(() -> payroll.approvePayrollRun(merchantId, runId, Actor.current().subject()));
+        return payroll.getRun(merchantId, runId)
+                .orElseThrow(() -> ApiException.notFound("Payroll run not found"));
     }
 
     public record PayoutSubmission(String payoutBatchReference) {}

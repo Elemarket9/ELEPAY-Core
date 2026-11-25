@@ -1,5 +1,6 @@
 package com.elepay.merchanttools.inventory;
 
+import com.elepay.common.ApiException;
 import com.elepay.merchanttools.MerchantToolAccess;
 import static com.elepay.merchanttools.MerchantToolAccess.Resource.*;
 import java.math.BigDecimal;
@@ -248,7 +249,8 @@ public class InventoryController {
     }
     private void verifyTransfer(UUID id) {
         UUID merchant = access.manage(TRANSFER, id);
-        var order = transferService.getTransferOrder(id).orElseThrow();
+        var order = transferService.getTransferOrder(id)
+                .orElseThrow(() -> ApiException.notFound("Transfer order not found"));
         access.belongs(merchant, WAREHOUSE, order.sourceWarehouseId());
         access.belongs(merchant, WAREHOUSE, order.destinationWarehouseId());
         transferService.listTransferItems(id).forEach(item -> access.belongs(merchant, VARIANT, item.variantId()));
@@ -256,7 +258,8 @@ public class InventoryController {
 
     private void verifyPurchaseOrder(UUID id) {
         UUID merchant = access.manage(PURCHASE_ORDER, id);
-        var order = poService.getPurchaseOrder(id).orElseThrow();
+        var order = poService.getPurchaseOrder(id)
+                .orElseThrow(() -> ApiException.notFound("Purchase order not found"));
         access.belongs(merchant, WAREHOUSE, order.warehouseId());
         access.belongs(merchant, SUPPLIER, order.supplierId());
         poService.listPoItems(id).forEach(item -> access.belongs(merchant, VARIANT, item.variantId()));

@@ -445,6 +445,38 @@ public class PosOrderService {
     }
 
     @Transactional
+    public PosOrder voidOrder(UUID orderId, String actor) {
+        PosOrder order = lockOrder(orderId);
+        if ("VOIDED".equals(order.status())) {
+            return order;
+        }
+        if (!"PENDING".equals(order.status()) || order.paidPesewas() > 0) {
+            throw ApiException.conflict("order_cannot_be_voided", "Only unpaid pending orders can be voided");
+        }
+        List<Link> links = db.sql("""
+                SELECT id, order_id, checkout_ref, amount, status, split_key
+                FROM pos_checkout_link
+                WHERE order_id = :id AND status IN ('open', 'applied')
+                FOR UPDATE
+                """).param("id", orderId).query(Link.class).list();
+        for (Link l : links) {
+            if ("applied".equals(l.status())) {
+                throw ApiException.conflict("order_cannot_be_voided", "Order has an applied digital payment and cannot be voided");
+            }
+        }
+        for (Link l : links) {
+            if ("open".equals(l.status())) {
+                checkout.cancel(order.merchantId(), order.branchId(), l.checkoutRef(), actor);
+                db.sql("UPDATE pos_checkout_link SET status = 'cancelled' WHERE id = :id")
+                        .param("id", l.id()).update();
+            }
+        }
+        db.sql("UPDATE pos_order SET status = 'VOIDED' WHERE id = :id")
+                .param("id", orderId).update();
+        return getOrder(orderId).orElseThrow();
+    }
+
+    @Transactional
     public TenderResult initiateTender(UUID orderId, TenderRequest req, String actor) {
         if (req == null || req.tenderType() == null) {
             throw ApiException.badRequest("tender_required", "Tender type is required");

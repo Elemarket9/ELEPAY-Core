@@ -422,4 +422,12 @@ public class PayrollManagementService {
             FROM payroll_run WHERE merchant_id = ? ORDER BY period_year DESC, period_month DESC
             """).param(merchantId).query(PayrollRunRow.class).list();
     }
+
+    public Optional<PayrollRunRow> getRun(UUID merchantId, UUID runId) {
+        return db.sql("""
+            SELECT id, period_month, period_year, total_gross_pesewas, total_paye_tax_pesewas, total_net_pay_pesewas,
+                   status, initiated_by, approved_by, executed_at
+            FROM payroll_run WHERE id = ? AND merchant_id = ?
+            """).params(runId, merchantId).query(PayrollRunRow.class).optional();
+    }
 }

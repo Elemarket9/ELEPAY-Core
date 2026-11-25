@@ -83,6 +83,8 @@ export interface KdsState {
   queue: KdsQueuedAction[];
   lastSyncAt: number | null;
   printerFailures: KdsPrintFailure[];
+  needsFullResync?: boolean;
+  resyncSeenIds?: string[];
 }
 
 export const emptyKdsState = (): KdsState => ({
@@ -91,6 +93,7 @@ export const emptyKdsState = (): KdsState => ({
   queue: [],
   lastSyncAt: null,
   printerFailures: [],
+  needsFullResync: false,
 });
 
 const isLive = (s: KdsStatus) => s !== "SERVED" && s !== "CANCELLED";
@@ -204,12 +207,27 @@ export function kdsApplySync(
 ): { state: KdsState; arrived: string[] } {
   const tickets = { ...state.tickets };
   const arrived: string[] = [];
+  const isResyncing = Boolean(state.needsFullResync);
+  const seenIds = isResyncing ? new Set<string>(state.resyncSeenIds ?? []) : null;
+
   for (const v of result.tickets) {
+    if (seenIds) seenIds.add(v.ticket.id);
     const known = tickets[v.ticket.id];
-    if (known && known.ticket.changeSeq > v.ticket.changeSeq) continue;
+    if (!isResyncing && known && known.ticket.changeSeq > v.ticket.changeSeq) continue;
     if (!known && v.ticket.status === "NEW") arrived.push(v.ticket.id);
     tickets[v.ticket.id] = withPending(v, state.queue);
   }
+
+  if (isResyncing && !result.hasMore && seenIds) {
+    const pendingTicketIds = new Set(state.queue.map((a) => a.ticketId));
+    for (const id of Object.keys(tickets)) {
+      if (!seenIds.has(id) && !pendingTicketIds.has(id)) {
+        delete tickets[id];
+      }
+    }
+  }
+
+  const stillResyncing = isResyncing && result.hasMore;
   return {
     state: {
       ...state,
@@ -217,6 +235,8 @@ export function kdsApplySync(
       cursor: Math.max(state.cursor, result.cursor),
       lastSyncAt: now,
       printerFailures: result.printerFailures,
+      needsFullResync: stillResyncing,
+      resyncSeenIds: stillResyncing && seenIds ? Array.from(seenIds) : undefined,
     },
     arrived,
   };
@@ -224,7 +244,9 @@ export function kdsApplySync(
 
 export function kdsSettle(state: KdsState, actionId: string, result: KdsBumpResult | null): KdsState {
   const queue = state.queue.filter((a) => a.actionId !== actionId);
-  if (!result) return { ...state, queue };
+  if (!result) {
+    return { ...state, queue, cursor: 0, needsFullResync: true, resyncSeenIds: [] };
+  }
   const known = state.tickets[result.view.ticket.id];
   const tickets = { ...state.tickets };
   if (!known || known.ticket.changeSeq <= result.view.ticket.changeSeq) {

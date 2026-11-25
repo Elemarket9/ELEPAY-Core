@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, Text, Pressable, View } from "react-native";
 import {
+  ApiError,
   Balances,
   colors,
   ElepayClient,
@@ -26,15 +27,25 @@ export function HomeScreen({ client, merchant, onNavigate }: Props) {
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [b, tx] = await Promise.all([
+      const [balRes, txRes] = await Promise.allSettled([
         client.call<Balances>(`/v1/merchants/${merchant.id}/balances`),
         client.call<TransactionLine[]>(`/v1/merchants/${merchant.id}/transactions`),
       ]);
-      setBalances(b);
-      setRecent(tx.slice(0, 6));
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const errors: string[] = [];
+      if (balRes.status === "fulfilled") {
+        setBalances(balRes.value);
+      } else {
+        setBalances(null);
+        if (!(balRes.reason instanceof ApiError && balRes.reason.status === 403)) {
+          errors.push(balRes.reason instanceof Error ? balRes.reason.message : String(balRes.reason));
+        }
+      }
+      if (txRes.status === "fulfilled") {
+        setRecent(txRes.value.slice(0, 6));
+      } else {
+        errors.push(txRes.reason instanceof Error ? txRes.reason.message : String(txRes.reason));
+      }
+      setError(errors.length > 0 ? errors.join(" · ") : null);
     } finally {
       setRefreshing(false);
     }

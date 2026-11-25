@@ -46,6 +46,9 @@ export interface SettlementDestination {
   accountNumber: string;
   accountName: string;
   verification: string;
+  status?: string;
+  coolingOffUntil?: string | null;
+  oobVerificationStatus?: string;
 }
 
 export interface CatalogRow {
@@ -75,6 +78,7 @@ export interface DiningTable {
   tableNumber: string;
   capacity: number;
   status: "AVAILABLE" | "OCCUPIED" | "RESERVED" | "DIRTY";
+  currentOrderId?: string | null;
 }
 
 export interface DeviceCredential {
@@ -85,6 +89,7 @@ export interface DeviceCredential {
   merchantName: string;
   stationId: string | null;
   stationName: string | null;
+  hasPrinter?: boolean;
 }
 
 export interface KitchenStation {

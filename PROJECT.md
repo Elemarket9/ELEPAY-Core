@@ -1,91 +1,74 @@
-# Project: ELEPAY-Core — Stage 1 Launch Readiness, Kill-Switch Matrix, Dead-End Security Gates, Custodian Bank Escrow & Benchmarking
-
-## Product boundary
-ELEPAY is strictly fintech. Core financial functions are wallet accounts, append-only double-entry ledger, domestic Ghana payments and collections, provider-neutral multi-merchant payment allocations, financial escrow, settlement, payouts and reconciliation, FX conversion, treasury, reserves, lending, virtual cards, POS payment handling, bill payment, agent banking, compliance (KYC/AML), fraud controls, security, merchant financial BackOffice, developer APIs and webhooks.
-
-Merchant tools restored Nov 23 2026 by founder decision (`com.elepay.merchanttools`): POS held carts, inventory, product catalogs, purchasing, warehouses, restaurant/KDS, CRM, loyalty, coupons, campaigns, payroll and suppliers. These are merchant software, not regulated payment activities. Exception: gift cards and store credit hold customer value and must stay switched off for live use until BoG confirms the e-money position.
-
-**International payouts / remittance EXCLUDED from current scope per founder decision Nov 23 2026. Only domestic settlement.** International card acceptance and foreign-currency merchant collections remain in scope; FX conversion and merchant settlement must end at authorized domestic Ghana destinations.
-
-## External integrations and compliance status
-**Live bank, MoMo, card networks: NOT YET CONNECTED. Local testing uses sandbox/test fixtures only.**
-
-**GRA integration NOT IMPLEMENTED - manual submission required.** No generated local fiscal receipt, signature or acknowledgment may be presented as a successful agency submission.
-
-**E-Levy repealed April 2025 - no longer charged. Historical only.** Historical audit records must not be changed or used to originate a deduction.
-
-## Engineering
-Java 25, Spring Boot 4.2.0, Spring Modulith 2.2.0, PostgreSQL 18, Flyway, Maven. Preserve the modular monolith, the append-only double-entry ledger, accounting idempotency and the separation of external providers from internal financial state. Do not edit applied Flyway migrations; introduce only new migration versions (`V49+`) for approved data structure changes, and register all new tables in `src/test/resources/table-owners.properties`.
+# Project: ELEPAY-Core — Deep Frontend+Backend Code-Linking Remediation
 
 ## Architecture
-- **Stage 1 Kill-Switch Matrix & Route-Level Filter (`com.elepay.identity` / `com.elepay.payout`)**:
-  - `Stage1KillSwitchFilter` runs before authentication/database lookups and returns HTTP `404` (`{"code":"FEATURE_NOT_ENABLED","error":"FEATURE_NOT_ENABLED","module":"...","message":"This module is disabled in Stage 1"}`) for all default-off non-Stage-1 modules (`lending`, `virtual-cards`, `pos`, `bill-payments`, `agent-banking`, `fx-trading`, `consumer-w2w`/`consumer-wallet`, `consumer-ussd`, `consumer-mandates`, `consumer-growth`).
-  - Global Kill Switch (`POST /admin/kill-switch/global` & `POST /v1/ops/kill-switch/global`) stops all payouts/withdrawals/transfers in < 1 second via Redis + atomic in-memory state.
-  - Merchant Kill Switch (`POST /admin/kill-switch/merchants/{merchantId}` & `POST /v1/ops/kill-switch/merchants/{merchantId}`) stops payouts for 1 merchant only while others continue.
-  - API Key Kill Switch (`ApiKeys.revoke`) propagates to Redis + in-memory cache so revoked keys fail authentication in < 1 second.
-  - Emergency Payout Velocity Ceiling tracks rolling hourly and daily global GHS cedi outflow and auto-freezes outbound payouts on breach while collections/checkouts/callbacks continue uninterrupted.
-- **Custodian Bank Escrow, Submerchant Accounting & Outflow Backstop (`com.elepay.rails`, `com.elepay.checkout`, `com.elepay.settlement`, `com.elepay.enterprise`)**:
-  - Multi-merchant split collections, submerchant virtual ledger accounts (`pending`, `available`, `reserved`), delivery escrow holds, conditional settlement releases, and batch/payroll disbursements operate with zero dependency on Consumer W2W (`com.elepay.wallet`).
-  - `CustodianBankBackstopService` in `com.elepay.rails` hooks into `RailTransactions.send` to enforce hard daily outflow caps, per-payout caps, reserve floors, and emergency custodian freeze at the physical rail boundary, plus `verifyTrustSafeguarding` (`GET /v1/ops/custodian/safeguard-report`).
-- **Dead-End Security Gates (`com.elepay.identity`, `com.elepay.merchant`, `com.elepay.payout`, `com.elepay.security`, `com.elepay.common`)**:
-  - **Gate 1 (Stolen Merchant API Key / Login -> Dead End)**:
-    - Tiered API key prefixes & strict scopes: `pk_live_*` (can ONLY create payment intent/checkout), `sk_live_*` (can create + read + refund, CANNOT initiate payouts/withdrawals alone), `payout_live_*` (required for API-key payouts/withdrawals).
-    - IP Allowlist (`allowed_ips` on `api_credential` enforced via `CidrBlock` for `payout_live_*` keys; unregistered IP = 403 `ip_not_allowlisted`).
-    - Payout Destination Allowlist + 24-Hour Cooling-Off Lock + Out-of-Band Confirmation: Payouts (`withdrawals` and `payout-batches` when destination-allowlist enforced) only allowed to pre-approved, verified `settlement_destination` accounts after the 24-hour cooling-off window (`cooling_off_until`).
-  - **Gate 2 (Compromised Ops/Admin Account -> Dead End)**:
-    - Mandatory Maker-Checker Dual Control (`MakerCheckerService` + `maker_checker_proposal` table with DB trigger `reviewed_by <> proposed_by`): no single admin can approve large payouts, override escrow/reserve holds, force settlements, or change settlement rules / unfreeze kill switches alone.
-  - **Gate 3 (Compromised App Server -> Dead End)**:
-    - `KmsSecretProvider` wrapping `EnvelopeEncryption` + `KeyRotationService` (refusing disk file secrets in `ProductionSafetyCheck`).
-    - Strict Egress Firewall / Outbound Allowlist in `OutboundUrlGuard` (allowing only Custodian Bank, MTN, Telecel, AT, GhIPSS) + `deploy/edge/egress-network-policy.yaml`.
-    - Append-only DB permissions in `V49`: immutability triggers on all ledger & audit tables + PostgreSQL `EVENT TRIGGER` (`elepay_block_immutable_trigger_disable`) blocking `ALTER TABLE ... DISABLE TRIGGER`.
-- **Stage 1 Benchmarking, Adversarial Pentest & CI/CD OWASP Remediation**:
-  - Batch hash-join optimization in `TenWayClearingReconciliationEngine`, `Mt940StatementParser`, and `ReconciliationService` to reconcile 50k–100k transactions in seconds.
-  - `Stage1BenchmarkAndPentestIT` verifying concurrent split/callback/payout zero-drift, 50k+ reconciliation speed, and all Proof 1 & Proof 2 adversarial pentest gates, plus live curl proof execution.
-  - `pom.xml` (`security-scan` profile) & `.github/workflows/sandbox.yml` fix using the OWASP NVD 2.0 cached datafeed mirror so `mvn -B -Psecurity-scan -DskipTests verify` passes 100% green without failing on empty `NVD_API_KEY`.
+- **Backend**: Java 25 / Spring Boot 4.2.0 / Spring Modulith (29 modules, 38 controllers, 303 endpoints) in `src/main/java/com/elepay/` and `src/main/resources/`.
+- **Web Frontend**: React + TypeScript + Vite SPA in `web/` (50 Vitest tests, served via Spring Boot `SpaRoutes` in production).
+- **Mobile Monorepo**: npm workspaces Expo / React Native in `apps/` (`apps/shared` `@elepay/mobile-core`, `apps/restaurant-pos`, `apps/kitchen-kds`, `apps/merchant-app`).
 
-## Feature Inventory
-| # | Feature | Description | Milestone | Source |
-|---|---------|-------------|-----------|--------|
-| 1 | Stage 1 Route-Level Kill-Switch Matrix (`404 FEATURE_NOT_ENABLED`) | Default-off server-side filter returning 404 with `FEATURE_NOT_ENABLED` before DB/business logic for `lending`, `virtual-cards`, `pos`, `bill-payments`, `agent-banking`, `fx-trading`, and consumer W2W when disabled | M1 | survey_1, survey_3 |
-| 2 | Global, Merchant & API-Key (<1s) Kill Switches + Velocity Ceiling | `POST /admin/kill-switch/global`, merchant-scoped payout freeze, <1s Redis API key revocation cache, and automatic hourly/daily global cedi velocity ceiling | M1 | survey_1, survey_3 |
-| 3 | Custodian Bank Escrow, Submerchant Splits Without W2W & Outflow Backstop | Filter `"wallet"` when consumer W2W is off; `CustodianBankBackstopService` at `RailTransactions` boundary enforcing hard daily outflow caps, per-payout caps, reserve floor, and trust safeguarding report | M1 | survey_2 |
-| 4 | Dead-End Gate 1: `pk_live` / `sk_live` / `payout_live` Scopes, IP Allowlist, Destination Allowlist & 24h Cooling-Off Lock | Tiered key prefixes/scopes, IP allowlist for `payout_live`, pre-approved verified destination allowlist, OOB confirmation, and 24-hour cooling-off lock | M1 | survey_3 |
-| 5 | Dead-End Gate 2: Mandatory Maker-Checker Dual Control | `MakerCheckerService` + DB trigger enforcing `proposed_by <> reviewed_by` for large payouts, escrow/reserve hold releases, settlement rule changes, and kill-switch unfreezes | M1 | survey_3 |
-| 6 | Dead-End Gate 3: KMS/HSM Secret Abstraction, Strict Egress Firewall & Append-Only DB Event Trigger | `KmsSecretProvider` envelope encryption, `OutboundUrlGuard` strict partner allowlist, and `V49` append-only triggers + `elepay_block_immutable_trigger_disable` event trigger | M1 | survey_3 |
-| 7 | CI/CD OWASP Security Scan Remediation | Fix `pom.xml` `security-scan` profile and `.github/workflows/sandbox.yml` NVD datafeed configuration so OWASP Dependency-Check passes cleanly | M1 | survey_3 |
-| 8 | 50k–100k Fast Reconciliation Optimization, Stage 1 Concurrency Benchmark & Focused Pentest + Live Curl Proofs | Batch hash-join reconciliation engine refactor (<15s for 50k txns), `Stage1BenchmarkAndPentestIT` covering all proofs, and live curl output verification | M1 | survey_3 |
+## Code Layout & Exclusive File Ownership (Wave 2 Workers)
+- **`worker_backend`**: Owns `src/main/java/com/elepay/**`, `src/main/resources/**`, `src/test/java/com/elepay/**`.
+- **`worker_web`**: Owns `web/**`.
+- **`worker_apps`**: Owns `apps/**`.
+*(Strictly non-overlapping — no two concurrent Workers may write the same file.)*
+
+## Feature / Defect Inventory (Synthesized from 10 Wave-1 Subagents)
+
+### Track A — Backend (`worker_backend`)
+| # | Sev | Defect | Source | Milestone |
+|---|-----|--------|--------|-----------|
+| B1 | P0 | `RequestSigningFilter` rejects OIDC JWT browser mutations on `/v1/ops/**` in prod (`401 missing_signature`). Keep HMAC v2 mandatory for API keys / non-JWT callers, exempt authenticated OIDC `JwtAuthenticationToken` browser sessions on `/v1/ops/**`. | deep_link_8, deep_link_2 | M1-Backend |
+| B2 | P0 | `SecurityConfig` enables `.cors(cors -> {})` with no `CorsConfigurationSource` bean. Add configurable `@Bean CorsConfigurationSource` via `elepay.cors.allowed-origins` allowing all required methods/headers. | deep_link_8, deep_link_4 | M1-Backend |
+| B3 | P0 | `SpaRoutes.java:9` omits `"/developer", "/developer/**"` → 404 in prod Docker image. | deep_link_8, deep_link_2, deep_link_9, deep_link_10 | M1-Backend |
+| B4 | P0 | `POST /v1/restaurant/kds/tickets` needs real `pos_order_item.id`s. Add `GET /v1/pos/orders/{orderId}/items` returning `List<PosOrderItem>` (with `viewAccess`). | deep_link_1, deep_link_3, deep_link_5, deep_link_10 | M1-Backend |
+| B5 | P1 | `SecurityConfig.java:99-102` CSP `connect-src 'self'` blocks external OIDC issuer (`spring.security.oauth2.resourceserver.jwt.issuer-uri`); `isProd` uses `getActiveProfiles()` instead of `acceptsProfiles(Profiles.of("prod","production"))`. | deep_link_8, deep_link_2, deep_link_10 | M1-Backend |
+| B6 | P1 | All 5 security filters write `{"code","message"}` without `"detail"`. Emit both `"detail"` and `"message"` (plus `"code"`, `"status"`). | deep_link_8, deep_link_2, deep_link_1 | M1-Backend |
+| B7 | P1 | `ApiExceptionHandler` misses `IllegalArgumentException` (400), `IllegalStateException` (409), `NoSuchElementException` (404), `ConstraintViolationException` (400); `InventoryController.java:251,259` `.orElseThrow()` → `ApiException.notFound(...)`. | deep_link_8 | M1-Backend |
+| B8 | P1 | Jackson 2 vs Jackson 3 split in `DistributedSessionService`, `RuleEngineService`, `SyntheticIdentityService`, `GradientBoostedFraudModel` — migrate to `tools.jackson.databind.ObjectMapper` (Spring-managed bean). | deep_link_8 | M1-Backend |
+| B9 | P1 | `PosController.java:135-189` RBAC: `listTerminals`/`getActiveShift` should use `viewAccess` (filtering by `branchId` when branch-scoped); `authenticateCashier`/`openShift`/`closeShift` should use `operateAccess` with `requireBranch`. | deep_link_1, deep_link_3, deep_link_5 | M1-Backend |
+| B10 | P1 | `PosTerminal.pairingCode` has `@JsonIgnore` (`PosTerminalService.java:64`), preventing UI from showing pairing code on registration. Return `RegisterTerminalResponse` (same fields + `pairingCode` + `pairingCodeExpiresAt`) from `POST /v1/pos/terminals/register`. | deep_link_1, deep_link_3 | M1-Backend |
+| B11 | P1 | Add `POST /v1/pos/orders/{orderId}/void` (`operateAccess`) to void unpaid `PENDING` POS orders and cancel any open `pos_checkout_link`. | deep_link_1, deep_link_5 | M1-Backend |
+| B12 | P1 | `PayrollController.java:99-109` returns `void` from `submit`/`approve`, closing `MerchantTools.tsx` panel. Return updated `PayrollRun`. | deep_link_3 | M1-Backend |
+| B13 | P1 | `KitchenDeviceService.Paired` omits `hasPrinter` boolean (causes `Kitchen.tsx` and `apps/kitchen-kds` to hardcode `hasPrinter: false`). Include `hasPrinter` based on station's `output`/`printerAddress`. | deep_link_2, deep_link_6 | M1-Backend |
+| B14 | P2 | `KillSwitchController.java:185` ignores request body `{ active, reason }` when deactivating; accept optional reason. `ReadWriteDataSourceConfig`: wrap in `LazyConnectionDataSourceProxy`. `TraceContextFilter`: sanitize incoming `X-Trace-Id`. | deep_link_8, deep_link_2 | M1-Backend |
+
+### Track B — Web Frontend (`worker_web`)
+| # | Sev | Defect | Source | Milestone |
+|---|-----|--------|--------|-----------|
+| W1 | P0 | `MerchantTools.tsx:311-338` `sendToKitchen` sends `c.variantId` as `orderItemId` (always 404), wrong fields (`orderNumber`/`tableNumber`/`stationId`/`modifiersJson`/`notes`), omits `tableId`/`diningMode` (`TAKEAWAY`→`TAKEOUT`)/`clientRef`, and swallows error in `catch {}`. Fetch `GET /v1/pos/orders/${ord.id}/items`, map real `orderItemId`, send exact `KdsService` DTO, surface errors. | deep_link_1, deep_link_3, deep_link_10 | M2-Web |
+| W2 | P0 | `PosTenderPanel.tsx:127-137` ignores `railStatus: "failed"` when `checkout.status` resets to `"open"` → polls forever. | deep_link_1 | M2-Web |
+| W3 | P0 | `PosTenderPanel.tsx:90-119,457-461` "Verify Now" swallows confirm error, clears pending/QR state, and calls `onOrderPaid()` on an unpaid order. Keep polling and show inline notice if still unpaid. | deep_link_1, deep_link_3 | M2-Web |
+| W4 | P1 | `PosTerminalBar.tsx`: display one-time `pairingCode` on terminal registration; clear `shift` and surface non-404 errors in `loadShift()`. | deep_link_1 | M2-Web |
+| W5 | P1 | `MerchantTools.tsx` + `posHelpers.ts`: seat `DINE_IN` table via `POST /v1/restaurant/tables/${tableId}/seat?orderId=${created.id}` after creating order; remove dead `tableId` from `buildPosOrderPayload`; add "Void / New Order" button calling `POST /v1/pos/orders/${order.id}/void`; rename `SeatSplitGroup.items[].lineTotalPesewas` → `totalPesewas`; add `"SETTLED"` to `isTerminalStatusPaid()`. | deep_link_1, deep_link_3, deep_link_10 | M2-Web |
+| W6 | P1 | `Checkout.tsx`: use `status.fee`/`status.total`/`status.method` when paid/processing (fixes post-reload receipt totals); clear/rotate `localStorage` idempotency key on method/phone/network change, `paid`, or `railStatus === "failed"`; fix OIDC redirect race & dev `prompt()` cancel; relabel static `showQr` toggle ("Open on another device") and render `qrPayload` if present during `ghqr` processing. | deep_link_1 | M2-Web |
+| W7 | P1 | `PosTenderPanel.tsx:273-280`: remove broken `/qr?link=${dc.reference}` fallback (use `dc.payUrl` / `qrPayload`). Validate cash against remaining balance `ord.totalPesewas - ord.paidPesewas`. | deep_link_1, deep_link_3, deep_link_10 | M2-Web |
+| W8 | P1 | `Merchant.tsx`: fix `OrdersAndReceipts` `"pending"` filter (`pending_settlement`, `processing`, `awaiting_delivery`) & surface load errors; handle empty `merchants === []` cleanly instead of infinite loading; include `delivery` kind in `BusinessAccounting` gross sales if applicable. | deep_link_1, deep_link_3 | M2-Web |
+| W9 | P1 | `Kitchen.tsx`: use `hasPrinter` from paired credential / station instead of hardcoding `false`. `Ops.tsx`: include `netByCurrency` check in `ledgerHealthy`; pass `b.currency` to `formatMoney` at `:1323`; add `.sev-low` in `styles.css`. `api.ts:43`: read `data?.detail ?? data?.message ?? (response.statusText || \`HTTP ${response.status}\`)`. | deep_link_2, deep_link_8 | M2-Web |
+| W10 | P1 | Update/add Vitest unit tests in `web/src/pos/posHelpers.test.ts` covering `"SETTLED"`, `totalPesewas`, `buildPosOrderPayload`, and rail failure status detection. | deep_link_1 | M2-Web |
+
+### Track C — Mobile Apps (`worker_apps`)
+| # | Sev | Defect | Source | Milestone |
+|---|-----|--------|--------|-----------|
+| A1 | P0 | All 3 Expo apps (`restaurant-pos`, `kitchen-kds`, `merchant-app`) fail Metro bundling (`ConfigError: Cannot resolve entry file`) due to `"main": "node_modules/expo/AppEntry.js"` in hoisted workspaces + missing `metro.config.js`. Add `index.ts` (`registerRootComponent(App)`), set `"main": "index.ts"`, and add workspace-aware `metro.config.js` to all 3 apps. | deep_link_4, deep_link_6, deep_link_7, deep_link_10 | M3-Apps |
+| A2 | P0 | `apps/restaurant-pos/src/screens/PosRegisterScreen.tsx:195-213` `sendToKitchen` sends `c.variantId` as `orderItemId` (always 404) and wrong DTO fields. Fetch `GET /v1/pos/orders/${ord.id}/items`, map real `orderItemId`, send exact `KdsService` payload (`tableId`, `diningMode` with `TAKEOUT`, `clientRef`, `modifiers`), surface errors. | deep_link_5, deep_link_10 | M3-Apps |
+| A3 | P1 | `apps/shared/src/`: (1) `posHelpers.ts`: rename `SeatSplitResult.seatGroups[].items[].lineTotalPesewas` → `totalPesewas`; add `"SETTLED"` to `isTerminalStatusPaid()`; remove dead `tableId`/`notes` from `buildPosOrderPayload`. (2) `api.ts`: fix `response.statusText || \`HTTP ${response.status}\`` + `ProblemDetail.errors[]` in `call` & `callAsKitchenDevice`; fix `callAsKitchenDevice` to send & sign `options.idempotencyKey`, uppercase `method`, and include `baseUrl` path prefix in `canonicalV2`; add fetch timeout (`AbortController`). (3) `money.ts`: tighten `normalizeGhanaPhone` to `/^233[1-9]\d{8}$/`. (4) `types.ts`: add `status`, `coolingOffUntil`, `oobVerificationStatus` to `SettlementDestination` and `hasPrinter?: boolean` to `DeviceCredential`. (5) `kdsEngine.ts`: revert optimistic ticket state on 4xx rejection in `kdsSettle` (or trigger full resync with `since=0`). | deep_link_4, deep_link_6, deep_link_7 | M3-Apps |
+| A4 | P1 | `apps/restaurant-pos`: (1) `TenderModal.tsx`: fix "Verify Now" swallowing 409; detect `railStatus === "failed"`; cancel pending digital checkout on modal close (or warn/cancel); remove broken `/qr?link=${dc.reference}` fallback; await receipt before closing. (2) `PosRegisterScreen.tsx`: seat `DINE_IN` table via `POST /v1/restaurant/tables/${tableId}/seat?orderId=${created.id}`; add "Void / New Order" button (`POST /v1/pos/orders/${order.id}/void`). (3) `App.tsx`: preserve `PosRegisterScreen` state across Register/Floor Plan tab switches (display toggle instead of unmount); reset state on merchant switch (`key={merchant.id}`); add `.catch()` on `SecureStore`; use `SafeAreaProvider`/`SafeAreaView` from `react-native-safe-area-context`. | deep_link_5, deep_link_4 | M3-Apps |
+| A5 | P1 | `apps/kitchen-kds`: (1) `KitchenBoardScreen.tsx`: await AsyncStorage hydration BEFORE starting live `sync` loop + add `if (stopped) return;` guards after every `await`; trigger immediate `flush()` kick after bump/cancel; guard `toLocaleTimeString` with try/catch for Android Hermes; handle 4xx rejection by reverting optimistic state / resyncing; use `hasPrinter` from paired credential/station; fix `ticketCard` width overflow. (2) `StationSelectScreen.tsx`: add loading/retry/cancel guard. (3) `App.tsx`: use `SafeAreaProvider`/`SafeAreaView` from `react-native-safe-area-context`. | deep_link_6, deep_link_4 | M3-Apps |
+| A6 | P1 | `apps/merchant-app`: (1) `SalesScreen.tsx`: fix `"pending"` filter (`pending_settlement`, `processing`, `awaiting_delivery`); only show Refund form for refundable statuses (`settled`, `pending_settlement`, `partially_refunded`) and non-cashier roles. (2) `CollectScreen.tsx`: render `r.qrPayload ?? r.payload` for Shop GhQR. (3) `App.tsx`: add `key={merchant.id}` on tab screens; add empty-merchants state instead of infinite loading; add `.catch()` on `SecureStore`; use `SafeAreaProvider`/`SafeAreaView` from `react-native-safe-area-context`. (4) `HomeScreen.tsx`: handle `/balances` 403 for cashiers without blanking `/transactions`. (5) `WithdrawScreen.tsx`: show destination `coolingOffUntil`/`oobVerificationStatus` warnings and handle HTTP 202 `DualControl` (`pending_approval`) cleanly. | deep_link_7, deep_link_4 | M3-Apps |
+| A7 | P1 | Update/add unit tests in `apps/shared/src/__tests__/core.test.ts` covering `totalPesewas`, `"SETTLED"`, `normalizeGhanaPhone` (`2330...` rejected), `callAsKitchenDevice` idempotency/uppercase, and `kdsSettle` 4xx rollback. | deep_link_4, deep_link_6 | M3-Apps |
+
+## Interface Contracts (Synchronized Across All 3 Tracks)
+1. `GET /v1/pos/orders/{orderId}/items` → `200 OK` JSON array of `PosOrderItem` (`id`, `orderId`, `variantId`, `name`, `quantity`, `unitPricePesewas`, `discountPesewas`, `totalPesewas`, `seatNumber`, `course`, `modifiers`, `notes`).
+2. `POST /v1/pos/orders/{orderId}/void` → `200 OK` `PosOrder` (status `VOIDED`, cancels any active `pos_checkout_link`).
+3. `POST /v1/pos/terminals/register` → `200 OK` JSON containing all `PosTerminal` fields PLUS `pairingCode` (6-digit string) and `pairingCodeExpiresAt` (ISO-8601).
+4. `POST /v1/payroll/runs/{id}/submit` and `POST /v1/payroll/runs/{id}/approve` → `200 OK` `PayrollRun`.
+5. `POST /v1/public/kitchen/pair` → `200 OK` `Paired` including `hasPrinter: boolean`.
+6. Security filter error JSON → `{"code":"...","detail":"...","message":"...","status":...}`.
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 1 | M1: Stage 1 Kill-Switch Matrix, Custodian Bank Backstop, Dead-End Security Gates, OWASP Fix & Stage 1 Benchmarking/Pentest | Complete implementation and verification of Features 1–8 across `V49` migration, identity, merchant, payout, rails, security, common, reconciliation, CI/CD config, and integration/benchmark/pentest tests | none | IN_PROGRESS |
-
-## Interface Contracts
-### `Stage1KillSwitchFilter` & `KillSwitchController` ↔ `Payouts` / `ApiKeys`
-- `POST /admin/kill-switch/global` & `POST /v1/ops/kill-switch/global`: trips global payout/withdrawal/transfer freeze in <1s; `Payouts.create`, `Payouts.submit`, `MerchantPayouts.withdraw`, `MerchantPayouts.batch` reject with `GLOBAL_KILL_SWITCH_ACTIVE`.
-- `POST /admin/kill-switch/merchants/{merchantId}` & `POST /v1/ops/kill-switch/merchants/{merchantId}`: freezes payouts for `merchantId` only (`MERCHANT_KILL_SWITCH_ACTIVE`).
-- Non-Stage-1 disabled routes (`/v1/lending/**`, `/v1/virtual-cards/**`, `/v1/cards/**`, `/v1/pos/**`, `/v1/bills/**`, `/v1/bill-payments/**`, `/v1/agents/**`, `/v1/agent-banking/**`, `/v1/fx/**`, `/v1/fx-trading/**`, etc.) return HTTP `404` with `{"code":"FEATURE_NOT_ENABLED","error":"FEATURE_NOT_ENABLED",...}`.
-
-### `ApiKeys` / `SecurityConfig` ↔ `MerchantPayouts` / `Merchants`
-- `pk_live_*` -> `key_type = 'publishable'`, scope restricted to payment intent / checkout creation (`POST /v1/merchants/{id}/checkouts`, `POST /v1/checkouts`).
-- `sk_live_*` -> `key_type = 'secret'`, scopes `view`, `collect`, `refund`; rejected with `403 Forbidden` (`payout_key_required`) on payout/withdrawal endpoints.
-- `payout_live_*` -> `key_type = 'payout'`, requires caller IP to match `api_credential.allowed_ips` (`403 Forbidden` `ip_not_allowlisted` if unregistered/mismatched IP) and destination to be pre-approved, verified, and past `cooling_off_until` (`403 Forbidden` `destination_not_allowlisted` / `destination_cooling_off_active`).
-
-### `CustodianBankBackstopService` (`com.elepay.rails`) ↔ `RailTransactions`
-- `authorizeOutboundDisbursement(UUID txId, String reference, String rail, String direction, long amountPesewas, String currency)` enforced inside `RailTransactions.send` before external rail invocation.
-
-## Code Layout
-- `src/main/resources/db/migration/V49__stage1_kill_switches_custodian_and_dead_end_gates.sql` — Consolidated Stage 1 Flyway migration
-- `src/test/resources/table-owners.properties` — Register all new V49 tables to their owning modules (`identity`, `payout`, `rails`, `security`)
-- `src/main/java/com/elepay/identity/*` — `Stage1KillSwitchFilter`, `KillSwitchService`, `KillSwitchController`, `ApiKeys`, `ApiKeyAuthentication`, `SecurityConfig`, `Actor`
-- `src/main/java/com/elepay/merchant/*` — `Merchants`, `MerchantAccess` (24h cooling-off lock & OOB verification)
-- `src/main/java/com/elepay/payout/*` — `Payouts`, `MerchantPayouts`, `PayoutPolicies`, `PayoutPolicyApi`, `PayoutVelocityService`
-- `src/main/java/com/elepay/rails/*` — `CustodianBankBackstopService`, `RailTransactions`, `RailEndpoints`
-- `src/main/java/com/elepay/security/*` — `MakerCheckerService`, `MakerCheckerController`, `KmsSecretProvider`, `ProductionSafetyCheck`
-- `src/main/java/com/elepay/common/*` — `OutboundUrlGuard` (strict egress allowlist)
-- `src/main/java/com/elepay/reconciliation/*` & `src/main/java/com/elepay/operations/*` — `TenWayClearingReconciliationEngine`, `Mt940StatementParser`, `ReconciliationService` (50k–100k batch hash-join optimization)
-- `pom.xml` & `.github/workflows/sandbox.yml` — OWASP Dependency-Check NVD cache datafeed configuration
-- `src/test/java/com/elepay/stage1/Stage1BenchmarkAndPentestIT.java` — End-to-end Proofs 1–6 verification, concurrency benchmark, 50k reconciliation speed benchmark, and adversarial pentest suite
-
-## Readiness and evidence
-The original 100-algorithm inventory describes source implementations, **implemented in code, not yet proven in production**. Re-run backend, frontend, integration, Flyway, security and ledger integrity tests at the exact commit. Mark CI green only when a successful run is observed; simulated/test payment rails do not imply live partner connection.
+| 0 | Wave 1: 10-Subagent Deep Challenge | 8 Explorers + 2 Challengers across entire stack | none | DONE |
+| 1 | M1-Backend | Backend P0/P1/P2 fixes (`worker_backend`) | M0 | DONE |
+| 2 | M2-Web | Web Frontend P0/P1/P2 fixes (`worker_web`) | M0 | DONE |
+| 3 | M3-Apps | Mobile Monorepo P0/P1/P2 fixes (`worker_apps`) | M0 | DONE |
+| 4 | Wave 3: Verification Gate | 2 Reviewers + 2 Challengers + 1 Forensic Auditor (Iter 2 PASS) | M1, M2, M3 | DONE |

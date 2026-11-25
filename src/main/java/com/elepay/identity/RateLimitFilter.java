@@ -103,7 +103,7 @@ class RateLimitFilter extends OncePerRequestFilter {
         if (maxBodyBytes > 0) {
             long declared = request.getContentLengthLong();
             if (declared > maxBodyBytes) {
-                reject(response, 413, "{\"code\":\"payload_too_large\",\"message\":\"Request body is too large.\"}");
+                reject(response, 413, "{\"code\":\"payload_too_large\",\"detail\":\"Request body is too large.\",\"message\":\"Request body is too large.\",\"status\":413}");
                 return;
             }
         }
@@ -201,7 +201,7 @@ class RateLimitFilter extends OncePerRequestFilter {
     }
 
     private void tooManyRequests(HttpServletResponse response) throws IOException {
-        reject(response, 429, "{\"code\":\"rate_limited\",\"message\":\"Too many requests. Try again in a minute.\"}");
+        reject(response, 429, "{\"code\":\"rate_limited\",\"detail\":\"Too many requests. Try again in a minute.\",\"message\":\"Too many requests. Try again in a minute.\",\"status\":429}");
     }
 
     private void reject(HttpServletResponse response, int status, String body) throws IOException {

@@ -61,10 +61,10 @@ public class PosController {
                                           Integer manufactureYear, String deviceName, String deviceDescription) {}
 
     @PostMapping("/terminals/register")
-    public PosTerminalService.PosTerminal registerTerminal(@RequestBody RegisterTerminalRequest req) {
+    public PosTerminalService.RegisteredTerminal registerTerminal(@RequestBody RegisterTerminalRequest req) {
         access.manage(req.merchantId());
         access.branch(req.merchantId(), req.branchId());
-        return terminalService.registerTerminal(req.merchantId(), req.branchId(), req.serialNumber(), req.model(),
+        return terminalService.registerTerminalWithPairingCode(req.merchantId(), req.branchId(), req.serialNumber(), req.model(),
                 new PosTerminalService.RegulatoryProfile(req.city(), req.region(), req.country(), req.address(),
                         req.location(), req.latitude(), req.longitude(), req.connectionType(), req.manufacturer(),
                         req.manufactureYear(), req.deviceName(), req.deviceDescription()));
@@ -134,8 +134,14 @@ public class PosController {
 
     @GetMapping("/terminals/merchant/{merchantId}")
     public List<PosTerminalService.PosTerminal> listTerminals(@PathVariable UUID merchantId) {
-        access.manage(merchantId);
-        return terminalService.listTerminals(merchantId);
+        var caller = access.viewAccess(merchantId);
+        List<PosTerminalService.PosTerminal> terminals = terminalService.listTerminals(merchantId);
+        if (caller.branchScoped()) {
+            return terminals.stream()
+                    .filter(t -> java.util.Objects.equals(caller.branchId(), t.branchId()))
+                    .toList();
+        }
+        return terminals;
     }
 
     // Cashier & Shift endpoints
@@ -151,7 +157,7 @@ public class PosController {
 
     @PostMapping("/cashiers/auth")
     public ResponseEntity<PosCashierService.Cashier> authenticateCashier(@RequestBody AuthenticateCashierRequest req) {
-        access.manage(req.merchantId());
+        access.operateAccess(req.merchantId());
         boolean valid = cashierService.authenticateCashier(req.merchantId(), req.badgeNumber(), req.pin());
         if (!valid) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
@@ -166,9 +172,12 @@ public class PosController {
 
     @PostMapping("/shifts/open")
     public PosCashierService.Shift openShift(@RequestBody OpenShiftRequest req) {
-        access.manage(req.merchantId());
+        var caller = access.operateAccess(req.merchantId());
         access.belongs(req.merchantId(), TERMINAL, req.terminalId());
         access.belongs(req.merchantId(), CASHIER, req.cashierId());
+        var terminal = terminalService.getTerminal(req.terminalId())
+                .orElseThrow(() -> ApiException.notFound("Terminal not found"));
+        access.requireBranch(caller, terminal.branchId());
         return cashierService.openShift(req.terminalId(), req.cashierId(), req.merchantId(), req.openingBalancePesewas(), req.notes());
     }
 
@@ -176,13 +185,21 @@ public class PosController {
 
     @PostMapping("/shifts/{shiftId}/close")
     public PosCashierService.Shift closeShift(@PathVariable UUID shiftId, @RequestBody CloseShiftRequest req) {
-        access.manage(SHIFT, shiftId);
+        var caller = access.operateAccess(SHIFT, shiftId);
+        var shift = cashierService.getShift(shiftId)
+                .orElseThrow(() -> ApiException.notFound("Shift not found"));
+        var terminal = terminalService.getTerminal(shift.terminalId())
+                .orElseThrow(() -> ApiException.notFound("Terminal not found"));
+        access.requireBranch(caller, terminal.branchId());
         return cashierService.closeShift(shiftId, req.closingBalancePesewas(), req.notes());
     }
 
     @GetMapping("/shifts/active/{terminalId}")
     public ResponseEntity<PosCashierService.Shift> getActiveShift(@PathVariable UUID terminalId) {
-        access.manage(TERMINAL, terminalId);
+        var caller = access.viewAccess(TERMINAL, terminalId);
+        var terminal = terminalService.getTerminal(terminalId)
+                .orElseThrow(() -> ApiException.notFound("Terminal not found"));
+        access.requireBranch(caller, terminal.branchId());
         return cashierService.getActiveShift(terminalId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
@@ -251,6 +268,21 @@ public class PosController {
         return orderService.getOrder(orderId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/orders/{orderId}/items")
+    public List<PosOrderService.PosOrderItem> listOrderItems(@PathVariable UUID orderId) {
+        var caller = access.viewAccess(ORDER, orderId);
+        var order = orderService.getOrder(orderId)
+                .orElseThrow(() -> ApiException.notFound("Order not found"));
+        access.requireBranch(caller, order.branchId());
+        return orderService.listOrderItems(orderId);
+    }
+
+    @PostMapping("/orders/{orderId}/void")
+    public PosOrderService.PosOrder voidOrder(@PathVariable UUID orderId) {
+        verifyOrder(orderId);
+        return orderService.voidOrder(orderId, com.elepay.identity.Actor.current().subject());
     }
 
     public record TenderPaymentRequest(TenderType tenderType, long amountPesewas, String reference) {}

@@ -56,6 +56,37 @@ describe("Audit Remediation Tests", () => {
         message: "This module is disabled in Stage 1",
       });
     });
+
+    it("falls back to data.message and HTTP status when detail and statusText are absent", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({ code: "missing_signature", message: "Request signature required" }),
+            { status: 401, statusText: "", headers: { "Content-Type": "application/json" } }
+          )
+        )
+      );
+
+      await expect(api("/v1/ops/queue", { anonymous: true })).rejects.toMatchObject({
+        status: 401,
+        code: "missing_signature",
+        message: "Request signature required",
+      });
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response("", { status: 503, statusText: "" })
+        )
+      );
+
+      await expect(api("/v1/ops/queue", { anonymous: true })).rejects.toMatchObject({
+        status: 503,
+        code: "error",
+        message: "HTTP 503",
+      });
+    });
   });
 
   describe("Checkout.tsx redirectUrl validation and receipt formatting", () => {

@@ -69,6 +69,20 @@ public class PosTerminalService {
             OffsetDateTime createdAt
     ) {}
 
+    public record RegisteredTerminal(
+            UUID id,
+            UUID merchantId,
+            UUID branchId,
+            String serialNumber,
+            String model,
+            String pairingCode,
+            OffsetDateTime pairingCodeExpiresAt,
+            String hardwareFingerprint,
+            String status,
+            OffsetDateTime pairedAt,
+            OffsetDateTime createdAt
+    ) {}
+
     public record PairingResult(
             UUID terminalId,
             String serialNumber,
@@ -92,6 +106,18 @@ public class PosTerminalService {
     @Transactional
     public PosTerminal registerTerminal(UUID merchantId, UUID branchId, String serialNumber, String model,
                                         RegulatoryProfile profile) {
+        RegisteredTerminal registered = registerTerminalWithPairingCode(merchantId, branchId, serialNumber, model, profile);
+        PosTerminal persisted = getTerminal(registered.id()).orElseThrow();
+        return new PosTerminal(
+                persisted.id(), persisted.merchantId(), persisted.branchId(),
+                persisted.serialNumber(), persisted.model(), registered.pairingCode(),
+                persisted.secretKey(), persisted.hardwareFingerprint(),
+                persisted.status(), persisted.pairedAt(), persisted.createdAt());
+    }
+
+    @Transactional
+    public RegisteredTerminal registerTerminalWithPairingCode(UUID merchantId, UUID branchId, String serialNumber,
+                                                              String model, RegulatoryProfile profile) {
         UUID id = UUID.randomUUID();
         String pairingCode = String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
         String pairingCodeHash = hashPairingCode(merchantId, pairingCode);
@@ -139,11 +165,11 @@ public class PosTerminalService {
             .update();
         report(id);
         PosTerminal persisted = getTerminal(id).orElseThrow();
-        return new PosTerminal(
+        return new RegisteredTerminal(
                 persisted.id(), persisted.merchantId(), persisted.branchId(),
-                persisted.serialNumber(), persisted.model(), pairingCode,
-                persisted.secretKey(), persisted.hardwareFingerprint(),
-                persisted.status(), persisted.pairedAt(), persisted.createdAt());
+                persisted.serialNumber(), persisted.model(), pairingCode, pairingExpiresAt,
+                persisted.hardwareFingerprint(), persisted.status(),
+                persisted.pairedAt(), persisted.createdAt());
     }
 
     @Transactional

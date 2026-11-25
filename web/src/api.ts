@@ -31,16 +31,20 @@ export async function api<T>(path: string, options: CallOptions = {}): Promise<T
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const text = await response.text();
-  let data: { code?: string; detail?: string } | null = null;
+  let data: { code?: string; detail?: string; message?: string } | null = null;
   if (text) {
     try {
-      data = JSON.parse(text) as { code?: string; detail?: string };
+      data = JSON.parse(text) as { code?: string; detail?: string; message?: string };
     } catch {
-      throw new ApiError(response.status, "invalid_response", response.statusText || "Invalid response");
+      throw new ApiError(response.status, "invalid_response", response.statusText || `HTTP ${response.status}`);
     }
   }
   if (!response.ok) {
-    throw new ApiError(response.status, data?.code ?? "error", data?.detail ?? response.statusText);
+    throw new ApiError(
+      response.status,
+      data?.code ?? "error",
+      data?.detail ?? data?.message ?? (response.statusText || `HTTP ${response.status}`),
+    );
   }
   return data as T;
 }

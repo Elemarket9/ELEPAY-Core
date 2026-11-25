@@ -1,5 +1,7 @@
 package com.elepay.common;
 
+import jakarta.validation.ConstraintViolationException;
+import java.util.NoSuchElementException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
@@ -24,6 +26,42 @@ class ApiExceptionHandler {
         problem.setProperty("code", "validation_failed");
         problem.setProperty("errors", error.getBindingResult().getFieldErrors().stream()
                 .map(field -> field.getField() + ": " + field.getDefaultMessage()).toList());
+        return problem;
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    ProblemDetail constraintViolation(ConstraintViolationException error) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request validation failed");
+        problem.setProperty("code", "validation_failed");
+        problem.setProperty("errors", error.getConstraintViolations().stream()
+                .map(v -> v.getPropertyPath() + ": " + v.getMessage()).toList());
+        return problem;
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    ProblemDetail illegalArgument(IllegalArgumentException error) {
+        String detail = error.getMessage() != null && !error.getMessage().isBlank()
+                ? error.getMessage() : "Invalid request argument";
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, detail);
+        problem.setProperty("code", "invalid_argument");
+        return problem;
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    ProblemDetail illegalState(IllegalStateException error) {
+        String detail = error.getMessage() != null && !error.getMessage().isBlank()
+                ? error.getMessage() : "The request conflicts with current state";
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, detail);
+        problem.setProperty("code", "invalid_state");
+        return problem;
+    }
+
+    @ExceptionHandler(NoSuchElementException.class)
+    ProblemDetail notFound(NoSuchElementException error) {
+        String detail = error.getMessage() != null && !error.getMessage().isBlank()
+                ? error.getMessage() : "Resource not found";
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, detail);
+        problem.setProperty("code", "not_found");
         return problem;
     }
 

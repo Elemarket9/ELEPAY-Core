@@ -34,7 +34,7 @@ public class Stage1KillSwitchFilter extends OncePerRequestFilter {
             response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
             response.setContentType("application/json");
             response.setCharacterEncoding("UTF-8");
-            response.getWriter().write("{\"code\":\"invalid_path\",\"message\":\"The request path is not allowed\"}");
+            response.getWriter().write("{\"code\":\"invalid_path\",\"detail\":\"The request path is not allowed\",\"message\":\"The request path is not allowed\",\"status\":400}");
             return;
         }
         String disabledModule = killSwitchService.resolveDisabledModuleForPath(path);
@@ -45,7 +45,7 @@ public class Stage1KillSwitchFilter extends OncePerRequestFilter {
             response.getWriter().write(
                     "{\"code\":\"FEATURE_NOT_ENABLED\",\"error\":\"FEATURE_NOT_ENABLED\",\"module\":\""
                             + disabledModule
-                            + "\",\"message\":\"This module is disabled in Stage 1\"}"
+                            + "\",\"detail\":\"This module is disabled in Stage 1\",\"message\":\"This module is disabled in Stage 1\",\"status\":404}"
             );
             return;
         }

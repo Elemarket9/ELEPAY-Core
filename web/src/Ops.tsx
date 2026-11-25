@@ -324,7 +324,11 @@ function Overview() {
     }
   };
 
-  const ledgerHealthy = integrity ? integrity.accountsWithDrift === 0 && integrity.unbalancedTransactions === 0 : null;
+  const ledgerHealthy = integrity
+    ? integrity.accountsWithDrift === 0
+      && integrity.unbalancedTransactions === 0
+      && Object.values(integrity.netByCurrency ?? {}).every((v) => v === 0)
+    : null;
 
   return (
     <>
@@ -1320,7 +1324,7 @@ function MerchantControls({ perms }: { perms: OpsPermissions | null }) {
             {selected.balances.map((b) => (
               <div className="kpi-card" key={`${b.currency}-${b.bucket}`}>
                 <div className="kpi-label">{b.currency} {b.bucket}</div>
-                <div className="kpi-value">{formatMoney(b.balance)}</div>
+                <div className="kpi-value">{formatMoney(b.balance, b.currency)}</div>
               </div>
             ))}
             {selected.balances.length === 0 && <p className="small muted">No ledger accounts opened yet.</p>}

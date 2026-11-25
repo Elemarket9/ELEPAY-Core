@@ -5,6 +5,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -15,6 +16,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -26,6 +28,9 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CompositeFilter;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -72,6 +77,48 @@ class SecurityConfig {
     }
 
     @Bean
+    CorsConfigurationSource corsConfigurationSource(
+            @Value("${elepay.cors.allowed-origins:}") String allowedOrigins) {
+        CorsConfiguration config = new CorsConfiguration();
+        List<String> origins = allowedOrigins == null || allowedOrigins.isBlank()
+                ? List.of()
+                : Arrays.stream(allowedOrigins.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .toList();
+        config.setAllowedOrigins(origins);
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of(
+                "Authorization", "Content-Type", "Accept", "Idempotency-Key",
+                "X-Elepay-Api-Key", "X-Elepay-Signature", "X-Elepay-Signature-Version",
+                "X-Elepay-Timestamp", "X-Elepay-Nonce", "X-Elepay-Channel", "X-Trace-Id"
+        ));
+        config.setExposedHeaders(List.of("X-Trace-Id", "X-Span-Id", "Retry-After"));
+        config.setAllowCredentials(false);
+        config.setMaxAge(3600L);
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
+    static String extractOrigin(String uriString) {
+        if (uriString == null || uriString.isBlank()) return null;
+        try {
+            URI uri = URI.create(uriString.trim());
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if (scheme == null || host == null) return null;
+            int port = uri.getPort();
+            boolean defaultPort = (port == -1)
+                    || ("http".equalsIgnoreCase(scheme) && port == 80)
+                    || ("https".equalsIgnoreCase(scheme) && port == 443);
+            return defaultPort ? scheme + "://" + host : scheme + "://" + host + ":" + port;
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    @Bean
     SecurityFilterChain api(HttpSecurity http, ApiKeys apiKeys,
                             EdgeProtectionFilter edgeProtectionFilter,
                             Stage1KillSwitchFilter stage1KillSwitchFilter,
@@ -79,10 +126,12 @@ class SecurityConfig {
                             RequestSigningFilter requestSigningFilter,
                             Environment env,
                             @Value("${management.server.port:0}") int managementPort,
-                            @Value("${elepay.security.trusted-proxies:}") String trustedProxies)
+                            @Value("${elepay.security.trusted-proxies:}") String trustedProxies,
+                            @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri:}") String issuerUri)
             throws Exception {
-        boolean isProd = env != null && Arrays.stream(env.getActiveProfiles())
-                .anyMatch(p -> "prod".equalsIgnoreCase(p) || "production".equalsIgnoreCase(p));
+        boolean isProd = env != null && env.acceptsProfiles(Profiles.of("prod", "production"));
+        String issuerOrigin = extractOrigin(issuerUri);
+        String connectSrc = issuerOrigin != null ? "connect-src 'self' " + issuerOrigin : "connect-src 'self'";
 
         CompositeFilter preAuthFilters = new CompositeFilter();
         preAuthFilters.setFilters(List.of(
@@ -98,7 +147,7 @@ class SecurityConfig {
                 .headers(h -> h
                         .contentSecurityPolicy(csp -> csp.policyDirectives(
                                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-                                + "img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; "
+                                + "img-src 'self' data:; " + connectSrc + "; font-src 'self'; object-src 'none'; "
                                 + "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"))
                         .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31_536_000))
                         .frameOptions(f -> f.deny())
@@ -169,9 +218,7 @@ class SecurityConfig {
             if (header != null) {
                 var authOpt = keys.authenticate(header);
                 if (authOpt.isEmpty()) {
-                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                    response.setContentType("application/json");
-                    response.getWriter().write("{\"code\":\"invalid_api_key\",\"error\":\"invalid_api_key\",\"message\":\"Invalid or revoked API key\"}");
+                    writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "invalid_api_key", "Invalid or revoked API key");
                     return;
                 }
                 ApiKeyAuthentication auth = authOpt.get();
@@ -179,16 +226,12 @@ class SecurityConfig {
                 // Gate 1: Enforce IP Allowlist for payout_live_* keys (and any key with configured allowed_ips)
                 String pathForGates = RequestPaths.normalized(request);
                 if (pathForGates == null) {
-                    response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-                    response.setContentType("application/json");
-                    response.getWriter().write("{\"code\":\"invalid_path\",\"message\":\"The request path is not allowed\"}");
+                    writeError(response, HttpServletResponse.SC_BAD_REQUEST, "invalid_path", "The request path is not allowed");
                     return;
                 }
                 String callerIp = ClientIpResolver.resolve(request, trustedProxies);
                 if (!keys.isIpAllowed(auth, callerIp)) {
-                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                    response.setContentType("application/json");
-                    response.getWriter().write("{\"code\":\"ip_not_allowlisted\",\"error\":\"ip_not_allowlisted\",\"message\":\"API key is restricted to the merchant's registered server IP allowlist\"}");
+                    writeError(response, HttpServletResponse.SC_FORBIDDEN, "ip_not_allowlisted", "API key is restricted to the merchant's registered server IP allowlist");
                     return;
                 }
 
@@ -201,26 +244,20 @@ class SecurityConfig {
                                 || path.equals("/v1/checkouts")
                                 || path.startsWith("/v1/public/"));
                     if (!allowedForPublishable) {
-                        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                        response.setContentType("application/json");
-                        response.getWriter().write("{\"code\":\"publishable_key_restricted\",\"error\":\"publishable_key_restricted\",\"message\":\"Publishable keys (pk_live) can only create payment intents / checkouts\"}");
+                        writeError(response, HttpServletResponse.SC_FORBIDDEN, "publishable_key_restricted", "Publishable keys (pk_live) can only create payment intents / checkouts");
                         return;
                     }
                 }
 
                 // Kitchen device keys (kd_live_*) reach only the kitchen display endpoints, nothing else.
                 if ("kitchen".equalsIgnoreCase(auth.keyType()) && !KitchenDevicePaths.allowed(request.getMethod(), pathForGates)) {
-                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                    response.setContentType("application/json");
-                    response.getWriter().write("{\"code\":\"kitchen_key_restricted\",\"error\":\"kitchen_key_restricted\",\"message\":\"Kitchen device keys can only use the kitchen display\"}");
+                    writeError(response, HttpServletResponse.SC_FORBIDDEN, "kitchen_key_restricted", "Kitchen device keys can only use the kitchen display");
                     return;
                 }
 
                 // POS terminal keys (pos_live_*) reach only POS terminal/order/cart/shift/NFC/sync endpoints.
                 if ("pos_terminal".equalsIgnoreCase(auth.keyType()) && !PosDevicePaths.allowed(request.getMethod(), pathForGates)) {
-                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                    response.setContentType("application/json");
-                    response.getWriter().write("{\"code\":\"pos_terminal_key_restricted\",\"error\":\"pos_terminal_key_restricted\",\"message\":\"POS terminal keys can only access POS terminal endpoints\"}");
+                    writeError(response, HttpServletResponse.SC_FORBIDDEN, "pos_terminal_key_restricted", "POS terminal keys can only access POS terminal endpoints");
                     return;
                 }
 
@@ -235,24 +272,27 @@ class SecurityConfig {
                             || pathForGates.matches("^/v1/merchants/[^/]+/payroll(?:/.*)?/payouts(?:/.*)?$")
                             || pathForGates.matches("^/v1/payouts(?:/.*)?$");
                     if (isPayoutRoute) {
-                        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                        response.setContentType("application/json");
-                        response.getWriter().write("{\"code\":\"payout_key_required\",\"error\":\"payout_key_required\",\"message\":\"Non-payout API keys cannot initiate or modify payouts or withdrawals; use a dedicated payout_live key\"}");
+                        writeError(response, HttpServletResponse.SC_FORBIDDEN, "payout_key_required", "Non-payout API keys cannot initiate or modify payouts or withdrawals; use a dedicated payout_live key");
                         return;
                     }
                 }
 
                 // Enforce fine-grained scopes (view, collect, refund, withdraw, payouts) on API keys.
                 if (!hasRequiredScope(auth, method, pathForGates)) {
-                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                    response.setContentType("application/json");
-                    response.getWriter().write("{\"code\":\"insufficient_scope\",\"error\":\"insufficient_scope\",\"message\":\"API key lacks required scope for this operation\"}");
+                    writeError(response, HttpServletResponse.SC_FORBIDDEN, "insufficient_scope", "API key lacks required scope for this operation");
                     return;
                 }
 
                 SecurityContextHolder.getContext().setAuthentication(auth);
             }
             chain.doFilter(request, response);
+        }
+
+        private static void writeError(HttpServletResponse response, int status, String code, String message) throws IOException {
+            response.setStatus(status);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"code\":\"" + code + "\",\"error\":\"" + code
+                    + "\",\"detail\":\"" + message + "\",\"message\":\"" + message + "\",\"status\":" + status + "}");
         }
 
         private static boolean hasRequiredScope(ApiKeyAuthentication auth, String method, String path) {

@@ -45,7 +45,6 @@ export function TenderModal({
   visible,
   onClose,
   client,
-  merchantId,
   totalPesewas,
   ensureOrder,
   onOrderPaid,
@@ -61,11 +60,15 @@ export function TenderModal({
   const [cardPayUrl, setCardPayUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollGenRef = useRef(0);
   const completingRef = useRef(false);
+  const usedFallbackRef = useRef(false);
 
   const stopPolling = useCallback(() => {
+    pollGenRef.current += 1;
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
@@ -77,38 +80,58 @@ export function TenderModal({
   useEffect(() => {
     if (!visible) {
       stopPolling();
+      usedFallbackRef.current = false;
+      setActiveOrder(null);
       setPendingRef(null);
       setPollStatus(null);
       setQrPayload(null);
       setCardPayUrl(null);
+      setCashInput("");
+      setMomoPhone("");
       setError(null);
+      setNotice(null);
     }
   }, [visible, stopPolling]);
 
   const completeDigitalOrder = useCallback(
-    async (ord: PosOrder, usedFallback: boolean) => {
+    async (ord: PosOrder, usedFallback: boolean, isManualVerify = false) => {
       if (completingRef.current) return;
       completingRef.current = true;
-      stopPolling();
+      const gen = pollGenRef.current;
+      setError(null);
+      setNotice(null);
       try {
-        let paidOrder = ord;
+        let paidOrder: PosOrder;
         if (usedFallback) {
           paidOrder = await client.call<PosOrder>(`/v1/pos/orders/${ord.id}/digital-checkout/confirm`, { method: "POST" });
         } else {
           const refreshed = await client.call<PosOrder>(`/v1/pos/orders/${ord.id}`);
-          paidOrder =
-            refreshed.status === "PAID"
-              ? refreshed
-              : await client
-                  .call<PosOrder>(`/v1/pos/orders/${ord.id}/digital-checkout/confirm`, { method: "POST" })
-                  .catch(() => refreshed);
+          if (pollGenRef.current !== gen) return;
+          if (refreshed.status === "PAID") {
+            paidOrder = refreshed;
+          } else {
+            paidOrder = await client.call<PosOrder>(`/v1/pos/orders/${ord.id}/digital-checkout/confirm`, { method: "POST" });
+          }
         }
+        if (pollGenRef.current !== gen) return;
+        if (paidOrder.status !== "PAID") {
+          setNotice("Payment not confirmed yet — still waiting for rail confirmation.");
+          return;
+        }
+        stopPolling();
+        usedFallbackRef.current = false;
         setPendingRef(null);
         setQrPayload(null);
         setCardPayUrl(null);
+        setNotice(null);
         await onOrderPaid(paidOrder);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        if (pollGenRef.current !== gen) return;
+        if (isManualVerify && e instanceof ApiError && e.status === 409) {
+          setNotice("Payment not confirmed yet — still waiting for rail confirmation.");
+        } else {
+          setError(e instanceof Error ? e.message : String(e));
+        }
       } finally {
         completingRef.current = false;
       }
@@ -119,26 +142,36 @@ export function TenderModal({
   const startPolling = useCallback(
     (ord: PosOrder, refToPoll: string, usedFallback: boolean) => {
       stopPolling();
+      const gen = ++pollGenRef.current;
+      usedFallbackRef.current = usedFallback;
       setPollStatus("PENDING");
       pollRef.current = setInterval(() => {
         void (async () => {
+          if (pollGenRef.current !== gen) return;
           try {
-            const st = await client.call<{ status: string; message?: string | null }>(
+            const st = await client.call<{ status: string; railStatus?: string | null; message?: string | null }>(
               `/v1/public/checkouts/${refToPoll}/status`,
               { anonymous: true },
             );
-            setPollStatus(st.status);
+            if (pollGenRef.current !== gen) return;
+            setPollStatus(st.railStatus && st.status.toLowerCase() === "open" ? `${st.status} (${st.railStatus})` : st.status);
             if (isTerminalStatusPaid(st.status)) {
-              await completeDigitalOrder(ord, usedFallback);
-            } else if (isTerminalStatusFailed(st.status)) {
+              await completeDigitalOrder(ord, usedFallback, false);
+            } else if (
+              isTerminalStatusFailed(st.status) ||
+              (st.status.toLowerCase() === "open" && isTerminalStatusFailed(st.railStatus))
+            ) {
               stopPolling();
-              setError(st.message || `Payment ${st.status.toLowerCase()}.`);
+              const failedLabel = (st.railStatus || st.status).toLowerCase();
+              setError(st.message || `Payment ${failedLabel}.`);
             }
           } catch {
+            if (pollGenRef.current !== gen) return;
             try {
               const latest = await client.call<PosOrder>(`/v1/pos/orders/${ord.id}`);
+              if (pollGenRef.current !== gen) return;
               if (isTerminalStatusPaid(latest.status)) {
-                await completeDigitalOrder(ord, false);
+                await completeDigitalOrder(ord, usedFallback, false);
               }
             } catch {
               // Keep polling across transient drops
@@ -152,19 +185,21 @@ export function TenderModal({
 
   async function payCash() {
     setError(null);
+    setNotice(null);
     const cash = parseMoney(cashInput);
     if (cash === null || cash <= 0) {
       setError("Enter cash received, e.g. 50.00");
-      return;
-    }
-    if (cash < totalPesewas) {
-      setError(`Cash received is less than ${formatMoney(totalPesewas)}`);
       return;
     }
     setBusy(true);
     try {
       const ord = await ensureOrder();
       setActiveOrder(ord);
+      const remainingPesewas = Math.max(0, ord.totalPesewas - ord.paidPesewas);
+      if (cash < remainingPesewas) {
+        setError(`Cash received is less than ${formatMoney(remainingPesewas)}`);
+        return;
+      }
       const paid = await client.call<PosOrder>(`/v1/pos/orders/${ord.id}/payments`, {
         idempotencyKey: newKey(),
         body: { tenderType: "CASH", amountPesewas: cash, reference: null },
@@ -183,6 +218,7 @@ export function TenderModal({
 
   async function startMomoPush() {
     setError(null);
+    setNotice(null);
     const msisdn = normalizeGhanaPhone(momoPhone);
     if (!msisdn) {
       setError("Enter a valid Ghana MoMo number, e.g. 024 123 4567");
@@ -202,7 +238,7 @@ export function TenderModal({
         const norm = normalizeTenderResult(res);
         ref = norm.checkoutRef;
         if (isTerminalStatusPaid(norm.paymentStatus) || isTerminalStatusPaid(norm.orderStatus)) {
-          await completeDigitalOrder(norm.order ?? ord, false);
+          await completeDigitalOrder(norm.order ?? ord, false, false);
           return;
         }
         if (isTerminalStatusFailed(norm.paymentStatus)) {
@@ -235,6 +271,7 @@ export function TenderModal({
 
   async function startGhQr() {
     setError(null);
+    setNotice(null);
     setBusy(true);
     try {
       const ord = await ensureOrder();
@@ -251,21 +288,18 @@ export function TenderModal({
         ref = norm.checkoutRef;
         payload = norm.qrPayload ?? norm.payUrl;
         if (isTerminalStatusPaid(norm.paymentStatus) || isTerminalStatusPaid(norm.orderStatus)) {
-          await completeDigitalOrder(norm.order ?? ord, false);
+          await completeDigitalOrder(norm.order ?? ord, false, false);
           return;
         }
       } catch (err) {
         if (err instanceof ApiError && err.status === 404) {
           usedFallback = true;
-          const dc = await client.call<{ reference: string; payUrl: string | null }>(
+          const dc = await client.call<{ reference: string; payUrl?: string | null; qrPayload?: string | null }>(
             `/v1/pos/orders/${ord.id}/digital-checkout`,
             { method: "POST" },
           );
           ref = dc.reference;
-          const qr = await client
-            .call<{ payload: string }>(`/v1/merchants/${merchantId}/qr?link=${encodeURIComponent(dc.reference)}`)
-            .catch(() => ({ payload: dc.payUrl ?? dc.reference }));
-          payload = qr.payload;
+          payload = dc.qrPayload ?? dc.payUrl ?? dc.reference;
         } else {
           throw err;
         }
@@ -283,6 +317,7 @@ export function TenderModal({
 
   async function startCard() {
     setError(null);
+    setNotice(null);
     setBusy(true);
     try {
       const ord = await ensureOrder();
@@ -293,7 +328,7 @@ export function TenderModal({
       });
       const norm = normalizeTenderResult(res);
       if (isTerminalStatusPaid(norm.paymentStatus) || isTerminalStatusPaid(norm.orderStatus)) {
-        await completeDigitalOrder(norm.order ?? ord, false);
+        await completeDigitalOrder(norm.order ?? ord, false, false);
         return;
       }
       if (!norm.checkoutRef) throw new Error("No card checkout reference returned.");
@@ -309,6 +344,7 @@ export function TenderModal({
 
   async function cancelPending() {
     stopPolling();
+    usedFallbackRef.current = false;
     if (activeOrder) {
       await client.call(`/v1/pos/orders/${activeOrder.id}/digital-checkout/cancel`, { method: "POST" }).catch(() => {});
     }
@@ -316,21 +352,30 @@ export function TenderModal({
     setPollStatus(null);
     setQrPayload(null);
     setCardPayUrl(null);
+    setNotice(null);
   }
 
+  async function handleClose() {
+    if (pendingRef) {
+      await cancelPending();
+    }
+    onClose();
+  }
+
+  const remainingDue = activeOrder ? Math.max(0, activeOrder.totalPesewas - activeOrder.paidPesewas) : totalPesewas;
   const parsedCash = parseMoney(cashInput);
-  const changeDue = parsedCash !== null && parsedCash >= totalPesewas ? parsedCash - totalPesewas : null;
+  const changeDue = parsedCash !== null && parsedCash >= remainingDue ? parsedCash - remainingDue : null;
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={() => void handleClose()}>
       <View style={styles.backdrop}>
         <View style={styles.sheet}>
           <View style={styles.header}>
             <View>
               <Text style={styles.title}>Collect Payment</Text>
-              <Text style={styles.totalSub}>Total due: {formatMoney(totalPesewas)}</Text>
+              <Text style={styles.totalSub}>Total due: {formatMoney(remainingDue)}</Text>
             </View>
-            <Pressable onPress={onClose}>
+            <Pressable onPress={() => void handleClose()}>
               <Text style={styles.closeText}>Close</Text>
             </Pressable>
           </View>
@@ -351,6 +396,7 @@ export function TenderModal({
                   onPress={() => {
                     setMode(k);
                     setError(null);
+                    setNotice(null);
                   }}
                 >
                   <Text style={[styles.modeBtnText, mode === k && styles.modeBtnTextActive]}>{label}</Text>
@@ -359,6 +405,7 @@ export function TenderModal({
             </View>
 
             {error && <Text style={styles.errorText}>{error}</Text>}
+            {notice && <Text style={styles.noticeText}>{notice}</Text>}
 
             {pendingRef ? (
               <View style={styles.pendingBox}>
@@ -373,13 +420,23 @@ export function TenderModal({
                   </View>
                 )}
                 {cardPayUrl && (
-                  <Pressable style={styles.secondaryBtn} onPress={() => void Linking.openURL(cardPayUrl)}>
+                  <Pressable
+                    style={styles.secondaryBtn}
+                    onPress={() =>
+                      void Linking.openURL(cardPayUrl).catch((e) =>
+                        setError(e instanceof Error ? e.message : "Could not open card checkout link."),
+                      )
+                    }
+                  >
                     <Text style={styles.secondaryBtnText}>Open Card Checkout Link</Text>
                   </Pressable>
                 )}
                 <View style={styles.row}>
                   {activeOrder && (
-                    <Pressable style={[styles.primaryBtn, { flex: 1 }]} onPress={() => void completeDigitalOrder(activeOrder, false)}>
+                    <Pressable
+                      style={[styles.primaryBtn, { flex: 1 }]}
+                      onPress={() => void completeDigitalOrder(activeOrder, usedFallbackRef.current, true)}
+                    >
                       <Text style={styles.primaryBtnText}>Verify Now</Text>
                     </Pressable>
                   )}
@@ -396,18 +453,18 @@ export function TenderModal({
                   keyboardType="decimal-pad"
                   value={cashInput}
                   onChangeText={setCashInput}
-                  placeholder={(totalPesewas / 100).toFixed(2)}
+                  placeholder={(remainingDue / 100).toFixed(2)}
                   placeholderTextColor={colors.subtle}
                 />
                 <View style={styles.denomRow}>
-                  <Pressable style={styles.denomChip} onPress={() => setCashInput((totalPesewas / 100).toFixed(2))}>
+                  <Pressable style={styles.denomChip} onPress={() => setCashInput((remainingDue / 100).toFixed(2))}>
                     <Text style={styles.denomText}>Exact</Text>
                   </Pressable>
                   {[1000, 2000, 5000, 10000].map((add) => (
                     <Pressable
                       key={add}
                       style={styles.denomChip}
-                      onPress={() => setCashInput(((totalPesewas + add) / 100).toFixed(2))}
+                      onPress={() => setCashInput(((remainingDue + add) / 100).toFixed(2))}
                     >
                       <Text style={styles.denomText}>+{formatMoney(add)}</Text>
                     </Pressable>
@@ -420,7 +477,7 @@ export function TenderModal({
                   </View>
                 )}
                 <Pressable style={styles.primaryBtn} disabled={busy} onPress={() => void payCash()}>
-                  {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Charge Cash {formatMoney(totalPesewas)}</Text>}
+                  {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Charge Cash {formatMoney(remainingDue)}</Text>}
                 </Pressable>
               </View>
             ) : mode === "MOMO" ? (
@@ -580,4 +637,5 @@ const styles = StyleSheet.create({
   secondaryBtnText: { color: colors.ink, fontSize: 14, fontWeight: "700" },
   mutedText: { fontSize: 13, color: colors.muted, marginBottom: spacing.md },
   errorText: { color: colors.danger, fontSize: 13, fontWeight: "600", marginBottom: 8 },
+  noticeText: { color: colors.info, fontSize: 13, fontWeight: "600", marginBottom: 8 },
 });

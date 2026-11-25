@@ -32,7 +32,7 @@ export function Kitchen() {
     const d = loadDevice();
     if (d && saved && saved.merchantId !== d.merchantId) return null;
     if (d && !saved && d.stationId !== undefined && d.stationName) {
-      return { merchantId: d.merchantId, merchantName: d.merchantName, stationId: d.stationId, stationName: d.stationName, hasPrinter: false };
+      return { merchantId: d.merchantId, merchantName: d.merchantName, stationId: d.stationId, stationName: d.stationName, hasPrinter: Boolean(d.hasPrinter) };
     }
     return saved;
   });
@@ -71,7 +71,7 @@ export function Kitchen() {
   if (!device && !staff) return <PairScreen onPaired={(d) => {
     saveDevice(d); setDevice(d);
     if (d.stationId && d.stationName) {
-      const s: Setup = { merchantId: d.merchantId, merchantName: d.merchantName, stationId: d.stationId, stationName: d.stationName, hasPrinter: false };
+      const s: Setup = { merchantId: d.merchantId, merchantName: d.merchantName, stationId: d.stationId, stationName: d.stationName, hasPrinter: Boolean(d.hasPrinter) };
       try { store()?.setItem(SETUP_KEY, JSON.stringify(s)); } catch { /* ignore */ }
       setSetup(s);
     } else {

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
 import { colors, ElepayClient, MerchantView, radius, spacing } from "@elepay/mobile-core";
@@ -27,6 +28,7 @@ export default function App() {
         if (savedUrl) setBaseUrl(savedUrl);
         if (savedToken) setToken(savedToken);
       })
+      .catch(() => {})
       .finally(() => setBooted(true));
   }, []);
 
@@ -51,90 +53,98 @@ export default function App() {
   async function handleSignedIn(url: string, newToken: string) {
     setBaseUrl(url);
     setToken(newToken);
-    await SecureStore.setItemAsync(KEY_URL, url);
-    await SecureStore.setItemAsync(KEY_TOKEN, newToken);
+    await SecureStore.setItemAsync(KEY_URL, url).catch(() => {});
+    await SecureStore.setItemAsync(KEY_TOKEN, newToken).catch(() => {});
   }
 
   async function handleSignOut() {
     setToken(null);
-    await SecureStore.deleteItemAsync(KEY_TOKEN);
+    await SecureStore.deleteItemAsync(KEY_TOKEN).catch(() => {});
   }
 
   if (!booted) return null;
 
   if (!token) {
     return (
-      <SafeAreaView style={styles.root}>
-        <StatusBar style="dark" />
-        <SignInScreen initialBaseUrl={baseUrl} onSignedIn={(u, t) => void handleSignedIn(u, t)} />
-      </SafeAreaView>
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.root}>
+          <StatusBar style="dark" />
+          <SignInScreen initialBaseUrl={baseUrl} onSignedIn={(u, t) => void handleSignedIn(u, t)} />
+        </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
   const merchant = merchants.find((m) => m.id === merchantId) ?? null;
 
   return (
-    <SafeAreaView style={styles.root}>
-      <StatusBar style="light" />
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerBrand}>ELEPAY RESTAURANT POS</Text>
-          <Text style={styles.headerName} numberOfLines={1}>
-            {merchant ? merchant.tradingName : "Loading restaurant…"}
-          </Text>
-        </View>
-        {merchants.length > 1 && merchant && (
-          <Pressable
-            style={styles.switchBtn}
-            onPress={() => {
-              const idx = merchants.findIndex((m) => m.id === merchant.id);
-              setMerchantId(merchants[(idx + 1) % merchants.length].id);
-            }}
-          >
-            <Text style={styles.switchBtnText}>Switch</Text>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.root}>
+        <StatusBar style="light" />
+        <View style={styles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerBrand}>ELEPAY RESTAURANT POS</Text>
+            <Text style={styles.headerName} numberOfLines={1}>
+              {merchant ? merchant.tradingName : "Loading restaurant…"}
+            </Text>
+          </View>
+          {merchants.length > 1 && merchant && (
+            <Pressable
+              style={styles.switchBtn}
+              onPress={() => {
+                const idx = merchants.findIndex((m) => m.id === merchant.id);
+                setMerchantId(merchants[(idx + 1) % merchants.length].id);
+              }}
+            >
+              <Text style={styles.switchBtnText}>Switch</Text>
+            </Pressable>
+          )}
+          <Pressable style={styles.signOutBtn} onPress={() => void handleSignOut()}>
+            <Text style={styles.signOutText}>Sign out</Text>
           </Pressable>
-        )}
-        <Pressable style={styles.signOutBtn} onPress={() => void handleSignOut()}>
-          <Text style={styles.signOutText}>Sign out</Text>
-        </Pressable>
-      </View>
-
-      {error && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorText}>{error}</Text>
         </View>
-      )}
 
-      <View style={{ flex: 1 }}>
-        {merchant && tab === "register" && (
-          <PosRegisterScreen
-            client={client}
-            merchant={merchant}
-            preselectedTableId={preselectedTableId}
-            onClearPreselectedTable={() => setPreselectedTableId(null)}
-          />
+        {error && (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
         )}
-        {merchant && tab === "floor" && (
-          <FloorPlanScreen
-            client={client}
-            merchant={merchant}
-            onStartTableOrder={(tid) => {
-              setPreselectedTableId(tid);
-              setTab("register");
-            }}
-          />
-        )}
-      </View>
 
-      <View style={styles.tabBar}>
-        <Pressable style={[styles.tabItem, tab === "register" && styles.tabItemActive]} onPress={() => setTab("register")}>
-          <Text style={[styles.tabLabel, tab === "register" && styles.tabLabelActive]}>POS Register</Text>
-        </Pressable>
-        <Pressable style={[styles.tabItem, tab === "floor" && styles.tabItemActive]} onPress={() => setTab("floor")}>
-          <Text style={[styles.tabLabel, tab === "floor" && styles.tabLabelActive]}>Floor Plan</Text>
-        </Pressable>
-      </View>
-    </SafeAreaView>
+        <View style={{ flex: 1 }}>
+          {merchant && (
+            <View style={{ flex: 1, display: tab === "register" ? "flex" : "none" }}>
+              <PosRegisterScreen
+                key={merchant.id}
+                client={client}
+                merchant={merchant}
+                preselectedTableId={preselectedTableId}
+                onClearPreselectedTable={() => setPreselectedTableId(null)}
+              />
+            </View>
+          )}
+          {merchant && tab === "floor" && (
+            <FloorPlanScreen
+              key={merchant.id}
+              client={client}
+              merchant={merchant}
+              onStartTableOrder={(tid) => {
+                setPreselectedTableId(tid);
+                setTab("register");
+              }}
+            />
+          )}
+        </View>
+
+        <View style={styles.tabBar}>
+          <Pressable style={[styles.tabItem, tab === "register" && styles.tabItemActive]} onPress={() => setTab("register")}>
+            <Text style={[styles.tabLabel, tab === "register" && styles.tabLabelActive]}>POS Register</Text>
+          </Pressable>
+          <Pressable style={[styles.tabItem, tab === "floor" && styles.tabItemActive]} onPress={() => setTab("floor")}>
+            <Text style={[styles.tabLabel, tab === "floor" && styles.tabLabelActive]}>Floor Plan</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

@@ -1,10 +1,11 @@
 package com.elepay.risk;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -22,10 +23,16 @@ import java.util.UUID;
 public class SyntheticIdentityService {
 
     private final JdbcClient db;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
 
     public SyntheticIdentityService(JdbcClient db) {
+        this(db, new ObjectMapper());
+    }
+
+    @Autowired
+    public SyntheticIdentityService(JdbcClient db, @Autowired(required = false) ObjectMapper objectMapper) {
         this.db = db;
+        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
     }
 
     public record IdentityProfile(
@@ -128,7 +135,7 @@ public class SyntheticIdentityService {
         String jsonInconsistencies;
         try {
             jsonInconsistencies = objectMapper.writeValueAsString(inconsistencies);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             jsonInconsistencies = "[]";
         }
 

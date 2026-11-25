@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Platform, SafeAreaView, StyleSheet } from "react-native";
+import { Platform, StyleSheet } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
@@ -41,7 +42,7 @@ export default function App() {
               merchantName: parsedDevice.merchantName,
               stationId: parsedDevice.stationId,
               stationName: parsedDevice.stationName,
-              hasPrinter: false,
+              hasPrinter: Boolean(parsedDevice.hasPrinter),
             });
           }
         }
@@ -55,63 +56,65 @@ export default function App() {
   async function handlePaired(url: string, d: DeviceCredential) {
     setBaseUrl(url);
     setDevice(d);
-    await SecureStore.setItemAsync(KEY_URL, url);
-    await SecureStore.setItemAsync(KEY_DEVICE, JSON.stringify(d));
+    await SecureStore.setItemAsync(KEY_URL, url).catch(() => {});
+    await SecureStore.setItemAsync(KEY_DEVICE, JSON.stringify(d)).catch(() => {});
     if (d.stationId && d.stationName) {
       const s: KdsSetup = {
         merchantId: d.merchantId,
         merchantName: d.merchantName,
         stationId: d.stationId,
         stationName: d.stationName,
-        hasPrinter: false,
+        hasPrinter: Boolean(d.hasPrinter),
       };
       setSetup(s);
-      await AsyncStorage.setItem(KEY_SETUP, JSON.stringify(s));
+      await AsyncStorage.setItem(KEY_SETUP, JSON.stringify(s)).catch(() => {});
     } else {
       setSetup(null);
-      await AsyncStorage.removeItem(KEY_SETUP);
+      await AsyncStorage.removeItem(KEY_SETUP).catch(() => {});
     }
   }
 
   async function handleSelectStation(s: KdsSetup) {
     setSetup(s);
-    await AsyncStorage.setItem(KEY_SETUP, JSON.stringify(s));
+    await AsyncStorage.setItem(KEY_SETUP, JSON.stringify(s)).catch(() => {});
   }
 
   async function handleUnpair() {
     setDevice(null);
     setSetup(null);
-    await SecureStore.deleteItemAsync(KEY_DEVICE);
-    await AsyncStorage.removeItem(KEY_SETUP);
+    await SecureStore.deleteItemAsync(KEY_DEVICE).catch(() => {});
+    await AsyncStorage.removeItem(KEY_SETUP).catch(() => {});
   }
 
   if (!booted) return null;
 
   return (
-    <SafeAreaView style={styles.root}>
-      <StatusBar style="light" />
-      {!device ? (
-        <PairDeviceScreen initialBaseUrl={baseUrl} onPaired={(u, d) => void handlePaired(u, d)} />
-      ) : !setup ? (
-        <StationSelectScreen
-          client={client}
-          device={device}
-          onSelect={(s) => void handleSelectStation(s)}
-          onUnpair={() => void handleUnpair()}
-        />
-      ) : (
-        <KitchenBoardScreen
-          client={client}
-          device={device}
-          setup={setup}
-          onChangeStation={() => {
-            setSetup(null);
-            void AsyncStorage.removeItem(KEY_SETUP);
-          }}
-          onUnpair={() => void handleUnpair()}
-        />
-      )}
-    </SafeAreaView>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.root}>
+        <StatusBar style="light" />
+        {!device ? (
+          <PairDeviceScreen initialBaseUrl={baseUrl} onPaired={(u, d) => void handlePaired(u, d)} />
+        ) : !setup ? (
+          <StationSelectScreen
+            client={client}
+            device={device}
+            onSelect={(s) => void handleSelectStation(s)}
+            onUnpair={() => void handleUnpair()}
+          />
+        ) : (
+          <KitchenBoardScreen
+            client={client}
+            device={device}
+            setup={setup}
+            onChangeStation={() => {
+              setSetup(null);
+              void AsyncStorage.removeItem(KEY_SETUP).catch(() => {});
+            }}
+            onUnpair={() => void handleUnpair()}
+          />
+        )}
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

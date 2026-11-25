@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -82,8 +83,11 @@ public class RequestSigningFilter extends OncePerRequestFilter {
         boolean isPublic = isPublicPath(path);
         boolean enforceHeader = "true".equalsIgnoreCase(request.getHeader(HEADER_ENFORCE));
         boolean apiCredential = request.getHeader(HEADER_API_KEY) != null;
-        boolean isPrivilegedOpsOrAdmin = path.startsWith("/v1/ops/") || path.equals("/v1/ops")
-                || path.startsWith("/admin/") || path.equals("/admin");
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        boolean isOidcJwtSession = auth instanceof JwtAuthenticationToken && auth.isAuthenticated() && !apiCredential;
+        boolean isOpsPath = path.startsWith("/v1/ops/") || path.equals("/v1/ops");
+        boolean isAdminPath = path.startsWith("/admin/") || path.equals("/admin");
+        boolean isPrivilegedOpsOrAdmin = isAdminPath || (isOpsPath && !isOidcJwtSession);
         boolean requireSignature = (enforceHeader
                 || (enforceSigning && (!requireV2 || apiCredential || isPrivilegedOpsOrAdmin)))
                 && isMutation && !isPublic;
@@ -215,7 +219,7 @@ public class RequestSigningFilter extends OncePerRequestFilter {
     private void sendJsonError(HttpServletResponse response, int status, String code, String message) throws IOException {
         response.setStatus(status);
         response.setContentType("application/json");
-        response.getWriter().write("{\"code\":\"" + code + "\",\"message\":\"" + message + "\"}");
+        response.getWriter().write("{\"code\":\"" + code + "\",\"detail\":\"" + message + "\",\"message\":\"" + message + "\",\"status\":" + status + "}");
     }
 
     public static String computeSignature(String secret, String timestamp, String method, String path, String body) {

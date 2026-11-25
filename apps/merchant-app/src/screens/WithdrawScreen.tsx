@@ -50,11 +50,13 @@ export function WithdrawScreen({ client, merchant }: Props) {
       setBalances(b);
       setDestinations(dests);
       setPayouts(p);
-      setSelectedDest((prev) =>
-        prev && dests.some((d) => d.id === prev && d.verification === "verified")
+      setSelectedDest((prev) => {
+        const isEligible = (d: SettlementDestination) =>
+          d.verification === "verified" && !(d.coolingOffUntil && Date.parse(d.coolingOffUntil) > Date.now());
+        return prev && dests.some((d) => d.id === prev && isEligible(d))
           ? prev
-          : (dests.find((d) => d.verification === "verified")?.id ?? ""),
-      );
+          : (dests.find(isEligible)?.id ?? "");
+      });
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -72,7 +74,7 @@ export function WithdrawScreen({ client, merchant }: Props) {
     setError(null);
     setMsg(null);
     if (!selectedDest) {
-      setError("Select a verified settlement destination first.");
+      setError("Select an active, verified settlement destination first.");
       return;
     }
     const pesewas = parseMoney(amount);
@@ -82,11 +84,18 @@ export function WithdrawScreen({ client, merchant }: Props) {
     }
     setBusy(true);
     try {
-      await client.call(`/v1/merchants/${merchant.id}/withdrawals`, {
-        idempotencyKey: newKey(),
-        body: { amount: pesewas, destinationId: selectedDest },
-      });
-      setMsg(`Withdrawal of ${formatMoney(pesewas)} requested.`);
+      const res = await client.call<{ code?: string; detail?: string; message?: string } | null>(
+        `/v1/merchants/${merchant.id}/withdrawals`,
+        {
+          idempotencyKey: newKey(),
+          body: { amount: pesewas, destinationId: selectedDest },
+        },
+      );
+      if (res && res.code === "pending_approval") {
+        setMsg(res.detail || res.message || `Withdrawal of ${formatMoney(pesewas)} queued for dual-control approval.`);
+      } else {
+        setMsg(`Withdrawal of ${formatMoney(pesewas)} requested.`);
+      }
       setAmount("");
       await load();
     } catch (e) {
@@ -116,12 +125,15 @@ export function WithdrawScreen({ client, merchant }: Props) {
           <View style={styles.destList}>
             {destinations.map((d) => {
               const verified = d.verification === "verified";
+              const inCoolingOff = Boolean(d.coolingOffUntil && Date.parse(d.coolingOffUntil) > Date.now());
+              const oobPending = Boolean(d.oobVerificationStatus && d.oobVerificationStatus !== "verified");
+              const selectable = verified && !inCoolingOff;
               const active = selectedDest === d.id;
               return (
                 <Pressable
                   key={d.id}
-                  disabled={!verified}
-                  style={[styles.destItem, active && styles.destItemActive, !verified && { opacity: 0.5 }]}
+                  disabled={!selectable}
+                  style={[styles.destItem, active && styles.destItemActive, !selectable && { opacity: 0.55 }]}
                   onPress={() => setSelectedDest(d.id)}
                 >
                   <View style={{ flex: 1 }}>
@@ -131,10 +143,18 @@ export function WithdrawScreen({ client, merchant }: Props) {
                     <Text style={styles.destSub}>
                       {d.accountName} ({d.type})
                     </Text>
+                    {inCoolingOff && (
+                      <Text style={styles.warnSub}>
+                        Cooling off until {new Date(d.coolingOffUntil!).toUTCString()}
+                      </Text>
+                    )}
+                    {oobPending && (
+                      <Text style={styles.warnSub}>OOB verification: {d.oobVerificationStatus}</Text>
+                    )}
                   </View>
-                  <View style={[styles.tag, verified ? styles.tagOk : styles.tagWarn]}>
-                    <Text style={[styles.tagText, verified ? styles.tagTextOk : styles.tagTextWarn]}>
-                      {d.verification.toUpperCase()}
+                  <View style={[styles.tag, selectable ? styles.tagOk : styles.tagWarn]}>
+                    <Text style={[styles.tagText, selectable ? styles.tagTextOk : styles.tagTextWarn]}>
+                      {inCoolingOff ? "COOLING OFF" : d.verification.toUpperCase()}
                     </Text>
                   </View>
                 </Pressable>
@@ -221,6 +241,7 @@ const styles = StyleSheet.create({
   destItemActive: { borderColor: colors.green, backgroundColor: colors.greenSubtle },
   destTitle: { fontSize: 14, fontWeight: "700", color: colors.ink },
   destSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  warnSub: { fontSize: 11, fontWeight: "700", color: colors.warn, marginTop: 3 },
   tag: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: radius.pill },
   tagOk: { backgroundColor: colors.okBg },
   tagWarn: { backgroundColor: colors.warnBg },

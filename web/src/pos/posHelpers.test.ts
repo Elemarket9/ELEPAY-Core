@@ -5,11 +5,13 @@ import {
   computeCartTotals,
   formatKdsStatusLabel,
   isFeatureNotEnabled,
+  isPollStatusFailed,
   isTerminalStatusFailed,
   isTerminalStatusPaid,
   normalizeNfcTapResult,
   normalizeTenderResult,
   parseHeldCartPayload,
+  type SeatSplitGroup,
 } from "./posHelpers";
 
 describe("POS & Terminal Helpers", () => {
@@ -38,14 +40,13 @@ describe("POS & Terminal Helpers", () => {
     expect(clamped.total).toBe(0);
   });
 
-  it("builds POS order payload with real terminalId, cashierId, orderType, tableId, and seatNumber", () => {
+  it("builds POS order payload with terminalId, cashierId, orderType, and seatNumber without dead tableId", () => {
     const payload = buildPosOrderPayload({
       merchantId: "m-1",
       branchId: "b-1",
       terminalId: "term-123",
       cashierId: "cash-456",
       orderType: "DINE_IN",
-      tableId: "tbl-7",
       lines: [
         { variantId: "v-1", label: "Jollof Rice", unitPricePesewas: 4500, qty: 2, seatNumber: 3 },
       ],
@@ -56,7 +57,7 @@ describe("POS & Terminal Helpers", () => {
     expect(payload.terminalId).toBe("term-123");
     expect(payload.cashierId).toBe("cash-456");
     expect(payload.orderType).toBe("DINE_IN");
-    expect(payload.tableId).toBe("tbl-7");
+    expect("tableId" in payload).toBe(false);
     expect(payload.items[0].seatNumber).toBe(3);
 
     const retailPayload = buildPosOrderPayload({
@@ -64,30 +65,47 @@ describe("POS & Terminal Helpers", () => {
       terminalId: "term-123",
       cashierId: "cash-456",
       orderType: "RETAIL",
-      tableId: "tbl-7",
       lines: [
         { variantId: "v-1", label: "Water", unitPricePesewas: 500, qty: 1, seatNumber: 2 },
       ],
       discountPesewas: 0,
       taxPesewas: 0,
     });
-    expect(retailPayload.tableId).toBeNull();
+    expect("tableId" in retailPayload).toBe(false);
     expect(retailPayload.items[0].seatNumber).toBeNull();
   });
 
-  it("classifies terminal payment statuses and KDS labels", () => {
+  it("classifies terminal payment statuses (including SETTLED), rail failure polling, and KDS labels", () => {
     expect(isTerminalStatusPaid("paid")).toBe(true);
     expect(isTerminalStatusPaid("SUCCEEDED")).toBe(true);
+    expect(isTerminalStatusPaid("SETTLED")).toBe(true);
+    expect(isTerminalStatusPaid("settled")).toBe(true);
     expect(isTerminalStatusPaid("pending")).toBe(false);
 
     expect(isTerminalStatusFailed("DECLINED")).toBe(true);
     expect(isTerminalStatusFailed("failed")).toBe(true);
     expect(isTerminalStatusFailed("processing")).toBe(false);
 
+    // Rail failure detection when checkout resets to "open" with railStatus: "failed"
+    expect(isPollStatusFailed({ status: "open", railStatus: "failed" })).toBe(true);
+    expect(isPollStatusFailed({ status: "open", railStatus: "DECLINED" })).toBe(true);
+    expect(isPollStatusFailed({ status: "expired", railStatus: null })).toBe(true);
+    expect(isPollStatusFailed({ status: "processing", railStatus: "pending" })).toBe(false);
+    expect(isPollStatusFailed({ status: "open", railStatus: null })).toBe(false);
+
     expect(formatKdsStatusLabel("NEW")).toBe("Kitchen: Queued");
     expect(formatKdsStatusLabel("IN_PROGRESS")).toBe("Kitchen: Preparing");
     expect(formatKdsStatusLabel("READY")).toBe("Kitchen: Ready");
     expect(formatKdsStatusLabel(null)).toBe("Not sent");
+  });
+
+  it("types SeatSplitGroup items with totalPesewas matching backend PosOrderItem", () => {
+    const group: SeatSplitGroup = {
+      seatNumber: 1,
+      subtotalPesewas: 9000,
+      items: [{ id: "oi-1", itemName: "Jollof Rice", quantity: 2, totalPesewas: 9000 }],
+    };
+    expect(group.items[0].totalPesewas).toBe(9000);
   });
 
   it("parses held cart payloads safely and rejects malformed JSON", () => {

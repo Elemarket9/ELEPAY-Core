@@ -181,10 +181,84 @@ class SecurityHardeningUnitTest {
     void distributedSessionServiceDoesNotSwallowRevocationFailures() {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         when(redis.delete(anyString())).thenThrow(new RuntimeException("Redis down"));
-        var service = new DistributedSessionService(null, redis, new com.fasterxml.jackson.databind.ObjectMapper());
+        var service = new DistributedSessionService(null, redis, new tools.jackson.databind.ObjectMapper());
 
         assertThatThrownBy(() -> service.revokeSession("sess_abc"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Redis");
+    }
+
+    @Test
+    void requestSigningFilterAllowsOidcJwtBrowserMutationsOnOpsWithoutHmac() throws Exception {
+        String secret = "platform-secret-at-least-32-chars-long";
+        var filter = new RequestSigningFilter(secret, true, new DistributedNonceStore(), null);
+        ReflectionTestUtils.setField(filter, "requireV2", true);
+
+        var jwt = org.springframework.security.oauth2.jwt.Jwt.withTokenValue("tok")
+                .header("alg", "RS256")
+                .subject("ops-user")
+                .issuedAt(Instant.now())
+                .expiresAt(Instant.now().plusSeconds(300))
+                .build();
+        var auth = new org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken(
+                jwt, List.of(new SimpleGrantedAuthority("ROLE_ops")), "ops-user");
+        SecurityContextHolder.getContext().setAuthentication(auth);
+        try {
+            var req = new MockHttpServletRequest("POST", "/v1/ops/kill-switch/global");
+            var res = new MockHttpServletResponse();
+            var chain = new MockFilterChain();
+            filter.doFilter(req, res, chain);
+
+            assertThat(res.getStatus()).isEqualTo(200);
+            assertThat(chain.getRequest()).isNotNull();
+
+            // Still requires HMAC v2 if X-Elepay-Api-Key is present
+            var apiKeyReq = new MockHttpServletRequest("POST", "/v1/ops/kill-switch/global");
+            apiKeyReq.addHeader(RequestSigningFilter.HEADER_API_KEY, "sk_live_test");
+            var apiKeyRes = new MockHttpServletResponse();
+            filter.doFilter(apiKeyReq, apiKeyRes, new MockFilterChain());
+
+            assertThat(apiKeyRes.getStatus()).isEqualTo(401);
+            assertThat(apiKeyRes.getContentAsString()).contains("\"code\":\"missing_signature\"");
+            assertThat(apiKeyRes.getContentAsString()).contains("\"detail\":");
+            assertThat(apiKeyRes.getContentAsString()).contains("\"message\":");
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
+    void securityConfigCorsAndIssuerOriginExtractionWork() {
+        var config = new SecurityConfig();
+        var source = config.corsConfigurationSource("http://localhost:5173, http://localhost:8081");
+        var corsReq = new MockHttpServletRequest("OPTIONS", "/v1/merchants");
+        var cors = source.getCorsConfiguration(corsReq);
+        assertThat(cors).isNotNull();
+        assertThat(cors.getAllowedOrigins()).containsExactly("http://localhost:5173", "http://localhost:8081");
+        assertThat(cors.getAllowedMethods()).contains("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
+        assertThat(cors.getAllowedHeaders()).contains("Authorization", "Idempotency-Key", "X-Elepay-Signature");
+        assertThat(cors.getExposedHeaders()).contains("X-Trace-Id", "X-Span-Id", "Retry-After");
+
+        assertThat(SecurityConfig.extractOrigin("https://auth.elepay.gh/realms/elepay")).isEqualTo("https://auth.elepay.gh");
+        assertThat(SecurityConfig.extractOrigin("http://localhost:8180/realms/dev")).isEqualTo("http://localhost:8180");
+        assertThat(SecurityConfig.extractOrigin("")).isNull();
+        assertThat(SecurityConfig.extractOrigin("not a uri")).isNull();
+    }
+
+    @Test
+    void traceContextFilterSanitizesIncomingTraceId() throws Exception {
+        var filter = new com.elepay.reliability.TraceContextFilter();
+
+        var validReq = new MockHttpServletRequest("GET", "/v1/merchants");
+        validReq.addHeader("X-Trace-Id", "trace_abc-123.xyz");
+        var validRes = new MockHttpServletResponse();
+        filter.doFilter(validReq, validRes, new MockFilterChain());
+        assertThat(validRes.getHeader("X-Trace-Id")).isEqualTo("trace_abc-123.xyz");
+
+        var maliciousReq = new MockHttpServletRequest("GET", "/v1/merchants");
+        maliciousReq.addHeader("X-Trace-Id", "bad\r\nX-Injected: 1");
+        var maliciousRes = new MockHttpServletResponse();
+        filter.doFilter(maliciousReq, maliciousRes, new MockFilterChain());
+        assertThat(maliciousRes.getHeader("X-Trace-Id")).matches("^[0-9a-f]{32}$");
     }
 }

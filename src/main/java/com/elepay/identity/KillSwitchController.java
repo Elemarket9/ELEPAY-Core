@@ -181,11 +181,19 @@ public class KillSwitchController {
         );
     }
 
+    public record RevokeApiKeyRequest(Boolean active, String reason) {}
+
     @PostMapping({"/admin/kill-switch/api-keys/{keyId}", "/v1/ops/kill-switch/api-keys/{keyId}"})
-    public Map<String, Object> emergencyRevokeApiKey(@PathVariable UUID keyId) {
+    public Map<String, Object> emergencyRevokeApiKey(
+            @PathVariable UUID keyId,
+            @RequestBody(required = false) RevokeApiKeyRequest request
+    ) {
         Actor actor = Actor.current();
         actor.requireFreezeRisk();
-        boolean revoked = apiKeys.emergencyRevokeById(keyId, actor.subject());
+        String reason = (request != null && request.reason() != null && !request.reason().isBlank())
+                ? request.reason().strip()
+                : "Emergency API key revocation";
+        boolean revoked = apiKeys.emergencyRevokeById(keyId, actor.subject(), reason);
         if (!revoked) {
             boolean exists = Boolean.TRUE.equals(db.sql("SELECT EXISTS(SELECT 1 FROM api_credential WHERE id = :id)")
                     .param("id", keyId).query(Boolean.class).single());
@@ -195,13 +203,15 @@ public class KillSwitchController {
             return Map.of(
                     "keyId", keyId,
                     "revoked", false,
-                    "status", "ALREADY_REVOKED"
+                    "status", "ALREADY_REVOKED",
+                    "reason", reason
             );
         }
         return Map.of(
                 "keyId", keyId,
                 "revoked", true,
-                "status", "REVOKED"
+                "status", "REVOKED",
+                "reason", reason
         );
     }
 

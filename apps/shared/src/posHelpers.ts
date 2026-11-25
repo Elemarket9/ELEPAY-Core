@@ -67,6 +67,22 @@ export interface PosOrder {
   orderType?: string;
 }
 
+export interface PosOrderItem {
+  id: string;
+  orderId: string;
+  variantId: string;
+  itemName: string;
+  quantity: number;
+  unitPricePesewas: number;
+  discountPesewas: number;
+  taxPesewas: number;
+  totalPesewas: number;
+  modifiersJson: string | null;
+  seatNumber: number | null;
+  course: string | null;
+  notes: string | null;
+}
+
 export interface PosReceipt {
   receiptNumber: string;
   escposFormattedText: string;
@@ -93,7 +109,7 @@ export interface SeatSplitResult {
   seatGroups: {
     seatNumber: number;
     subtotalPesewas: number;
-    items: { id: string; itemName: string; quantity: number; lineTotalPesewas: number }[];
+    items: { id: string; itemName: string; quantity: number; totalPesewas: number }[];
   }[];
 }
 
@@ -179,7 +195,6 @@ export function buildPosOrderPayload(args: {
   terminalId: string | null;
   cashierId: string | null;
   orderType: OrderType;
-  tableId: string | null;
   lines: PosCartLine[];
   discountPesewas: number;
   taxPesewas: number;
@@ -190,7 +205,6 @@ export function buildPosOrderPayload(args: {
     terminalId: args.terminalId,
     cashierId: args.cashierId,
     orderType: args.orderType,
-    tableId: args.orderType === "DINE_IN" ? args.tableId : null,
     items: args.lines.map((c) => ({
       variantId: c.variantId,
       itemName: c.label,
@@ -202,7 +216,6 @@ export function buildPosOrderPayload(args: {
     })),
     discountPesewas: args.discountPesewas,
     taxPesewas: args.taxPesewas,
-    notes: null,
   };
 }
 

@@ -5,6 +5,7 @@ import { formatMoney, normalizeGhanaPhone, parseMoney } from "../money";
 import { IconBanknote, IconCreditCard, IconExternalLink, IconQrCode, IconSmartphone } from "../ui/Icons";
 import {
   isFeatureNotEnabled,
+  isPollStatusFailed,
   isTerminalStatusFailed,
   isTerminalStatusPaid,
   MOMO_NETWORKS,
@@ -35,10 +36,11 @@ interface DigitalCheckoutFallback {
   amount: number;
   status: string;
   payUrl: string | null;
+  qrPayload?: string | null;
 }
 
 export function PosTenderPanel({
-  merchantId,
+  merchantId: _merchantId,
   terminalId,
   totalPesewas,
   ensureOrder,
@@ -63,12 +65,16 @@ export function PosTenderPanel({
   const [qrImage, setQrImage] = useState<string | null>(null);
   const [cardPayUrl, setCardPayUrl] = useState<string | null>(null);
   const [nfcResult, setNfcResult] = useState<NormalizedNfcTapResult | null>(null);
+  const [verifyNotice, setVerifyNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollGenRef = useRef(0);
   const completingRef = useRef(false);
+  const usedFallbackRef = useRef(false);
 
   const stopPolling = useCallback(() => {
+    pollGenRef.current += 1;
     if (pollTimerRef.current !== null) {
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
@@ -90,9 +96,10 @@ export function PosTenderPanel({
   const completeDigitalOrder = useCallback(async (orderObj: PosOrder, usedFallbackCheckout: boolean) => {
     if (completingRef.current) return;
     completingRef.current = true;
-    stopPolling();
+    setVerifyNotice(null);
+    setError(null);
     try {
-      let paidOrder = orderObj;
+      let paidOrder: PosOrder;
       if (usedFallbackCheckout) {
         paidOrder = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}/digital-checkout/confirm`, { method: "POST" });
       } else {
@@ -100,19 +107,34 @@ export function PosTenderPanel({
         if (refreshed.status === "PAID") {
           paidOrder = refreshed;
         } else {
-          paidOrder = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}/digital-checkout/confirm`, { method: "POST" }).catch(() => refreshed);
+          paidOrder = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}/digital-checkout/confirm`, { method: "POST" });
         }
       }
+      if (paidOrder.status !== "PAID") {
+        setActiveOrder(paidOrder);
+        setVerifyNotice("Payment not confirmed yet — still waiting for rail confirmation.");
+        return;
+      }
+      stopPolling();
       setPendingRef(null);
       setCheckoutRef(null);
       setPollStatus(null);
       setQrPayload(null);
       setQrReference(null);
       setCardPayUrl(null);
+      setVerifyNotice(null);
       await onOrderPaid(paidOrder);
     } catch (err) {
-      if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
-      setError(err instanceof ApiError ? err.message : String(err));
+      if (isFeatureNotEnabled(err)) {
+        stopPolling();
+        onModuleDisabled();
+        return;
+      }
+      if (err instanceof ApiError && err.status === 409) {
+        setVerifyNotice(err.message || "Payment not confirmed yet — still waiting for rail confirmation.");
+      } else {
+        setError(err instanceof ApiError ? err.message : String(err));
+      }
     } finally {
       completingRef.current = false;
     }
@@ -120,25 +142,32 @@ export function PosTenderPanel({
 
   const startPolling = useCallback((orderObj: PosOrder, refToPoll: string, usedFallbackCheckout: boolean) => {
     stopPolling();
+    const gen = ++pollGenRef.current;
+    usedFallbackRef.current = usedFallbackCheckout;
+    setVerifyNotice(null);
     setPollStatus("PENDING");
     pollTimerRef.current = setInterval(() => {
       void (async () => {
         try {
-          const st = await api<{ status: string; message?: string | null }>(
+          const st = await api<{ status: string; railStatus?: string | null; message?: string | null }>(
             `/v1/public/checkouts/${refToPoll}/status`,
             { anonymous: true },
           );
-          setPollStatus(st.status);
+          if (pollGenRef.current !== gen) return;
+          setPollStatus(st.railStatus && isTerminalStatusFailed(st.railStatus) ? st.railStatus : st.status);
           if (isTerminalStatusPaid(st.status)) {
             await completeDigitalOrder(orderObj, usedFallbackCheckout);
-          } else if (isTerminalStatusFailed(st.status)) {
+          } else if (isPollStatusFailed(st)) {
             stopPolling();
-            setError(st.message || `Payment ${st.status.toLowerCase()}.`);
+            const failedLabel = (isTerminalStatusFailed(st.railStatus) ? st.railStatus : st.status) ?? "failed";
+            setError(st.message || `Payment ${failedLabel.toLowerCase()}.`);
           }
         } catch {
+          if (pollGenRef.current !== gen) return;
           // Also check POS order directly in case tender settled server-side
           try {
             const ord = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}`);
+            if (pollGenRef.current !== gen) return;
             if (isTerminalStatusPaid(ord.status)) {
               await completeDigitalOrder(orderObj, false);
             }
@@ -150,6 +179,10 @@ export function PosTenderPanel({
     }, 3000);
   }, [completeDigitalOrder, stopPolling]);
 
+  const remainingPesewas = activeOrder
+    ? Math.max(0, activeOrder.totalPesewas - activeOrder.paidPesewas)
+    : totalPesewas;
+
   async function payCash() {
     setError(null);
     const cash = parseMoney(cashInput);
@@ -157,20 +190,27 @@ export function PosTenderPanel({
       setError("Enter the cash received, like 50.00");
       return;
     }
-    if (cash < totalPesewas) {
-      setError(`Cash received is less than ${formatMoney(totalPesewas)}`);
+    if (cash < remainingPesewas) {
+      setError(`Cash received is less than ${formatMoney(remainingPesewas)}`);
       return;
     }
     setBusy(true);
     try {
       const ord = await ensureOrder();
       setActiveOrder(ord);
+      const duePesewas = Math.max(0, ord.totalPesewas - ord.paidPesewas);
+      if (cash < duePesewas) {
+        setError(`Cash received is less than remaining balance ${formatMoney(duePesewas)}`);
+        return;
+      }
       const paid = await api<PosOrder>(`/v1/pos/orders/${ord.id}/payments`, {
         body: { tenderType: "CASH", amountPesewas: cash, reference: null },
         idempotencyKey: newKey(),
       });
+      setActiveOrder(paid);
       if (paid.status !== "PAID") {
-        setError("The sale is not fully paid yet.");
+        const left = Math.max(0, paid.totalPesewas - paid.paidPesewas);
+        setError(`The sale is not fully paid yet. Remaining balance: ${formatMoney(left)}.`);
         return;
       }
       await onOrderPaid(paid);
@@ -274,9 +314,7 @@ export function PosTenderPanel({
           usedFallback = true;
           const dc = await api<DigitalCheckoutFallback>(`/v1/pos/orders/${ord.id}/digital-checkout`, { method: "POST" });
           ref = dc.reference;
-          const qrRes = await api<{ payload: string }>(`/v1/merchants/${merchantId}/qr?link=${encodeURIComponent(dc.reference)}`)
-            .catch(() => ({ payload: dc.payUrl ?? dc.reference }));
-          emvPayload = qrRes.payload;
+          emvPayload = dc.qrPayload ?? dc.payUrl ?? dc.reference;
         } else {
           throw tenderErr;
         }
@@ -393,10 +431,11 @@ export function PosTenderPanel({
     setQrReference(null);
     setCardPayUrl(null);
     setNfcResult(null);
+    setVerifyNotice(null);
   }
 
   const parsedCash = parseMoney(cashInput);
-  const cashChange = parsedCash !== null && parsedCash >= totalPesewas ? parsedCash - totalPesewas : null;
+  const cashChange = parsedCash !== null && parsedCash >= remainingPesewas ? parsedCash - remainingPesewas : null;
 
   return (
     <div style={{ marginTop: "0.9rem", paddingTop: "0.9rem", borderTop: "1px solid var(--line)" }}>
@@ -434,6 +473,7 @@ export function PosTenderPanel({
             </div>
           </div>
           <p className="small muted" style={{ marginBottom: "0.65rem" }}>Auto-polling every 3 seconds…</p>
+          {verifyNotice && <p className="notice warn" role="status" style={{ marginBottom: "0.65rem" }}>{verifyNotice}</p>}
           {qrImage && (
             <div className="qr-frame" style={{ margin: "0.65rem 0" }}>
               <img src={qrImage} alt="EMVCo GhQR code" width={200} height={200} />
@@ -455,7 +495,7 @@ export function PosTenderPanel({
           )}
           <div className="flex-row">
             {checkoutRef && activeOrder && (
-              <button type="button" onClick={() => void completeDigitalOrder(activeOrder, false)} disabled={busy}>
+              <button type="button" onClick={() => void completeDigitalOrder(activeOrder, usedFallbackRef.current)} disabled={busy}>
                 Verify Now
               </button>
             )}
@@ -475,12 +515,12 @@ export function PosTenderPanel({
                   inputMode="decimal"
                   value={cashInput}
                   onChange={(e) => setCashInput(e.target.value)}
-                  placeholder={(totalPesewas / 100).toFixed(2)}
+                  placeholder={(remainingPesewas / 100).toFixed(2)}
                 />
               </label>
               <div className="flex-row" style={{ marginBottom: "0.65rem", gap: "0.35rem" }}>
-                <button type="button" className="secondary small" style={{ margin: 0 }} onClick={() => setCashInput((totalPesewas / 100).toFixed(2))}>
-                  Exact ({formatMoney(totalPesewas)})
+                <button type="button" className="secondary small" style={{ margin: 0 }} onClick={() => setCashInput((remainingPesewas / 100).toFixed(2))}>
+                  Exact ({formatMoney(remainingPesewas)})
                 </button>
                 {[1000, 2000, 5000, 10000].map((add) => (
                   <button
@@ -488,7 +528,7 @@ export function PosTenderPanel({
                     type="button"
                     className="secondary small"
                     style={{ margin: 0 }}
-                    onClick={() => setCashInput(((totalPesewas + add) / 100).toFixed(2))}
+                    onClick={() => setCashInput(((remainingPesewas + add) / 100).toFixed(2))}
                   >
                     +{formatMoney(add)}
                   </button>
@@ -502,7 +542,7 @@ export function PosTenderPanel({
               )}
               <div className="flex-row">
                 <button type="button" className="large" style={{ flex: 1, margin: 0 }} onClick={() => void payCash()} disabled={busy}>
-                  {busy ? "Recording…" : `Charge Cash ${formatMoney(totalPesewas)}`}
+                  {busy ? "Recording…" : `Charge Cash ${formatMoney(remainingPesewas)}`}
                 </button>
                 {!hasOrder && onClearCart && (
                   <button type="button" className="secondary large" style={{ margin: 0 }} onClick={onClearCart}>Clear</button>

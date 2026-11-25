@@ -29,11 +29,55 @@ export function newKey(): string {
   return out;
 }
 
+const DEFAULT_TIMEOUT_MS = 20_000;
+
 export interface CallOptions {
   method?: string;
   body?: unknown;
   idempotencyKey?: string;
   anonymous?: boolean;
+  timeoutMs?: number;
+}
+
+interface ErrorBody {
+  code?: string;
+  detail?: string;
+  message?: string;
+  errors?: unknown[];
+}
+
+function formatErrorMessage(data: ErrorBody | null, response: Response): string {
+  const base = data?.detail || data?.message || response.statusText || `HTTP ${response.status}`;
+  const errs = Array.isArray(data?.errors)
+    ? data.errors.filter((e): e is string => typeof e === "string" && e.trim().length > 0)
+    : [];
+  return errs.length > 0 ? `${base}: ${errs.join("; ")}` : base;
+}
+
+function extractSigningPathAndQuery(fullUrl: string, fallbackPath: string): { pathname: string; query: string | null } {
+  try {
+    const parsed = new URL(fullUrl);
+    const query = parsed.search ? parsed.search.slice(1) : null;
+    return { pathname: parsed.pathname || "/", query: query || null };
+  } catch {
+    const qIndex = fallbackPath.indexOf("?");
+    const pathname = qIndex >= 0 ? fallbackPath.slice(0, qIndex) : fallbackPath;
+    const query = qIndex >= 0 ? fallbackPath.slice(qIndex + 1) : null;
+    return { pathname, query: query || null };
+  }
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  if (typeof AbortController === "undefined" || timeoutMs <= 0) {
+    return fetch(url, init);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function normalizeBaseUrl(url: string): string {
@@ -73,6 +117,10 @@ export class ElepayClient {
     }
   }
 
+  getServerNow(): number {
+    return Date.now() + this.clockOffsetMs;
+  }
+
   async call<T>(path: string, options: CallOptions = {}): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
@@ -81,28 +129,29 @@ export class ElepayClient {
       headers.Authorization = `Bearer ${this.token}`;
     }
 
-    const url = `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
-    const response = await fetch(url, {
-      method: options.method ?? (options.body === undefined ? "GET" : "POST"),
-      headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    });
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+    const url = `${this.baseUrl}${normalizedPath}`;
+    const response = await fetchWithTimeout(
+      url,
+      {
+        method: (options.method ?? (options.body === undefined ? "GET" : "POST")).toUpperCase(),
+        headers,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      },
+      options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    );
 
     const text = await response.text();
-    let data: { code?: string; detail?: string; message?: string } | null = null;
+    let data: ErrorBody | null = null;
     if (text) {
       try {
-        data = JSON.parse(text) as { code?: string; detail?: string; message?: string };
+        data = JSON.parse(text) as ErrorBody;
       } catch {
         throw new ApiError(response.status, "invalid_response", response.statusText || "Invalid server response");
       }
     }
     if (!response.ok) {
-      throw new ApiError(
-        response.status,
-        data?.code ?? "error",
-        data?.detail ?? data?.message ?? response.statusText ?? `HTTP ${response.status}`,
-      );
+      throw new ApiError(response.status, data?.code ?? "error", formatErrorMessage(data, response));
     }
     return data as T;
   }
@@ -129,7 +178,7 @@ export class ElepayClient {
 
   /** Execute an API request authenticated as a paired KDS device with HMAC-SHA256 v2 request signing. */
   async callAsKitchenDevice<T>(device: DeviceCredential, path: string, options: CallOptions = {}): Promise<T> {
-    const method = options.method ?? (options.body === undefined ? "GET" : "POST");
+    const method = (options.method ?? (options.body === undefined ? "GET" : "POST")).toUpperCase();
     const body = options.body === undefined ? "" : JSON.stringify(options.body);
     const headers: Record<string, string> = {
       Accept: "application/json",
@@ -138,11 +187,14 @@ export class ElepayClient {
     if (options.body !== undefined) {
       headers["Content-Type"] = "application/json";
     }
+    if (options.idempotencyKey) {
+      headers["Idempotency-Key"] = options.idempotencyKey;
+    }
+
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+    const url = `${this.baseUrl}${normalizedPath}`;
     if (method !== "GET") {
-      const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-      const qIndex = normalizedPath.indexOf("?");
-      const pathname = qIndex >= 0 ? normalizedPath.slice(0, qIndex) : normalizedPath;
-      const query = qIndex >= 0 ? normalizedPath.slice(qIndex + 1) : null;
+      const { pathname, query } = extractSigningPathAndQuery(url, normalizedPath);
       const timestamp = String(Math.floor((Date.now() + this.clockOffsetMs) / 1000));
       const nonce = newKey();
       headers["X-Elepay-Timestamp"] = timestamp;
@@ -150,31 +202,30 @@ export class ElepayClient {
       headers["X-Elepay-Signature-Version"] = "2";
       headers["X-Elepay-Signature"] = hmacSha256Hex(
         device.signingSecret,
-        canonicalV2([timestamp, method, pathname, query || null, nonce, null, body]),
+        canonicalV2([timestamp, method, pathname, query, nonce, options.idempotencyKey ?? null, body]),
       );
     }
 
-    const url = `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
-    const response = await fetch(url, {
-      method,
-      headers,
-      body: options.body === undefined ? undefined : body,
-    });
+    const response = await fetchWithTimeout(
+      url,
+      {
+        method,
+        headers,
+        body: options.body === undefined ? undefined : body,
+      },
+      options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    );
     const text = await response.text();
-    let data: { code?: string; detail?: string; message?: string } | null = null;
+    let data: ErrorBody | null = null;
     if (text) {
       try {
-        data = JSON.parse(text) as { code?: string; detail?: string; message?: string };
+        data = JSON.parse(text) as ErrorBody;
       } catch {
         throw new ApiError(response.status, "invalid_response", response.statusText || "Invalid server response");
       }
     }
     if (!response.ok) {
-      throw new ApiError(
-        response.status,
-        data?.code ?? "error",
-        data?.message ?? data?.detail ?? response.statusText ?? `HTTP ${response.status}`,
-      );
+      throw new ApiError(response.status, data?.code ?? "error", formatErrorMessage(data, response));
     }
     return data as T;
   }
