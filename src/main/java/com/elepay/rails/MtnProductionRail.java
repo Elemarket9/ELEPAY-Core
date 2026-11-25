@@ -26,6 +26,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Direct MTN Ghana production collection and disbursement adapter. No aggregator, sandbox
@@ -46,7 +47,7 @@ public class MtnProductionRail implements PaymentRail {
         }
     }
 
-    private record Response(int status, String body, String contentType) {}
+    record Response(int status, String body, String contentType) {}
 
     /** Fixed diagnostic for upstream HTML authentication blocks, never raw response content. */
     private static final class AuthenticationWafException extends IllegalStateException {
@@ -254,8 +255,7 @@ public class MtnProductionRail implements PaymentRail {
                 response = send(req);
             }
             long latency = System.currentTimeMillis() - start;
-            boolean accepted = response.status() == 202 && !isNonJsonWafResponse(response);
-            health.record(name(), accepted, false, latency);
+            health.record(name(), mtnAnswered(response), false, latency);
             if (isNonJsonWafResponse(response)) {
                 return Result.unknown("MTN refund rejected by upstream WAF (non-JSON HTML response)");
             }
@@ -368,8 +368,7 @@ public class MtnProductionRail implements PaymentRail {
             }
 
             long latency = System.currentTimeMillis() - start;
-            boolean accepted = response.status() == 202 && !isNonJsonWafResponse(response);
-            health.record(name(), accepted, false, latency);
+            health.record(name(), mtnAnswered(response), false, latency);
 
             if (isNonJsonWafResponse(response)) {
                 return Result.unknown("MTN request rejected by upstream WAF (non-JSON HTML response)");
@@ -427,8 +426,7 @@ public class MtnProductionRail implements PaymentRail {
             }
 
             long latency = System.currentTimeMillis() - start;
-            boolean ok = (response.status() == 200 && !isNonJsonWafResponse(response)) || response.status() == 404;
-            health.record(name(), ok, false, latency);
+            health.record(name(), mtnAnswered(response), false, latency);
 
             if (isNonJsonWafResponse(response)) {
                 return Result.unknown("MTN status unavailable: upstream returned non-JSON WAF/HTML response");
@@ -565,6 +563,30 @@ public class MtnProductionRail implements PaymentRail {
         return token;
     }
 
+    /**
+     * Whether MTN itself answered, for the rail's circuit breaker. The breaker must measure whether MTN is
+     * reachable, not whether it said yes: a refusal such as 400 bad request, 404 unknown reference,
+     * 409 "already have this X-Reference-Id" (expected when a lost request is safely resent) or a 500 with an
+     * MTN JSON error code such as NOT_ALLOWED is a working MTN. Counting those as failures let two refused
+     * ops balance lookups, or a few idempotent resends during recovery, open the circuit and stop all MTN
+     * payments. Only real outages count: gateway errors (502/503/504), throttling (429), a WAF/HTML page,
+     * or a 5xx without an MTN JSON body. Timeouts and connection errors are recorded at their catch sites.
+     */
+    static boolean mtnAnswered(Response response) {
+        if (response == null || isNonJsonWafResponse(response)) return false;
+        int status = response.status();
+        if (status == 429 || status == 502 || status == 503 || status == 504) return false;
+        if (status < 500) return true;
+        String body = response.body() == null ? "" : response.body().trim();
+        if (!body.startsWith("{")) return false;
+        try {
+            JsonNode node = JsonMapper.shared().readTree(body);
+            return node.hasNonNull("code") || node.hasNonNull("error");
+        } catch (RuntimeException notJson) {
+            return false;
+        }
+    }
+
     private static boolean isNonJsonWafResponse(Response response) {
         if (response == null) return false;
         if (response.contentType() != null && response.contentType().toLowerCase(Locale.ROOT).contains("text/html")) {
@@ -633,8 +655,7 @@ public class MtnProductionRail implements PaymentRail {
                 response = send(req);
             }
             long latency = System.currentTimeMillis() - start;
-            boolean ok = response.status() == 200 && !isNonJsonWafResponse(response);
-            health.record(name(), ok, false, latency);
+            health.record(name(), mtnAnswered(response), false, latency);
             if (isNonJsonWafResponse(response)) {
                 return new AccountBalance(false, 0L, "GHS", "MTN balance unavailable: upstream returned WAF/HTML response");
             }
@@ -709,8 +730,7 @@ public class MtnProductionRail implements PaymentRail {
                 response = send(req);
             }
             long latency = System.currentTimeMillis() - start;
-            boolean ok = response.status() == 200 && !isNonJsonWafResponse(response);
-            health.record(name(), ok, false, latency);
+            health.record(name(), mtnAnswered(response), false, latency);
             if (isNonJsonWafResponse(response)) {
                 return new AccountValidation(false, false, normalized, "MTN validation unavailable: WAF/HTML response");
             }

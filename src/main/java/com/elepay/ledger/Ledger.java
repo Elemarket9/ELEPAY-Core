@@ -287,6 +287,28 @@ public class Ledger {
                 .param("code", code).query(Long.class).optional().orElse(0L);
     }
 
+    /**
+     * When the oldest money still sitting in this account arrived, matching first-in, first-out: the current
+     * balance is made of the most recent credits, so the oldest credit still needed to cover it dates it.
+     * Empty when the balance is zero or negative. Used to spot merchant funds held past the agreed
+     * settlement period (BoG Notice BG/GOV/SEC/2026/43).
+     */
+    public Optional<OffsetDateTime> oldestUnspentCreditAt(String code) {
+        long balance = balance(code);
+        if (balance <= 0) return Optional.empty();
+        return db.sql("""
+                SELECT min(posted_at) FROM (
+                    SELECT t.posted_at, e.amount,
+                           sum(e.amount) OVER (ORDER BY t.posted_at DESC, e.transaction_id DESC, e.line DESC) AS cum
+                    FROM journal_entry e
+                    JOIN journal_transaction t ON t.id = e.transaction_id
+                    JOIN ledger_account a ON a.id = e.account_id
+                    WHERE a.code = :code AND e.amount > 0) credits
+                WHERE credits.cum - credits.amount < :balance""")
+                .param("code", code).param("balance", balance)
+                .query(OffsetDateTime.class).optional();
+    }
+
     public Optional<Account> account(String code) {
         return db.sql("""
                 SELECT id, code, owner_type, owner_id, bucket, currency, allow_negative, balance

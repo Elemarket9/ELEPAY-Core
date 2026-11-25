@@ -39,6 +39,31 @@ public class KillSwitchService {
     public static final String REDIS_MERCHANTS_KEY = "elepay:killswitch:merchants";
     public static final String REDIS_MODULE_PREFIX = "elepay:killswitch:module:";
 
+    public static final String CARD_PAYMENTS = "card-payments";
+    public static final String MTN_COLLECTIONS = "mtn-collections";
+    public static final String MTN_PAYOUTS = "mtn-payouts";
+    public static final String CHECKOUT = "checkout";
+    public static final String RESTAURANT = "restaurant";
+
+    /**
+     * The switch that governs NEW money movement on a rail, or null when none applies. Refunds are never
+     * blocked: returning a customer's money must keep working while a rail is switched off.
+     */
+    public static String railSwitch(String direction, String rail) {
+        if (rail == null || direction == null || "refund".equals(direction)) return null;
+        return switch (rail.toLowerCase(Locale.ROOT)) {
+            case "card" -> CARD_PAYMENTS;
+            case "mtn" -> "charge".equals(direction) ? MTN_COLLECTIONS : "payout".equals(direction) ? MTN_PAYOUTS : null;
+            default -> null;
+        };
+    }
+
+    /** True unless the rail switch for this direction is off. */
+    public boolean isRailAllowed(String direction, String rail) {
+        String key = railSwitch(direction, rail);
+        return key == null || isModuleEnabled(key);
+    }
+
     private final JdbcClient db;
     private final Audit audit;
     private final OpsQueue ops;
@@ -88,6 +113,14 @@ public class KillSwitchService {
         moduleStates.put("consumer-w2w", consumerWalletEnabled);
         moduleStates.put("ussd", ussdEnabled);
         moduleStates.put("mandates", mandatesEnabled);
+
+        // Launch payment switches (on by default; the admin dashboard turns them off and on at runtime).
+        // Rail switches stop NEW payments only: status checks, recovery of in-flight payments and refunds go on.
+        moduleStates.put(CARD_PAYMENTS, true);
+        moduleStates.put(MTN_COLLECTIONS, true);
+        moduleStates.put(MTN_PAYOUTS, true);
+        moduleStates.put(CHECKOUT, true);
+        moduleStates.put(RESTAURANT, true);
         loadControls();
     }
 
@@ -230,6 +263,19 @@ public class KillSwitchService {
         // 6. Physical POS Terminals
         if (path.startsWith("/v1/pos")) {
             return isModuleEnabled("pos") ? null : "pos";
+        }
+        // 6a. Card payments: new card tokenisation (charges are also stopped at the rail by isRailAllowed)
+        if (path.startsWith("/v1/rails/card/tokens")) {
+            return isModuleEnabled(CARD_PAYMENTS) ? null : CARD_PAYMENTS;
+        }
+        // 6b. Checkout: creating checkouts and paying them. Order lookups and status pages stay up so
+        // customers who already paid can still see their order.
+        if (path.matches("/v1/merchants/[^/]+/checkouts/?") || path.matches("/v1/public/checkouts/[^/]+/pay(/.*)?")) {
+            return isModuleEnabled(CHECKOUT) ? null : CHECKOUT;
+        }
+        // 6c. Restaurant ordering and kitchen screens
+        if (path.startsWith("/v1/restaurant") || path.startsWith("/v1/public/kitchen")) {
+            return isModuleEnabled(RESTAURANT) ? null : RESTAURANT;
         }
         // 7. Consumer Wallet / W2W / Growth
         if (path.startsWith("/v1/wallet") || path.startsWith("/v1/ops/customers")
