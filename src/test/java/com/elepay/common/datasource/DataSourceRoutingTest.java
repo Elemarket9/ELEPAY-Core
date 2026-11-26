@@ -187,7 +187,7 @@ class DataSourceRoutingTest {
     }
 
     @Test
-    void unregisteredCellFallsBackToDefaultCellPrimaryInSingleCellMode() {
+    void unregisteredCellCannotUseAnotherCellsPrimary() {
         DataSource cell0Primary = new StubDataSource("cell-0-primary");
         DataSource cell0Replica = new StubDataSource("cell-0-replica");
 
@@ -198,8 +198,9 @@ class DataSourceRoutingTest {
         DataSourceRouteContext.setCellId("cell-99");
         TransactionSynchronizationManager.setCurrentTransactionReadOnly(true);
 
-        assertThat(router.determineCurrentLookupKey()).isEqualTo(CellDataSourceKey.defaultPrimary());
-        assertThat(router.determineTargetDataSource()).isSameAs(cell0Primary);
+        org.assertj.core.api.Assertions.assertThatIllegalStateException()
+                .isThrownBy(router::determineTargetDataSource)
+                .withMessageContaining("cell-99");
     }
 
     @Test
