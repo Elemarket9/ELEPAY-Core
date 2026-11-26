@@ -114,6 +114,9 @@ public class RailEndpoints {
             @RequestParam(defaultValue = "1000") long amount,
             @RequestParam(defaultValue = "GHS") String currency
     ) {
+        if (amount <= 0) {
+            throw com.elepay.common.ApiException.badRequest("invalid_amount", "Amount must be positive");
+        }
         return router.selectRoute(channel, network, amount, currency);
     }
 

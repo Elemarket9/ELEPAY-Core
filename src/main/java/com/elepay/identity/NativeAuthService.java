@@ -266,6 +266,9 @@ public class NativeAuthService {
         if (ch.consumedAt() != null) {
             throw ApiException.forbidden("This verification challenge has already been completed");
         }
+        if (ch.attempts() >= ch.maxAttempts()) {
+            throw ApiException.forbidden("Verification challenge is locked due to too many failed attempts");
+        }
         if (ch.resendCount() >= MAX_RESENDS) {
             throw ApiException.forbidden("Maximum code resends reached. Please start sign-in again.");
         }
@@ -297,7 +300,6 @@ public class NativeAuthService {
                     sms_code_hash = :sh,
                     email_verified_at = NULL,
                     sms_verified_at = NULL,
-                    attempts = 0,
                     resend_count = resend_count + 1,
                     last_sent_at = :now,
                     expires_at = :exp

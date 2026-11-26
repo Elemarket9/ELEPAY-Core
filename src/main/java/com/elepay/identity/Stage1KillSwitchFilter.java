@@ -38,7 +38,8 @@ public class Stage1KillSwitchFilter extends OncePerRequestFilter {
             return;
         }
         String disabledModule = killSwitchService.resolveDisabledModuleForPath(path);
-        if (disabledModule != null) {
+        if (disabledModule != null
+                && !("DELETE".equalsIgnoreCase(request.getMethod()) && path.startsWith("/v1/rails/card/tokens/"))) {
             response.setStatus(HttpServletResponse.SC_NOT_FOUND);
             response.setContentType("application/json");
             response.setCharacterEncoding("UTF-8");

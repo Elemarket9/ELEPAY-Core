@@ -154,6 +154,7 @@ public class DeveloperController {
             @PathVariable UUID merchantId,
             @PathVariable UUID endpointId
     ) {
+        Actor.current().requireUser();
         return service.pingWebhook(merchantId, endpointId);
     }
 
@@ -166,7 +167,8 @@ public class DeveloperController {
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "50") int limit
     ) {
-        return service.listDeliveryLogs(merchantId, endpointId, status, limit);
+        int safeLimit = Math.max(1, Math.min(limit, 200));
+        return service.listDeliveryLogs(merchantId, endpointId, status, safeLimit);
     }
 
     @GetMapping("/merchants/{merchantId}/webhooks/deliveries/{logId}")

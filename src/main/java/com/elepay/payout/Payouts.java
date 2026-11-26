@@ -398,7 +398,7 @@ public class Payouts {
 
     public List<Payout> forOwner(String ownerType, UUID owner, int limit) {
         return db.sql(SELECT + " WHERE owner_type = :t AND owner_id = :o ORDER BY created_at DESC LIMIT :l")
-                .param("t", ownerType).param("o", owner).param("l", Math.min(limit, 500)).query(this::map).list();
+                .param("t", ownerType).param("o", owner).param("l", Math.max(1, Math.min(limit, 500))).query(this::map).list();
     }
 
     private List<Payout> list(String where, Object value, int limit) {

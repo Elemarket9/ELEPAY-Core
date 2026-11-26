@@ -224,6 +224,11 @@ public class MerchantPayouts {
     @PostMapping("/payouts/{reference}/retry")
     public Payouts.Batch retry(@PathVariable UUID merchantId, @PathVariable String reference,
                                @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        // Authorize caller against merchant BEFORE looking up payout to avoid cross-tenant existence oracle.
+        access.require(merchantId, VIEW);
+        if (key == null || key.isBlank()) {
+            throw ApiException.badRequest("missing_idempotency_key", "Idempotency-Key header is required");
+        }
         record RetryRow(String clientRef, long amount, String type, String network, String accountNumber, String accountName) {}
         var payoutOpt = db.sql("""
                 SELECT client_reference, amount, destination->>'type', destination->>'network',
@@ -235,9 +240,6 @@ public class MerchantPayouts {
                 .optional();
         if (payoutOpt.isEmpty()) {
             throw ApiException.notFound("Payout not found");
-        }
-        if (key == null || key.isBlank()) {
-            throw ApiException.badRequest("missing_idempotency_key", "Idempotency-Key header is required");
         }
         RetryRow row = payoutOpt.get();
         String clientRef = row.clientRef() == null ? "" : row.clientRef();

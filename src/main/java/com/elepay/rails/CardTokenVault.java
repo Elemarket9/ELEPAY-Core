@@ -166,6 +166,9 @@ public class CardTokenVault {
         if (input.expiryMonth() < 1 || input.expiryMonth() > 12) {
             throw ApiException.badRequest("invalid_expiry_month", "Card expiry month must be between 1 and 12");
         }
+        if (input.expiryYear() < 2000 || input.expiryYear() > 2100) {
+            throw ApiException.badRequest("invalid_expiry_year", "Card expiry year must be between 2000 and 2100");
+        }
         YearMonth expiry = YearMonth.of(input.expiryYear(), input.expiryMonth());
         if (expiry.isBefore(YearMonth.now())) {
             throw ApiException.badRequest("card_expired", "Card is already expired");

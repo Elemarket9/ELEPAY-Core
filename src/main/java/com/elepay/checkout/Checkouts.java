@@ -161,7 +161,7 @@ class Checkouts {
         List<UUID> ids = db.sql("""
                 SELECT id FROM checkout WHERE collector_id = :m AND (CAST(:branch AS uuid) IS NULL OR branch_id = CAST(:branch AS uuid))
                 ORDER BY created_at DESC LIMIT :limit""")
-                .param("m", merchantId).param("branch", a.branchId()).param("limit", Math.min(limit, 200))
+                .param("m", merchantId).param("branch", a.branchId()).param("limit", Math.max(1, Math.min(limit, 200)))
                 .query(UUID.class).list();
         return ids.stream().map(id -> summary(checkouts.load(id, false), null)).toList();
     }
@@ -205,7 +205,7 @@ class Checkouts {
                 WHERE a.merchant_id = :m AND c.status IN ('paid', 'processing')
                   AND (CAST(:branch AS uuid) IS NULL OR (c.collector_id = :m AND c.branch_id = CAST(:branch AS uuid)))
                 ORDER BY c.created_at DESC, a.line LIMIT :limit""")
-                .param("m", merchantId).param("branch", a.branchId()).param("limit", Math.min(limit, 500))
+                .param("m", merchantId).param("branch", a.branchId()).param("limit", Math.max(1, Math.min(limit, 500)))
                 .query((rs, i) -> new Ref(rs.getObject(1, UUID.class), rs.getInt(2))).list();
         return refs.stream().map(r -> {
             var c = checkouts.load(r.checkout(), false);

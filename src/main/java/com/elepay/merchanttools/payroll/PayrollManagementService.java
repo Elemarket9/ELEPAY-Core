@@ -114,6 +114,11 @@ public class PayrollManagementService {
      */
     @Transactional
     public EmployeeRecord registerEmployee(CreateEmployeeCommand cmd) {
+        if (cmd.baseSalaryPesewas() < 0 || cmd.allowancesPesewas() < 0
+                || cmd.reliefsPesewas() < 0 || cmd.tier3VoluntaryRateBps() < 0 || cmd.tier3VoluntaryRateBps() > 10000) {
+            throw com.elepay.common.ApiException.badRequest("invalid_employee_compensation",
+                    "Employee salary, allowances, reliefs, and tier3 rate must be non-negative");
+        }
         UUID id = UUID.randomUUID();
         db.sql("""
             INSERT INTO payroll_employee

@@ -74,9 +74,16 @@ public class FxExposureService {
                 .optional();
 
         if (limitOpt.isEmpty()) {
+            Integer knownCurrency = db.sql("SELECT COUNT(*) FROM currency WHERE code = :c")
+                    .param("c", currency)
+                    .query(Integer.class).single();
+            if (knownCurrency == null || knownCurrency == 0) {
+                throw com.elepay.common.ApiException.badRequest("unsupported_currency",
+                        "Unsupported FX currency: " + currency);
+            }
             long nofp = calculateNofp(currency);
             return new ExposureStatus(currency, nofp, ledger.balance("system:fx_clearing:" + currency),
-                    ledger.balance("system:fx_in_flight:" + currency), Long.MAX_VALUE, 0, false, false, Optional.empty());
+                    ledger.balance("system:fx_in_flight:" + currency), 0L, 0, false, false, Optional.empty());
         }
 
         ExposureLimit limit = limitOpt.get();

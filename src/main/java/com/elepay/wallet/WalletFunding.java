@@ -116,7 +116,7 @@ class WalletFunding {
     public List<Operation> operations(@RequestParam(defaultValue = "50") int limit) {
         UUID customer = wallets.customer(com.elepay.identity.Actor.current());
         return db.sql("SELECT id FROM wallet_operation WHERE customer_id = :c ORDER BY created_at DESC LIMIT :l")
-                .param("c", customer).param("l", Math.min(limit, 200)).query(UUID.class).list()
+                .param("c", customer).param("l", Math.max(1, Math.min(limit, 200))).query(UUID.class).list()
                 .stream().map(this::operation).toList();
     }
 

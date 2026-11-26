@@ -201,6 +201,9 @@ public class DeveloperService {
         access.require(merchantId, MerchantAccess.Permission.MANAGE);
         var e = webhooks.endpoint(merchantId, endpointId)
                 .orElseThrow(() -> ApiException.notFound("Webhook endpoint not found"));
+        if (!e.active()) {
+            throw ApiException.conflict("webhook_inactive", "Cannot ping a deactivated webhook endpoint");
+        }
         var ep = Map.of("id", e.id().toString(), "url", e.url(), "secret", e.secret());
 
         String eventId = UUID.randomUUID().toString();
