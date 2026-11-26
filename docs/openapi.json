@@ -124,6 +124,11 @@
             "minLength" : 0,
             "type" : "string"
           },
+          "externalSellerId" : {
+            "maxLength" : 128,
+            "minLength" : 0,
+            "type" : "string"
+          },
           "kind" : {
             "pattern" : "sale|delivery",
             "type" : "string"
@@ -144,7 +149,6 @@
             "type" : "integer"
           }
         },
-        "required" : [ "merchantId" ],
         "type" : "object"
       },
       "AmountRequest" : {
@@ -2532,39 +2536,24 @@
       },
       "Entry" : {
         "properties" : {
-          "account" : {
+          "evidenceReference" : {
+            "maxLength" : 200,
+            "minLength" : 0,
             "type" : "string"
           },
-          "amount" : {
-            "format" : "int64",
-            "type" : "integer"
-          },
-          "currency" : {
+          "externalSellerId" : {
+            "minLength" : 1,
+            "pattern" : "[A-Za-z0-9._:-]{1,128}",
             "type" : "string"
           },
-          "description" : {
+          "merchantCode" : {
             "type" : "string"
           },
-          "kind" : {
-            "type" : "string"
-          },
-          "line" : {
-            "format" : "int32",
-            "type" : "integer"
-          },
-          "postedAt" : {
-            "format" : "date-time",
-            "type" : "string"
-          },
-          "runningBalance" : {
-            "format" : "int64",
-            "type" : "integer"
-          },
-          "transactionId" : {
-            "format" : "uuid",
-            "type" : "string"
+          "profile" : {
+            "$ref" : "#/components/schemas/Application"
           }
         },
+        "required" : [ "externalSellerId" ],
         "type" : "object"
       },
       "EvenSplitPortion" : {
@@ -3383,7 +3372,7 @@
           },
           "scopes" : {
             "items" : {
-              "pattern" : "view|collect|refund|withdraw|payouts",
+              "pattern" : "view|collect|refund|withdraw|payouts|seller_sync",
               "type" : "string"
             },
             "type" : "array"
@@ -6499,6 +6488,27 @@
         },
         "type" : "object"
       },
+      "Result" : {
+        "properties" : {
+          "detail" : {
+            "type" : "string"
+          },
+          "externalSellerId" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "payoutDestinationReady" : {
+            "type" : "boolean"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Review" : {
         "properties" : {
           "decision" : {
@@ -8564,7 +8574,7 @@
     },
     "/v1/auth/resend" : {
       "post" : {
-        "operationId" : "resend",
+        "operationId" : "resend_1",
         "requestBody" : {
           "content" : {
             "application/json" : {
@@ -11577,6 +11587,223 @@
           }
         },
         "tags" : [ "merchants" ]
+      }
+    },
+    "/v1/merchants/{marketplace}/seller-directory/sync" : {
+      "post" : {
+        "operationId" : "sync",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "marketplace",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "items" : {
+                  "$ref" : "#/components/schemas/Entry"
+                },
+                "type" : "array"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/Result"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "marketplace-seller-directory" ]
+      }
+    },
+    "/v1/merchants/{marketplace}/seller-directory/{externalId}" : {
+      "get" : {
+        "operationId" : "lookup_1",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "marketplace",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "externalId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Result"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "marketplace-seller-directory" ]
+      }
+    },
+    "/v1/merchants/{marketplace}/seller-directory/{externalId}/destinations" : {
+      "post" : {
+        "operationId" : "destination",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "marketplace",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "externalId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/DestinationRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Destination"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "marketplace-seller-directory" ]
+      }
+    },
+    "/v1/merchants/{marketplace}/seller-directory/{externalId}/destinations/{destination}/confirm" : {
+      "post" : {
+        "operationId" : "confirm",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "marketplace",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "externalId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "destination",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/OobConfirmRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "marketplace-seller-directory" ]
+      }
+    },
+    "/v1/merchants/{marketplace}/seller-directory/{externalId}/destinations/{destination}/resend" : {
+      "post" : {
+        "operationId" : "resend",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "marketplace",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "externalId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "destination",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "marketplace-seller-directory" ]
       }
     },
     "/v1/merchants/{merchantId}/checkouts" : {
@@ -17145,7 +17372,7 @@
     },
     "/v1/restaurant/kds/sync" : {
       "get" : {
-        "operationId" : "sync",
+        "operationId" : "sync_1",
         "parameters" : [ {
           "in" : "query",
           "name" : "merchantId",

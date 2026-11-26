@@ -8,3 +8,7 @@ CREATE TABLE marketplace_seller_directory (
     UNIQUE (marketplace_id, seller_id),
     FOREIGN KEY (marketplace_id, seller_id) REFERENCES marketplace_seller(marketplace_id, seller_id)
 );
+
+ALTER TABLE api_credential DROP CONSTRAINT api_credential_scopes_check;
+ALTER TABLE api_credential ADD CONSTRAINT api_credential_scopes_check
+    CHECK (scopes <@ ARRAY['view', 'collect', 'refund', 'withdraw', 'payouts', 'seller_sync']::text[]);

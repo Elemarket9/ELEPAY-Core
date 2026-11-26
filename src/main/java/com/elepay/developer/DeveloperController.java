@@ -30,7 +30,7 @@ public class DeveloperController {
     public record KeyRequest(
             @Size(max = 100) String label,
             @Pattern(regexp = "live|test") String environment,
-            List<@Pattern(regexp = "view|collect|refund|withdraw|payouts") String> scopes,
+            List<@Pattern(regexp = "view|collect|refund|withdraw|payouts|seller_sync") String> scopes,
             String keyType,
             List<String> allowedIps
     ) {
