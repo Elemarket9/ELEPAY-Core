@@ -21,6 +21,8 @@ class OperationalMetrics implements MeterBinder {
             Map.entry("elepay.ledger.accounts_with_drift",
                     "SELECT count(*) FROM ledger_account_reconstruction WHERE projected_balance <> journal_balance"),
             Map.entry("elepay.outbox.backlog", "SELECT count(*) FROM outbox_event WHERE published_at IS NULL"),
+            Map.entry("elepay.outbox.dead", "SELECT count(*) FROM outbox_event WHERE dead_at IS NOT NULL"),
+            Map.entry("elepay.postgres.waiting_locks", "SELECT count(*) FROM pg_locks WHERE NOT granted"),
             Map.entry("elepay.outbox.oldest_pending_seconds",
                     "SELECT coalesce(extract(epoch FROM now() - min(created_at)), 0) FROM outbox_event WHERE published_at IS NULL"),
             Map.entry("elepay.webhooks.dead", "SELECT count(*) FROM webhook_delivery WHERE status = 'dead'"),

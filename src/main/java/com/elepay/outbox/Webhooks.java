@@ -226,9 +226,10 @@ public class Webhooks implements OutboxConsumer {
         record Pending(UUID event, UUID endpoint, String url, String secret, String body, int attempts) {}
         List<Pending> batch = inTx(() -> {
             List<Pending> claimed = db.sql("""
-                    SELECT d.event_id, d.endpoint_id, w.url, w.secret, e.payload::text, d.attempts
+                    SELECT d.event_id, d.endpoint_id, w.url, w.secret, coalesce(e.payload, a.payload)::text, d.attempts
                     FROM webhook_delivery d JOIN webhook_endpoint w ON w.id = d.endpoint_id
                     JOIN outbox_event e ON e.id = d.event_id
+                    LEFT JOIN outbox_payload_archive a ON a.event_id = e.id
                     WHERE d.status = 'pending' AND w.active AND w.environment = 'live' AND d.next_attempt_at <= now()
                     ORDER BY d.next_attempt_at LIMIT :limit FOR UPDATE OF d SKIP LOCKED""")
                     .param("limit", limit)

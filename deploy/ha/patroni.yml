@@ -1,0 +1,42 @@
+# Supply per-node identity, addresses, TLS key paths and credentials via Patroni environment configuration.
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    synchronous_mode: true
+    synchronous_mode_strict: true
+    synchronous_node_count: 1
+    check_timeline: true
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        synchronous_commit: 'on'
+        fsync: 'on'
+        full_page_writes: 'on'
+        wal_level: replica
+        wal_log_hints: 'on'
+        hot_standby: 'on'
+        ssl: 'on'
+        ssl_min_protocol_version: TLSv1.2
+        password_encryption: scram-sha-256
+        archive_mode: 'on'
+        archive_command: 'pgbackrest --stanza=elepay archive-push "%p"'
+        restore_command: 'pgbackrest --stanza=elepay archive-get "%f" "%p"'
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+    - auth-host: scram-sha-256
+    - auth-local: peer
+  pg_hba:
+    - local all all peer
+    - hostssl replication all all scram-sha-256 clientcert=verify-full
+    - hostssl all all all scram-sha-256 clientcert=verify-full
+watchdog:
+  mode: required
+  safety_margin: 5
+restapi:
+  verify_client: required
+etcd3:
+  protocol: https

@@ -174,15 +174,15 @@ public class Ledger {
                 throw ApiException.insufficientFunds();
             }
         }
-        int line = 0;
-        for (Leg leg : posting.legs()) {
-            Account account = accounts.get(leg.account());
-            db.sql("""
-                    INSERT INTO journal_entry (transaction_id, line, account_id, currency, amount)
-                    VALUES (:tx, :line, :account, :currency, :amount)""")
-                    .param("tx", id).param("line", line++).param("account", account.id())
-                    .param("currency", account.currency()).param("amount", leg.amount()).update();
-        }
+        // Bind the ordered leg list once; all account rows are already locked and validated.
+        db.sql("""
+                INSERT INTO journal_entry (transaction_id, line, account_id, currency, amount)
+                SELECT :tx, CAST(l.ordinality - 1 AS integer), a.id, a.currency,
+                       CAST(l.entry ->> 'amount' AS bigint)
+                FROM jsonb_array_elements(CAST(:legs AS jsonb)) WITH ORDINALITY AS l(entry, ordinality)
+                JOIN ledger_account a ON a.code = (l.entry ->> 'account')
+                ORDER BY l.ordinality""")
+                .param("tx", id).param("legs", json.writeValueAsString(posting.legs())).update();
         return new Posted(id, false);
     }
 

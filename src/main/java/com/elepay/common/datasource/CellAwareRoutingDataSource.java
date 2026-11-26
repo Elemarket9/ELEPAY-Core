@@ -25,8 +25,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * <p>Routing rules in {@link #determineCurrentLookupKey()}:
  * <ol>
  *   <li>Reads {@code cellId = DataSourceRouteContext.getCellId()} (default {@code "cell-0"}).</li>
- *   <li>If {@code cellId} is not registered (e.g. single-cell mode), falls back to
- *       {@code (DEFAULT_CELL_ID, PRIMARY)}.</li>
+ *   <li>Rejects requests bound to an unregistered cell.</li>
  *   <li>Determines desired {@link RouteType}: explicit {@link DataSourceRouteContext#getRouteOverride()}
  *       if present, else {@link RouteType#REPLICA} when
  *       {@link TransactionSynchronizationManager#isCurrentTransactionReadOnly()} is {@code true},
@@ -154,8 +153,7 @@ public class CellAwareRoutingDataSource extends AbstractRoutingDataSource implem
         RouteType effectiveRoute;
 
         if (!cellRegistered) {
-            effectiveCellId = CellDataSourceKey.DEFAULT_CELL_ID;
-            effectiveRoute = RouteType.PRIMARY;
+            throw new IllegalStateException("No primary datasource registered for cell " + requestedCellId);
         } else {
             effectiveCellId = requestedCellId;
             RouteType override = DataSourceRouteContext.getRouteOverride();
@@ -193,13 +191,7 @@ public class CellAwareRoutingDataSource extends AbstractRoutingDataSource implem
                     return ds;
                 }
             }
-            ds = dynamicDataSources.get(CellDataSourceKey.defaultPrimary());
-            if (ds != null) {
-                return ds;
-            }
-            if (defaultDataSource != null) {
-                return defaultDataSource;
-            }
+            throw new IllegalStateException("No primary datasource registered for cell " + key.cellId());
         }
         return super.determineTargetDataSource();
     }

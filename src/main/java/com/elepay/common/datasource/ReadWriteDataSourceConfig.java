@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import javax.sql.DataSource;
+import org.springframework.core.env.Environment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -37,7 +38,7 @@ public class ReadWriteDataSourceConfig {
 
     @Bean
     public ReplicaHealthTracker replicaHealthTracker(
-            @Value("${elepay.datasource.replica.max-lag-ms:2000}") long maxLagMs,
+            @Value("${elepay.datasource.replica.max-lag-ms:${elepay.datasource.replica-max-lag-ms:2000}}") long maxLagMs,
             @Value("${elepay.datasource.replica.cooldown-ms:15000}") long cooldownMs) {
         return new ReplicaHealthTracker(maxLagMs, Duration.ofMillis(cooldownMs));
     }
@@ -52,15 +53,16 @@ public class ReadWriteDataSourceConfig {
             @Value("${spring.datasource.hikari.maximum-pool-size:50}") int maxPoolSize,
             @Value("${spring.datasource.hikari.minimum-idle:10}") int minIdle,
             @Value("${spring.datasource.hikari.leak-detection-threshold:60000}") long leakThreshold,
+            Environment environment,
             ReplicaHealthTracker replicaHealthTracker,
             ObjectProvider<MeterRegistry> meterRegistryProvider) {
 
-        HikariDataSource primaryDs = createHikariDataSource(
+        HikariDataSource primaryDs = configuredPool(environment,
                 "ElepayPrimaryPool", primaryUrl, username, password, maxPoolSize, minIdle, leakThreshold, false);
 
         HikariDataSource replicaDs = null;
         if (isDistinctReplicaUrl(primaryUrl, replicaUrl)) {
-            replicaDs = createHikariDataSource(
+            replicaDs = configuredPool(environment,
                     "ElepayReplicaPool", replicaUrl.trim(), username, password, maxPoolSize, minIdle, leakThreshold, true);
             log.info("Configured CellAwareRoutingDataSource with distinct primary and read-replica pools for {}",
                     CellDataSourceKey.DEFAULT_CELL_ID);
@@ -82,6 +84,21 @@ public class ReadWriteDataSourceConfig {
     @ConditionalOnProperty(name = "elepay.datasource.read-write-split.enabled", havingValue = "true")
     public DataSource routingDataSource(CellAwareRoutingDataSource cellAwareRoutingDataSource) {
         return new LazyConnectionDataSourceProxy(cellAwareRoutingDataSource);
+    }
+
+    private static HikariDataSource configuredPool(Environment env, String name, String url,
+            String user, String password, int max, int min, long leakThreshold, boolean replica) {
+        if (replica) {
+            max = env.getProperty("elepay.datasource.replica.pool-max", Integer.class, max);
+            min = Math.min(min, max);
+        }
+        HikariConfig config = buildHikariConfig(name, url, user, password, max, min, leakThreshold, replica);
+        config.setConnectionTimeout(env.getRequiredProperty("spring.datasource.hikari.connection-timeout", Long.class));
+        config.setIdleTimeout(env.getRequiredProperty("spring.datasource.hikari.idle-timeout", Long.class));
+        config.setMaxLifetime(env.getRequiredProperty("spring.datasource.hikari.max-lifetime", Long.class));
+        config.addDataSourceProperty("prepareThreshold",
+                env.getRequiredProperty("spring.datasource.hikari.data-source-properties.prepareThreshold"));
+        return new HikariDataSource(config);
     }
 
     static boolean isDistinctReplicaUrl(String primaryUrl, String replicaUrl) {

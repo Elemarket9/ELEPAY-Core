@@ -199,13 +199,13 @@ class PartitioningIT extends PostgresTestBase {
         assertThat(stats).extracting(PartitionMaintenanceService.PartitionStat::parentTable)
                 .contains("journal_entry", "audit_log", "webhook_delivery_log", "idempotent_request");
 
-        // Idempotent request TTL pruning removes expired rows while keeping fresh ones
+        // Idempotent request retention archives responses and preserves every unique claim
         String scope = "ttl-test-" + suffix;
         OffsetDateTime oldTs = OffsetDateTime.now(ZoneOffset.UTC).minusDays(45);
         OffsetDateTime freshTs = OffsetDateTime.now(ZoneOffset.UTC);
         db.sql("""
-                INSERT INTO idempotent_request (scope, key, request_hash, created_at)
-                VALUES (:scope, 'old-key', 'h1', :oldTs), (:scope, 'fresh-key', 'h2', :freshTs)
+                INSERT INTO idempotent_request (scope, key, request_hash, created_at, response)
+                VALUES (:scope, 'old-key', 'h1', :oldTs, '42'::jsonb), (:scope, 'fresh-key', 'h2', :freshTs, '43'::jsonb)
                 """)
                 .param("scope", scope)
                 .param("oldTs", oldTs)
@@ -219,7 +219,9 @@ class PartitioningIT extends PostgresTestBase {
                 .param("scope", scope).query(Long.class).single();
         long remainingFresh = db.sql("SELECT count(*) FROM idempotent_request WHERE scope = :scope AND key = 'fresh-key'")
                 .param("scope", scope).query(Long.class).single();
-        assertThat(remainingOld).isZero();
+        assertThat(remainingOld).isOne();
+        assertThat(db.sql("SELECT response::text FROM idempotency_result_archive WHERE scope = :scope AND key = 'old-key'")
+                .param("scope", scope).query(String.class).single()).isEqualTo("42");
         assertThat(remainingFresh).isEqualTo(1L);
     }
 }

@@ -85,7 +85,10 @@ public class Idempotency {
                 .param("scope", scope).param("key", key).param("hash", hash).update();
         if (claimed == 0) {
             record Stored(String hash, String response) {}
-            Stored stored = db.sql("SELECT request_hash, response::text FROM idempotent_request WHERE scope = :scope AND key = :key")
+            Stored stored = db.sql("""
+                    SELECT r.request_hash, coalesce(r.response, a.response)::text
+                    FROM idempotent_request r LEFT JOIN idempotency_result_archive a USING (scope, key)
+                    WHERE r.scope = :scope AND r.key = :key""")
                     .param("scope", scope).param("key", key)
                     .query((rs, i) -> new Stored(rs.getString(1), rs.getString(2))).single();
             if (!stored.hash().equals(hash)) throw ApiException.idempotencyConflict();
