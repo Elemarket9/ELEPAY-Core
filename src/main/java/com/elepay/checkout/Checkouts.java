@@ -51,11 +51,18 @@ class Checkouts {
         this.publicBaseUrl = publicBaseUrl;
     }
 
-    record AllocationInput(@NotNull UUID merchantId, @Pattern(regexp = "sale|delivery") String kind,
+    record AllocationInput(UUID merchantId, @Pattern(regexp = "sale|delivery") String kind,
                            @Positive long amount, @Size(max = 200) String description,
                            @Size(max = 64) String category,
                            @Min(0) @Max(5000) Integer reserveBps,
-                           @Size(max = 64) String releaseCondition) {}
+                           @Size(max = 64) String releaseCondition, @Size(max = 128) String externalSellerId) {
+        UUID recipient(UUID marketplace, MerchantAccess access) {
+            if ((merchantId == null) == (externalSellerId == null))
+                throw ApiException.badRequest("invalid_recipient", "Provide either merchantId or externalSellerId");
+            if (merchantId != null) return merchantId;
+            return access.externalSeller(marketplace, externalSellerId);
+        }
+    }
 
     record CreateCheckout(@Positive Long amount, @Size(max = MAX) List<@Valid AllocationInput> allocations,
                           @Size(max = 500) String description, UUID branchId,
@@ -114,7 +121,7 @@ class Checkouts {
             } else {
                 if (request.amount() != null) throw ApiException.badRequest("ambiguous_amount", "Provide either amount or allocations");
                 allocations = request.allocations().stream().map(x -> new CheckoutService.AllocationRequest(
-                        x.merchantId(), x.kind(), x.amount(), x.description(), x.category(),
+                        x.recipient(merchantId, access), x.kind(), x.amount(), x.description(), x.category(),
                         x.reserveBps(), x.releaseCondition())).toList();
             }
             UUID branch = branchFor(a, request.branchId());

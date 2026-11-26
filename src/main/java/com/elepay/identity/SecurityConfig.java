@@ -320,6 +320,9 @@ class SecurityConfig {
             if ("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method) || "OPTIONS".equalsIgnoreCase(method)) {
                 return scopes.contains("view");
             }
+            if (path.matches("^/v1/merchants/[^/]+/seller-directory(?:/.*)?$")) {
+                return scopes.contains("seller_sync");
+            }
             if (path.contains("/refunds")) {
                 return scopes.contains("refund");
             }

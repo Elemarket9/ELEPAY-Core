@@ -28,7 +28,7 @@ import tools.jackson.databind.ObjectMapper;
 public class DeveloperService {
     private static final Logger log = LoggerFactory.getLogger(DeveloperService.class);
     private static final SecureRandom RANDOM = new SecureRandom();
-    public static final Set<String> ALLOWED_SCOPES = Set.of("view", "collect", "refund", "withdraw", "payouts");
+    public static final Set<String> ALLOWED_SCOPES = com.elepay.identity.ApiKeys.SCOPES;
     public static final Set<String> DEFAULT_EVENT_TYPES = Set.of(
             "checkout.paid", "payment.failed", "payout.completed", "refund.created", "mandate.active"
     );
