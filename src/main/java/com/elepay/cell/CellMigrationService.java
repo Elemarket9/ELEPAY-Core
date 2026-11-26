@@ -1,15 +1,11 @@
 package com.elepay.cell;
 
 import com.elepay.common.ApiException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -163,14 +159,11 @@ public class CellMigrationService {
         String nextState = nextStateOf(current.state());
         String verificationHash = current.verificationHash();
 
-        if (STATE_VERIFYING.equals(nextState) && (verificationHash == null || verificationHash.isBlank())) {
-            verificationHash = computeVerificationHash(current);
-        }
-
         if (STATE_CUTOVER.equals(nextState)) {
-            UUID affinityGroupId = findAffinityGroupId(current.merchantId());
-            cellRouter.assignMerchant(current.merchantId(), current.targetCellId(), affinityGroupId, true);
-            cellRouter.invalidateCache(current.merchantId());
+            // The migration workflow does not yet copy and reconcile physical ledger data.
+            // Legacy verification hashes describe job metadata and cannot authorize a cutover.
+            throw ApiException.conflict("migration_data_unverified",
+                    "Cutover requires verified ledger data on the destination cell");
         }
 
         if (STATE_COMPLETED.equals(nextState)) {
@@ -291,16 +284,6 @@ public class CellMigrationService {
                     "invalid_migration_state",
                     "Cannot advance migration from state " + currentState);
         };
-    }
-
-    private static String computeVerificationHash(MigrationJob job) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            String payload = job.id() + ":" + job.merchantId() + ":" + job.sourceCellId() + "->" + job.targetCellId();
-            return HexFormat.of().formatHex(digest.digest(payload.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 unavailable", e);
-        }
     }
 
     private static MigrationJob mapRow(ResultSet rs, int rowNum) throws SQLException {
