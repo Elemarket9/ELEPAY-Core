@@ -2,6 +2,7 @@ package com.elepay.checkout;
 
 import com.elepay.common.ApiException;
 import com.elepay.common.References;
+import com.elepay.merchant.MerchantAccess;
 import com.elepay.ingestion.IngestionHandler;
 import com.elepay.ingestion.IngestionRecord;
 import java.util.List;
@@ -24,17 +25,19 @@ class AsyncCheckoutHandler implements IngestionHandler {
     static final String EVENT_TYPE = "CHECKOUT_CREATE";
 
     private final CheckoutService checkouts;
+    private final MerchantAccess access;
     private final JdbcClient db;
     private final TransactionTemplate tx;
     private final ObjectMapper json;
     private final String publicBaseUrl;
 
     AsyncCheckoutHandler(CheckoutService checkouts,
-                         JdbcClient db,
+                         MerchantAccess access, JdbcClient db,
                          PlatformTransactionManager tm,
                          ObjectMapper json,
                          @Value("${elepay.public-base-url}") String publicBaseUrl) {
         this.checkouts = checkouts;
+        this.access = access;
         this.db = db;
         this.tx = new TransactionTemplate(tm);
         this.json = json;
@@ -84,7 +87,7 @@ class AsyncCheckoutHandler implements IngestionHandler {
             }
             allocations = request.allocations().stream()
                     .map(x -> new CheckoutService.AllocationRequest(
-                            x.recipient(merchantId, db), x.kind(), x.amount(), x.description(), x.category(),
+                            x.recipient(merchantId, access), x.kind(), x.amount(), x.description(), x.category(),
                             x.reserveBps(), x.releaseCondition()))
                     .toList();
         }

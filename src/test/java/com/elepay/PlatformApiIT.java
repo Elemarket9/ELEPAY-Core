@@ -69,6 +69,26 @@ class PlatformApiIT extends PostgresTestBase {
     }
 
     @Test
+    void sellerSyncResolvesExternalIdsAndIsolatesInvalidRows() {
+        String base = "/v1/merchants/" + marketplace;
+        String sync = base + "/seller-directory/sync";
+        String credential = key(marketplace, mpOwner, "view", "seller_sync", "collect");
+        String code = api.call("GET", "/v1/merchants/" + seller, sellerOwner, null, null).body().get("merchantCode").asString();
+        var batch = List.of(Map.of("externalSellerId", "invalid seller"),
+                Map.of("externalSellerId", "seller-1", "merchantCode", code));
+        var result = withKey("POST", sync, credential, null, batch);
+        assertThat(result.status()).as(result.body().toString()).isEqualTo(200);
+        assertThat(result.body().get(0).get("status").asString()).isEqualTo("invalid_entry");
+        assertThat(result.body().get(1).get("merchantId").asString()).isEqualTo(seller.toString());
+        assertThat(withKey("POST", sync, credential, null, batch).body()).isEqualTo(result.body());
+        var order = Map.of("allocations", List.of(Map.of("externalSellerId", "seller-1", "amount", 2500)));
+        assertThat(withKey("POST", base + "/checkouts", credential, UUID.randomUUID().toString(), order).status()).isEqualTo(200);
+        assertThat(withKey("POST", sync, key(marketplace, mpOwner, "collect"), null, batch).status()).isEqualTo(403);
+        assertThat(withKey("POST", base + "/seller-directory/seller-1/destinations", credential, null,
+                Map.of("type", "bank", "network", "GCB", "accountNumber", "1234567890", "accountName", "Example")).status()).isEqualTo(404);
+    }
+
+    @Test
     void platformCreatesQueriesAndCancelsOrdersAndRecoversEvents() {
         String collect = key(marketplace, mpOwner, "view", "collect", "refund");
         Map<String, Object> order = Map.of("orderReference", "ELM-1001", "description", "Sample Marketplace order 1001",

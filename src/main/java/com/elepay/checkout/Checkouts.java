@@ -56,13 +56,11 @@ class Checkouts {
                            @Size(max = 64) String category,
                            @Min(0) @Max(5000) Integer reserveBps,
                            @Size(max = 64) String releaseCondition, @Size(max = 128) String externalSellerId) {
-        UUID recipient(UUID marketplace, JdbcClient db) {
+        UUID recipient(UUID marketplace, MerchantAccess access) {
             if ((merchantId == null) == (externalSellerId == null))
                 throw ApiException.badRequest("invalid_recipient", "Provide either merchantId or externalSellerId");
             if (merchantId != null) return merchantId;
-            return db.sql("SELECT seller_id FROM marketplace_seller_directory WHERE marketplace_id=:m AND external_id=:e")
-                    .param("m", marketplace).param("e", externalSellerId).query(UUID.class).optional()
-                    .orElseThrow(() -> ApiException.badRequest("unknown_external_seller", "Sync seller before checkout: " + externalSellerId));
+            return access.externalSeller(marketplace, externalSellerId);
         }
     }
 
@@ -123,7 +121,7 @@ class Checkouts {
             } else {
                 if (request.amount() != null) throw ApiException.badRequest("ambiguous_amount", "Provide either amount or allocations");
                 allocations = request.allocations().stream().map(x -> new CheckoutService.AllocationRequest(
-                        x.recipient(merchantId, db), x.kind(), x.amount(), x.description(), x.category(),
+                        x.recipient(merchantId, access), x.kind(), x.amount(), x.description(), x.category(),
                         x.reserveBps(), x.releaseCondition())).toList();
             }
             UUID branch = branchFor(a, request.branchId());

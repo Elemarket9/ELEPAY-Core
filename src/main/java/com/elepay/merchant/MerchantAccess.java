@@ -190,6 +190,12 @@ public class MerchantAccess {
     }
 
     /** True if {@code seller} is an active seller of {@code marketplace}. */
+    public UUID externalSeller(UUID marketplace, String externalSellerId) {
+        return db.sql("SELECT seller_id FROM marketplace_seller_directory WHERE marketplace_id=:m AND external_id=:e")
+                    .param("m", marketplace).param("e", externalSellerId).query(UUID.class).optional()
+                    .orElseThrow(() -> ApiException.badRequest("unknown_external_seller", "Sync seller before checkout: " + externalSellerId));
+    }
+
     public boolean isActiveSeller(UUID marketplace, UUID seller) {
         return db.sql("SELECT count(*) FROM marketplace_seller WHERE marketplace_id = :m AND seller_id = :s AND status = 'active'")
                 .param("m", marketplace).param("s", seller).query(Long.class).single() > 0;
