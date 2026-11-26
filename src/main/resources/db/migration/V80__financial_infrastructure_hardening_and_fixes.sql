@@ -312,12 +312,12 @@ RETURNS TABLE(split_violations BIGINT, unresolved_rails BIGINT) LANGUAGE sql STA
     SELECT
         (SELECT count(*)
          FROM checkout c
-         LEFT JOIN (
+         JOIN (
              SELECT checkout_id, sum(amount) AS alloc_sum
              FROM checkout_allocation
              GROUP BY checkout_id
          ) a ON a.checkout_id = c.id
-         WHERE COALESCE(a.alloc_sum, 0) <> c.subtotal
+         WHERE a.alloc_sum <> c.subtotal
             OR (c.status = 'paid'
                 AND (c.journal_tx IS NULL
                      OR (c.total_paid IS NOT NULL AND c.total_paid <> c.subtotal + c.customer_fee)))) AS split_violations,

@@ -236,10 +236,14 @@ public class RailTransactions {
 
     /** Applies a rail result under a row lock. Safe to call repeatedly and out of order. */
     public void apply(UUID id, Result result, String source) {
-        txRetry.execute(() -> {
-            applyLocked(id, result, source);
-            return null;
-        });
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+            tx.executeWithoutResult(s -> applyLocked(id, result, source));
+        } else {
+            txRetry.execute(() -> {
+                applyLocked(id, result, source);
+                return null;
+            });
+        }
     }
 
     private void applyLocked(UUID id, Result result, String source) {

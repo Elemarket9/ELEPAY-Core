@@ -62,6 +62,8 @@ class EnterpriseItemRefundTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(ledger.debitAcrossStripes(any(), any(Long.class)))
                 .thenAnswer(invocation -> List.of(Ledger.Leg.debit(invocation.getArgument(0), invocation.getArgument(1))));
+        when(ledger.debitStripeOrAcrossStripes(any(), any(), any(Long.class)))
+                .thenAnswer(invocation -> List.of(Ledger.Leg.debit(invocation.getArgument(0), invocation.getArgument(2))));
         when(ledger.post(any())).thenReturn(new Ledger.Posted(UUID.randomUUID(), false));
 
         refundCalculator = new EnterpriseItemRefundCalculator();
