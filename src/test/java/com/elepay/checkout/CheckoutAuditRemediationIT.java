@@ -118,7 +118,7 @@ class CheckoutAuditRemediationIT extends PostgresTestBase {
         // Ops releases reserve -> succeeds
         var opsRelease = api.call("POST",
                 "/v1/merchants/" + marketplace + "/checkouts/" + ref + "/allocations/0/release-reserve",
-                ops, null, Map.of("amount", 1_000L, "reason", "approved release"));
+                ops, UUID.randomUUID().toString(), Map.of("amount", 1_000L, "reason", "approved release"));
         assertThat(opsRelease.status()).isEqualTo(200);
         assertThat(ledger.balance(Ledger.code("merchant", seller, "reserved", "GHS"))).isEqualTo(0L);
     }
@@ -154,7 +154,7 @@ class CheckoutAuditRemediationIT extends PostgresTestBase {
         // Ops releases reserve before delivery confirmation / settlement
         var rel = api.call("POST",
                 "/v1/merchants/" + marketplace + "/checkouts/" + ref + "/allocations/0/release-reserve",
-                ops, null, Map.of("amount", 1_000L, "reason", "early release"));
+                ops, UUID.randomUUID().toString(), Map.of("amount", 1_000L, "reason", "early release"));
         assertThat(rel.status()).isEqualTo(200);
 
         // Confirm delivery and run settleDue

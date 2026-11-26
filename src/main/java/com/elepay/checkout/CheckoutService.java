@@ -717,6 +717,11 @@ class CheckoutService {
 
     @Transactional
     Refund refund(MerchantAccess.Access access, String reference, int line, long amount, String reason) {
+        return refund(access, reference, line, amount, reason, null);
+    }
+
+    @Transactional
+    Refund refund(MerchantAccess.Access access, String reference, int line, long amount, String reason, String idempotencyKey) {
         if (killSwitch != null) killSwitch.requirePayoutsAllowed(access.merchantId());
         Checkout c = load(reference, true);
         Allocation a = allocation(c, line);
@@ -731,10 +736,13 @@ class CheckoutService {
         Take t = take(a, amount);
         UUID id = UUID.randomUUID();
         String refundRef = References.next("RF");
+        String ledgerKey = (idempotencyKey != null && !idempotencyKey.isBlank())
+                ? com.elepay.common.Idempotency.sha256(access.merchantId() + ":" + reference + ":" + line + ":" + idempotencyKey)
+                : id.toString();
         boolean toWallet = c.paymentMethod().equals("wallet");
         List<Leg> legs = takeLegs(c, a, t);
         legs.add(Leg.credit(toWallet ? CustomerDirectory.available(c.customerId()) : Ledger.REFUNDS_IN_FLIGHT, amount));
-        var posted = ledger.post(Ledger.Posting.of("refund", id.toString(), "refund", legs)
+        var posted = ledger.post(Ledger.Posting.of("refund", ledgerKey, "refund", legs)
                 .relatedTo(c.journalTx()).describedAs(refundRef)
                 .withMetadata(Map.of("checkout", c.reference(), "line", String.valueOf(line))));
         db.sql("""
@@ -1251,6 +1259,11 @@ class CheckoutService {
 
     @Transactional
     ReserveRelease releaseReserve(UUID merchantId, String reference, int line, long amount, String reason, String actor) {
+        return releaseReserve(merchantId, reference, line, amount, reason, actor, null);
+    }
+
+    @Transactional
+    ReserveRelease releaseReserve(UUID merchantId, String reference, int line, long amount, String reason, String actor, String idempotencyKey) {
         Checkout c = load(reference, true);
         Allocation a = allocation(c, line);
         if (!c.collectorId().equals(merchantId)) {
@@ -1272,12 +1285,15 @@ class CheckoutService {
         String target = ledger.open("merchant", a.merchantId(), settled ? "available" : "pending", Ledger.GHS);
 
         UUID releaseId = UUID.randomUUID();
+        String ledgerKey = (idempotencyKey != null && !idempotencyKey.isBlank())
+                ? com.elepay.common.Idempotency.sha256(merchantId + ":" + reference + ":" + line + ":" + idempotencyKey)
+                : releaseId.toString();
         List<Leg> legs = List.of(
                 Leg.debit(reserved, amount),
                 Leg.credit(target, amount)
         );
 
-        var posted = ledger.post(Ledger.Posting.of("reserve-release", releaseId.toString(), "reserve_release", legs)
+        var posted = ledger.post(Ledger.Posting.of("reserve-release", ledgerKey, "reserve_release", legs)
                 .describedAs("Reserve release for checkout " + reference + " line " + line)
                 .withMetadata(Map.of("checkout", reference, "line", String.valueOf(line), "merchant", a.merchantId().toString())));
 

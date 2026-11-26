@@ -73,8 +73,8 @@ class ApiExceptionHandler {
         return problem;
     }
 
-    @ExceptionHandler(PessimisticLockingFailureException.class)
-    ProblemDetail busy(PessimisticLockingFailureException error) {
+    @ExceptionHandler(org.springframework.dao.ConcurrencyFailureException.class)
+    ProblemDetail busy(org.springframework.dao.ConcurrencyFailureException error) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "Concurrent update; retry with the same idempotency key");
         problem.setProperty("code", "retry");
         return problem;

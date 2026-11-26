@@ -169,56 +169,20 @@ public class Ledger {
 
     private Map<String, Account> lock(Collection<String> codes) {
         List<String> distinct = codes.stream().distinct().sorted().toList();
-        int maxAttempts = 3;
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            try {
-                List<Account> found = db.sql("""
-                        SELECT id, code, owner_type, owner_id, bucket, currency, allow_negative, balance
-                        FROM ledger_account WHERE code IN (:codes) ORDER BY id FOR UPDATE""")
-                        .param("codes", distinct).query(Ledger::account).list();
-                if (found.size() != distinct.size()) {
-                    throw ApiException.badRequest("unknown_account", "Posting references an unknown ledger account");
-                }
-                Map<String, Account> byCode = new HashMap<>();
-                found.forEach(a -> byCode.put(a.code(), a));
-                return byCode;
-            } catch (org.springframework.dao.PessimisticLockingFailureException e) {
-                if (attempt < maxAttempts && isTransientLockSqlState(e)) {
-                    sleepBackoff(attempt);
-                    continue;
-                }
-                throw ApiException.conflict("lock_contention", "Could not lock the ledger accounts. Retry the request.");
-            } catch (org.springframework.dao.ConcurrencyFailureException e) {
-                if (attempt < maxAttempts && isTransientLockSqlState(e)) {
-                    sleepBackoff(attempt);
-                    continue;
-                }
-                throw ApiException.conflict("concurrency_failure", "The ledger is busy. Retry the request.");
-            }
+        // Do NOT retry 40P01/40001 inside an active PostgreSQL transaction: PostgreSQL immediately
+        // marks the transaction aborted (subsequent statements fail with SQLSTATE 25P02).
+        // Let ConcurrencyFailureException / PessimisticLockingFailureException propagate so Spring
+        // rolls back cleanly and outer transaction-boundary retry (FinancialTxRetry) starts a new tx.
+        List<Account> found = db.sql("""
+                SELECT id, code, owner_type, owner_id, bucket, currency, allow_negative, balance
+                FROM ledger_account WHERE code IN (:codes) ORDER BY id FOR UPDATE""")
+                .param("codes", distinct).query(Ledger::account).list();
+        if (found.size() != distinct.size()) {
+            throw ApiException.badRequest("unknown_account", "Posting references an unknown ledger account");
         }
-        throw ApiException.conflict("lock_contention", "Failed to acquire row locks due to concurrent contention");
-    }
-
-    private static boolean isTransientLockSqlState(Throwable t) {
-        Throwable cur = t;
-        while (cur != null) {
-            if (cur instanceof java.sql.SQLException sqlEx) {
-                String state = sqlEx.getSQLState();
-                if ("40P01".equals(state) || "40001".equals(state)) {
-                    return true;
-                }
-            }
-            cur = cur.getCause();
-        }
-        return false;
-    }
-
-    private static void sleepBackoff(int attempt) {
-        try {
-            Thread.sleep(10L * attempt);
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-        }
+        Map<String, Account> byCode = new HashMap<>();
+        found.forEach(a -> byCode.put(a.code(), a));
+        return byCode;
     }
 
     private static Account account(java.sql.ResultSet rs, int i) throws java.sql.SQLException {

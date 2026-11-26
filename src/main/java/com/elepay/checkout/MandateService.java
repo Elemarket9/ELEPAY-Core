@@ -45,6 +45,7 @@ public class MandateService {
 
     private final TransactionTemplate tx;
     private final TransactionTemplate txRequiresNew;
+    private final com.elepay.common.FinancialTxRetry txRetry;
     private com.elepay.wallet.TransferLimits transferLimits;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -64,6 +65,7 @@ public class MandateService {
         this.tx = new TransactionTemplate(tm);
         this.txRequiresNew = new TransactionTemplate(tm);
         this.txRequiresNew.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.txRetry = new com.elepay.common.FinancialTxRetry(tm);
     }
 
     public record CreateMandateRequest(
@@ -240,7 +242,7 @@ public class MandateService {
         }
         merchants.require(merchantId, MerchantAccess.Permission.COLLECT);
 
-        return tx.execute(s -> idempotency.execute("mandate-charge:" + merchantId + ":" + mandateId, key, request, MandateCharge.class,
+        return txRetry.execute(() -> idempotency.execute("mandate-charge:" + merchantId + ":" + mandateId, key, request, MandateCharge.class,
                 () -> doChargeMandate(merchantId, mandateId, key, request.amount(), request.description())));
     }
 

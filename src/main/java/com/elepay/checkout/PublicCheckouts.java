@@ -43,6 +43,7 @@ class PublicCheckouts {
     private final Idempotency idempotency;
     private final JdbcClient db;
     private final TransactionTemplate tx;
+    private final com.elepay.common.FinancialTxRetry txRetry;
     private final Map<String, AtomicInteger> payAttempts = Collections.synchronizedMap(
             new LinkedHashMap<>(1024, 0.75f, true) {
                 @Override
@@ -66,6 +67,7 @@ class PublicCheckouts {
         this.idempotency = idempotency;
         this.db = db;
         this.tx = new TransactionTemplate(tm);
+        this.txRetry = new com.elepay.common.FinancialTxRetry(tm);
         this.publicBaseUrl = publicBaseUrl;
         this.killSwitchService = killSwitchService;
         this.regulatory = regulatory;
@@ -164,7 +166,7 @@ class PublicCheckouts {
         UUID customer = customers.currentCustomer();
         String payChannel = payChannel(channel);
         String coarseIp = http.getRemoteAddr();
-        return tx.execute(s -> idempotency.execute("checkout-wallet:" + customer, key, Map.of("reference", reference),
+        return txRetry.execute(() -> idempotency.execute("checkout-wallet:" + customer, key, Map.of("reference", reference),
                 CheckoutService.PaymentResult.class, () -> {
                     checkouts.noteChannel(reference, payChannel);
                     regulatory.rememberCheckout(checkouts.load(reference, false).id(), coarseIp);

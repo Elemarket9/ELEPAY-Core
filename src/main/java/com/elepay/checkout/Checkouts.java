@@ -32,6 +32,7 @@ class Checkouts {
     private final RailTransactions rails;
     private final JdbcClient db;
     private final TransactionTemplate tx;
+    private final com.elepay.common.FinancialTxRetry txRetry;
     private final String publicBaseUrl;
 
     Checkouts(CheckoutService checkouts, MerchantAccess access, Idempotency idempotency, RailTransactions rails,
@@ -42,6 +43,7 @@ class Checkouts {
         this.rails = rails;
         this.db = db;
         this.tx = new TransactionTemplate(tm);
+        this.txRetry = new com.elepay.common.FinancialTxRetry(tm);
         this.publicBaseUrl = publicBaseUrl;
     }
 
@@ -253,15 +255,21 @@ class Checkouts {
                 rules, request.changeReason(), a.actor().subject());
     }
 
-    /** Releases retained merchant reserves (ops only). */
+    /** Releases retained merchant reserves (ops only, idempotent). */
     @PostMapping("/checkouts/{reference}/allocations/{line}/release-reserve")
     public CheckoutService.ReserveRelease releaseReserve(@PathVariable UUID merchantId,
                                                          @PathVariable String reference,
                                                          @PathVariable int line,
+                                                         @RequestHeader(value = "Idempotency-Key", required = false) String key,
                                                          @Valid @RequestBody ReserveReleaseRequest request) {
         var actor = com.elepay.identity.Actor.current();
         actor.requireOps();
-        return checkouts.releaseReserve(merchantId, reference, line, request.amount(), request.reason(), actor.subject());
+        if (key == null || key.isBlank()) {
+            throw ApiException.badRequest("missing_idempotency_key", "Idempotency-Key header is required");
+        }
+        return txRetry.execute(() -> idempotency.execute("reserve-release:" + merchantId, key,
+                Map.of("reference", reference, "line", line, "request", request), CheckoutService.ReserveRelease.class,
+                () -> checkouts.releaseReserve(merchantId, reference, line, request.amount(), request.reason(), actor.subject(), key)));
     }
 
     // ---- refunds ----------------------------------------------------------------------------
@@ -279,9 +287,9 @@ class Checkouts {
                                          @PathVariable int line, @RequestHeader("Idempotency-Key") String key,
                                          @Valid @RequestBody RefundRequest request) {
         var a = access.require(merchantId, REFUND);
-        var refund = tx.execute(s -> idempotency.execute("refund:" + merchantId, key,
+        var refund = txRetry.execute(() -> idempotency.execute("refund:" + merchantId, key,
                 Map.of("reference", reference, "line", line, "request", request), CheckoutService.Refund.class,
-                () -> checkouts.refund(a, reference, line, request.amount(), request.reason())));
+                () -> checkouts.refund(a, reference, line, request.amount(), request.reason(), key)));
         if (refund != null && refund.status().equals("pending")) {
             UUID railTx = checkouts.pendingRefundRailTx(refund.id());
             if (railTx != null) rails.submit(railTx);
