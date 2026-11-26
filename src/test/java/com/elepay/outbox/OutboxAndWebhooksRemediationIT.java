@@ -69,8 +69,8 @@ class OutboxAndWebhooksRemediationIT extends PostgresTestBase {
                         .param("id", endpointId).param("m", merchantId).param("url", url).update();
                 db.sql("""
                         INSERT INTO outbox_event (id, aggregate_type, aggregate_id, event_type, payload, merchant_ids)
-                        VALUES (:id, 'test', '1', 'test.event', '{"ok":true}'::jsonb, :m)""")
-                        .param("id", eventId).param("m", new UUID[]{merchantId}).update();
+                        VALUES (:id, 'test', :aid, 'test.event', '{"ok":true}'::jsonb, :m)""")
+                        .param("id", eventId).param("aid", eventId.toString()).param("m", new UUID[]{merchantId}).update();
                 db.sql("""
                         INSERT INTO webhook_delivery (event_id, endpoint_id, status, next_attempt_at)
                         VALUES (:e, :w, 'pending', now() - interval '1 second')""")
@@ -107,8 +107,8 @@ class OutboxAndWebhooksRemediationIT extends PostgresTestBase {
         UUID eventId = UUID.randomUUID();
         db.sql("""
                 INSERT INTO outbox_event (id, aggregate_type, aggregate_id, event_type, payload, next_attempt_at)
-                VALUES (:id, 'test', '1', 'remediation.test', '{"ok":true}'::jsonb, now() - interval '1 second')""")
-                .param("id", eventId).update();
+                VALUES (:id, 'test', :aid, 'remediation.test', '{"ok":true}'::jsonb, now() - interval '1 second')""")
+                .param("id", eventId).param("aid", eventId.toString()).update();
 
         int published = dispatcher.dispatchBatch(1000);
         assertThat(published).isGreaterThanOrEqualTo(1);

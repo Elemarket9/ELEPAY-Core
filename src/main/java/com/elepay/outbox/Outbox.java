@@ -49,8 +49,7 @@ public class Outbox {
         return db.sql("""
                 SELECT id, sequence, event_type, aggregate_id, created_at, payload::text FROM outbox_event
                 WHERE :m = ANY(merchant_ids)
-                  AND status = 'PUBLISHED'
-                  AND published_at IS NOT NULL
+                  AND status <> 'DEAD'
                   AND sequence > :after
                 ORDER BY sequence
                 LIMIT :limit""")

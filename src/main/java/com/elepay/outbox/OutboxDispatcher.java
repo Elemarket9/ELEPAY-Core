@@ -134,13 +134,14 @@ public class OutboxDispatcher {
                            e.schema_version, e.payload::text, e.merchant_ids, e.created_at
                     FROM outbox_event e
                     WHERE e.published_at IS NULL
-                      AND e.status = 'PENDING'
+                      AND e.status <> 'DEAD'
                       AND e.next_attempt_at <= now()
                       AND NOT EXISTS (
                           SELECT 1 FROM outbox_event earlier
                           WHERE earlier.aggregate_type = e.aggregate_type
                             AND earlier.aggregate_id = e.aggregate_id
                             AND earlier.published_at IS NULL
+                            AND earlier.status <> 'DEAD'
                             AND earlier.sequence < e.sequence
                       )
                     ORDER BY e.sequence
@@ -166,7 +167,7 @@ public class OutboxDispatcher {
                         UPDATE outbox_event
                         SET next_attempt_at = now() + interval '60 seconds'
                         WHERE id = :id
-                          AND status = 'PENDING'""")
+                          AND status <> 'DEAD'""")
                         .param("id", event.id()).update();
             }
             return claimed;
@@ -186,7 +187,7 @@ public class OutboxDispatcher {
                                     last_error = NULL,
                                     next_attempt_at = now()
                                 WHERE id = :id
-                                  AND status = 'PENDING'""")
+                                  AND status <> 'DEAD'""")
                                 .param("id", event.id()).update());
                 if (updated != null && updated == 1) {
                     done++;

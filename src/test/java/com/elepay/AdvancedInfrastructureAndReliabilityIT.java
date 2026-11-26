@@ -118,8 +118,9 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
                 .param("id", ev2).query(Boolean.class).single();
         assertThat(ev2PublishedEarly).as("ev2 must not overtake unpublished ev1 for the same aggregate").isFalse();
         assertThat(outbox.eventsFor(merchantId, 0L, 100))
-                .as("Outbox.eventsFor must not leak unpublished PENDING events")
-                .noneMatch(e -> e.id().equals(ev1) || e.id().equals(ev2));
+                .as("Outbox.eventsFor returns committed non-DEAD events in sequence order")
+                .extracting(Outbox.MerchantEvent::id)
+                .containsExactly(ev1, ev2);
 
         // Now make ev1 due: both ev1 and ev2 publish in sequence order
         db.sql("UPDATE outbox_event SET next_attempt_at = now() WHERE id = :id").param("id", ev1).update();
