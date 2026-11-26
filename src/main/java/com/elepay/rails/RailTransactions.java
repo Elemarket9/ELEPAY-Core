@@ -1,6 +1,7 @@
 package com.elepay.rails;
 
 import com.elepay.common.ApiException;
+import com.elepay.common.FinancialTxRetry;
 import com.elepay.common.OpsQueue;
 import com.elepay.common.References;
 import com.elepay.identity.KillSwitchService;
@@ -54,6 +55,7 @@ public class RailTransactions {
     private final OpsQueue ops;
     private final Ledger ledger;
     private final TransactionTemplate tx;
+    private final FinancialTxRetry txRetry;
     private final boolean recoveryEnabled;
     private final CustodianBankBackstopService custodianBackstop;
     private final KillSwitchService killSwitch;
@@ -84,6 +86,7 @@ public class RailTransactions {
         this.ops = ops;
         this.ledger = ledger;
         this.tx = new TransactionTemplate(tm);
+        this.txRetry = new FinancialTxRetry(tm);
         this.recoveryEnabled = recoveryEnabled;
         this.custodianBackstop = custodianBackstop;
         this.killSwitch = killSwitch;
@@ -233,7 +236,10 @@ public class RailTransactions {
 
     /** Applies a rail result under a row lock. Safe to call repeatedly and out of order. */
     public void apply(UUID id, Result result, String source) {
-        tx.executeWithoutResult(s -> applyLocked(id, result, source));
+        txRetry.execute(() -> {
+            applyLocked(id, result, source);
+            return null;
+        });
     }
 
     private void applyLocked(UUID id, Result result, String source) {
@@ -330,13 +336,13 @@ public class RailTransactions {
                     UPDATE rail_transaction SET status = 'pending', updated_at = now(),
                            rail_reference = coalesce(:pref, rail_reference),
                            redirect_url = coalesce(:url, redirect_url),
-                           next_check_at = now() + make_interval(secs => least(600, 15 * power(2, check_attempts)))
+                           next_check_at = now() + make_interval(secs => least(600, 15 * power(2, least(check_attempts, 10))))
                     WHERE id = :id""")
                     .param("id", id).param("pref", result.railReference()).param("url", result.redirectUrl()).update();
             case UNKNOWN -> {
                 db.sql("""
                         UPDATE rail_transaction SET status = 'unknown', updated_at = now(),
-                               next_check_at = now() + make_interval(secs => least(1800, 30 * power(2, check_attempts)))
+                               next_check_at = now() + make_interval(secs => least(1800, 30 * power(2, least(check_attempts, 10))))
                         WHERE id = :id""").param("id", id).update();
                 if (!"submit".equals(source) && checkAttempts(id) >= MAX_UNKNOWN_CHECKS) {
                     ops.raise("rail_result_unknown", "high", "rail_tx:" + t.reference(), Map.of(
@@ -363,7 +369,7 @@ public class RailTransactions {
                     // Post-submission UNAVAILABLE: keep unknown/pending for retry and NEVER release funds.
                     db.sql("""
                             UPDATE rail_transaction SET updated_at = now(),
-                                   next_check_at = now() + make_interval(secs => least(1800, 30 * power(2, check_attempts)))
+                                   next_check_at = now() + make_interval(secs => least(1800, 30 * power(2, least(check_attempts, 10))))
                             WHERE id = :id""").param("id", id).update();
                     if (!"submit".equals(source) && checkAttempts(id) >= MAX_UNKNOWN_CHECKS) {
                         ops.raise("rail_result_unknown", "high", "rail_tx:" + t.reference(), Map.of(
@@ -384,6 +390,13 @@ public class RailTransactions {
                                failure_reason = 'Not found at rail' WHERE id = :id""").param("id", t.id()).update();
                 events.publishEvent(new RailEvents.Failed(t.id(), t.rail(), t.direction(), t.purpose(),
                         t.purposeId(), t.amount(), "Not found at rail"));
+            } else {
+                // Grace period not yet elapsed: back off next_check_at so scheduled recovery does not
+                // tight-loop every 15s hammering the partner rail until the 10-minute grace window expires.
+                db.sql("""
+                        UPDATE rail_transaction SET updated_at = now(),
+                               next_check_at = now() + make_interval(secs => least(600, 30 * power(2, least(check_attempts, 10))))
+                        WHERE id = :id""").param("id", t.id()).update();
             }
             return;
         }
@@ -426,7 +439,7 @@ public class RailTransactions {
         JsonNode payload = json.readTree(body);
         String payloadJson = json.writeValueAsString(payload);
 
-        return tx.execute(s -> {
+        return txRetry.execute(() -> {
             boolean fresh = db.sql("""
                     INSERT INTO rail_callback (id, rail, dedupe_key, reference, event_type, payload)
                     VALUES (:id, :rail, :key, :reference, :type, CAST(:payload AS jsonb))
@@ -545,6 +558,10 @@ public class RailTransactions {
                                 }
                             }
                             submit(id);
+                        }
+                        String after = find(id).orElseThrow().status();
+                        if (!after.equals(t.status()) && Set.of("succeeded", "failed", "mismatch").contains(after)) {
+                            resolved++;
                         }
                     }
                     continue;

@@ -1,0 +1,154 @@
+package com.elepay.checkout;
+
+import com.elepay.checkout.CheckoutService.Allocation;
+import com.elepay.checkout.CheckoutService.Checkout;
+import com.elepay.checkout.CheckoutService.Refund;
+import com.elepay.checkout.CheckoutService.Take;
+import com.elepay.common.ApiException;
+import com.elepay.common.Audit;
+import com.elepay.common.Idempotency;
+import com.elepay.common.OpsQueue;
+import com.elepay.common.References;
+import com.elepay.ledger.Ledger;
+import com.elepay.ledger.Ledger.Leg;
+import com.elepay.merchant.MerchantAccess;
+import com.elepay.operations.EmtechCapture;
+import com.elepay.outbox.Outbox;
+import com.elepay.rails.RailEvents;
+import com.elepay.wallet.CustomerDirectory;
+import java.util.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.event.EventListener;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Per-allocation refunds (wallet and rail), multi-merchant clawback accounting, deterministic
+ * idempotent ledger keys, and refund rail finality listeners.
+ */
+@Service
+class CheckoutRefundService {
+    private final JdbcClient db;
+    private final Ledger ledger;
+    private final Outbox outbox;
+    private final Audit audit;
+    private final OpsQueue ops;
+    private final CustomerDirectory customers;
+    private final EmtechCapture regulatory;
+    private final CheckoutStore store;
+    private com.elepay.identity.KillSwitchService killSwitch;
+
+    @Autowired(required = false)
+    void setKillSwitch(com.elepay.identity.KillSwitchService killSwitch) {
+        this.killSwitch = killSwitch;
+    }
+
+    CheckoutRefundService(JdbcClient db, Ledger ledger, Outbox outbox, Audit audit, OpsQueue ops,
+                          CustomerDirectory customers, EmtechCapture regulatory, CheckoutStore store) {
+        this.db = db;
+        this.ledger = ledger;
+        this.outbox = outbox;
+        this.audit = audit;
+        this.ops = ops;
+        this.customers = customers;
+        this.regulatory = regulatory;
+        this.store = store;
+    }
+
+    @Transactional
+    Refund refund(MerchantAccess.Access access, String reference, int line, long amount, String reason) {
+        return refund(access, reference, line, amount, reason, null);
+    }
+
+    @Transactional
+    Refund refund(MerchantAccess.Access access, String reference, int line, long amount, String reason, String idempotencyKey) {
+        if (killSwitch != null) killSwitch.requirePayoutsAllowed(access.merchantId());
+        Checkout c = store.load(reference, true);
+        Allocation a = CheckoutStore.allocation(c, line);
+        if (!access.merchantId().equals(a.merchantId()) && !access.merchantId().equals(c.collectorId())) {
+            throw ApiException.notFound("Allocation not found");
+        }
+        if (!c.status().equals("paid")) throw ApiException.conflict("not_paid", "Only paid checkouts can be refunded");
+        if (amount <= 0) throw ApiException.badRequest("invalid_amount", "Refund amount must be positive");
+        if (Math.addExact(Math.addExact(a.refunded(), a.disputed()), amount) > a.amount()) {
+            throw ApiException.conflict("refund_exceeds_allocation", "Refund exceeds the remaining allocation");
+        }
+        Take t = CheckoutService.take(a, amount);
+        UUID id = UUID.randomUUID();
+        String refundRef = References.next("RF");
+        String ledgerKey = (idempotencyKey != null && !idempotencyKey.isBlank())
+                ? Idempotency.sha256(access.merchantId() + ":" + reference + ":" + line + ":" + idempotencyKey)
+                : id.toString();
+        boolean toWallet = c.paymentMethod().equals("wallet");
+        List<Leg> legs = CheckoutStore.takeLegs(c, a, t);
+        legs.add(Leg.credit(toWallet ? CustomerDirectory.available(c.customerId()) : Ledger.REFUNDS_IN_FLIGHT, amount));
+        var posted = ledger.post(Ledger.Posting.of("refund", ledgerKey, "refund", legs)
+                .relatedTo(c.journalTx()).describedAs(refundRef)
+                .withMetadata(Map.of("checkout", c.reference(), "line", String.valueOf(line))));
+        db.sql("""
+                UPDATE checkout_allocation SET refunded = refunded + :amount, refunded_fee = refunded_fee + :fee,
+                       refunded_platform_fee = refunded_platform_fee + :platform,
+                       pending_amount = pending_amount - :pending,
+                       reserve_released = reserve_released + :reserved,
+                       platform_pending = platform_pending - :pp,
+                       fee_deferred = fee_deferred - :fd
+                WHERE checkout_id = :c AND line = :l""")
+                .param("amount", amount).param("fee", t.fee()).param("platform", t.platform())
+                .param("pending", t.sellerFromPending()).param("reserved", t.sellerFromReserved())
+                .param("pp", t.platformFromPending())
+                .param("fd", t.feeFromDeferred()).param("c", c.id()).param("l", line).update();
+        UUID railTx = toWallet ? null : store.railRefund(c, id, amount);
+        db.sql("""
+                INSERT INTO refund (id, reference, checkout_id, line, amount, fee_returned, platform_fee_returned,
+                    destination, status, journal_tx, rail_tx, reason, created_by)
+                VALUES (:id, :ref, :c, :l, :amount, :fee, :platform, :dest, :status, :tx, :rail, :reason, :by)""")
+                .param("id", id).param("ref", refundRef).param("c", c.id()).param("l", line).param("amount", amount)
+                .param("fee", t.fee()).param("platform", t.platform()).param("dest", toWallet ? "wallet" : "rail")
+                .param("status", toWallet ? "completed" : "pending").param("tx", posted.transactionId())
+                .param("rail", railTx).param("reason", reason).param("by", access.actor().subject()).update();
+        if (toWallet) {
+            customers.recordOperation(refundRef, c.customerId(), "refund", amount, "completed",
+                    a.merchantName() + " " + c.reference(), posted.transactionId(), id);
+        }
+        audit.record(access.actor().subject(), "refund.created", "checkout:" + c.reference(),
+                Map.of("line", line, "amount", amount, "refund", refundRef, "reason", String.valueOf(reason)));
+        outbox.publish("refund", refundRef, toWallet ? "refund.completed" : "refund.pending", Map.of(
+                "refund", refundRef, "checkout", c.reference(), "line", line, "amount", amount),
+                CheckoutStore.setOf(a.merchantId(), c.collectorId()));
+        if (toWallet) regulatory.refund(id);
+        return new Refund(id, refundRef, c.reference(), line, amount, t.fee(), t.platform(),
+                toWallet ? "wallet" : "rail", toWallet ? "completed" : "pending", posted.transactionId());
+    }
+
+    UUID pendingRefundRailTx(UUID refundId) {
+        return db.sql("SELECT rail_tx FROM refund WHERE id = :id").param("id", refundId).query(UUID.class).single();
+    }
+
+    @EventListener
+    @Transactional
+    void onRefundRail(RailEvents.Succeeded event) {
+        if (!event.purpose().equals("refund")) return;
+        var refund = db.sql("SELECT reference, amount FROM refund WHERE id = :id AND status = 'pending' FOR UPDATE")
+                .param("id", event.purposeId()).query((rs, i) -> new Object[]{rs.getString(1), rs.getLong(2)}).optional();
+        if (refund.isEmpty()) return;
+        long amount = (long) refund.get()[1];
+        var posted = ledger.post(Ledger.Posting.of("refund-completion", event.purposeId().toString(), "refund_completion",
+                List.of(Leg.debit(Ledger.REFUNDS_IN_FLIGHT, amount), Leg.credit(Ledger.clearing(event.rail()), amount))));
+        db.sql("UPDATE refund SET status = 'completed', completion_tx = :tx WHERE id = :id")
+                .param("tx", posted.transactionId()).param("id", event.purposeId()).update();
+        regulatory.refund(event.purposeId());
+    }
+
+    @EventListener
+    @Transactional
+    void onRefundRailFailed(RailEvents.Failed event) {
+        if (!event.purpose().equals("refund")) return;
+        int failed = db.sql("UPDATE refund SET status = 'failed' WHERE id = :id AND status = 'pending'")
+                .param("id", event.purposeId()).update();
+        if (failed == 1) regulatory.refund(event.purposeId());
+        ops.raise("refund_delivery_failed", "high", "refund:" + event.purposeId(), Map.of(
+                "amount", event.amount(), "reason", String.valueOf(event.reason()),
+                "note", "Funds are held in refunds_in_flight; retry or credit the customer's wallet"));
+    }
+}

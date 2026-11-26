@@ -111,7 +111,9 @@ public interface PaymentRail {
             if (circuitBreaker != null) {
                 circuitBreaker.recordFailure();
             }
-            return Result.unavailable("Rail " + name() + " submission failed: " + e.getMessage());
+            // Submission may already have reached the partner rail; never return UNAVAILABLE
+            // (which RailTransactions treats as pre-submission FAILED and releases reserved funds).
+            return Result.unknown("Rail " + name() + " submission failed: " + e.getMessage());
         }
     }
 

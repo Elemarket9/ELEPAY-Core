@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Autowired;
  * Verifies multi-recipient split allocations, platform fee recognition,
  * merchant reserve retention, conditional release, and double-entry balance.
  */
+@SuppressWarnings("deprecation")
 class MultiMerchantSettlementTest extends PostgresTestBase {
 
     @Autowired Ledger ledger;
@@ -203,5 +204,32 @@ class MultiMerchantSettlementTest extends PostgresTestBase {
         assertThatThrownBy(() -> new MultiMerchantSettlementEngine.SettlementAllocation(
                 merchantA, "Bad Seller", "sale", -100L, 0L, 0L, 0L, 0L, "IMMEDIATE"
         )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void alignedInvariantsRejectNullCollectorForPlatformFeesAndDeduplicateIdempotentReserveRelease() {
+        String customerWallet = Ledger.code("customer", customerId, "available", Ledger.GHS);
+        var allocWithPlatformFee = new MultiMerchantSettlementEngine.SettlementAllocation(
+                merchantA, "Seller A", "sale", 10_000L, 100L, 500L, 0L, 0L, "DELIVERY_CONFIRMED"
+        );
+        assertThatThrownBy(() -> settlementEngine.postMultiMerchantPayment(
+                UUID.randomUUID(), "EP-NO-COLL", "wallet", customerWallet, 0L,
+                List.of(allocWithPlatformFee), null
+        )).isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("Collector ID is required");
+
+        String reserved = Ledger.code("merchant", merchantA, "reserved", Ledger.GHS);
+        ledger.post(Ledger.Posting.of("init-idem-res", UUID.randomUUID().toString(), "init", List.of(
+                Ledger.Leg.debit(Ledger.clearing("sandbox"), 1_000L),
+                Ledger.Leg.credit(reserved, 1_000L)
+        )));
+
+        UUID checkoutId = UUID.randomUUID();
+        String key = "idem-" + UUID.randomUUID();
+        var r1 = settlementEngine.releaseMerchantReserve(checkoutId, 0, merchantA, 400L, true, "ops", "reason", key);
+        var r2 = settlementEngine.releaseMerchantReserve(checkoutId, 0, merchantA, 400L, true, "ops", "reason", key);
+        assertThat(r2.journalTxId()).isEqualTo(r1.journalTxId());
+        assertThat(ledger.balance(reserved)).isEqualTo(600L);
+        assertThat(ledger.integrity().ok()).isTrue();
     }
 }
