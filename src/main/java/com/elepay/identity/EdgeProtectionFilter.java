@@ -55,6 +55,9 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
     private final TokenBucketRateLimiter perClient;
     private final Semaphore inFlight;
     private final int maxInFlight;
+    @Nullable private final Semaphore callbackInFlight;
+    private final int callbackMaxInFlight;
+    private final boolean exemptCallbacksFromShedding;
     private final long admissionWaitMillis;
     private final AbusePenaltyBox penaltyBox;
     @Nullable private final MeterRegistry meters;
@@ -74,6 +77,21 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
                 maxInFlight, admissionWaitMillis, penaltyBox, redis, meters, "");
     }
 
+    public EdgeProtectionFilter(boolean enabled,
+                                long maxBodyBytes,
+                                int maxUriLength,
+                                int perClientBurst,
+                                int perClientPerMinute,
+                                int maxInFlight,
+                                long admissionWaitMillis,
+                                AbusePenaltyBox penaltyBox,
+                                @Nullable StringRedisTemplate redis,
+                                @Nullable MeterRegistry meters,
+                                String trustedProxies) {
+        this(enabled, maxBodyBytes, maxUriLength, perClientBurst, perClientPerMinute,
+                maxInFlight, 200, true, admissionWaitMillis, penaltyBox, redis, meters, trustedProxies);
+    }
+
     @Autowired
     public EdgeProtectionFilter(@Value("${elepay.edge.enabled:true}") boolean enabled,
                                 @Value("${elepay.edge.max-body-bytes:1048576}") long maxBodyBytes,
@@ -81,6 +99,8 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
                                 @Value("${elepay.edge.per-client.burst:300}") int perClientBurst,
                                 @Value("${elepay.edge.per-client.per-minute:1200}") int perClientPerMinute,
                                 @Value("${elepay.edge.max-in-flight:400}") int maxInFlight,
+                                @Value("${elepay.edge.callback-max-in-flight:200}") int callbackMaxInFlight,
+                                @Value("${elepay.edge.exempt-callbacks-from-shedding:true}") boolean exemptCallbacksFromShedding,
                                 @Value("${elepay.edge.admission-wait-ms:50}") long admissionWaitMillis,
                                 AbusePenaltyBox penaltyBox,
                                 @Nullable StringRedisTemplate redis,
@@ -92,11 +112,17 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
         this.perClient = TokenBucketRateLimiter.perMinute(perClientBurst, perClientPerMinute, redis);
         this.maxInFlight = Math.max(1, maxInFlight);
         this.inFlight = new Semaphore(this.maxInFlight);
+        this.callbackMaxInFlight = Math.max(0, callbackMaxInFlight);
+        this.callbackInFlight = this.callbackMaxInFlight > 0 ? new Semaphore(this.callbackMaxInFlight) : null;
+        this.exemptCallbacksFromShedding = exemptCallbacksFromShedding;
         this.admissionWaitMillis = Math.max(0, admissionWaitMillis);
         this.penaltyBox = penaltyBox;
         this.meters = meters;
         this.trustedProxies = trustedProxies == null ? "" : trustedProxies;
-        if (meters != null) meters.gauge("elepay.edge.in_flight", this, EdgeProtectionFilter::inFlight);
+        if (meters != null) {
+            meters.gauge("elepay.edge.in_flight", this, EdgeProtectionFilter::inFlight);
+            meters.gauge("elepay.edge.callback_in_flight", this, EdgeProtectionFilter::callbackInFlight);
+        }
     }
 
     @Override
@@ -131,23 +157,30 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
             return;
         }
 
-        if (!penaltyBox.isExempt(client) && !perClient.tryAcquire("edge:" + client)) {
+        boolean callbackExempt = exemptCallbacksFromShedding && isRailCallback(request.getMethod(), uri);
+        if (!callbackExempt && !penaltyBox.isExempt(client) && !perClient.tryAcquire("edge:" + client)) {
             penaltyBox.strike(client, 1);
             reject(response, 429, "rate_limited", "Too many requests. Slow down.", 10, "client_rate");
             return;
         }
 
-        boolean admitted;
-        try {
-            admitted = admissionWaitMillis == 0 ? inFlight.tryAcquire()
-                    : inFlight.tryAcquire(admissionWaitMillis, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            admitted = false;
-        }
-        if (!admitted) {
-            reject(response, 503, "overloaded", "Service is busy. Retry shortly.", 1, "shed");
-            return;
+        // Signed rail callbacks use a dedicated in-flight budget (or bypass shedding if configured <= 0)
+        // so merchant API bursts saturating the general pool never shed inbound payment confirmations.
+        Semaphore budget = callbackExempt ? callbackInFlight : inFlight;
+        if (budget != null) {
+            boolean admitted;
+            try {
+                admitted = admissionWaitMillis == 0 ? budget.tryAcquire()
+                        : budget.tryAcquire(admissionWaitMillis, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                admitted = false;
+            }
+            if (!admitted) {
+                reject(response, 503, "overloaded", "Service is busy. Retry shortly.", 1,
+                        callbackExempt ? "callback_shed" : "shed");
+                return;
+            }
         }
 
         CappedRequest capped = new CappedRequest(request, maxBodyBytes);
@@ -157,7 +190,9 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
             if (!capped.overflowed()) throw e;
             // The body exceeded the limit while streaming (chunked upload).
         } finally {
-            inFlight.release();
+            if (budget != null) {
+                budget.release();
+            }
         }
         if (capped.overflowed()) {
             penaltyBox.strike(client, 3);
@@ -180,9 +215,26 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
         }
     }
 
-    /** Requests currently admitted (for metrics and tests). */
+    /** Signed inbound rail/partner callback routes exempt from general load shedding. */
+    static boolean isRailCallback(String method, String uri) {
+        if (!"POST".equals(method) || uri == null) return false;
+        return (uri.startsWith("/v1/rails/") && (uri.endsWith("/callbacks") || uri.contains("/callbacks/")))
+                || (uri.startsWith("/v1/fx/partners/") && (uri.endsWith("/callbacks") || uri.endsWith("/inbound")));
+    }
+
+    /** Requests currently admitted in the general pool (for metrics and tests). */
     public int inFlight() {
         return maxInFlight - inFlight.availablePermits();
+    }
+
+    /** Callback requests currently admitted in the dedicated callback pool (for metrics and tests). */
+    public int callbackInFlight() {
+        return callbackInFlight == null ? 0 : callbackMaxInFlight - callbackInFlight.availablePermits();
+    }
+
+    /** Configured general in-flight budget. */
+    public int maxInFlight() {
+        return maxInFlight;
     }
 
     private void reject(HttpServletResponse response, int status, String code, String message, long retryAfter, String reason)

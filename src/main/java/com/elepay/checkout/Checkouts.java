@@ -128,6 +128,7 @@ class Checkouts {
 
     /** Platform order lookup by the platform's own order reference. */
     @GetMapping("/orders/{orderReference}")
+    @Transactional(readOnly = true)
     public CheckoutSummary byOrder(@PathVariable UUID merchantId, @PathVariable String orderReference) {
         var a = access.require(merchantId, VIEW);
         UUID id = db.sql("SELECT id FROM checkout WHERE collector_id = :m AND order_reference = :o")
@@ -158,6 +159,7 @@ class Checkouts {
 
     /** Checkouts this merchant collected. Cashiers see their branch only. */
     @GetMapping("/checkouts")
+    @Transactional(readOnly = true)
     public List<CheckoutSummary> collected(@PathVariable UUID merchantId, @RequestParam(defaultValue = "50") int limit) {
         var a = access.require(merchantId, VIEW);
         List<UUID> ids = db.sql("""
@@ -169,6 +171,7 @@ class Checkouts {
     }
 
     @GetMapping("/checkouts/{reference}")
+    @Transactional(readOnly = true)
     public CheckoutSummary one(@PathVariable UUID merchantId, @PathVariable String reference) {
         var a = access.require(merchantId, VIEW);
         var c = checkouts.load(reference, false);
@@ -199,6 +202,7 @@ class Checkouts {
 
     /** Allocations paid to this merchant across all collectors (its own sales ledger). */
     @GetMapping("/transactions")
+    @Transactional(readOnly = true)
     public List<Line> transactions(@PathVariable UUID merchantId, @RequestParam(defaultValue = "100") int limit) {
         var a = access.require(merchantId, VIEW);
         record Ref(UUID checkout, int line) {}
@@ -234,6 +238,7 @@ class Checkouts {
     // ---- marketplace commission grid ---------------------------------------------------------
 
     @GetMapping("/fee-schedule")
+    @Transactional(readOnly = true)
     public CheckoutService.FeeSchedule feeSchedule(@PathVariable UUID merchantId) {
         access.require(merchantId, VIEW);
         return checkouts.feeSchedule(merchantId);
@@ -298,6 +303,7 @@ class Checkouts {
     }
 
     @GetMapping("/refunds")
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> refunds(@PathVariable UUID merchantId) {
         access.require(merchantId, FINANCE_VIEW);
         return db.sql("""
@@ -310,6 +316,7 @@ class Checkouts {
     }
 
     @GetMapping("/settlements")
+    @Transactional(readOnly = true)
     public List<CheckoutService.SettlementBatch> settlements(@PathVariable UUID merchantId) {
         access.require(merchantId, FINANCE_VIEW);
         return db.sql("SELECT id FROM settlement_batch WHERE merchant_id = :m ORDER BY created_at DESC LIMIT 200")
@@ -317,6 +324,7 @@ class Checkouts {
     }
 
     @GetMapping("/disputes")
+    @Transactional(readOnly = true)
     public List<CheckoutService.Dispute> disputes(@PathVariable UUID merchantId) {
         access.require(merchantId, FINANCE_VIEW);
         return db.sql("""
@@ -341,6 +349,7 @@ class Checkouts {
     }
 
     @GetMapping("/payment-links")
+    @Transactional(readOnly = true)
     public List<Link> links(@PathVariable UUID merchantId) {
         var a = access.require(merchantId, VIEW);
         return db.sql("""
@@ -355,6 +364,7 @@ class Checkouts {
 
     /** QR payload for a payment link or the merchant code; clients render it as a QR image. */
     @GetMapping("/qr")
+    @Transactional(readOnly = true)
     public Map<String, String> qr(@PathVariable UUID merchantId, @RequestParam(required = false) String link) {
         access.require(merchantId, VIEW);
         var merchant = access.find(merchantId).orElseThrow();

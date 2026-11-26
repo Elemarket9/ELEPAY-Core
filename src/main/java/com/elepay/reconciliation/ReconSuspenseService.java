@@ -232,6 +232,7 @@ public class ReconSuspenseService {
         );
     }
 
+    @Transactional(readOnly = true)
     public Optional<SuspenseRecord> findById(UUID suspenseId) {
         return db.sql("""
             SELECT id, match_record_id, suspense_account_code, variance_pesewas,
@@ -258,6 +259,7 @@ public class ReconSuspenseService {
                 .optional();
     }
 
+    @Transactional(readOnly = true)
     public List<SuspenseRecord> listOpenSuspenseItems(AgingBucket bucket) {
         String query = (bucket != null)
                 ? "SELECT id, match_record_id, suspense_account_code, variance_pesewas, currency, aging_bucket, status, resolution_notes, resolved_by, resolved_at, created_at, updated_at FROM recon_suspense_ledger WHERE status IN ('OPEN', 'UNDER_INVESTIGATION') AND aging_bucket = :bucket ORDER BY created_at ASC"

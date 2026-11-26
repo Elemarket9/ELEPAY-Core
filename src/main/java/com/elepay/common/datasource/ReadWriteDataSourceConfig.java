@@ -2,67 +2,108 @@ package com.elepay.common.datasource;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Duration;
+import javax.sql.DataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.datasource.LazyConnectionDataSourceProxy;
-import org.springframework.jdbc.datasource.lookup.AbstractRoutingDataSource;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
-
-import javax.sql.DataSource;
-import java.util.HashMap;
-import java.util.Map;
 
 /**
- * PostgreSQL High Availability Connection Pooling & Read/Write Split Routing (Domain 15).
- * Dynamically routes read-only transactions to read replicas and write transactions to primary.
+ * PostgreSQL High Availability Connection Pooling, Read/Write Split &amp; Cell-Aware Routing
+ * (Stage 3B + Stage 4 Shared Foundation).
+ *
+ * <p>When {@code elepay.datasource.read-write-split.enabled=true}:
+ * <ul>
+ *   <li>Creates a single HikariCP pool if {@code elepay.datasource.replica-url} is absent, blank,
+ *       or identical to {@code spring.datasource.url} (never opening a duplicate idle pool).</li>
+ *   <li>Wraps {@link CellAwareRoutingDataSource} in {@link LazyConnectionDataSourceProxy} as the
+ *       {@code @Primary DataSource} so {@code @Transactional(readOnly = true)} is evaluated before
+ *       acquiring a JDBC connection.</li>
+ *   <li>Applies PostgreSQL JDBC batch/prepared-statement tuning ({@code reWriteBatchedInserts=true},
+ *       {@code prepareThreshold=3}).</li>
+ * </ul>
  */
 @Configuration
 public class ReadWriteDataSourceConfig {
 
-    public enum RouteType {
-        PRIMARY,
-        REPLICA
+    private static final Logger log = LoggerFactory.getLogger(ReadWriteDataSourceConfig.class);
+
+    @Bean
+    public ReplicaHealthTracker replicaHealthTracker(
+            @Value("${elepay.datasource.replica.max-lag-ms:2000}") long maxLagMs,
+            @Value("${elepay.datasource.replica.cooldown-ms:15000}") long cooldownMs) {
+        return new ReplicaHealthTracker(maxLagMs, Duration.ofMillis(cooldownMs));
     }
 
-    public static class ReadWriteRoutingDataSource extends AbstractRoutingDataSource {
-        @Override
-        protected Object determineCurrentLookupKey() {
-            boolean isReadOnly = TransactionSynchronizationManager.isCurrentTransactionReadOnly();
-            return isReadOnly ? RouteType.REPLICA : RouteType.PRIMARY;
+    @Bean
+    @ConditionalOnProperty(name = "elepay.datasource.read-write-split.enabled", havingValue = "true")
+    public CellAwareRoutingDataSource cellAwareRoutingDataSource(
+            @Value("${spring.datasource.url}") String primaryUrl,
+            @Value("${elepay.datasource.replica-url:}") String replicaUrl,
+            @Value("${spring.datasource.username:elepay}") String username,
+            @Value("${spring.datasource.password:}") String password,
+            @Value("${spring.datasource.hikari.maximum-pool-size:50}") int maxPoolSize,
+            @Value("${spring.datasource.hikari.minimum-idle:10}") int minIdle,
+            @Value("${spring.datasource.hikari.leak-detection-threshold:60000}") long leakThreshold,
+            ReplicaHealthTracker replicaHealthTracker,
+            ObjectProvider<MeterRegistry> meterRegistryProvider) {
+
+        HikariDataSource primaryDs = createHikariDataSource(
+                "ElepayPrimaryPool", primaryUrl, username, password, maxPoolSize, minIdle, leakThreshold, false);
+
+        HikariDataSource replicaDs = null;
+        if (isDistinctReplicaUrl(primaryUrl, replicaUrl)) {
+            replicaDs = createHikariDataSource(
+                    "ElepayReplicaPool", replicaUrl.trim(), username, password, maxPoolSize, minIdle, leakThreshold, true);
+            log.info("Configured CellAwareRoutingDataSource with distinct primary and read-replica pools for {}",
+                    CellDataSourceKey.DEFAULT_CELL_ID);
+        } else {
+            log.info("Replica URL absent or identical to primary URL; running CellAwareRoutingDataSource in safe single-pool mode for {}",
+                    CellDataSourceKey.DEFAULT_CELL_ID);
         }
+
+        CellAwareRoutingDataSource routingDataSource =
+                new CellAwareRoutingDataSource(replicaHealthTracker, meterRegistryProvider.getIfAvailable());
+        routingDataSource.registerCell(CellDataSourceKey.DEFAULT_CELL_ID, primaryDs, replicaDs);
+        routingDataSource.setDefaultTargetDataSource(primaryDs);
+        routingDataSource.afterPropertiesSet();
+        return routingDataSource;
     }
 
     @Bean
     @Primary
     @ConditionalOnProperty(name = "elepay.datasource.read-write-split.enabled", havingValue = "true")
-    public DataSource routingDataSource(
-            @Value("${spring.datasource.url}") String primaryUrl,
-            @Value("${elepay.datasource.replica-url:${spring.datasource.url}}") String replicaUrl,
-            @Value("${spring.datasource.username:elepay}") String username,
-            @Value("${spring.datasource.password:}") String password,
-            @Value("${spring.datasource.hikari.maximum-pool-size:50}") int maxPoolSize,
-            @Value("${spring.datasource.hikari.minimum-idle:10}") int minIdle,
-            @Value("${spring.datasource.hikari.leak-detection-threshold:60000}") long leakThreshold) {
-
-        DataSource primaryDs = createHikariDataSource("ElepayPrimaryPool", primaryUrl, username, password, maxPoolSize, minIdle, leakThreshold, false);
-        DataSource replicaDs = createHikariDataSource("ElepayReplicaPool", replicaUrl, username, password, maxPoolSize, minIdle, leakThreshold, true);
-
-        ReadWriteRoutingDataSource routingDataSource = new ReadWriteRoutingDataSource();
-        Map<Object, Object> targetDataSources = new HashMap<>();
-        targetDataSources.put(RouteType.PRIMARY, primaryDs);
-        targetDataSources.put(RouteType.REPLICA, replicaDs);
-
-        routingDataSource.setTargetDataSources(targetDataSources);
-        routingDataSource.setDefaultTargetDataSource(primaryDs);
-        routingDataSource.afterPropertiesSet();
-
-        return new LazyConnectionDataSourceProxy(routingDataSource);
+    public DataSource routingDataSource(CellAwareRoutingDataSource cellAwareRoutingDataSource) {
+        return new LazyConnectionDataSourceProxy(cellAwareRoutingDataSource);
     }
 
-    private static DataSource createHikariDataSource(
+    static boolean isDistinctReplicaUrl(String primaryUrl, String replicaUrl) {
+        if (replicaUrl == null || replicaUrl.isBlank()) {
+            return false;
+        }
+        if (primaryUrl == null || primaryUrl.isBlank()) {
+            return true;
+        }
+        return !replicaUrl.trim().equals(primaryUrl.trim());
+    }
+
+    public static HikariDataSource createHikariDataSource(
+            String poolName, String jdbcUrl, String user, String pass,
+            int maxPool, int minIdle, long leakThreshold, boolean readOnly) {
+
+        HikariConfig config = buildHikariConfig(
+                poolName, jdbcUrl, user, pass, maxPool, minIdle, leakThreshold, readOnly);
+        return new HikariDataSource(config);
+    }
+
+    static HikariConfig buildHikariConfig(
             String poolName, String jdbcUrl, String user, String pass,
             int maxPool, int minIdle, long leakThreshold, boolean readOnly) {
 
@@ -78,10 +119,10 @@ public class ReadWriteDataSourceConfig {
         config.setMaxLifetime(1800000);
         config.setLeakDetectionThreshold(leakThreshold);
         config.setReadOnly(readOnly);
-        config.addDataSourceProperty("cachePrepStmts", "true");
-        config.addDataSourceProperty("prepStmtCacheSize", "250");
-        config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+        // PostgreSQL JDBC driver performance tuning
+        config.addDataSourceProperty("reWriteBatchedInserts", "true");
+        config.addDataSourceProperty("prepareThreshold", "3");
 
-        return new HikariDataSource(config);
+        return config;
     }
 }

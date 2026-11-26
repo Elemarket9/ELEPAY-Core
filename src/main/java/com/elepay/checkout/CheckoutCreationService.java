@@ -1,5 +1,6 @@
 package com.elepay.checkout;
 
+import com.elepay.cell.CrossCellGuard;
 import com.elepay.checkout.CheckoutService.AllocationRequest;
 import com.elepay.checkout.CheckoutService.Checkout;
 import com.elepay.checkout.CheckoutService.FeeRule;
@@ -26,15 +27,18 @@ class CheckoutCreationService {
     private final Audit audit;
     private final CheckoutConfigService config;
     private final CheckoutStore store;
+    private final CrossCellGuard crossCellGuard;
 
     CheckoutCreationService(JdbcClient db, MerchantAccess merchants, Outbox outbox, Audit audit,
-                            CheckoutConfigService config, CheckoutStore store) {
+                            CheckoutConfigService config, CheckoutStore store,
+                            CrossCellGuard crossCellGuard) {
         this.db = db;
         this.merchants = merchants;
         this.outbox = outbox;
         this.audit = audit;
         this.config = config;
         this.store = store;
+        this.crossCellGuard = crossCellGuard;
     }
 
     /** The category's rule, else the marketplace's default ('*') rule, else no commission. */
@@ -79,10 +83,13 @@ class CheckoutCreationService {
         long subtotal = 0;
         List<long[]> fees = new ArrayList<>();
         List<String> categories = new ArrayList<>();
+        Set<UUID> involvedMerchants = new LinkedHashSet<>();
+        involvedMerchants.add(collectorId);
         for (AllocationRequest a : requested) {
             if (a == null || a.merchantId() == null || a.amount() <= 0) {
                 throw ApiException.badRequest("invalid_allocation", "Each allocation needs a merchant and a positive amount");
             }
+            involvedMerchants.add(a.merchantId());
             String kind = a.kind() == null ? "sale" : a.kind();
             if (!Set.of("sale", "delivery").contains(kind)) throw ApiException.badRequest("invalid_kind", "Use sale or delivery");
             var recipient = merchants.find(a.merchantId())
@@ -124,6 +131,7 @@ class CheckoutCreationService {
             categories.add(category);
         }
         if (subtotal > maxTotal) throw ApiException.badRequest("amount_too_large", "Checkout total exceeds the limit");
+        crossCellGuard.assertSameCell(involvedMerchants);
         UUID id = UUID.randomUUID();
         String reference = References.next("EP");
         db.sql("""

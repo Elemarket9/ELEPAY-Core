@@ -1,5 +1,6 @@
 package com.elepay.identity;
 
+import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -10,7 +11,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -60,6 +64,15 @@ class SecurityConfig {
 
     @Bean
     FilterRegistrationBean<RequestSigningFilter> requestSigningFilterRegistration(RequestSigningFilter filter) {
+        var reg = new FilterRegistrationBean<>(filter);
+        reg.setEnabled(false);
+        return reg;
+    }
+
+    @Bean
+    @ConditionalOnBean(name = "cellRoutingFilter")
+    FilterRegistrationBean<OncePerRequestFilter> cellRoutingFilterRegistration(
+            @Qualifier("cellRoutingFilter") OncePerRequestFilter filter) {
         var reg = new FilterRegistrationBean<>(filter);
         reg.setEnabled(false);
         return reg;
@@ -124,6 +137,7 @@ class SecurityConfig {
                             Stage1KillSwitchFilter stage1KillSwitchFilter,
                             RateLimitFilter rateLimitFilter,
                             RequestSigningFilter requestSigningFilter,
+                            @Qualifier("cellRoutingFilter") @Autowired(required = false) OncePerRequestFilter cellRoutingFilter,
                             Environment env,
                             @Value("${management.server.port:0}") int managementPort,
                             @Value("${elepay.security.trusted-proxies:}") String trustedProxies,
@@ -133,13 +147,16 @@ class SecurityConfig {
         String issuerOrigin = extractOrigin(issuerUri);
         String connectSrc = issuerOrigin != null ? "connect-src 'self' " + issuerOrigin : "connect-src 'self'";
 
+        List<Filter> preAuthList = new ArrayList<>();
+        preAuthList.add(edgeProtectionFilter);
+        preAuthList.add(stage1KillSwitchFilter);
+        preAuthList.add(rateLimitFilter);
+        if (cellRoutingFilter != null) {
+            preAuthList.add(cellRoutingFilter);
+        }
+        preAuthList.add(new ApiKeyFilter(apiKeys, trustedProxies));
         CompositeFilter preAuthFilters = new CompositeFilter();
-        preAuthFilters.setFilters(List.of(
-                edgeProtectionFilter,
-                stage1KillSwitchFilter,
-                rateLimitFilter,
-                new ApiKeyFilter(apiKeys, trustedProxies)
-        ));
+        preAuthFilters.setFilters(preAuthList);
 
         http.csrf(csrf -> csrf.disable())
                 .cors(cors -> {})

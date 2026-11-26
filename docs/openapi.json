@@ -269,6 +269,45 @@
         "required" : [ "contactPhone", "kind", "legalName", "tradingName" ],
         "type" : "object"
       },
+      "AssignMerchantRequest" : {
+        "properties" : {
+          "affinityGroupId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "cellId" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "pinned" : {
+            "type" : "boolean"
+          }
+        },
+        "required" : [ "cellId", "merchantId" ],
+        "type" : "object"
+      },
+      "AsyncCheckoutAccepted" : {
+        "properties" : {
+          "duplicate" : {
+            "type" : "boolean"
+          },
+          "ingestionId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "statusUrl" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "AuthUserView" : {
         "properties" : {
           "email" : {
@@ -399,6 +438,32 @@
           "total" : {
             "format" : "int64",
             "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "BatchCheckoutAccepted" : {
+        "properties" : {
+          "batchSize" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/AsyncCheckoutAccepted"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "BatchCheckoutRequest" : {
+        "properties" : {
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/CreateCheckout"
+            },
+            "type" : "array"
           }
         },
         "type" : "object"
@@ -679,6 +744,34 @@
           },
           "maxSinglePayoutPesewas" : {
             "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "CellRecord" : {
+        "properties" : {
+          "cellId" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "displayName" : {
+            "type" : "string"
+          },
+          "jdbcUrl" : {
+            "type" : "string"
+          },
+          "replicaJdbcUrl" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "weight" : {
+            "format" : "int32",
             "type" : "integer"
           }
         },
@@ -2886,6 +2979,74 @@
         "required" : [ "askRate", "bidRate", "destinationCurrency", "source", "sourceCurrency" ],
         "type" : "object"
       },
+      "IngestionStatus" : {
+        "properties" : {
+          "attempts" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "completedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "eventType" : {
+            "type" : "string"
+          },
+          "ingestionId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "lastError" : {
+            "type" : "string"
+          },
+          "resultJson" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "tenantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "IngestionStatusResponse" : {
+        "properties" : {
+          "attempts" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "completedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "eventType" : {
+            "type" : "string"
+          },
+          "ingestionId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "lastError" : {
+            "type" : "string"
+          },
+          "result" : { },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "IngredientCostDetail" : {
         "properties" : {
           "ingredientName" : {
@@ -3775,6 +3936,56 @@
           "total" : {
             "format" : "int64",
             "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "MigrationJob" : {
+        "properties" : {
+          "completedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "createdBy" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "lastError" : {
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "rowsCopied" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "sourceCellId" : {
+            "type" : "string"
+          },
+          "state" : {
+            "type" : "string"
+          },
+          "targetCellId" : {
+            "type" : "string"
+          },
+          "updatedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "verificationHash" : {
+            "type" : "string"
           }
         },
         "type" : "object"
@@ -4761,6 +4972,23 @@
             "type" : "string"
           }
         },
+        "type" : "object"
+      },
+      "PlanMigrationRequest" : {
+        "properties" : {
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "targetCellId" : {
+            "minLength" : 1,
+            "type" : "string"
+          }
+        },
+        "required" : [ "merchantId", "targetCellId" ],
         "type" : "object"
       },
       "PlatformPolicy" : {
@@ -5874,6 +6102,30 @@
         },
         "type" : "object"
       },
+      "RegisterCellRequest" : {
+        "properties" : {
+          "cellId" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "displayName" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "jdbcUrl" : {
+            "type" : "string"
+          },
+          "replicaJdbcUrl" : {
+            "type" : "string"
+          },
+          "weight" : {
+            "format" : "int32",
+            "type" : "integer"
+          }
+        },
+        "required" : [ "cellId", "displayName" ],
+        "type" : "object"
+      },
       "RegisterRequest" : {
         "properties" : {
           "email" : {
@@ -6293,6 +6545,14 @@
           "active" : {
             "type" : "boolean"
           },
+          "reason" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "RollbackMigrationRequest" : {
+        "properties" : {
           "reason" : {
             "type" : "string"
           }
@@ -9537,7 +9797,7 @@
     },
     "/v1/inventory/batches" : {
       "post" : {
-        "operationId" : "createBatch",
+        "operationId" : "createBatch_1",
         "requestBody" : {
           "content" : {
             "application/json" : {
@@ -11400,6 +11660,94 @@
         "tags" : [ "checkouts" ]
       }
     },
+    "/v1/merchants/{merchantId}/checkouts/async" : {
+      "post" : {
+        "operationId" : "createAsync",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateCheckout"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AsyncCheckoutAccepted"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "async-checkout-controller" ]
+      }
+    },
+    "/v1/merchants/{merchantId}/checkouts/batch" : {
+      "post" : {
+        "operationId" : "createBatch",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/BatchCheckoutRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/BatchCheckoutAccepted"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "async-checkout-controller" ]
+      }
+    },
     "/v1/merchants/{merchantId}/checkouts/{reference}" : {
       "get" : {
         "operationId" : "one_2",
@@ -11756,6 +12104,41 @@
           }
         },
         "tags" : [ "checkouts" ]
+      }
+    },
+    "/v1/merchants/{merchantId}/ingestions/{ingestionId}" : {
+      "get" : {
+        "operationId" : "ingestionStatus",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "ingestionId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/IngestionStatusResponse"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "async-checkout-controller" ]
       }
     },
     "/v1/merchants/{merchantId}/mandates" : {
@@ -12675,6 +13058,199 @@
         "tags" : [ "integrity-api" ]
       }
     },
+    "/v1/ops/cells" : {
+      "get" : {
+        "operationId" : "listCells",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "cell-admin-controller" ]
+      },
+      "post" : {
+        "operationId" : "registerCell",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegisterCellRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/CellRecord"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "cell-admin-controller" ]
+      }
+    },
+    "/v1/ops/cells/assign" : {
+      "post" : {
+        "operationId" : "assignMerchant",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/AssignMerchantRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "cell-admin-controller" ]
+      }
+    },
+    "/v1/ops/cells/migrations" : {
+      "post" : {
+        "operationId" : "planMigration",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PlanMigrationRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MigrationJob"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "cell-admin-controller" ]
+      }
+    },
+    "/v1/ops/cells/migrations/{id}/advance" : {
+      "post" : {
+        "operationId" : "advanceMigration",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MigrationJob"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "cell-admin-controller" ]
+      }
+    },
+    "/v1/ops/cells/migrations/{id}/rollback" : {
+      "post" : {
+        "operationId" : "rollbackMigration",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RollbackMigrationRequest"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MigrationJob"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "cell-admin-controller" ]
+      }
+    },
+    "/v1/ops/cells/resolve/{merchantId}" : {
+      "get" : {
+        "operationId" : "resolveCell",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "cell-admin-controller" ]
+      }
+    },
     "/v1/ops/compliance/mml-transactions" : {
       "get" : {
         "operationId" : "mmlTransactions",
@@ -13130,7 +13706,7 @@
     },
     "/v1/ops/emtech/submissions/{id}/replay" : {
       "post" : {
-        "operationId" : "replay",
+        "operationId" : "replay_1",
         "parameters" : [ {
           "in" : "path",
           "name" : "id",
@@ -13400,6 +13976,64 @@
           }
         },
         "tags" : [ "fx-api" ]
+      }
+    },
+    "/v1/ops/ingestions/dead" : {
+      "get" : {
+        "operationId" : "listDead",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "limit",
+          "required" : false,
+          "schema" : {
+            "default" : 50,
+            "format" : "int32",
+            "type" : "integer"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/IngestionStatus"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "ingestion-ops-controller" ]
+      }
+    },
+    "/v1/ops/ingestions/{ingestionId}/replay" : {
+      "post" : {
+        "operationId" : "replay",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "ingestionId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/IngestionStatus"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "ingestion-ops-controller" ]
       }
     },
     "/v1/ops/kill-switch/api-keys/{keyId}" : {

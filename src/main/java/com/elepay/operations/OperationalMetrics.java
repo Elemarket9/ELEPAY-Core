@@ -8,6 +8,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Operational gauges for alerting, refreshed every 30 seconds from
@@ -43,7 +44,8 @@ class OperationalMetrics implements MeterBinder {
     }
 
     @Scheduled(fixedDelayString = "${elepay.metrics.refresh-ms:30000}", initialDelay = 5000)
-    void refresh() {
+    @Transactional(readOnly = true)
+    public void refresh() {
         QUERIES.forEach((name, sql) -> {
             try {
                 values.put(name, db.sql(sql).query(Number.class).single().doubleValue());

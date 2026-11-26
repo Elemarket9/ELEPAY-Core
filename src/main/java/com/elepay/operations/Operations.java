@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 /** Operations console APIs: exception queue, ledger integrity, overview and audit trail. */
@@ -29,6 +30,7 @@ class Operations {
     record Resolution(@NotBlank @Size(max = 1000) String resolution) {}
 
     @GetMapping("/queue")
+    @Transactional(readOnly = true)
     public List<OpsQueue.Item> list(@RequestParam(defaultValue = "open") String status) {
         Actor.current().requireOps();
         return queue.list(status);
@@ -53,12 +55,14 @@ class Operations {
 
     /** Every balance must equal the sum of its journal entries and every currency must net to zero. */
     @GetMapping("/ledger/integrity")
+    @Transactional(readOnly = true)
     public Ledger.Integrity integrity() {
         Actor.current().requireOps();
         return ledger.integrity();
     }
 
     @GetMapping("/overview")
+    @Transactional(readOnly = true)
     public Map<String, Object> overview() {
         Actor.current().requireOps();
         return db.sql("""
@@ -74,6 +78,7 @@ class Operations {
     }
 
     @GetMapping("/disputes")
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> disputes(@RequestParam(defaultValue = "open") String status) {
         Actor.current().requireOps();
         return db.sql("""
@@ -85,6 +90,7 @@ class Operations {
     }
 
     @GetMapping("/audit")
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> audit(@RequestParam String subject) {
         Actor actor = Actor.current();
         if (!actor.canFreezeRisk()) {
@@ -104,6 +110,7 @@ class Operations {
     }
 
     @GetMapping("/reconciliation/runs")
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> runs() {
         Actor.current().requireOps();
         return db.sql("SELECT id, rail, period, imported_by, summary::text AS summary, created_at FROM reconciliation_run ORDER BY created_at DESC LIMIT 100")
@@ -129,6 +136,7 @@ class Operations {
     }
 
     @GetMapping("/merchants/search")
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> searchMerchants(@RequestParam(defaultValue = "") String q) {
         Actor.current().requireOps();
         String trimmed = q == null ? "" : q.trim();
@@ -158,6 +166,7 @@ class Operations {
     }
 
     @GetMapping("/merchants/{id}/controls")
+    @Transactional(readOnly = true)
     public Map<String, Object> merchantControls(@PathVariable UUID id) {
         Actor.current().requireOps();
         var merchant = db.sql("""
@@ -211,6 +220,7 @@ class Operations {
      * Credit Customer Name, and Debit Customer Name.
      */
     @GetMapping("/compliance/mml-transactions")
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> mmlTransactions(
             @RequestParam(defaultValue = "30") int days,
             @RequestParam(defaultValue = "500") int limit) {

@@ -65,29 +65,39 @@ class RateLimitFilter extends OncePerRequestFilter {
                     @Value("${elepay.rate-limits.unauth-per-ip-per-min:300}") int unauthPerIpPerMin,
                     @Value("${elepay.rate-limits.auth-per-ip-per-min:1200}") int authPerIpPerMin,
                     @Value("${elepay.rate-limits.per-credential-per-min:3000}") int perCredentialPerMin,
-                    @Value("${elepay.rate-limits.global-per-min:60000}") int globalPerMin) {
+                    @Value("${elepay.rate-limits.global-per-min:60000}") int globalPerMin,
+                    @Value("${elepay.rate-limits.burst-multiplier:1}") int burstMultiplier) {
         this.enabled = enabled;
         this.sharedRequired = sharedRequired;
         this.trustedProxies = trustedProxies == null ? "" : trustedProxies;
         this.maxBodyBytes = maxBodyBytes;
-        int m = Math.max(1, multiplier);
+        double m = Math.max(1, multiplier);
+        double burst = Math.max(1, burstMultiplier);
         this.rules = List.of(
-                new Rule("POST", "/v1/auth/", "auth", TokenBucketRateLimiter.perMinute(20 * m, 20 * m, redis)),
-                new Rule("POST", "/v1/rails/card/tokens", "card-tokenize", TokenBucketRateLimiter.perMinute(10 * m, 10 * m, redis)),
-                new Rule(null, "/v1/wallet/recipients/lookup", "recipient-lookup", TokenBucketRateLimiter.perMinute(20 * m, 20 * m, redis)),
-                new Rule(null, "/v1/public/", "public", TokenBucketRateLimiter.perMinute(120 * m, 120 * m, redis)),
-                new Rule("POST", "/v1/ussd/", "ussd", TokenBucketRateLimiter.perMinute(300 * m, 300 * m, redis)));
-        // Capacity == per-minute allowance, so a client may burst up to a full minute's budget (idempotent
-        // retries are not penalised) and then refills steadily. Defaults are deliberately generous: these
-        // break volumetric floods, not the carefully tuned targeted rules above.
-        this.unauthPerIp = TokenBucketRateLimiter.perMinute(unauthPerIpPerMin * m, unauthPerIpPerMin * m, redis);
-        this.authPerIp = TokenBucketRateLimiter.perMinute(authPerIpPerMin * m, authPerIpPerMin * m, redis);
-        this.perCredential = TokenBucketRateLimiter.perMinute(perCredentialPerMin * m, perCredentialPerMin * m, redis);
-        this.global = TokenBucketRateLimiter.perMinute(globalPerMin * m, globalPerMin * m, redis);
+                new Rule("POST", "/v1/auth/", "auth", TokenBucketRateLimiter.perMinute(20.0 * m, 20.0 * m, redis)),
+                new Rule("POST", "/v1/rails/card/tokens", "card-tokenize", TokenBucketRateLimiter.perMinute(10.0 * m, 10.0 * m, redis)),
+                new Rule(null, "/v1/wallet/recipients/lookup", "recipient-lookup", TokenBucketRateLimiter.perMinute(20.0 * m, 20.0 * m, redis)),
+                new Rule(null, "/v1/public/", "public", TokenBucketRateLimiter.perMinute(120.0 * m, 120.0 * m, redis)),
+                new Rule("POST", "/v1/ussd/", "ussd", TokenBucketRateLimiter.perMinute(300.0 * m, 300.0 * m, redis)));
+        // Capacity == per-minute allowance * burstMultiplier, so a client may burst up to its configured
+        // window (idempotent retries and high-throughput ingestion spikes are not penalised) and then refills
+        // steadily. Double arithmetic avoids 32-bit int overflow at high-throughput multipliers.
+        this.unauthPerIp = TokenBucketRateLimiter.perMinute(unauthPerIpPerMin * m * burst, unauthPerIpPerMin * m, redis);
+        this.authPerIp = TokenBucketRateLimiter.perMinute(authPerIpPerMin * m * burst, authPerIpPerMin * m, redis);
+        this.perCredential = TokenBucketRateLimiter.perMinute(perCredentialPerMin * m * burst, perCredentialPerMin * m, redis);
+        this.global = TokenBucketRateLimiter.perMinute(globalPerMin * m * burst, globalPerMin * m, redis);
+    }
+
+    RateLimitFilter(boolean enabled, int multiplier,
+                    org.springframework.data.redis.core.StringRedisTemplate redis,
+                    boolean sharedRequired, String trustedProxies, long maxBodyBytes,
+                    int unauthPerIpPerMin, int authPerIpPerMin, int perCredentialPerMin, int globalPerMin) {
+        this(enabled, multiplier, redis, sharedRequired, trustedProxies, maxBodyBytes,
+                unauthPerIpPerMin, authPerIpPerMin, perCredentialPerMin, globalPerMin, 1);
     }
 
     RateLimitFilter(boolean enabled, int multiplier) {
-        this(enabled, multiplier, null, false, "", 2097152, 300, 1200, 3000, 60000);
+        this(enabled, multiplier, null, false, "", 2097152, 300, 1200, 3000, 60000, 1);
     }
 
     @Override
