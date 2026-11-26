@@ -53,8 +53,9 @@ public class FinancialTxRetry {
                     long backoffMs = computeJitteredBackoffMs(attempt);
                     log.warn("Transient PostgreSQL concurrency failure on attempt {}/{}; rolling back and retrying in {}ms",
                             attempt, attempts, backoffMs);
-                    sleepQuietly(backoffMs);
-                    continue;
+                    if (sleepQuietly(backoffMs)) {
+                        continue;
+                    }
                 }
                 if (isTransientConcurrencyFailure(ex)) {
                     throw ApiException.conflict("lock_contention",
@@ -67,11 +68,11 @@ public class FinancialTxRetry {
     }
 
     public static boolean isTransientConcurrencyFailure(Throwable t) {
-        if (t instanceof ConcurrencyFailureException) {
-            return true;
-        }
         Throwable cur = t;
         while (cur != null) {
+            if (cur instanceof ConcurrencyFailureException) {
+                return true;
+            }
             if (cur instanceof SQLException sqlEx) {
                 String state = sqlEx.getSQLState();
                 if ("40P01".equals(state) || "40001".equals(state)) {
@@ -88,11 +89,13 @@ public class FinancialTxRetry {
         return ThreadLocalRandom.current().nextLong(1L, Math.max(2L, ceiling + 1L));
     }
 
-    private static void sleepQuietly(long millis) {
+    private static boolean sleepQuietly(long millis) {
         try {
             Thread.sleep(millis);
+            return !Thread.currentThread().isInterrupted();
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
+            return false;
         }
     }
 }

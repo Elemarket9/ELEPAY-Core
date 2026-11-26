@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.AbstractDataSource;
@@ -22,6 +23,12 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 @DisplayName("Cell-Aware & Read/Write DataSource Routing Unit Tests")
 class DataSourceRoutingTest {
+
+    @BeforeEach
+    void setUp() {
+        DataSourceRouteContext.clear();
+        TransactionSynchronizationManager.setCurrentTransactionReadOnly(false);
+    }
 
     @AfterEach
     void tearDown() {
@@ -196,10 +203,15 @@ class DataSourceRoutingTest {
         router.afterPropertiesSet();
 
         DataSourceRouteContext.setCellId("cell-99");
-        TransactionSynchronizationManager.setCurrentTransactionReadOnly(true);
-
+        // Write transaction on logical cell falls back to (cell-0, PRIMARY)
+        TransactionSynchronizationManager.setCurrentTransactionReadOnly(false);
         assertThat(router.determineCurrentLookupKey()).isEqualTo(CellDataSourceKey.defaultPrimary());
         assertThat(router.determineTargetDataSource()).isSameAs(cell0Primary);
+
+        // Read-only transaction on logical cell falls back to cell-0 while preserving REPLICA route
+        TransactionSynchronizationManager.setCurrentTransactionReadOnly(true);
+        assertThat(router.determineCurrentLookupKey()).isEqualTo(CellDataSourceKey.defaultReplica());
+        assertThat(router.determineTargetDataSource()).isSameAs(cell0Replica);
     }
 
     @Test

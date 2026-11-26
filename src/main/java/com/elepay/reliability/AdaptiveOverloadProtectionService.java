@@ -91,6 +91,8 @@ public class AdaptiveOverloadProtectionService {
         }
     }
 
+    private static final int MAX_TRACKED_MERCHANT_BULKHEADS = 10_000;
+
     /**
      * Executes a workload protected by per-merchant noisy-neighbor bulkheads, priority-tier
      * load shedding, and AIMD adaptive concurrency limits.
@@ -100,6 +102,7 @@ public class AdaptiveOverloadProtectionService {
             LoadShedder.PriorityTier tier,
             Supplier<T> action) {
         Objects.requireNonNull(tier, "tier must not be null");
+        Objects.requireNonNull(action, "action must not be null");
 
         // 1. Check JVM Heap pressure for non-critical workloads
         double heapRatio = currentHeapUsageRatio();
@@ -109,52 +112,86 @@ public class AdaptiveOverloadProtectionService {
                     "Instance memory pressure elevated (Retry-After: " + recommendedRetryAfterSeconds() + "s)");
         }
 
-        // 2. Priority-tier admission check
-        int limit = adaptiveLimit.get();
-        int currentInFlight = globalInFlight.get();
-        double loadFactor = (double) currentInFlight / Math.max(1, limit);
-        if (tier != LoadShedder.PriorityTier.CRITICAL && loadFactor >= tier.getSheddingThreshold()) {
-            totalShed503.incrementAndGet();
-            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "priority_load_shed",
-                    "Non-critical workload shed at load factor "
-                            + String.format("%.2f", loadFactor)
-                            + " (Retry-After: " + recommendedRetryAfterSeconds() + "s)");
-        }
-        if (currentInFlight >= limit) {
-            totalShed503.incrementAndGet();
-            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "adaptive_concurrency_limit_reached",
-                    "Adaptive concurrency limit (" + limit + ") reached (Retry-After: "
-                            + recommendedRetryAfterSeconds() + "s)");
-        }
-
-        // 3. Per-merchant noisy-neighbor bulkhead check
+        // 2. Atomically reserve global slot before checking priority-tier threshold and concurrency limit
+        int reservedSlot = globalInFlight.incrementAndGet();
+        boolean globalSlotHeld = true;
         Semaphore merchantSem = null;
-        if (merchantId != null) {
-            merchantSem = merchantBulkheads.computeIfAbsent(merchantId, id -> new Semaphore(maxPerMerchant));
-            if (!merchantSem.tryAcquire()) {
-                totalShed429.incrementAndGet();
-                throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "merchant_bulkhead_saturated",
-                        "Per-merchant concurrency bulkhead (" + maxPerMerchant + ") saturated for merchant "
-                                + merchantId + " (Retry-After: " + recommendedRetryAfterSeconds() + "s)");
-            }
-        }
-
-        globalInFlight.incrementAndGet();
-        loadShedder.incrementLoad();
+        boolean merchantPermitHeld = false;
+        boolean loadShedderIncremented = false;
         long startNanos = System.nanoTime();
         boolean success = false;
         try {
+            int limit = adaptiveLimit.get();
+            double loadFactor = (double) (reservedSlot - 1) / Math.max(1, limit);
+            if (tier != LoadShedder.PriorityTier.CRITICAL && loadFactor >= tier.getSheddingThreshold()) {
+                totalShed503.incrementAndGet();
+                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "priority_load_shed",
+                        "Non-critical workload shed at load factor "
+                                + String.format(java.util.Locale.ROOT, "%.2f", loadFactor)
+                                + " (Retry-After: " + recommendedRetryAfterSeconds() + "s)");
+            }
+            if (reservedSlot > limit) {
+                totalShed503.incrementAndGet();
+                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "adaptive_concurrency_limit_reached",
+                        "Adaptive concurrency limit (" + limit + ") reached (Retry-After: "
+                                + recommendedRetryAfterSeconds() + "s)");
+            }
+
+            // 3. Per-merchant noisy-neighbor bulkhead check
+            if (merchantId != null) {
+                evictIdleBulkheadsIfNeeded();
+                merchantSem = merchantBulkheads.computeIfAbsent(merchantId, id -> new Semaphore(maxPerMerchant));
+                if (!merchantSem.tryAcquire()) {
+                    totalShed429.incrementAndGet();
+                    throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "merchant_bulkhead_saturated",
+                            "Per-merchant concurrency bulkhead (" + maxPerMerchant + ") saturated for merchant "
+                                    + merchantId + " (Retry-After: " + recommendedRetryAfterSeconds() + "s)");
+                }
+                merchantPermitHeld = true;
+            }
+
+            loadShedder.incrementLoad();
+            loadShedderIncremented = true;
+            startNanos = System.nanoTime();
             T res = action.get();
             success = true;
             return res;
         } finally {
-            long elapsedMs = Math.max(1L, (System.nanoTime() - startNanos) / 1_000_000L);
-            lastLatencyMs.set(elapsedMs);
-            updateAdaptiveLimit(elapsedMs, success, heapRatio);
-            loadShedder.decrementLoad();
-            globalInFlight.decrementAndGet();
-            if (merchantSem != null) {
-                merchantSem.release();
+            try {
+                if (loadShedderIncremented) {
+                    long elapsedMs = Math.max(1L, (System.nanoTime() - startNanos) / 1_000_000L);
+                    lastLatencyMs.set(elapsedMs);
+                    updateAdaptiveLimit(elapsedMs, success, heapRatio);
+                }
+            } finally {
+                if (loadShedderIncremented) {
+                    try {
+                        loadShedder.decrementLoad();
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+                if (globalSlotHeld) {
+                    globalInFlight.decrementAndGet();
+                }
+                if (merchantPermitHeld && merchantSem != null) {
+                    merchantSem.release();
+                }
+            }
+        }
+    }
+
+    private void evictIdleBulkheadsIfNeeded() {
+        if (merchantBulkheads.size() < MAX_TRACKED_MERCHANT_BULKHEADS) {
+            return;
+        }
+        var iter = merchantBulkheads.entrySet().iterator();
+        int removed = 0;
+        while (iter.hasNext() && removed < 1000) {
+            var entry = iter.next();
+            Semaphore sem = entry.getValue();
+            if (sem.availablePermits() == maxPerMerchant && !sem.hasQueuedThreads()) {
+                iter.remove();
+                removed++;
             }
         }
     }

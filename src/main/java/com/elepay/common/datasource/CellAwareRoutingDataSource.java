@@ -145,34 +145,47 @@ public class CellAwareRoutingDataSource extends AbstractRoutingDataSource implem
                         .collect(Collectors.toSet()));
     }
 
+    /**
+     * Returns all distinct managed underlying {@link DataSource} pools across all registered cells
+     * and roles (primary + replica).
+     */
+    public Set<DataSource> managedDataSources() {
+        Set<DataSource> uniquePools = Collections.newSetFromMap(new IdentityHashMap<>());
+        uniquePools.addAll(dynamicDataSources.values());
+        if (defaultDataSource != null) {
+            uniquePools.add(defaultDataSource);
+        }
+        return Collections.unmodifiableSet(uniquePools);
+    }
+
     @Override
     protected Object determineCurrentLookupKey() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()
+                && TransactionSynchronizationManager.isActualTransactionActive()
+                && !TransactionSynchronizationManager.isCurrentTransactionReadOnly()
+                && org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null) {
+            DataSourceRouteContext.markPrimaryWritten();
+        }
+
         String requestedCellId = DataSourceRouteContext.getCellId();
         boolean cellRegistered = hasCell(requestedCellId);
 
-        String effectiveCellId;
+        String effectiveCellId = cellRegistered ? requestedCellId : CellDataSourceKey.DEFAULT_CELL_ID;
+        RouteType override = DataSourceRouteContext.getRouteOverride();
+        RouteType desiredRoute = (override != null)
+                ? override
+                : (TransactionSynchronizationManager.isCurrentTransactionReadOnly()
+                        ? RouteType.REPLICA
+                        : RouteType.PRIMARY);
+
         RouteType effectiveRoute;
-
-        if (!cellRegistered) {
-            effectiveCellId = CellDataSourceKey.DEFAULT_CELL_ID;
-            effectiveRoute = RouteType.PRIMARY;
+        if (desiredRoute == RouteType.REPLICA) {
+            boolean forcePrimary = DataSourceRouteContext.isPrimaryWritten()
+                    || !hasDistinctReplica(effectiveCellId)
+                    || !replicaHealthTracker.isReplicaHealthy(effectiveCellId);
+            effectiveRoute = forcePrimary ? RouteType.PRIMARY : RouteType.REPLICA;
         } else {
-            effectiveCellId = requestedCellId;
-            RouteType override = DataSourceRouteContext.getRouteOverride();
-            RouteType desiredRoute = (override != null)
-                    ? override
-                    : (TransactionSynchronizationManager.isCurrentTransactionReadOnly()
-                            ? RouteType.REPLICA
-                            : RouteType.PRIMARY);
-
-            if (desiredRoute == RouteType.REPLICA) {
-                boolean forcePrimary = DataSourceRouteContext.isPrimaryWritten()
-                        || !hasDistinctReplica(effectiveCellId)
-                        || !replicaHealthTracker.isReplicaHealthy(effectiveCellId);
-                effectiveRoute = forcePrimary ? RouteType.PRIMARY : RouteType.REPLICA;
-            } else {
-                effectiveRoute = RouteType.PRIMARY;
-            }
+            effectiveRoute = RouteType.PRIMARY;
         }
 
         recordRouteMetric(effectiveCellId, effectiveRoute);

@@ -159,4 +159,14 @@ class EdgeProtectionFilterTest {
         assertThat(res.getContentType()).isEqualTo("application/json");
         assertThat(res.getContentAsString()).contains("payload_too_large").hasSizeLessThan(200);
     }
+
+    @Test
+    void nullRequestUriDoesNotThrowNullPointerException() throws Exception {
+        var f = filter(box(100), 1_024, 100, 10);
+        var r = new MockHttpServletRequest("GET", null);
+        r.setRemoteAddr("10.0.0.9");
+        var res = new MockHttpServletResponse();
+        f.doFilter(r, res, OK);
+        assertThat(res.getStatus()).isEqualTo(200);
+    }
 }

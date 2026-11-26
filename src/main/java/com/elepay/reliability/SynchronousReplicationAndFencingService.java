@@ -71,6 +71,8 @@ public class SynchronousReplicationAndFencingService {
     private final JdbcClient db;
     private final ReplicaHealthTracker replicaHealthTracker;
     private final AlertDispatcher alerts;
+    private final tools.jackson.databind.ObjectMapper json;
+    private final org.springframework.transaction.support.TransactionTemplate requiresNewTx;
     private final String synchronousCommitMode;
     private final boolean enforceSyncStandby;
     private final AtomicLong currentEpochGauge = new AtomicLong(1L);
@@ -83,11 +85,20 @@ public class SynchronousReplicationAndFencingService {
             @Autowired(required = false) ReplicaHealthTracker replicaHealthTracker,
             @Autowired(required = false) AlertDispatcher alerts,
             @Autowired(required = false) MeterRegistry meterRegistry,
+            @Autowired(required = false) tools.jackson.databind.ObjectMapper json,
+            @Autowired(required = false) org.springframework.transaction.PlatformTransactionManager txManager,
             @Value("${elepay.replication.synchronous-commit:remote_apply}") String synchronousCommitMode,
             @Value("${elepay.replication.enforce-sync-standby:false}") boolean enforceSyncStandby) {
         this.db = db;
         this.replicaHealthTracker = replicaHealthTracker;
         this.alerts = alerts;
+        this.json = json != null ? json : tools.jackson.databind.json.JsonMapper.builder().build();
+        if (txManager != null) {
+            this.requiresNewTx = new org.springframework.transaction.support.TransactionTemplate(txManager);
+            this.requiresNewTx.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        } else {
+            this.requiresNewTx = null;
+        }
         this.synchronousCommitMode = (synchronousCommitMode == null || synchronousCommitMode.isBlank())
                 ? "remote_apply" : synchronousCommitMode.trim();
         this.enforceSyncStandby = enforceSyncStandby;
@@ -102,13 +113,25 @@ public class SynchronousReplicationAndFencingService {
     /**
      * Executes an authoritative financial spending check or mutation pinned strictly to the
      * writable PRIMARY (never reading from a stale read replica) and sets Read-Your-Own-Writes
-     * sticky-primary context.
+     * sticky-primary context. Fails closed if the cluster is fenced into
+     * {@code SAFE_READ_ONLY_DEGRADED} mode.
      */
     public <T> T executeAuthoritativeFinancialAction(Supplier<T> action) {
         RouteType previousOverride = DataSourceRouteContext.getRouteOverride();
         DataSourceRouteContext.setRouteOverride(RouteType.PRIMARY);
         DataSourceRouteContext.markPrimaryWritten();
         try {
+            if (!syncHealthyGauge.get() || enforceSyncStandby) {
+                String mode = db.sql("SELECT replication_mode FROM failover_fencing_epoch WHERE cluster_id = :cid")
+                        .param("cid", DEFAULT_CLUSTER_ID)
+                        .query(String.class)
+                        .optional()
+                        .orElse("SYNCHRONOUS");
+                if ("SAFE_READ_ONLY_DEGRADED".equals(mode)) {
+                    throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "sync_replication_degraded_fence",
+                            "Cluster is fenced into SAFE_READ_ONLY_DEGRADED mode because synchronous standby durability is unavailable");
+                }
+            }
             return action.get();
         } finally {
             DataSourceRouteContext.setRouteOverride(previousOverride);
@@ -140,7 +163,11 @@ public class SynchronousReplicationAndFencingService {
                     row.fencingEpoch(),
                     0,
                     "fencing-guard",
-                    Map.of("rejectedNodeId", String.valueOf(nodeId), "rejectedEpoch", callerEpoch)
+                    Map.of(
+                            "reason", "Obsolete primary fenced out",
+                            "rejectedNodeId", String.valueOf(nodeId),
+                            "rejectedEpoch", callerEpoch
+                    )
             );
             throw ApiException.conflict("split_brain_fenced",
                     "Obsolete primary '" + nodeId + "' with stale epoch " + callerEpoch
@@ -332,9 +359,9 @@ public class SynchronousReplicationAndFencingService {
             String actor,
             Map<String, Object> details) {
         UUID id = UUID.randomUUID();
-        String detailsJson = "{\"reason\":\"" + String.valueOf(details.getOrDefault("reason", eventType))
-                .replace("\"", "'") + "\"}";
-        db.sql("""
+        Map<String, Object> effectiveDetails = details == null ? Map.of("reason", eventType) : details;
+        String detailsJson = json.writeValueAsString(effectiveDetails);
+        Runnable insertWork = () -> db.sql("""
                 INSERT INTO failover_audit_event
                     (id, cluster_id, event_type, old_primary_id, new_primary_id,
                      old_epoch, new_epoch, quorum_votes, actor, details)
@@ -350,6 +377,11 @@ public class SynchronousReplicationAndFencingService {
                 .param("actor", actor)
                 .param("details", detailsJson)
                 .update();
+        if (requiresNewTx != null) {
+            requiresNewTx.executeWithoutResult(status -> insertWork.run());
+        } else {
+            insertWork.run();
+        }
         return id;
     }
 }

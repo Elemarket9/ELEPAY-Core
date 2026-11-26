@@ -161,14 +161,16 @@ public class RedisIngestionStream {
         }
         try {
             redis.opsForStream().createGroup(streamKey, ReadOffset.from("0-0"), consumerGroup);
+            groupInitialized.set(true);
         } catch (Exception e) {
             String msg = e.getMessage();
-            if (msg == null || !msg.contains("BUSYGROUP")) {
-                // Stream may not exist yet; create group after verifying or ignore BUSYGROUP.
+            if (msg != null && msg.contains("BUSYGROUP")) {
+                groupInitialized.set(true);
+            } else {
+                // Stream may not exist yet; retry group creation on subsequent drain calls.
                 log.debug("Redis consumer group init note for {}/{}: {}", streamKey, consumerGroup, msg);
             }
         }
-        groupInitialized.set(true);
     }
 
     private static Optional<IngestionCommand> parseRecord(MapRecord<String, Object, Object> rec) {

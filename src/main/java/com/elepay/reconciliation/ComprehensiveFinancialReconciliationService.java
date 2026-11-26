@@ -86,10 +86,30 @@ public class ComprehensiveFinancialReconciliationService {
             String reason
     ) {}
 
+    public record AdjustmentProposal(
+            UUID proposalId,
+            String idempotencyKey,
+            String initiatorActor,
+            String debitAccount,
+            String creditAccount,
+            long amountMinor,
+            String reason,
+            String referenceId,
+            String status,
+            String reviewedBy,
+            String reviewNote,
+            UUID adjustmentTxId,
+            Instant createdAt,
+            Instant reviewedAt
+    ) {}
+
     private final JdbcClient db;
     private final Ledger ledger;
     private final Audit audit;
     private final AlertDispatcher alerts;
+    private final Map<UUID, AdjustmentProposal> proposalsById = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, UUID> proposalIdByIdempotencyKey = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Object proposalLock = new Object();
 
     @Autowired
     public ComprehensiveFinancialReconciliationService(
@@ -136,7 +156,8 @@ public class ComprehensiveFinancialReconciliationService {
             ));
         }
 
-        // 7 & 8. Multi-merchant split payments conservation & ambiguous provider outcomes via DB summary function
+        // 7, 8, 9, 10, 11: Multi-merchant split payments conservation, paid checkouts conservation,
+        // refunds, settlement batches, payouts, and ambiguous provider outcomes via DB summary function
         record SplitAndRailSummary(long splitViolations, long unresolvedRails) {}
         SplitAndRailSummary summary = db.sql("SELECT split_violations, unresolved_rails FROM reconciliation_split_and_rail_summary()")
                 .query((rs, i) -> new SplitAndRailSummary(rs.getLong(1), rs.getLong(2)))
@@ -151,7 +172,7 @@ public class ComprehensiveFinancialReconciliationService {
                     splitViolationCount,
                     splitViolationCount,
                     "CRITICAL",
-                    "Inspect split allocations where sum(amount) != subtotal"
+                    "Inspect split allocations where sum(amount) != subtotal or paid checkout total mismatch"
             ));
         }
 
@@ -170,26 +191,28 @@ public class ComprehensiveFinancialReconciliationService {
         }
 
         // 13. Cross-cell transfers in-transit conservation:
-        // sum(amount_minor WHERE state = 'RESERVED_IN_TRANSIT') == balance('system:cross_cell_in_transit:GHS')
+        // sum(amount_minor WHERE state IN ('RESERVED_IN_TRANSIT', 'COMMITTED_TARGET', 'RECONCILIATION_REQUIRED'))
+        // == sum of system:cross_cell_in_transit:* balances
         Long reservedInTransitSum = db.sql("""
                 SELECT COALESCE(sum(amount_minor), 0)
                 FROM cross_cell_transfer
-                WHERE state = 'RESERVED_IN_TRANSIT'""")
+                WHERE state IN ('RESERVED_IN_TRANSIT', 'COMMITTED_TARGET', 'RECONCILIATION_REQUIRED')""")
                 .query(Long.class)
                 .single();
         long expectedInTransit = reservedInTransitSum == null ? 0L : reservedInTransitSum;
-        long actualInTransitLedger = ledger.rawBalance("system:cross_cell_in_transit:GHS");
+        long actualInTransitLedger = ledger.rawBalance("system:cross_cell_in_transit:GHS")
+                + ledger.rawBalance("system:cross_cell_in_transit:USD");
         long crossCellVariance = actualInTransitLedger - expectedInTransit;
         if (crossCellVariance != 0L) {
             exceptions.add(new DiscrepancyException(
                     "CROSS_CELL_TRANSFERS",
                     "IN_TRANSIT_BALANCE_VARIANCE",
-                    "system:cross_cell_in_transit:GHS",
+                    "system:cross_cell_in_transit:*",
                     expectedInTransit,
                     actualInTransitLedger,
                     crossCellVariance,
                     "CRITICAL",
-                    "Reconcile RESERVED_IN_TRANSIT cross_cell_transfer records against system:cross_cell_in_transit:GHS"
+                    "Reconcile active in-transit cross_cell_transfer records against system:cross_cell_in_transit:*"
             ));
         }
 
@@ -202,9 +225,7 @@ public class ComprehensiveFinancialReconciliationService {
                 .single();
         long openSuspenseCount = openSuspense == null ? 0L : openSuspense;
 
-        boolean balanced = integrity.ok()
-                && splitViolationCount == 0L
-                && crossCellVariance == 0L;
+        boolean balanced = integrity.ok() && exceptions.isEmpty();
 
         if (!balanced && alerts != null) {
             alerts.notifyHighSeverity("reconciliation_discrepancy",
@@ -215,6 +236,7 @@ public class ComprehensiveFinancialReconciliationService {
                             "unbalancedTx", integrity.unbalancedTransactions(),
                             "driftedAccounts", integrity.accountsWithDrift(),
                             "splitViolations", splitViolationCount,
+                            "unresolvedRails", unresolvedCount,
                             "crossCellVariance", crossCellVariance
                     ));
         }
@@ -232,6 +254,177 @@ public class ComprehensiveFinancialReconciliationService {
                 openSuspenseCount,
                 exceptions
         );
+    }
+
+    /**
+     * Step 1 of two-step 4-eyes compensating adjustment workflow: records a {@code PENDING}
+     * adjustment proposal initiated by {@code initiatorActor}.
+     */
+    public AdjustmentProposal proposeAdjustment(
+            String idempotencyKey,
+            String initiatorActor,
+            String debitAccountCode,
+            String creditAccountCode,
+            long amountMinor,
+            String reason,
+            String referenceId) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw ApiException.badRequest("idempotency_key_required", "idempotencyKey is required");
+        }
+        if (initiatorActor == null || initiatorActor.isBlank()) {
+            throw ApiException.badRequest("dual_control_required", "initiatorActor is required");
+        }
+        if (debitAccountCode == null || debitAccountCode.isBlank()
+                || creditAccountCode == null || creditAccountCode.isBlank()) {
+            throw ApiException.badRequest("invalid_account", "Both debitAccountCode and creditAccountCode are required");
+        }
+        if (amountMinor <= 0) {
+            throw ApiException.badRequest("invalid_amount", "Adjustment amount must be positive");
+        }
+        if (reason == null || reason.trim().length() < 5) {
+            throw ApiException.badRequest("reason_required", "A descriptive reason is required for compensating adjustments");
+        }
+        String normalizedKey = idempotencyKey.trim();
+        synchronized (proposalLock) {
+            UUID existingId = proposalIdByIdempotencyKey.get(normalizedKey);
+            if (existingId != null) {
+                AdjustmentProposal existing = proposalsById.get(existingId);
+                if (existing != null) {
+                    if (!existing.debitAccount().equals(debitAccountCode)
+                            || !existing.creditAccount().equals(creditAccountCode)
+                            || existing.amountMinor() != amountMinor) {
+                        throw ApiException.idempotencyConflict();
+                    }
+                    return existing;
+                }
+            }
+            UUID proposalId = UUID.randomUUID();
+            AdjustmentProposal proposal = new AdjustmentProposal(
+                    proposalId,
+                    normalizedKey,
+                    initiatorActor.trim(),
+                    debitAccountCode,
+                    creditAccountCode,
+                    amountMinor,
+                    reason.trim(),
+                    referenceId,
+                    "PENDING",
+                    null,
+                    null,
+                    null,
+                    Instant.now(),
+                    null
+            );
+            proposalsById.put(proposalId, proposal);
+            proposalIdByIdempotencyKey.put(normalizedKey, proposalId);
+            return proposal;
+        }
+    }
+
+    /**
+     * Step 2A of two-step 4-eyes compensating adjustment workflow: approves a {@code PENDING}
+     * proposal and posts the double-entry compensating journal transaction. Rejects self-approval
+     * ({@code approverActor == initiatorActor}) and double-approval.
+     */
+    @Transactional
+    public CompensatingAdjustmentResult approveAdjustment(UUID proposalId, String approverActor, String reviewNote) {
+        if (proposalId == null) {
+            throw ApiException.badRequest("proposal_id_required", "proposalId is required");
+        }
+        if (approverActor == null || approverActor.isBlank()) {
+            throw ApiException.badRequest("dual_control_required", "approverActor is required");
+        }
+        AdjustmentProposal proposal;
+        synchronized (proposalLock) {
+            proposal = proposalsById.get(proposalId);
+            if (proposal == null) {
+                throw ApiException.notFound("proposal_not_found", "Adjustment proposal not found: " + proposalId);
+            }
+            if (!"PENDING".equals(proposal.status())) {
+                throw ApiException.conflict("proposal_already_reviewed",
+                        "Adjustment proposal " + proposalId + " is already in state " + proposal.status());
+            }
+            if (proposal.initiatorActor().equalsIgnoreCase(approverActor.trim())) {
+                throw ApiException.forbidden(
+                        "Compensating financial adjustments require distinct initiator and approver actors (four-eyes principle)");
+            }
+        }
+
+        CompensatingAdjustmentResult posted = executeAuthorizedAdjustmentPosting(
+                proposal.idempotencyKey(),
+                proposal.initiatorActor(),
+                approverActor.trim(),
+                proposal.debitAccount(),
+                proposal.creditAccount(),
+                proposal.amountMinor(),
+                proposal.reason(),
+                proposal.referenceId());
+
+        synchronized (proposalLock) {
+            AdjustmentProposal current = proposalsById.get(proposalId);
+            if (current != null && !"PENDING".equals(current.status())
+                    && !Objects.equals(current.adjustmentTxId(), posted.adjustmentTxId())) {
+                throw ApiException.conflict("proposal_already_reviewed",
+                        "Adjustment proposal " + proposalId + " was reviewed concurrently");
+            }
+            proposalsById.put(proposalId, new AdjustmentProposal(
+                    proposal.proposalId(),
+                    proposal.idempotencyKey(),
+                    proposal.initiatorActor(),
+                    proposal.debitAccount(),
+                    proposal.creditAccount(),
+                    proposal.amountMinor(),
+                    proposal.reason(),
+                    proposal.referenceId(),
+                    "APPROVED",
+                    approverActor.trim(),
+                    reviewNote,
+                    posted.adjustmentTxId(),
+                    proposal.createdAt(),
+                    Instant.now()
+            ));
+        }
+        return posted;
+    }
+
+    /**
+     * Step 2B of two-step 4-eyes compensating adjustment workflow: rejects a {@code PENDING} proposal.
+     */
+    public AdjustmentProposal rejectAdjustment(UUID proposalId, String reviewerActor, String rejectionReason) {
+        if (proposalId == null) {
+            throw ApiException.badRequest("proposal_id_required", "proposalId is required");
+        }
+        if (reviewerActor == null || reviewerActor.isBlank()) {
+            throw ApiException.badRequest("dual_control_required", "reviewerActor is required");
+        }
+        synchronized (proposalLock) {
+            AdjustmentProposal proposal = proposalsById.get(proposalId);
+            if (proposal == null) {
+                throw ApiException.notFound("proposal_not_found", "Adjustment proposal not found: " + proposalId);
+            }
+            if (!"PENDING".equals(proposal.status())) {
+                throw ApiException.conflict("proposal_already_reviewed",
+                        "Adjustment proposal " + proposalId + " is already in state " + proposal.status());
+            }
+            AdjustmentProposal rejected = new AdjustmentProposal(
+                    proposal.proposalId(),
+                    proposal.idempotencyKey(),
+                    proposal.initiatorActor(),
+                    proposal.debitAccount(),
+                    proposal.creditAccount(),
+                    proposal.amountMinor(),
+                    proposal.reason(),
+                    proposal.referenceId(),
+                    "REJECTED",
+                    reviewerActor.trim(),
+                    rejectionReason,
+                    null,
+                    proposal.createdAt(),
+                    Instant.now()
+            );
+            proposalsById.put(proposalId, rejected);
+            return rejected;
+        }
     }
 
     /**
@@ -258,13 +451,37 @@ public class ComprehensiveFinancialReconciliationService {
             throw ApiException.forbidden(
                     "Compensating financial adjustments require distinct initiator and approver actors (four-eyes principle)");
         }
-        if (amountMinor <= 0) {
-            throw ApiException.badRequest("invalid_amount", "Adjustment amount must be positive");
+        AdjustmentProposal proposal = proposeAdjustment(
+                idempotencyKey,
+                initiatorActor,
+                debitAccountCode,
+                creditAccountCode,
+                amountMinor,
+                reason,
+                referenceId);
+        if ("APPROVED".equals(proposal.status()) && proposal.adjustmentTxId() != null) {
+            return new CompensatingAdjustmentResult(
+                    proposal.adjustmentTxId(),
+                    proposal.initiatorActor(),
+                    proposal.reviewedBy(),
+                    proposal.debitAccount(),
+                    proposal.creditAccount(),
+                    proposal.amountMinor(),
+                    proposal.reason()
+            );
         }
-        if (reason == null || reason.trim().length() < 5) {
-            throw ApiException.badRequest("reason_required", "A descriptive reason is required for compensating adjustments");
-        }
+        return approveAdjustment(proposal.proposalId(), approverActor, reason);
+    }
 
+    private CompensatingAdjustmentResult executeAuthorizedAdjustmentPosting(
+            String idempotencyKey,
+            String initiatorActor,
+            String approverActor,
+            String debitAccountCode,
+            String creditAccountCode,
+            long amountMinor,
+            String reason,
+            String referenceId) {
         Ledger.Posted posted = ledger.post(Posting.of(
                 "reconciliation:adjustment",
                 idempotencyKey,

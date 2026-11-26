@@ -69,7 +69,7 @@ public class OutboxDispatcher {
                             @Value("${elepay.outbox.retention-days:30}") int retentionDays,
                             @Autowired(required = false) MeterRegistry meterRegistry) {
         this.db = db;
-        this.consumers = consumers;
+        this.consumers = new java.util.concurrent.CopyOnWriteArrayList<>(consumers == null ? List.of() : consumers);
         this.claimTx = new TransactionTemplate(tm);
         this.consumerTx = new TransactionTemplate(tm);
         this.consumerTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -95,6 +95,18 @@ public class OutboxDispatcher {
             this.deadCounter = null;
             this.archivedCounter = null;
             this.publishLatencyTimer = null;
+        }
+    }
+
+    public void registerConsumer(OutboxConsumer consumer) {
+        if (consumer != null) {
+            this.consumers.add(consumer);
+        }
+    }
+
+    public void unregisterConsumer(OutboxConsumer consumer) {
+        if (consumer != null) {
+            this.consumers.remove(consumer);
         }
     }
 
@@ -150,7 +162,11 @@ public class OutboxDispatcher {
                                 rs.getObject(9, OffsetDateTime.class));
                     }).list();
             for (Outbox.Event event : claimed) {
-                db.sql("UPDATE outbox_event SET next_attempt_at = now() + interval '60 seconds' WHERE id = :id")
+                db.sql("""
+                        UPDATE outbox_event
+                        SET next_attempt_at = now() + interval '60 seconds'
+                        WHERE id = :id
+                          AND status = 'PENDING'""")
                         .param("id", event.id()).update();
             }
             return claimed;
@@ -161,7 +177,7 @@ public class OutboxDispatcher {
         for (Outbox.Event event : batch) {
             try {
                 deliver(event);
-                claimTx.executeWithoutResult(status ->
+                Integer updated = claimTx.execute(status ->
                         db.sql("""
                                 UPDATE outbox_event
                                 SET published_at = now(),
@@ -169,13 +185,16 @@ public class OutboxDispatcher {
                                     attempts = attempts + 1,
                                     last_error = NULL,
                                     next_attempt_at = now()
-                                WHERE id = :id""")
+                                WHERE id = :id
+                                  AND status = 'PENDING'""")
                                 .param("id", event.id()).update());
-                done++;
-                if (publishedCounter != null) publishedCounter.increment();
-                if (publishLatencyTimer != null && event.createdAt() != null) {
-                    long elapsedMs = Math.max(0L, Duration.between(event.createdAt(), OffsetDateTime.now()).toMillis());
-                    publishLatencyTimer.record(Duration.ofMillis(elapsedMs));
+                if (updated != null && updated == 1) {
+                    done++;
+                    if (publishedCounter != null) publishedCounter.increment();
+                    if (publishLatencyTimer != null && event.createdAt() != null) {
+                        long elapsedMs = Math.max(0L, Duration.between(event.createdAt(), OffsetDateTime.now()).toMillis());
+                        publishLatencyTimer.record(Duration.ofMillis(elapsedMs));
+                    }
                 }
             } catch (RuntimeException e) {
                 log.warn("Outbox event {} delivery failed: {}", event.id(), e.toString());
@@ -191,25 +210,30 @@ public class OutboxDispatcher {
         if (err.length() > 1000) err = err.substring(0, 1000);
         final String truncatedErr = err;
         Boolean movedToDead = claimTx.execute(status -> {
-            record AttemptRow(int attempts, int maxAttempts) {}
-            AttemptRow row = db.sql("SELECT attempts, max_attempts FROM outbox_event WHERE id = :id FOR NO KEY UPDATE")
+            record AttemptRow(int attempts, int maxAttempts, String status) {}
+            var rowOpt = db.sql("SELECT attempts, max_attempts, status FROM outbox_event WHERE id = :id FOR NO KEY UPDATE")
                     .param("id", event.id())
-                    .query((rs, i) -> new AttemptRow(rs.getInt(1), rs.getInt(2)))
-                    .single();
+                    .query((rs, i) -> new AttemptRow(rs.getInt(1), rs.getInt(2), rs.getString(3)))
+                    .optional();
+            if (rowOpt.isEmpty() || !"PENDING".equals(rowOpt.get().status())) {
+                return false;
+            }
+            AttemptRow row = rowOpt.get();
             int nextAttempts = row.attempts() + 1;
             if (nextAttempts >= row.maxAttempts()) {
-                db.sql("""
+                int updated = db.sql("""
                         UPDATE outbox_event
                         SET attempts = :att,
                             status = 'DEAD',
                             dead_at = now(),
                             last_error = :err
-                        WHERE id = :id""")
+                        WHERE id = :id
+                          AND status = 'PENDING'""")
                         .param("att", nextAttempts)
                         .param("err", truncatedErr)
                         .param("id", event.id())
                         .update();
-                return true;
+                return updated == 1;
             }
             long backoffMs = computeBackoffWithJitterMs(nextAttempts);
             db.sql("""
@@ -217,7 +241,8 @@ public class OutboxDispatcher {
                     SET attempts = :att,
                         last_error = :err,
                         next_attempt_at = now() + (:backoffMs * interval '1 millisecond')
-                    WHERE id = :id""")
+                    WHERE id = :id
+                      AND status = 'PENDING'""")
                     .param("att", nextAttempts)
                     .param("err", truncatedErr)
                     .param("backoffMs", backoffMs)

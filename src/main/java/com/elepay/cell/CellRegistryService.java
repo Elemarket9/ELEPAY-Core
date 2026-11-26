@@ -116,8 +116,11 @@ public class CellRegistryService {
             throw ApiException.badRequest("invalid_cell_id", "cellId must not be blank");
         }
         String trimmedCellId = cellId.trim();
-        if (getCell(trimmedCellId).isEmpty()) {
-            throw ApiException.notFound("cell_not_found", "Cell not found: " + trimmedCellId);
+        CellRecord cell = getCell(trimmedCellId)
+                .orElseThrow(() -> ApiException.notFound("cell_not_found", "Cell not found: " + trimmedCellId));
+        if ("OFFLINE".equalsIgnoreCase(cell.status())) {
+            throw ApiException.badRequest("cell_offline",
+                    "Cannot assign merchant to OFFLINE cell: " + trimmedCellId);
         }
 
         db.sql("""

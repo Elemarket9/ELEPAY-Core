@@ -33,6 +33,7 @@ public class ConsistentHashCellRouter implements CellRouter {
     private final CellProperties properties;
     private final ConcurrentHashMap<UUID, String> assignmentCache = new ConcurrentHashMap<>();
     private final Object ringLock = new Object();
+    private final java.util.concurrent.atomic.AtomicLong ringVersion = new java.util.concurrent.atomic.AtomicLong(0);
 
     private volatile RingSnapshot ringSnapshot;
 
@@ -53,20 +54,22 @@ public class ConsistentHashCellRouter implements CellRouter {
             return cached;
         }
 
+        long observedVersion = ringVersion.get();
         Optional<String> assigned = registry.findAssignedCell(merchantId);
         if (assigned.isPresent()) {
-            cachePut(merchantId, assigned.get());
+            cachePutIfVersionMatches(merchantId, assigned.get(), observedVersion);
             return assigned.get();
         }
 
         if (!properties.isEnabled()) {
-            cachePut(merchantId, defaultCell);
+            cachePutIfVersionMatches(merchantId, defaultCell, observedVersion);
             return defaultCell;
         }
 
         RingSnapshot snapshot = getOrBuildRing();
+        observedVersion = ringVersion.get();
         String resolved = lookupOnRing(snapshot, merchantId, defaultCell);
-        cachePut(merchantId, resolved);
+        cachePutIfVersionMatches(merchantId, resolved, observedVersion);
         return resolved;
     }
 
@@ -98,6 +101,7 @@ public class ConsistentHashCellRouter implements CellRouter {
     @Override
     public void rebuildRing() {
         synchronized (ringLock) {
+            ringVersion.incrementAndGet();
             List<CellRecord> allCells = registry.listCells();
             List<CellRecord> activeCells = allCells == null
                     ? List.of()
@@ -155,10 +159,24 @@ public class ConsistentHashCellRouter implements CellRouter {
         return entry != null ? entry.getValue() : defaultCell;
     }
 
+    private void cachePutIfVersionMatches(UUID merchantId, String cellId, long expectedVersion) {
+        synchronized (ringLock) {
+            if (ringVersion.get() == expectedVersion) {
+                cachePut(merchantId, cellId);
+            }
+        }
+    }
+
     private void cachePut(UUID merchantId, String cellId) {
         int maxSize = Math.max(1, properties.getCacheMaxSize());
-        if (assignmentCache.size() >= maxSize) {
-            assignmentCache.clear();
+        if (assignmentCache.size() >= maxSize && !assignmentCache.containsKey(merchantId)) {
+            int toEvict = Math.max(1, maxSize / 10);
+            var iter = assignmentCache.keySet().iterator();
+            while (iter.hasNext() && toEvict > 0) {
+                iter.next();
+                iter.remove();
+                toEvict--;
+            }
         }
         assignmentCache.put(merchantId, cellId);
     }

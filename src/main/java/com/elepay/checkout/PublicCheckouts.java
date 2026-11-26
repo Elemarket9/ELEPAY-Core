@@ -144,7 +144,7 @@ class PublicCheckouts {
         String caller = httpRequest.getRemoteAddr() == null ? "unknown" : httpRequest.getRemoteAddr();
         String payChannel = payChannel(channel);
         String coarseIp = "unknown".equals(caller) ? null : caller;
-        var started = tx.execute(s -> idempotency.execute("checkout-pay:" + reference, key, request,
+        var started = txRetry.execute(() -> idempotency.execute("checkout-pay:" + reference, key, request,
                 CheckoutService.PaymentResult.class, () -> {
                     checkouts.noteChannel(reference, payChannel);
                     regulatory.rememberCheckout(checkouts.load(reference, false).id(), coarseIp);

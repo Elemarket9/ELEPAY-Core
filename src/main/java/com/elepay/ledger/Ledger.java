@@ -121,7 +121,22 @@ public class Ledger {
     }
 
     private Posted write(Posting posting, UUID reverses) {
-        if (posting.legs().size() < 2) throw ApiException.badRequest("unbalanced", "A posting needs at least two legs");
+        if (posting == null) {
+            throw ApiException.badRequest("invalid_posting", "Posting must not be null");
+        }
+        if (posting.scope() == null || posting.scope().isBlank()
+                || posting.key() == null || posting.key().isBlank()
+                || posting.kind() == null || posting.kind().isBlank()) {
+            throw ApiException.badRequest("invalid_posting", "Posting scope, key, and kind are required");
+        }
+        if (posting.legs() == null || posting.legs().size() < 2) {
+            throw ApiException.badRequest("unbalanced", "A posting needs at least two legs");
+        }
+        for (Leg leg : posting.legs()) {
+            if (leg == null || leg.account() == null || leg.account().isBlank()) {
+                throw ApiException.badRequest("invalid_posting", "Posting leg account is required");
+            }
+        }
         String hash = Idempotency.hash(Map.of(
                 "kind", posting.kind(),
                 "legs", posting.legs(),
@@ -183,6 +198,9 @@ public class Ledger {
      * single SQL round trip (eliminating N-1 round trips per multi-merchant split or settlement).
      */
     private void insertEntriesBulk(UUID txId, List<Leg> legs, Map<String, Account> accounts) {
+        if (legs == null || legs.isEmpty()) {
+            throw ApiException.badRequest("unbalanced", "A posting needs at least two legs");
+        }
         StringBuilder sql = new StringBuilder(
                 "INSERT INTO journal_entry (transaction_id, line, account_id, currency, amount) VALUES ");
         Map<String, Object> params = new HashMap<>(legs.size() * 4 + 2);
@@ -204,7 +222,10 @@ public class Ledger {
         for (var entry : params.entrySet()) {
             spec = spec.param(entry.getKey(), entry.getValue());
         }
-        spec.update();
+        int inserted = spec.update();
+        if (inserted != legs.size()) {
+            throw new IllegalStateException("Expected to insert " + legs.size() + " journal entries, but inserted " + inserted);
+        }
     }
 
     public record BatchPostingOutcome(int index, String scope, String key, Posted posted, ApiException error) {
@@ -229,7 +250,11 @@ public class Ledger {
         }
         // Pre-lock all valid known accounts across the batch in deterministic id order
         List<String> allCandidateCodes = postings.stream()
-                .flatMap(p -> p.legs().stream().map(Leg::account))
+                .filter(Objects::nonNull)
+                .flatMap(p -> p.legs() == null ? java.util.stream.Stream.empty() : p.legs().stream())
+                .filter(Objects::nonNull)
+                .map(Leg::account)
+                .filter(Objects::nonNull)
                 .distinct()
                 .sorted()
                 .toList();
@@ -246,6 +271,8 @@ public class Ledger {
         List<BatchPostingOutcome> outcomes = new ArrayList<>(postings.size());
         for (int i = 0; i < postings.size(); i++) {
             Posting p = postings.get(i);
+            String scope = p != null ? p.scope() : null;
+            String key = p != null ? p.key() : null;
             Object savepoint = null;
             try {
                 if (TransactionSynchronizationManager.isActualTransactionActive()) {
@@ -257,14 +284,21 @@ public class Ledger {
                     org.springframework.transaction.interceptor.TransactionAspectSupport
                             .currentTransactionStatus().releaseSavepoint(savepoint);
                 }
-                outcomes.add(new BatchPostingOutcome(i, p.scope(), p.key(), posted, null));
-            } catch (ApiException ex) {
+                outcomes.add(new BatchPostingOutcome(i, scope, key, posted, null));
+            } catch (RuntimeException ex) {
                 if (savepoint != null) {
                     var status = org.springframework.transaction.interceptor.TransactionAspectSupport.currentTransactionStatus();
                     status.rollbackToSavepoint(savepoint);
                     status.releaseSavepoint(savepoint);
                 }
-                outcomes.add(new BatchPostingOutcome(i, p.scope(), p.key(), null, ex));
+                if (com.elepay.common.FinancialTxRetry.isTransientConcurrencyFailure(ex)) {
+                    throw ex;
+                }
+                ApiException apiEx = (ex instanceof ApiException ae)
+                        ? ae
+                        : ApiException.badRequest("invalid_posting",
+                                ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
+                outcomes.add(new BatchPostingOutcome(i, scope, key, null, apiEx));
             }
         }
         return outcomes;
@@ -341,7 +375,7 @@ public class Ledger {
         if (systemStripes <= 1) {
             return baseCode;
         }
-        return baseCode + ":s" + String.format("%02d", stripeIndex(routingKey));
+        return baseCode + ":s" + String.format(Locale.ROOT, "%02d", stripeIndex(routingKey));
     }
 
     /** Returns true when {@code code} ends with a stripe suffix ({@code :s00}..{@code :s255}). */
@@ -489,9 +523,21 @@ public class Ledger {
      */
     @Transactional
     public List<Leg> debitAcrossStripes(String baseCode, long amount) {
+        return debitStripeOrAcrossStripes(baseCode, null, amount);
+    }
+
+    /**
+     * TOCTOU-free and deadlock-safe debit allocation across stripes for {@code baseCode}, preferring
+     * the stripe for {@code routingKey} first when it has a positive locked balance, and draining
+     * remaining positive-balance stripes in deterministic account code order. All candidate rows are
+     * locked in a single {@code ORDER BY id FOR UPDATE} query.
+     */
+    @Transactional
+    public List<Leg> debitStripeOrAcrossStripes(String baseCode, Object routingKey, long amount) {
         if (amount <= 0) {
             throw ApiException.badRequest("invalid_amount", "Leg amount must be positive");
         }
+        String preferredCode = routingKey != null ? stripedCode(baseCode, routingKey) : null;
         List<Account> candidates = new ArrayList<>(db.sql("""
                 SELECT id, code, owner_type, owner_id, bucket, currency, allow_negative, balance
                 FROM ledger_account
@@ -501,7 +547,16 @@ public class Ledger {
                 .param("base", baseCode)
                 .param("stripePrefix", baseCode + ":s")
                 .query(Ledger::account).list());
-        candidates.sort(Comparator.comparing(Account::code));
+        candidates.sort((a, b) -> {
+            if (preferredCode != null) {
+                boolean aPref = preferredCode.equals(a.code());
+                boolean bPref = preferredCode.equals(b.code());
+                if (aPref != bPref) {
+                    return aPref ? -1 : 1;
+                }
+            }
+            return a.code().compareTo(b.code());
+        });
         List<Leg> legs = new ArrayList<>();
         long remaining = amount;
         for (Account account : candidates) {

@@ -85,6 +85,10 @@ class AsyncCheckoutController {
             @Valid @RequestBody BatchCheckoutRequest body) {
         var a = access.require(merchantId, COLLECT);
         String idempotencyKey = requireIdempotencyKey(key);
+        if (idempotencyKey.length() > 190) {
+            throw ApiException.badRequest("idempotency_key_too_long",
+                    "Batch Idempotency-Key must be at most 190 characters");
+        }
         if (body == null || body.items() == null || body.items().isEmpty()) {
             throw ApiException.badRequest("empty_batch", "Batch must contain between 1 and " + MAX_BATCH_SIZE + " items");
         }
@@ -152,6 +156,9 @@ class AsyncCheckoutController {
         }
         if (hasAllocations && request.amount() != null) {
             throw ApiException.badRequest("ambiguous_amount", "Provide either amount or allocations");
+        }
+        if (request.payerPhone() != null && !request.payerPhone().isBlank()) {
+            com.elepay.common.References.msisdn(request.payerPhone());
         }
     }
 

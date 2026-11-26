@@ -306,12 +306,8 @@ public class EnterpriseRefundService {
         // Debit platform service fee from platform revenue account (currency-parameterized)
         String revenueBase = "system:revenue:" + currency;
         if (totalPlatformFeeClawback > 0) {
-            String revenueAccount = ledger.openStripedSystem(revenueBase, "revenue", currency, false, checkoutId);
-            if (ledger.rawBalance(revenueAccount) >= totalPlatformFeeClawback) {
-                legs.add(Leg.debit(revenueAccount, totalPlatformFeeClawback));
-            } else {
-                legs.addAll(ledger.debitAcrossStripes(revenueBase, totalPlatformFeeClawback));
-            }
+            ledger.openStripedSystem(revenueBase, "revenue", currency, false, checkoutId);
+            legs.addAll(ledger.debitStripeOrAcrossStripes(revenueBase, checkoutId, totalPlatformFeeClawback));
         }
 
         // Credit destination

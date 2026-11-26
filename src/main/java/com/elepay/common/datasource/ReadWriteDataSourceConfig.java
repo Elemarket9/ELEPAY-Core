@@ -37,7 +37,7 @@ public class ReadWriteDataSourceConfig {
 
     @Bean
     public ReplicaHealthTracker replicaHealthTracker(
-            @Value("${elepay.datasource.replica.max-lag-ms:2000}") long maxLagMs,
+            @Value("${elepay.datasource.replica.max-lag-ms:${elepay.datasource.replica-max-lag-ms:2000}}") long maxLagMs,
             @Value("${elepay.datasource.replica.cooldown-ms:15000}") long cooldownMs) {
         return new ReplicaHealthTracker(maxLagMs, Duration.ofMillis(cooldownMs));
     }
@@ -52,16 +52,20 @@ public class ReadWriteDataSourceConfig {
             @Value("${spring.datasource.hikari.maximum-pool-size:50}") int maxPoolSize,
             @Value("${spring.datasource.hikari.minimum-idle:10}") int minIdle,
             @Value("${spring.datasource.hikari.leak-detection-threshold:60000}") long leakThreshold,
+            @Value("${elepay.datasource.pgbouncer.transaction-pooling:false}") boolean pgBouncerTxMode,
+            @Value("${elepay.datasource.ssl-mode:prefer}") String sslMode,
             ReplicaHealthTracker replicaHealthTracker,
             ObjectProvider<MeterRegistry> meterRegistryProvider) {
 
         HikariDataSource primaryDs = createHikariDataSource(
-                "ElepayPrimaryPool", primaryUrl, username, password, maxPoolSize, minIdle, leakThreshold, false);
+                "ElepayPrimaryPool", primaryUrl, username, password, maxPoolSize, minIdle, leakThreshold, false,
+                pgBouncerTxMode, sslMode);
 
         HikariDataSource replicaDs = null;
         if (isDistinctReplicaUrl(primaryUrl, replicaUrl)) {
             replicaDs = createHikariDataSource(
-                    "ElepayReplicaPool", replicaUrl.trim(), username, password, maxPoolSize, minIdle, leakThreshold, true);
+                    "ElepayReplicaPool", replicaUrl.trim(), username, password, maxPoolSize, minIdle, leakThreshold, true,
+                    pgBouncerTxMode, sslMode);
             log.info("Configured CellAwareRoutingDataSource with distinct primary and read-replica pools for {}",
                     CellDataSourceKey.DEFAULT_CELL_ID);
         } else {
@@ -97,15 +101,31 @@ public class ReadWriteDataSourceConfig {
     public static HikariDataSource createHikariDataSource(
             String poolName, String jdbcUrl, String user, String pass,
             int maxPool, int minIdle, long leakThreshold, boolean readOnly) {
+        return createHikariDataSource(
+                poolName, jdbcUrl, user, pass, maxPool, minIdle, leakThreshold, readOnly, false, "prefer");
+    }
+
+    public static HikariDataSource createHikariDataSource(
+            String poolName, String jdbcUrl, String user, String pass,
+            int maxPool, int minIdle, long leakThreshold, boolean readOnly,
+            boolean pgBouncerTxMode, String sslMode) {
 
         HikariConfig config = buildHikariConfig(
-                poolName, jdbcUrl, user, pass, maxPool, minIdle, leakThreshold, readOnly);
+                poolName, jdbcUrl, user, pass, maxPool, minIdle, leakThreshold, readOnly, pgBouncerTxMode, sslMode);
         return new HikariDataSource(config);
     }
 
     static HikariConfig buildHikariConfig(
             String poolName, String jdbcUrl, String user, String pass,
             int maxPool, int minIdle, long leakThreshold, boolean readOnly) {
+        return buildHikariConfig(
+                poolName, jdbcUrl, user, pass, maxPool, minIdle, leakThreshold, readOnly, false, "prefer");
+    }
+
+    static HikariConfig buildHikariConfig(
+            String poolName, String jdbcUrl, String user, String pass,
+            int maxPool, int minIdle, long leakThreshold, boolean readOnly,
+            boolean pgBouncerTxMode, String sslMode) {
 
         HikariConfig config = new HikariConfig();
         config.setPoolName(poolName);
@@ -119,9 +139,7 @@ public class ReadWriteDataSourceConfig {
         config.setMaxLifetime(1800000);
         config.setLeakDetectionThreshold(leakThreshold);
         config.setReadOnly(readOnly);
-        // PostgreSQL JDBC driver performance tuning
-        config.addDataSourceProperty("reWriteBatchedInserts", "true");
-        config.addDataSourceProperty("prepareThreshold", "3");
+        PgBouncerConnectionPoolManager.applyPgBouncerAndTlsProperties(config, pgBouncerTxMode, sslMode);
 
         return config;
     }

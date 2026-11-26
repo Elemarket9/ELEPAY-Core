@@ -107,6 +107,11 @@ public class CellMigrationService {
                     "Merchant " + merchantId + " is already assigned to cell " + normalizedTarget);
         }
 
+        db.sql("SELECT pg_advisory_xact_lock(hashtext('cell_migration:' || :merchantId::text))")
+                .param("merchantId", merchantId)
+                .query(Object.class)
+                .optional();
+
         long activeCount = db.sql("""
                 SELECT count(*) FROM cell_migration_job
                 WHERE merchant_id = :merchantId
@@ -168,9 +173,7 @@ public class CellMigrationService {
         }
 
         if (STATE_CUTOVER.equals(nextState)) {
-            UUID affinityGroupId = findAffinityGroupId(current.merchantId());
-            cellRouter.assignMerchant(current.merchantId(), current.targetCellId(), affinityGroupId, true);
-            cellRouter.invalidateCache(current.merchantId());
+            reassignMerchantAndAffinityGroup(current.merchantId(), current.targetCellId());
         }
 
         if (STATE_COMPLETED.equals(nextState)) {
@@ -216,9 +219,7 @@ public class CellMigrationService {
         }
 
         if (STATE_CUTOVER.equals(current.state())) {
-            UUID affinityGroupId = findAffinityGroupId(current.merchantId());
-            cellRouter.assignMerchant(current.merchantId(), current.sourceCellId(), affinityGroupId, true);
-            cellRouter.invalidateCache(current.merchantId());
+            reassignMerchantAndAffinityGroup(current.merchantId(), current.sourceCellId());
         }
 
         String effectiveError = (reason != null && !reason.isBlank()) ? reason : current.lastError();
@@ -278,6 +279,49 @@ public class CellMigrationService {
                 .query(UUID.class)
                 .optional()
                 .orElse(null);
+    }
+
+    private void reassignMerchantAndAffinityGroup(UUID merchantId, String targetCellId) {
+        record AssignmentMeta(UUID affinityGroupId, boolean pinned) {}
+        AssignmentMeta meta = db.sql("""
+                SELECT affinity_group_id, pinned
+                FROM merchant_cell_assignment
+                WHERE merchant_id = :merchantId""")
+                .param("merchantId", merchantId)
+                .query((rs, i) -> new AssignmentMeta(
+                        rs.getObject("affinity_group_id", UUID.class),
+                        rs.getBoolean("pinned")))
+                .optional()
+                .orElse(new AssignmentMeta(null, true));
+
+        UUID groupRoot = meta.affinityGroupId() != null ? meta.affinityGroupId() : merchantId;
+        List<UUID> groupMembers = db.sql("""
+                SELECT merchant_id
+                FROM merchant_cell_assignment
+                WHERE affinity_group_id = :root OR merchant_id = :root""")
+                .param("root", groupRoot)
+                .query(UUID.class)
+                .list();
+
+        cellRouter.assignMerchant(merchantId, targetCellId, meta.affinityGroupId(), meta.pinned());
+        cellRouter.invalidateCache(merchantId);
+
+        for (UUID memberId : groupMembers) {
+            if (!memberId.equals(merchantId)) {
+                AssignmentMeta memberMeta = db.sql("""
+                        SELECT affinity_group_id, pinned
+                        FROM merchant_cell_assignment
+                        WHERE merchant_id = :merchantId""")
+                        .param("merchantId", memberId)
+                        .query((rs, i) -> new AssignmentMeta(
+                                rs.getObject("affinity_group_id", UUID.class),
+                                rs.getBoolean("pinned")))
+                        .optional()
+                        .orElse(new AssignmentMeta(groupRoot, true));
+                cellRouter.assignMerchant(memberId, targetCellId, memberMeta.affinityGroupId(), memberMeta.pinned());
+                cellRouter.invalidateCache(memberId);
+            }
+        }
     }
 
     private static String nextStateOf(String currentState) {

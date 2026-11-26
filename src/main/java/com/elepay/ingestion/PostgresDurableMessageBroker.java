@@ -61,28 +61,21 @@ public class PostgresDurableMessageBroker implements DurableMessageBroker {
 
     @Override
     public PublishConfirmation publishDurable(BrokerMessage message) {
+        String provider = providerName();
         IngestionCommand cmd = new IngestionCommand(
                 message.tenantId(),
                 message.topic(),
                 message.idempotencyScope(),
                 message.idempotencyKey(),
-                message.payloadJson()
+                message.payloadJson(),
+                message.orderingKey(),
+                provider,
+                message.messageId() != null ? message.messageId().toString() : null
         );
         IngestionReceipt receipt = ingestionQueue.enqueue(cmd);
-        if (message.orderingKey() != null && !message.orderingKey().isBlank()) {
-            db.sql("""
-                    UPDATE ingestion_event
-                    SET ordering_key = :ord,
-                        broker_provider = :prov
-                    WHERE id = :id""")
-                    .param("ord", message.orderingKey().trim())
-                    .param("prov", providerName())
-                    .param("id", receipt.ingestionId())
-                    .update();
-        }
         return new PublishConfirmation(
                 receipt.ingestionId(),
-                providerName(),
+                provider,
                 receipt.status(),
                 true,
                 receipt.duplicate(),
@@ -96,28 +89,22 @@ public class PostgresDurableMessageBroker implements DurableMessageBroker {
         if (messages == null || messages.isEmpty()) {
             return List.of();
         }
+        String provider = providerName();
         List<IngestionCommand> cmds = messages.stream()
                 .map(m -> new IngestionCommand(
                         m.tenantId(),
                         m.topic(),
                         m.idempotencyScope(),
                         m.idempotencyKey(),
-                        m.payloadJson()))
+                        m.payloadJson(),
+                        m.orderingKey(),
+                        provider,
+                        m.messageId() != null ? m.messageId().toString() : null))
                 .toList();
         List<IngestionReceipt> receipts = ingestionQueue.enqueueBatch(cmds);
         Instant now = Instant.now();
-        String provider = providerName();
         List<PublishConfirmation> confirmations = new ArrayList<>(receipts.size());
-        for (int i = 0; i < receipts.size(); i++) {
-            IngestionReceipt r = receipts.get(i);
-            BrokerMessage msg = messages.get(i);
-            if (msg.orderingKey() != null && !msg.orderingKey().isBlank()) {
-                db.sql("UPDATE ingestion_event SET ordering_key = :ord, broker_provider = :prov WHERE id = :id")
-                        .param("ord", msg.orderingKey().trim())
-                        .param("prov", provider)
-                        .param("id", r.ingestionId())
-                        .update();
-            }
+        for (IngestionReceipt r : receipts) {
             confirmations.add(new PublishConfirmation(
                     r.ingestionId(),
                     provider,
@@ -143,9 +130,11 @@ public class PostgresDurableMessageBroker implements DurableMessageBroker {
                     completed_at = COALESCE(completed_at, now()),
                     updated_at = now(),
                     locked_by = NULL,
+                    locked_at = NULL,
                     lease_expires_at = NULL,
                     last_error = NULL
-                WHERE id = :id""")
+                WHERE id = :id
+                  AND status IN ('PENDING', 'PROCESSING')""")
                 .param("res", safeJson)
                 .param("id", messageId)
                 .update();
@@ -160,11 +149,14 @@ public class PostgresDurableMessageBroker implements DurableMessageBroker {
             db.sql("""
                     UPDATE ingestion_event
                     SET status = 'DEAD',
+                        attempts = CASE WHEN status = 'PENDING' THEN attempts + 1 ELSE attempts END,
                         last_error = :err,
                         updated_at = now(),
                         locked_by = NULL,
+                        locked_at = NULL,
                         lease_expires_at = NULL
-                    WHERE id = :id""")
+                    WHERE id = :id
+                      AND status IN ('PENDING', 'PROCESSING')""")
                     .param("err", "POISON_MESSAGE: " + safeReason)
                     .param("id", messageId)
                     .update();
@@ -172,13 +164,20 @@ public class PostgresDurableMessageBroker implements DurableMessageBroker {
         }
         db.sql("""
                 UPDATE ingestion_event
-                SET status = CASE WHEN attempts >= max_attempts THEN 'DEAD' ELSE 'PENDING' END,
+                SET attempts = CASE WHEN status = 'PENDING' THEN attempts + 1 ELSE attempts END,
+                    status = CASE
+                        WHEN (CASE WHEN status = 'PENDING' THEN attempts + 1 ELSE attempts END) >= max_attempts
+                        THEN 'DEAD'
+                        ELSE 'PENDING'
+                    END,
                     last_error = :err,
                     next_attempt_at = now() + interval '1 second',
                     updated_at = now(),
                     locked_by = NULL,
+                    locked_at = NULL,
                     lease_expires_at = NULL
-                WHERE id = :id""")
+                WHERE id = :id
+                  AND status IN ('PENDING', 'PROCESSING')""")
                 .param("err", safeReason)
                 .param("id", messageId)
                 .update();
@@ -194,11 +193,10 @@ public class PostgresDurableMessageBroker implements DurableMessageBroker {
         record Row(long pending, long processing, long dead, Instant oldestPending) {}
         Row row = db.sql("""
                 SELECT
-                    count(*) FILTER (WHERE status = 'PENDING') AS pending,
-                    count(*) FILTER (WHERE status = 'PROCESSING') AS processing,
-                    count(*) FILTER (WHERE status = 'DEAD') AS dead,
-                    min(created_at) FILTER (WHERE status = 'PENDING') AS oldest_pending
-                FROM ingestion_event""")
+                    (SELECT count(*) FROM ingestion_event WHERE status = 'PENDING') AS pending,
+                    (SELECT count(*) FROM ingestion_event WHERE status = 'PROCESSING') AS processing,
+                    (SELECT count(*) FROM ingestion_event WHERE status = 'DEAD') AS dead,
+                    (SELECT min(created_at) FROM ingestion_event WHERE status = 'PENDING') AS oldest_pending""")
                 .query((rs, i) -> {
                     var ts = rs.getTimestamp("oldest_pending");
                     return new Row(

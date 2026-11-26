@@ -16,7 +16,10 @@ import com.elepay.wallet.CustomerDirectory;
 import java.util.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Dispute opening (reserve hold), resolution (merchant_won / customer_won chargeback &amp; refund),
@@ -32,9 +35,11 @@ class CheckoutDisputeService {
     private final CustomerDirectory customers;
     private final EmtechCapture regulatory;
     private final CheckoutStore store;
+    private final TransactionTemplate requiresNewTx;
 
     CheckoutDisputeService(JdbcClient db, Ledger ledger, Outbox outbox, Audit audit, OpsQueue ops,
-                           CustomerDirectory customers, EmtechCapture regulatory, CheckoutStore store) {
+                           CustomerDirectory customers, EmtechCapture regulatory, CheckoutStore store,
+                           PlatformTransactionManager txManager) {
         this.db = db;
         this.ledger = ledger;
         this.outbox = outbox;
@@ -43,6 +48,8 @@ class CheckoutDisputeService {
         this.customers = customers;
         this.regulatory = regulatory;
         this.store = store;
+        this.requiresNewTx = new TransactionTemplate(txManager);
+        this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     @Transactional
@@ -50,6 +57,22 @@ class CheckoutDisputeService {
         Checkout c = store.load(reference, true);
         Allocation a = CheckoutStore.allocation(c, line);
         if (!c.status().equals("paid")) throw ApiException.conflict("not_paid", "Only paid checkouts can be disputed");
+        if (providerCase != null && !providerCase.isBlank()) {
+            Optional<UUID> existingId = db.sql("""
+                    SELECT id FROM dispute
+                    WHERE checkout_id = :c AND line = :l AND rail_case = :rc AND status = 'open'
+                    ORDER BY created_at DESC LIMIT 1""")
+                    .param("c", c.id()).param("l", line).param("rc", providerCase.trim())
+                    .query(UUID.class).optional();
+            if (existingId.isPresent()) {
+                Dispute existing = dispute(existingId.get());
+                if (existing.amount() == amount) {
+                    return existing;
+                }
+                throw ApiException.conflict("dispute_already_open",
+                        "An open dispute with case reference " + providerCase + " already exists for this allocation");
+            }
+        }
         if (amount <= 0 || Math.addExact(Math.addExact(a.refunded(), a.disputed()), amount) > a.amount()) {
             throw ApiException.conflict("dispute_exceeds_allocation", "Dispute exceeds the remaining allocation");
         }
@@ -63,8 +86,9 @@ class CheckoutDisputeService {
             hold = ledger.post(Ledger.Posting.of("dispute-hold", id.toString(), "dispute_hold", legs).relatedTo(c.journalTx()));
         } catch (ApiException e) {
             if (e.code().equals("insufficient_funds")) {
-                ops.raise("dispute_unfunded", "high", "checkout:" + reference + ":" + line,
-                        Map.of("amount", amount, "merchant", a.merchantId().toString()));
+                requiresNewTx.executeWithoutResult(status ->
+                        ops.raise("dispute_unfunded", "high", "checkout:" + reference + ":" + line,
+                                Map.of("amount", amount, "merchant", a.merchantId().toString())));
             }
             throw e;
         }
