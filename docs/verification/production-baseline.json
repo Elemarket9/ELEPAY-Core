@@ -1,0 +1,944 @@
+{
+  "commit": "6da0ca53b99699f51565f93eba2e46c71c91bff9",
+  "definition": "Lexical nonblank, noncomment production source lines; excludes exact decommented duplicate files, generated markers, test-only profiles, tests, migrations, docs, build/deployment configuration, and assets. Semantic duplication and unfinished implementation discount require manual review; this is a source baseline, not a verified meaningful-production total.",
+  "total": 32539,
+  "files": [
+    {
+      "path": "plugins/woocommerce-elepay/assets/blocks.js",
+      "code": 19
+    },
+    {
+      "path": "plugins/woocommerce-elepay/includes/class-wc-elepay-api.php",
+      "code": 185
+    },
+    {
+      "path": "plugins/woocommerce-elepay/includes/class-wc-elepay-blocks.php",
+      "code": 38
+    },
+    {
+      "path": "plugins/woocommerce-elepay/includes/class-wc-gateway-elepay.php",
+      "code": 298
+    },
+    {
+      "path": "plugins/woocommerce-elepay/woocommerce-elepay.php",
+      "code": 54
+    },
+    {
+      "path": "src/main/java/com/elepay/SandboxApplication.java",
+      "code": 11
+    },
+    {
+      "path": "src/main/java/com/elepay/agents/AgentCashInService.java",
+      "code": 114
+    },
+    {
+      "path": "src/main/java/com/elepay/agents/AgentCashOutService.java",
+      "code": 153
+    },
+    {
+      "path": "src/main/java/com/elepay/agents/AgentCommissionEngine.java",
+      "code": 114
+    },
+    {
+      "path": "src/main/java/com/elepay/agents/AgentConfigService.java",
+      "code": 28
+    },
+    {
+      "path": "src/main/java/com/elepay/agents/AgentFloatService.java",
+      "code": 141
+    },
+    {
+      "path": "src/main/java/com/elepay/agents/AgentOnboardingService.java",
+      "code": 165
+    },
+    {
+      "path": "src/main/java/com/elepay/agents/AgentPortalService.java",
+      "code": 108
+    },
+    {
+      "path": "src/main/java/com/elepay/bills/AirtimeDataPurchaseEngine.java",
+      "code": 174
+    },
+    {
+      "path": "src/main/java/com/elepay/bills/BillCatalogService.java",
+      "code": 103
+    },
+    {
+      "path": "src/main/java/com/elepay/bills/CarrierIntegrationClient.java",
+      "code": 19
+    },
+    {
+      "path": "src/main/java/com/elepay/bills/DefaultCarrierIntegrationClient.java",
+      "code": 56
+    },
+    {
+      "path": "src/main/java/com/elepay/bills/DefaultUtilityProviderClient.java",
+      "code": 58
+    },
+    {
+      "path": "src/main/java/com/elepay/bills/ScheduledBillPaymentService.java",
+      "code": 168
+    },
+    {
+      "path": "src/main/java/com/elepay/bills/SchoolFeePaymentService.java",
+      "code": 90
+    },
+    {
+      "path": "src/main/java/com/elepay/bills/UtilityPaymentService.java",
+      "code": 183
+    },
+    {
+      "path": "src/main/java/com/elepay/bills/UtilityProviderClient.java",
+      "code": 31
+    },
+    {
+      "path": "src/main/java/com/elepay/cards/CardControlsService.java",
+      "code": 102
+    },
+    {
+      "path": "src/main/java/com/elepay/cards/CardPanVault.java",
+      "code": 183
+    },
+    {
+      "path": "src/main/java/com/elepay/cards/CardProcessorContract.java",
+      "code": 28
+    },
+    {
+      "path": "src/main/java/com/elepay/cards/NetworkToken.java",
+      "code": 15
+    },
+    {
+      "path": "src/main/java/com/elepay/cards/NetworkTokenService.java",
+      "code": 231
+    },
+    {
+      "path": "src/main/java/com/elepay/cards/TokenStatus.java",
+      "code": 6
+    },
+    {
+      "path": "src/main/java/com/elepay/checkout/CheckoutChannel.java",
+      "code": 44
+    },
+    {
+      "path": "src/main/java/com/elepay/checkout/CheckoutNotifications.java",
+      "code": 39
+    },
+    {
+      "path": "src/main/java/com/elepay/checkout/CheckoutOperations.java",
+      "code": 44
+    },
+    {
+      "path": "src/main/java/com/elepay/checkout/CheckoutService.java",
+      "code": 879
+    },
+    {
+      "path": "src/main/java/com/elepay/checkout/Checkouts.java",
+      "code": 275
+    },
+    {
+      "path": "src/main/java/com/elepay/checkout/EmvcoQr.java",
+      "code": 221
+    },
+    {
+      "path": "src/main/java/com/elepay/checkout/MandateService.java",
+      "code": 365
+    },
+    {
+      "path": "src/main/java/com/elepay/checkout/PosCheckoutGateway.java",
+      "code": 43
+    },
+    {
+      "path": "src/main/java/com/elepay/checkout/PublicCheckouts.java",
+      "code": 158
+    },
+    {
+      "path": "src/main/java/com/elepay/common/ApiException.java",
+      "code": 37
+    },
+    {
+      "path": "src/main/java/com/elepay/common/ApiExceptionHandler.java",
+      "code": 37
+    },
+    {
+      "path": "src/main/java/com/elepay/common/Audit.java",
+      "code": 148
+    },
+    {
+      "path": "src/main/java/com/elepay/common/AuditCheckpoints.java",
+      "code": 116
+    },
+    {
+      "path": "src/main/java/com/elepay/common/HmacVerification.java",
+      "code": 56
+    },
+    {
+      "path": "src/main/java/com/elepay/common/Idempotency.java",
+      "code": 84
+    },
+    {
+      "path": "src/main/java/com/elepay/common/IntegrityKeys.java",
+      "code": 188
+    },
+    {
+      "path": "src/main/java/com/elepay/common/OpenApiConfig.java",
+      "code": 24
+    },
+    {
+      "path": "src/main/java/com/elepay/common/OpsQueue.java",
+      "code": 52
+    },
+    {
+      "path": "src/main/java/com/elepay/common/OutboundUrlGuard.java",
+      "code": 110
+    },
+    {
+      "path": "src/main/java/com/elepay/common/ProportionalAllocation.java",
+      "code": 84
+    },
+    {
+      "path": "src/main/java/com/elepay/common/References.java",
+      "code": 25
+    },
+    {
+      "path": "src/main/java/com/elepay/common/TokenBucketRateLimiter.java",
+      "code": 170
+    },
+    {
+      "path": "src/main/java/com/elepay/common/datasource/ReadWriteDataSourceConfig.java",
+      "code": 69
+    },
+    {
+      "path": "src/main/java/com/elepay/compliance/AlertPrioritizationService.java",
+      "code": 117
+    },
+    {
+      "path": "src/main/java/com/elepay/compliance/AmlMonitoringService.java",
+      "code": 171
+    },
+    {
+      "path": "src/main/java/com/elepay/compliance/AuditCompliance.java",
+      "code": 9
+    },
+    {
+      "path": "src/main/java/com/elepay/compliance/FaceMatchingLivenessService.java",
+      "code": 213
+    },
+    {
+      "path": "src/main/java/com/elepay/compliance/GhanaCardVerificationService.java",
+      "code": 166
+    },
+    {
+      "path": "src/main/java/com/elepay/compliance/PepScreeningService.java",
+      "code": 162
+    },
+    {
+      "path": "src/main/java/com/elepay/compliance/RegulatoryReportingService.java",
+      "code": 182
+    },
+    {
+      "path": "src/main/java/com/elepay/compliance/RetentionRedactionService.java",
+      "code": 166
+    },
+    {
+      "path": "src/main/java/com/elepay/compliance/SanctionsScreeningService.java",
+      "code": 257
+    },
+    {
+      "path": "src/main/java/com/elepay/compliance/StructuringDetectionService.java",
+      "code": 117
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/CashFlowUnderwritingService.java",
+      "code": 90
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/CollectionsPrioritizationService.java",
+      "code": 77
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/DayCountConvention.java",
+      "code": 33
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/DefaultPredictionService.java",
+      "code": 64
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/DynamicCreditLimitService.java",
+      "code": 91
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/EwaEligibilityService.java",
+      "code": 55
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/FloatForecastingService.java",
+      "code": 77
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/FloatRebalancingService.java",
+      "code": 103
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/InterestAccrualService.java",
+      "code": 88
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/MerchantCashAdvancePricingService.java",
+      "code": 76
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/MerchantCashFlowForecastService.java",
+      "code": 81
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/OverdraftScoringService.java",
+      "code": 67
+    },
+    {
+      "path": "src/main/java/com/elepay/credit/RepaymentSweepsService.java",
+      "code": 87
+    },
+    {
+      "path": "src/main/java/com/elepay/developer/DeveloperController.java",
+      "code": 197
+    },
+    {
+      "path": "src/main/java/com/elepay/developer/DeveloperService.java",
+      "code": 599
+    },
+    {
+      "path": "src/main/java/com/elepay/fees/FeeSchedule.java",
+      "code": 46
+    },
+    {
+      "path": "src/main/java/com/elepay/fx/FxApi.java",
+      "code": 188
+    },
+    {
+      "path": "src/main/java/com/elepay/fx/FxDeliveryEstimator.java",
+      "code": 74
+    },
+    {
+      "path": "src/main/java/com/elepay/fx/FxDualReconciliationService.java",
+      "code": 141
+    },
+    {
+      "path": "src/main/java/com/elepay/fx/FxExposureService.java",
+      "code": 86
+    },
+    {
+      "path": "src/main/java/com/elepay/fx/FxPartner.java",
+      "code": 18
+    },
+    {
+      "path": "src/main/java/com/elepay/fx/FxPricingService.java",
+      "code": 69
+    },
+    {
+      "path": "src/main/java/com/elepay/fx/FxRateService.java",
+      "code": 136
+    },
+    {
+      "path": "src/main/java/com/elepay/fx/FxRoutingService.java",
+      "code": 53
+    },
+    {
+      "path": "src/main/java/com/elepay/fx/FxService.java",
+      "code": 474
+    },
+    {
+      "path": "src/main/java/com/elepay/growth/ChurnPredictionService.java",
+      "code": 61
+    },
+    {
+      "path": "src/main/java/com/elepay/growth/NotificationTimingService.java",
+      "code": 65
+    },
+    {
+      "path": "src/main/java/com/elepay/growth/PersonalizedLimitService.java",
+      "code": 80
+    },
+    {
+      "path": "src/main/java/com/elepay/growth/SavingsGoalsService.java",
+      "code": 88
+    },
+    {
+      "path": "src/main/java/com/elepay/growth/SpendingCategorizationService.java",
+      "code": 130
+    },
+    {
+      "path": "src/main/java/com/elepay/identity/Actor.java",
+      "code": 43
+    },
+    {
+      "path": "src/main/java/com/elepay/identity/ApiKeyAuthentication.java",
+      "code": 28
+    },
+    {
+      "path": "src/main/java/com/elepay/identity/ApiKeys.java",
+      "code": 142
+    },
+    {
+      "path": "src/main/java/com/elepay/identity/DistributedNonceStore.java",
+      "code": 53
+    },
+    {
+      "path": "src/main/java/com/elepay/identity/DistributedSessionService.java",
+      "code": 196
+    },
+    {
+      "path": "src/main/java/com/elepay/identity/RateLimitFilter.java",
+      "code": 57
+    },
+    {
+      "path": "src/main/java/com/elepay/identity/RequestSigningFilter.java",
+      "code": 235
+    },
+    {
+      "path": "src/main/java/com/elepay/identity/SecurityConfig.java",
+      "code": 107
+    },
+    {
+      "path": "src/main/java/com/elepay/ledger/BalanceSnapshots.java",
+      "code": 201
+    },
+    {
+      "path": "src/main/java/com/elepay/ledger/Ledger.java",
+      "code": 256
+    },
+    {
+      "path": "src/main/java/com/elepay/lending/DelinquencyStateMachine.java",
+      "code": 99
+    },
+    {
+      "path": "src/main/java/com/elepay/lending/LendingConfigService.java",
+      "code": 28
+    },
+    {
+      "path": "src/main/java/com/elepay/lending/LoanApplicationService.java",
+      "code": 181
+    },
+    {
+      "path": "src/main/java/com/elepay/lending/LoanContractService.java",
+      "code": 255
+    },
+    {
+      "path": "src/main/java/com/elepay/lending/LoanProductService.java",
+      "code": 124
+    },
+    {
+      "path": "src/main/java/com/elepay/lending/LoanRestructureService.java",
+      "code": 110
+    },
+    {
+      "path": "src/main/java/com/elepay/lending/RepaymentSweepService.java",
+      "code": 160
+    },
+    {
+      "path": "src/main/java/com/elepay/merchant/MerchantAccess.java",
+      "code": 139
+    },
+    {
+      "path": "src/main/java/com/elepay/merchant/Merchants.java",
+      "code": 384
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/MerchantToolAccess.java",
+      "code": 50
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/accounting/AccountsReceivableAndPayableService.java",
+      "code": 126
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/accounting/GhanaianChartOfAccounts.java",
+      "code": 40
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/accounting/GlAccountCategory.java",
+      "code": 9
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/accounting/GraFiscalDataService.java",
+      "code": 92
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/accounting/InvoiceAndQuoteService.java",
+      "code": 321
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/accounting/MerchantGeneralLedgerService.java",
+      "code": 322
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/accounting/NormalBalance.java",
+      "code": 5
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/crm/CouponEngineService.java",
+      "code": 109
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/crm/GiftCardService.java",
+      "code": 134
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/crm/LoyaltyProgramService.java",
+      "code": 170
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/crm/MarketingCampaignService.java",
+      "code": 163
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/crm/RfmSegmentationService.java",
+      "code": 98
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/crm/StoreCreditService.java",
+      "code": 102
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/inventory/BatchTrackingService.java",
+      "code": 106
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/inventory/InventoryController.java",
+      "code": 205
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/inventory/MovementType.java",
+      "code": 11
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/inventory/ProductCatalogService.java",
+      "code": 199
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/inventory/PurchaseOrderService.java",
+      "code": 222
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/inventory/StockService.java",
+      "code": 242
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/inventory/StockTransferService.java",
+      "code": 185
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/inventory/WarehouseService.java",
+      "code": 74
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/payroll/GhanaianStatutoryDeductionsCalculator.java",
+      "code": 95
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/payroll/PayrollManagementService.java",
+      "code": 341
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/payroll/SupplierManagementService.java",
+      "code": 249
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/pos/PosCartService.java",
+      "code": 85
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/pos/PosCashierService.java",
+      "code": 181
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/pos/PosController.java",
+      "code": 219
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/pos/PosOfflineSyncService.java",
+      "code": 161
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/pos/PosOrderService.java",
+      "code": 343
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/pos/PosReceiptService.java",
+      "code": 125
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/pos/PosSplitBillService.java",
+      "code": 68
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/pos/PosTerminalService.java",
+      "code": 125
+    },
+    {
+      "path": "src/main/java/com/elepay/merchanttools/pos/TenderType.java",
+      "code": 7
+    },
+    {
+      "path": "src/main/java/com/elepay/operations/OperationalMetrics.java",
+      "code": 44
+    },
+    {
+      "path": "src/main/java/com/elepay/operations/Operations.java",
+      "code": 83
+    },
+    {
+      "path": "src/main/java/com/elepay/operations/ReconciliationService.java",
+      "code": 369
+    },
+    {
+      "path": "src/main/java/com/elepay/operations/SpaRoutes.java",
+      "code": 10
+    },
+    {
+      "path": "src/main/java/com/elepay/outbox/Outbox.java",
+      "code": 47
+    },
+    {
+      "path": "src/main/java/com/elepay/outbox/OutboxConsumer.java",
+      "code": 6
+    },
+    {
+      "path": "src/main/java/com/elepay/outbox/OutboxDispatcher.java",
+      "code": 79
+    },
+    {
+      "path": "src/main/java/com/elepay/outbox/Webhooks.java",
+      "code": 257
+    },
+    {
+      "path": "src/main/java/com/elepay/payout/MerchantPayouts.java",
+      "code": 113
+    },
+    {
+      "path": "src/main/java/com/elepay/payout/PayoutEvents.java",
+      "code": 6
+    },
+    {
+      "path": "src/main/java/com/elepay/payout/PayoutPolicies.java",
+      "code": 212
+    },
+    {
+      "path": "src/main/java/com/elepay/payout/PayoutPolicyApi.java",
+      "code": 75
+    },
+    {
+      "path": "src/main/java/com/elepay/payout/Payouts.java",
+      "code": 309
+    },
+    {
+      "path": "src/main/java/com/elepay/payout/PlatformRoutes.java",
+      "code": 24
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/AirtelTigoProductionRail.java",
+      "code": 379
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/CardBinLookupService.java",
+      "code": 109
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/CardTokenVault.java",
+      "code": 319
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/GhipssInstantPayRail.java",
+      "code": 421
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/MtnProductionRail.java",
+      "code": 295
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/NameVerification.java",
+      "code": 11
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/NameVerifications.java",
+      "code": 22
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/NetworkHealthDetector.java",
+      "code": 190
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/PaymentRail.java",
+      "code": 35
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/RailCallbacks.java",
+      "code": 32
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/RailEndpoints.java",
+      "code": 87
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/RailEvents.java",
+      "code": 11
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/RailRegistry.java",
+      "code": 43
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/RailStatus.java",
+      "code": 17
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/RailTransactions.java",
+      "code": 373
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/SafeFailoverRouter.java",
+      "code": 95
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/SmartPaymentRouter.java",
+      "code": 147
+    },
+    {
+      "path": "src/main/java/com/elepay/rails/TelecelCashProductionRail.java",
+      "code": 379
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/BackoffAndJitterRetry.java",
+      "code": 62
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/DatabaseFailoverRecoveryService.java",
+      "code": 63
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/DistributedLockService.java",
+      "code": 144
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/FaultInjectionHarness.java",
+      "code": 81
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/LoadShedder.java",
+      "code": 53
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/ObservabilityController.java",
+      "code": 17
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/ObservabilityService.java",
+      "code": 106
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/PartnerCircuitBreaker.java",
+      "code": 120
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/PartnerCircuitBreakerRegistry.java",
+      "code": 18
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/ScalingSignalService.java",
+      "code": 56
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/SloBurnRateAlertService.java",
+      "code": 66
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/SuccessRateAnomalyDetector.java",
+      "code": 54
+    },
+    {
+      "path": "src/main/java/com/elepay/reliability/TraceContextFilter.java",
+      "code": 29
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/AccountTakeoverService.java",
+      "code": 105
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/BehavioralBiometricsService.java",
+      "code": 125
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/ChargebackPredictionService.java",
+      "code": 128
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/DeviceRiskService.java",
+      "code": 143
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/GeoVelocityService.java",
+      "code": 146
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/GradientBoostedFraudModel.java",
+      "code": 152
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/MerchantRiskService.java",
+      "code": 138
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/MuleGraphService.java",
+      "code": 170
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/PromotionAbuseService.java",
+      "code": 156
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/RiskController.java",
+      "code": 62
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/RiskDecision.java",
+      "code": 7
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/RiskEngineService.java",
+      "code": 197
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/RuleEngineService.java",
+      "code": 228
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/SimSwapService.java",
+      "code": 128
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/StepUpAuthService.java",
+      "code": 184
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/SyntheticIdentityService.java",
+      "code": 135
+    },
+    {
+      "path": "src/main/java/com/elepay/risk/VelocityService.java",
+      "code": 137
+    },
+    {
+      "path": "src/main/java/com/elepay/security/AdminAnomalyDetector.java",
+      "code": 155
+    },
+    {
+      "path": "src/main/java/com/elepay/security/CiSecurityScanner.java",
+      "code": 134
+    },
+    {
+      "path": "src/main/java/com/elepay/security/EnvelopeEncryption.java",
+      "code": 124
+    },
+    {
+      "path": "src/main/java/com/elepay/security/IntegrityApi.java",
+      "code": 33
+    },
+    {
+      "path": "src/main/java/com/elepay/security/JwksService.java",
+      "code": 155
+    },
+    {
+      "path": "src/main/java/com/elepay/security/KeyRotationService.java",
+      "code": 92
+    },
+    {
+      "path": "src/main/java/com/elepay/security/MobileCertificatePinningService.java",
+      "code": 123
+    },
+    {
+      "path": "src/main/java/com/elepay/security/ProductionSafetyCheck.java",
+      "code": 98
+    },
+    {
+      "path": "src/main/java/com/elepay/security/SessionDeviceBindingService.java",
+      "code": 212
+    },
+    {
+      "path": "src/main/java/com/elepay/ussd/UssdGateways.java",
+      "code": 50
+    },
+    {
+      "path": "src/main/java/com/elepay/ussd/UssdMenu.java",
+      "code": 166
+    },
+    {
+      "path": "src/main/java/com/elepay/wallet/CustomerAdmin.java",
+      "code": 64
+    },
+    {
+      "path": "src/main/java/com/elepay/wallet/CustomerDirectory.java",
+      "code": 47
+    },
+    {
+      "path": "src/main/java/com/elepay/wallet/RecipientConfirmations.java",
+      "code": 298
+    },
+    {
+      "path": "src/main/java/com/elepay/wallet/TransferLimits.java",
+      "code": 109
+    },
+    {
+      "path": "src/main/java/com/elepay/wallet/WalletChannel.java",
+      "code": 96
+    },
+    {
+      "path": "src/main/java/com/elepay/wallet/WalletFunding.java",
+      "code": 138
+    },
+    {
+      "path": "src/main/java/com/elepay/wallet/Wallets.java",
+      "code": 184
+    },
+    {
+      "path": "web/src/Checkout.tsx",
+      "code": 288
+    },
+    {
+      "path": "web/src/Developer.tsx",
+      "code": 668
+    },
+    {
+      "path": "web/src/Merchant.tsx",
+      "code": 1215
+    },
+    {
+      "path": "web/src/Ops.tsx",
+      "code": 495
+    },
+    {
+      "path": "web/src/Wallet.tsx",
+      "code": 586
+    },
+    {
+      "path": "web/src/api.ts",
+      "code": 35
+    },
+    {
+      "path": "web/src/auth.ts",
+      "code": 52
+    },
+    {
+      "path": "web/src/main.tsx",
+      "code": 66
+    },
+    {
+      "path": "web/src/money.ts",
+      "code": 19
+    },
+    {
+      "path": "web/src/styles.css",
+      "code": 49
+    }
+  ],
+  "excluded": []
+}

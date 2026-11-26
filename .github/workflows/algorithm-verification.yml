@@ -1,0 +1,35 @@
+name: Algorithm verification
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  retry-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Isolated arithmetic and replay safety checks
+        run: python3 scripts/check-reliability-safety.py
+  production-count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/count-production-loc.mjs --self-test
+      - name: Count checked-in production source
+        run: node scripts/count-production-loc.mjs > production-loc.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-loc
+          path: production-loc.json
+          if-no-files-found: error

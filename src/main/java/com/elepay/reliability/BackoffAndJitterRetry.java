@@ -1,81 +1,105 @@
 package com.elepay.reliability;
 
-import java.util.Random;
+import java.util.Objects;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Predicate;
 import org.springframework.stereotype.Service;
 
 /**
- * Algorithm 087: Exponential backoff with Full Jitter.
- * Formula:
- *   temp = min(capMs, baseMs * 2^attempt)
- *   sleep = random_between(0, temp)
- * Avoids thundering herd problem on network retries while enforcing attempt budgets.
+ * Algorithm 087: bounded exponential backoff and jitter.
+ * Delay arithmetic saturates before multiplication; calculation uses O(1) space
+ * and at most 63 doubling steps. Retryability alone does not establish that a
+ * financial operation is safe to replay: callers must use durable idempotency
+ * or reconcile an unknown outcome before supplying a retryable decision.
  */
 @Service
 public class BackoffAndJitterRetry {
-
     public enum JitterStrategy {
-        FULL_JITTER,
-        EQUAL_JITTER,
-        DECORRELATED_JITTER,
-        NO_JITTER
+        FULL_JITTER, EQUAL_JITTER, DECORRELATED_JITTER, NO_JITTER
     }
 
-    public record RetryConfig(
-            int maxAttempts,
-            long baseDelayMs,
-            long maxDelayMs,
-            JitterStrategy jitterStrategy
-    ) {
+    public record RetryConfig(int maxAttempts, long baseDelayMs, long maxDelayMs,
+                              JitterStrategy jitterStrategy) {
+        public RetryConfig {
+            if (maxAttempts < 1 || baseDelayMs < 0 || maxDelayMs < baseDelayMs) {
+                throw new IllegalArgumentException("Invalid retry attempts or delay bounds");
+            }
+            Objects.requireNonNull(jitterStrategy, "jitterStrategy");
+        }
+
+        /** Compatibility preset; operational callers should supply validated policy. */
         public static RetryConfig defaultConfig() {
             return new RetryConfig(4, 100, 2000, JitterStrategy.FULL_JITTER);
         }
     }
 
-    private final Random random = new Random();
-
     public long calculateDelay(int attempt, RetryConfig config, long prevDelay) {
-        long exponential = config.baseDelayMs() * (1L << Math.min(attempt, 30));
-        long cappedExponential = Math.min(config.maxDelayMs(), exponential);
-
+        Objects.requireNonNull(config, "config");
+        if (attempt < 0 || prevDelay < 0) {
+            throw new IllegalArgumentException("Attempt and previous delay must be non-negative");
+        }
+        long exponential = config.baseDelayMs();
+        // A signed long reaches its cap in at most 63 doublings.
+        for (int i = 0; i < Math.min(attempt, 63); i++) {
+            if (exponential >= config.maxDelayMs()
+                    || exponential > config.maxDelayMs() / 2) {
+                exponential = config.maxDelayMs();
+                break;
+            }
+            exponential *= 2;
+        }
+        final long cap = exponential;
         return switch (config.jitterStrategy()) {
-            case FULL_JITTER -> (cappedExponential > 0) ? (long) (random.nextDouble() * cappedExponential) : 0L;
-            case EQUAL_JITTER -> {
-                long half = cappedExponential / 2;
-                yield half + (half > 0 ? (long) (random.nextDouble() * half) : 0L);
-            }
+            case FULL_JITTER -> below(cap);
+            case EQUAL_JITTER -> cap / 2 + below(cap - cap / 2);
             case DECORRELATED_JITTER -> {
-                long high = Math.max(config.baseDelayMs(), prevDelay * 3);
-                long randVal = (long) (config.baseDelayMs() + random.nextDouble() * (high - config.baseDelayMs()));
-                yield Math.min(config.maxDelayMs(), randVal);
+                long triple = prevDelay > Long.MAX_VALUE / 3
+                        ? Long.MAX_VALUE : prevDelay * 3;
+                long high = Math.max(config.baseDelayMs(), triple);
+                long sample = config.baseDelayMs() + below(high - config.baseDelayMs());
+                yield Math.min(config.maxDelayMs(), sample);
             }
-            case NO_JITTER -> cappedExponential;
+            case NO_JITTER -> cap;
         };
     }
 
-    /**
-     * Executes callable with exponential backoff and jitter for retryable errors.
-     */
-    public <T> T executeWithRetry(Callable<T> task, RetryConfig config, Predicate<Throwable> isRetryable) throws Exception {
-        int attempt = 0;
-        long lastDelay = config.baseDelayMs();
+    /** Uniform integer in [0, bound), or zero when bound is zero. */
+    private static long below(long bound) {
+        return bound == 0 ? 0 : ThreadLocalRandom.current().nextLong(bound);
+    }
 
-        while (true) {
+    /**
+     * At most maxAttempts task invocations. Errors and cancellation never retry.
+     * Attempt zero is the first retry delay: base * 2^0.
+     */
+    public <T> T executeWithRetry(Callable<T> task, RetryConfig config,
+                                 Predicate<Throwable> isRetryable) throws Exception {
+        Objects.requireNonNull(task, "task");
+        Objects.requireNonNull(config, "config");
+        Objects.requireNonNull(isRetryable, "isRetryable");
+        long lastDelay = config.baseDelayMs();
+        for (int attempt = 0; ; attempt++) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Retry execution interrupted");
+            }
             try {
                 return task.call();
-            } catch (Throwable t) {
-                attempt++;
-                if (attempt >= config.maxAttempts() || !isRetryable.test(t)) {
-                    if (t instanceof Exception e) throw e;
-                    throw new RuntimeException(t);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw interrupted;
+            } catch (Exception failure) {
+                if (attempt >= config.maxAttempts() - 1
+                        || Thread.currentThread().isInterrupted()
+                        || !isRetryable.test(failure)) {
+                    throw failure;
                 }
-
-                long delay = calculateDelay(attempt, config, lastDelay);
-                lastDelay = delay;
-
-                if (delay > 0) {
-                    Thread.sleep(delay);
+                lastDelay = calculateDelay(attempt, config, lastDelay);
+                try {
+                    if (lastDelay > 0) Thread.sleep(lastDelay);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw interrupted;
                 }
             }
         }
