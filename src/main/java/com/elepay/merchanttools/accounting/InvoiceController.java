@@ -50,7 +50,7 @@ public class InvoiceController {
         LocalDate due = req.dueDate() == null ? issue.plusDays(14) : req.dueDate();
         if (due.isBefore(issue)) throw ApiException.badRequest("due_date_invalid", "Due date cannot be before the issue date");
         return invoices.createInvoice(new InvoiceAndQuoteService.CreateInvoiceCommand(req.merchantId(),
-                invoices.nextNumber(req.merchantId(), "INV"), null, null, req.customerName().strip(), blank(req.customerEmail()),
+                null, null, null, req.customerName().strip(), blank(req.customerEmail()),
                 blank(req.customerPhone()), blank(req.customerTin()), issue, due, "GHS", lines(req), blank(req.notes())));
     }
 
@@ -60,7 +60,10 @@ public class InvoiceController {
         validate(req);
         LocalDate issue = req.issueDate() == null ? LocalDate.now() : req.issueDate();
         LocalDate expiry = req.dueDate() == null ? issue.plusDays(30) : req.dueDate();
-        return invoices.createQuote(req.merchantId(), invoices.nextNumber(req.merchantId(), "QTE"), null,
+        if (expiry.isBefore(issue)) {
+            throw ApiException.badRequest("invalid_argument", "Expiry date cannot be before issue date");
+        }
+        return invoices.createQuote(req.merchantId(), null, null,
                 req.customerName().strip(), blank(req.customerEmail()), blank(req.customerPhone()), issue, expiry,
                 lines(req), blank(req.notes()));
     }
@@ -72,7 +75,7 @@ public class InvoiceController {
         UUID merchantId = access.manage(QUOTE, quoteId);
         ledger.initializeStandardChartOfAccounts(merchantId);
         LocalDate due = req == null || req.dueDate() == null ? LocalDate.now().plusDays(14) : req.dueDate();
-        return invoices.convertQuoteToInvoice(merchantId, quoteId, invoices.nextNumber(merchantId, "INV"), due);
+        return invoices.convertQuoteToInvoice(merchantId, quoteId, null, due);
     }
 
     public enum PaymentMethod { CASH, BANK, MOMO }
@@ -93,14 +96,26 @@ public class InvoiceController {
     private static void validate(DocumentRequest req) {
         if (req.customerName() == null || req.customerName().isBlank())
             throw ApiException.badRequest("customer_required", "Customer name is required");
+        if (req.customerName().strip().length() > 128)
+            throw ApiException.badRequest("invalid_argument", "Customer name must not exceed 128 characters");
+        if (req.customerEmail() != null && req.customerEmail().strip().length() > 128)
+            throw ApiException.badRequest("invalid_argument", "Customer email must not exceed 128 characters");
+        if (req.customerPhone() != null && req.customerPhone().strip().length() > 32)
+            throw ApiException.badRequest("invalid_argument", "Customer phone must not exceed 32 characters");
+        if (req.customerTin() != null && req.customerTin().strip().length() > 32)
+            throw ApiException.badRequest("invalid_argument", "Customer TIN must not exceed 32 characters");
         if (req.items() == null || req.items().isEmpty())
             throw ApiException.badRequest("items_required", "Add at least one line");
         for (Line l : req.items()) {
             if (l.description() == null || l.description().isBlank() || l.unitPricePesewas() <= 0
                     || (l.quantity() != null && l.quantity().signum() <= 0))
                 throw ApiException.badRequest("line_invalid", "Every line needs a description, a positive quantity and price");
+            if (l.description().strip().length() > 255)
+                throw ApiException.badRequest("invalid_argument", "Item description must not exceed 255 characters");
             if (l.taxRateBps() != null && (l.taxRateBps() < 0 || l.taxRateBps() > 10_000))
                 throw ApiException.badRequest("tax_invalid", "Tax rate must be between 0% and 100%");
+            if (l.discountPesewas() != null && l.discountPesewas() < 0)
+                throw ApiException.badRequest("invalid_argument", "Line discount cannot be negative");
         }
     }
 

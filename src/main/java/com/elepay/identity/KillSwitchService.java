@@ -77,6 +77,7 @@ public class KillSwitchService {
     private final Map<UUID, String> merchantFrozenBy = new ConcurrentHashMap<>();
     private final Map<String, Boolean> moduleStates = new ConcurrentHashMap<>();
     private final Map<String, String> moduleChangedBy = new ConcurrentHashMap<>();
+    private final Map<String, String> moduleDisabledBy = new ConcurrentHashMap<>();
     private volatile boolean controlsUnreadable = false;
     private volatile boolean redisObservedHealthy = false;
 
@@ -133,8 +134,16 @@ public class KillSwitchService {
         try {
             db.sql("SELECT module_key, enabled, updated_by FROM module_kill_switch")
                     .query((rs, i) -> {
-                        moduleStates.put(rs.getString(1), rs.getBoolean(2));
-                        moduleChangedBy.put(rs.getString(1), rs.getString(3));
+                        String key = rs.getString(1);
+                        boolean enabled = rs.getBoolean(2);
+                        String updatedBy = rs.getString(3);
+                        moduleStates.put(key, enabled);
+                        if (updatedBy != null) {
+                            moduleChangedBy.put(key, updatedBy);
+                            if (!enabled) {
+                                moduleDisabledBy.put(key, updatedBy);
+                            }
+                        }
                         return 1;
                     }).list();
             var global = db.sql("""
@@ -163,6 +172,21 @@ public class KillSwitchService {
     public String globalFrozenBy() { return globalFrozenBy; }
 
     public String merchantFrozenBy(UUID merchantId) { return merchantFrozenBy.get(merchantId); }
+
+    public String moduleDisabledBy(String moduleKey) {
+        if (moduleKey == null) return null;
+        String key = moduleKey.toLowerCase(Locale.ROOT);
+        String inMem = moduleDisabledBy.get(key);
+        if (inMem != null) return inMem;
+        if (db != null) {
+            return db.sql("SELECT updated_by FROM module_kill_switch WHERE module_key = :k AND enabled = false")
+                    .param("k", key)
+                    .query(String.class)
+                    .optional()
+                    .orElse(null);
+        }
+        return null;
+    }
 
     public record KillSwitchStatus(
             boolean globalFrozen,
@@ -212,7 +236,24 @@ public class KillSwitchService {
             writeRedis(REDIS_MODULE_PREFIX + "consumer-wallet", Boolean.toString(enabled));
             writeRedis(REDIS_MODULE_PREFIX + "consumer-w2w", Boolean.toString(enabled));
         }
-        moduleChangedBy.put(key, actor);
+        if (actor != null) {
+            moduleChangedBy.put(key, actor);
+        }
+        if (!enabled) {
+            if (actor != null) {
+                moduleDisabledBy.put(key, actor);
+                if ("consumer-wallet".equals(key) || "consumer-w2w".equals(key)) {
+                    moduleDisabledBy.put("consumer-wallet", actor);
+                    moduleDisabledBy.put("consumer-w2w", actor);
+                }
+            }
+        } else {
+            moduleDisabledBy.remove(key);
+            if ("consumer-wallet".equals(key) || "consumer-w2w".equals(key)) {
+                moduleDisabledBy.remove("consumer-wallet");
+                moduleDisabledBy.remove("consumer-w2w");
+            }
+        }
         if (db != null) {
             db.sql("""
                     INSERT INTO module_kill_switch (module_key, enabled, stage, reason, updated_by, updated_at)
@@ -446,6 +487,8 @@ public class KillSwitchService {
         globalFrozenBy = null;
         frozenMerchants.clear();
         merchantFrozenBy.clear();
+        moduleDisabledBy.clear();
+        moduleChangedBy.clear();
         controlsUnreadable = false;
         writeRedis(REDIS_GLOBAL_KEY, "false");
         deleteRedis(REDIS_MERCHANTS_KEY);

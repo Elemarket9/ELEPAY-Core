@@ -197,7 +197,7 @@ class ReconciliationServiceTest extends PostgresTestBase {
         assertThat(approveRes.status()).as("approveRes body=%s", approveRes.body()).isEqualTo(200);
         assertThat(approveRes.body().get("status").asString()).isEqualTo("CLEARED");
 
-        // Verify double-entry posting debited platform:suspense:usd (not platform:suspense:ghs or system:suspense:GHS)
+        // Verify double-entry posting debited system:suspense:USD (unified per-currency suspense account)
         var debitLeg = db.sql("""
                 SELECT la.code, je.amount FROM journal_entry je
                 JOIN ledger_account la ON je.account_id = la.id
@@ -207,7 +207,7 @@ class ReconciliationServiceTest extends PostgresTestBase {
                 .query((rs, i) -> Map.of("code", rs.getString(1), "amount", rs.getLong(2)))
                 .single();
 
-        assertThat(debitLeg.get("code")).isEqualTo("platform:suspense:usd");
+        assertThat(debitLeg.get("code")).isEqualTo("system:suspense:USD");
     }
 
     @Test

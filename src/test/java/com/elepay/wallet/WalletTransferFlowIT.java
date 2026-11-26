@@ -83,7 +83,7 @@ class WalletTransferFlowIT extends PostgresTestBase {
                 Map.of("rail", "wallet", "phone", rawLocalPhone));
         assertThat(lookupResp.status()).isEqualTo(200);
         assertThat(lookupResp.body().get("status").asString()).isEqualTo("verified");
-        assertThat(lookupResp.body().get("verifiedName").asString()).isEqualTo("Akua Serwaa");
+        assertThat(lookupResp.body().get("verifiedName").asString()).isEqualTo("Akua S***");
         String confirmationIdStr = lookupResp.body().get("confirmationId").asString();
         assertThat(confirmationIdStr).isNotNull();
         UUID confirmationId = UUID.fromString(confirmationIdStr);

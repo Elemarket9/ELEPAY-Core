@@ -42,7 +42,13 @@ class PayrollApiIT extends PostgresTestBase {
         assertThat(api.call("POST", "/v1/payroll/runs/" + runId + "/approve", owner, null, null).status())
                 .as("cannot approve before submission").isEqualTo(409);
         assertThat(api.call("POST", "/v1/payroll/runs/" + runId + "/submit", owner, null, null).status()).isEqualTo(200);
-        assertThat(api.call("POST", "/v1/payroll/runs/" + runId + "/approve", owner, null, null).status()).isEqualTo(200);
+        assertThat(api.call("POST", "/v1/payroll/runs/" + runId + "/approve", owner, null, null).status())
+                .as("submitter cannot self-approve payroll run").isEqualTo(403);
+        String checkerSub = "checker-" + s;
+        db.sql("INSERT INTO merchant_member (merchant_id, subject, role) VALUES (:m, :sub, 'owner')")
+                .param("m", merchant).param("sub", checkerSub).update();
+        String checker = api.token(checkerSub);
+        assertThat(api.call("POST", "/v1/payroll/runs/" + runId + "/approve", checker, null, null).status()).isEqualTo(200);
 
         var fake = api.call("POST", "/v1/payroll/runs/" + runId + "/payout", owner, null, Map.of("payoutBatchReference", "PAYOUT-PR-123456"));
         assertThat(fake.status()).isEqualTo(422);

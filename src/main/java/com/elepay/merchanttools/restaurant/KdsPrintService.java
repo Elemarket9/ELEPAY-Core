@@ -121,31 +121,88 @@ public class KdsPrintService {
         return db.sql(JOB + " WHERE j.id = :id").param("id", id).query(PrintJob.class).optional();
     }
 
+    public UUID printJobBranchId(UUID jobId) {
+        return db.sql("""
+            SELECT COALESCE(s.branch_id, o.branch_id)
+            FROM restaurant_kds_print_job j
+            JOIN restaurant_kitchen_station s ON s.id = j.station_id
+            LEFT JOIN restaurant_kds_ticket t ON t.id = j.ticket_id
+            LEFT JOIN pos_order o ON o.id = t.order_id
+            WHERE j.id = :id
+            """)
+            .param("id", jobId)
+            .query(UUID.class)
+            .optional()
+            .orElse(null);
+    }
+
     /** Oldest printable job for this merchant, claimed by one device only (others skip it while locked). */
     @Transactional
     public Optional<PrintJob> claimNext(UUID merchantId, String deviceId) {
+        return claimNext(merchantId, deviceId, null);
+    }
+
+    /** Oldest printable job for this merchant (and branch if branch-scoped), claimed by one device only. */
+    @Transactional
+    public Optional<PrintJob> claimNext(UUID merchantId, String deviceId, UUID branchId) {
         if (deviceId == null || deviceId.isBlank() || deviceId.length() > 64)
             throw ApiException.badRequest("device_id_invalid", "Device id is required (max 64 characters)");
-        Optional<UUID> claimed = db.sql("""
-            UPDATE restaurant_kds_print_job
-            SET status = 'CLAIMED', claimed_by = :device, claimed_at = now(), attempts = attempts + 1
-            WHERE id = (
-                SELECT id FROM restaurant_kds_print_job
-                WHERE merchant_id = :m
-                  AND (status = 'PENDING'
-                       OR (status = 'CLAIMED' AND claimed_at < now() - make_interval(secs => :timeout)))
-                ORDER BY created_at
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED)
-            RETURNING id
-            """).param("device", deviceId).param("m", merchantId).param("timeout", CLAIM_TIMEOUT_SECONDS)
-                .query(UUID.class).optional();
+        Optional<UUID> claimed;
+        if (branchId == null) {
+            claimed = db.sql("""
+                UPDATE restaurant_kds_print_job
+                SET status = 'CLAIMED', claimed_by = :device, claimed_at = now(), attempts = attempts + 1
+                WHERE id = (
+                    SELECT id FROM restaurant_kds_print_job
+                    WHERE merchant_id = :m
+                      AND (status = 'PENDING'
+                           OR (status = 'CLAIMED' AND claimed_at < now() - make_interval(secs => :timeout)))
+                    ORDER BY created_at
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED)
+                RETURNING id
+                """).param("device", deviceId).param("m", merchantId).param("timeout", CLAIM_TIMEOUT_SECONDS)
+                    .query(UUID.class).optional();
+        } else {
+            claimed = db.sql("""
+                UPDATE restaurant_kds_print_job
+                SET status = 'CLAIMED', claimed_by = :device, claimed_at = now(), attempts = attempts + 1
+                WHERE id = (
+                    SELECT j.id
+                    FROM restaurant_kds_print_job j
+                    JOIN restaurant_kitchen_station s ON s.id = j.station_id
+                    LEFT JOIN restaurant_kds_ticket t ON t.id = j.ticket_id
+                    LEFT JOIN pos_order o ON o.id = t.order_id
+                    WHERE j.merchant_id = :m
+                      AND COALESCE(s.branch_id, o.branch_id) = :branchId
+                      AND (j.status = 'PENDING'
+                           OR (j.status = 'CLAIMED' AND j.claimed_at < now() - make_interval(secs => :timeout)))
+                    ORDER BY j.created_at
+                    LIMIT 1
+                    FOR UPDATE OF j SKIP LOCKED)
+                RETURNING id
+                """).param("device", deviceId).param("m", merchantId).param("branchId", branchId)
+                    .param("timeout", CLAIM_TIMEOUT_SECONDS)
+                    .query(UUID.class).optional();
+        }
         return claimed.flatMap(this::get);
     }
 
     /** Device reports the outcome. Repeated or late reports from another device change nothing. */
     @Transactional
     public PrintJob report(UUID jobId, String deviceId, boolean printed, String error) {
+        return report(jobId, deviceId, printed, error, null);
+    }
+
+    /** Device reports the outcome, validating branch ownership when the caller is branch-scoped. */
+    @Transactional
+    public PrintJob report(UUID jobId, String deviceId, boolean printed, String error, UUID callerBranchId) {
+        if (callerBranchId != null) {
+            UUID jobBranchId = printJobBranchId(jobId);
+            if (!callerBranchId.equals(jobBranchId)) {
+                throw ApiException.forbidden("Print job does not belong to your branch");
+            }
+        }
         if (printed) {
             db.sql("""
                 UPDATE restaurant_kds_print_job SET status = 'PRINTED', printed_at = now(), last_error = NULL

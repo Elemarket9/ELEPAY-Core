@@ -71,9 +71,16 @@ public class FxPricingService {
 
         MarginTier tier = resolveMarginTier(corridorCode, customerTier, sourceAmount);
         int marginBps = (tier != null) ? tier.marginBps() : defaultFeeBps;
+        if (marginBps < 0 || marginBps >= 10_000) {
+            throw ApiException.badRequest("invalid_margin", "Margin basis points must be between 0 and 9999");
+        }
         long fixedFee = (tier != null && tier.fixedFee() > 0) ? tier.fixedFee() : defaultFixedFee;
-        long variableFee = Math.multiplyExact(sourceAmount, marginBps) / 10_000;
-        long totalFee = Math.addExact(fixedFee, variableFee);
+        if (fixedFee < 0) {
+            throw ApiException.badRequest("invalid_fee", "Fixed fee must be non-negative");
+        }
+        // Margin is applied once transparently in the FX spread (effectiveRate), not double-charged as a variable fee.
+        long variableFee = 0L;
+        long totalFee = fixedFee;
 
         // Effective client rate applies a margin deduction on outbound conversion
         BigDecimal marginFactor = BigDecimal.valueOf(10_000 - marginBps).divide(BigDecimal.valueOf(10_000), MC);
@@ -82,11 +89,22 @@ public class FxPricingService {
         // Convert minor units with deterministic rounding down in customer's disfavour
         int srcExp = exponent(sourceCurrency);
         int dstExp = exponent(destinationCurrency);
-        long destinationAmount = new BigDecimal(sourceAmount)
+        BigDecimal converted = BigDecimal.valueOf(sourceAmount)
                 .multiply(effectiveRate)
-                .movePointRight(dstExp - srcExp)
-                .setScale(0, RoundingMode.DOWN)
-                .longValueExact();
+                .movePointRight(dstExp - srcExp);
+        if (converted.compareTo(BigDecimal.valueOf(Long.MAX_VALUE)) > 0) {
+            throw ApiException.badRequest("amount_overflow",
+                    "Converted destination amount exceeds maximum supported value");
+        }
+        long destinationAmount;
+        try {
+            destinationAmount = converted
+                    .setScale(0, RoundingMode.DOWN)
+                    .longValueExact();
+        } catch (ArithmeticException e) {
+            throw ApiException.badRequest("amount_overflow",
+                    "Converted destination amount exceeds maximum supported value");
+        }
 
         if (destinationAmount <= 0) {
             throw ApiException.badRequest("amount_too_small", "Amount is too small to convert to destination currency");

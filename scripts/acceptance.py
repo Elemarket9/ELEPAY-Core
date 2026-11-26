@@ -65,7 +65,7 @@ call("POST", "/v1/ops/customers", ops, {"subject": f"recipient-{RUN}", "phone": 
 sender = token(sender_subject)
 local = call("POST", "/v1/wallet/recipients/lookup", sender, {"rail": "wallet", "phone": "0" + recipient_phone[3:]})
 intl = call("POST", "/v1/wallet/recipients/lookup", sender, {"rail": "wallet", "phone": "+" + recipient_phone})
-assert local["verifiedName"] == intl["verifiedName"] == "Ama Mensah"
+assert local["verifiedName"] == intl["verifiedName"] == "Ama M***"
 print("Name confirmation: local and +233 formats show the same verified name")
 
 # ---- fund GH₵150 through a top-up and confirm through rail recovery --------------------------

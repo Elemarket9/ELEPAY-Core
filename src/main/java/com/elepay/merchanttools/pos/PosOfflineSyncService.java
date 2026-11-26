@@ -1,5 +1,9 @@
 package com.elepay.merchanttools.pos;
 
+import com.elepay.common.ApiException;
+import com.elepay.common.Idempotency;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -26,7 +30,9 @@ public class PosOfflineSyncService {
             String syncStatus,
             String conflictReason,
             String resolutionApplied,
-            OffsetDateTime syncedAt
+            OffsetDateTime syncedAt,
+            String payloadHash,
+            UUID serverOrderId
     ) {}
 
     public record OfflineOrderPayload(
@@ -64,7 +70,7 @@ public class PosOfflineSyncService {
     public Optional<OfflineSyncLog> findByTerminalAndIdempotencyKey(UUID terminalId, String idempotencyKey) {
         return db.sql("""
             SELECT id, terminal_id, offline_tx_id, idempotency_key, sync_status,
-                   conflict_reason, resolution_applied, synced_at
+                   conflict_reason, resolution_applied, synced_at, payload_hash, server_order_id
             FROM pos_offline_sync_log WHERE terminal_id = :terminalId AND idempotency_key = :key
             """)
             .param("terminalId", terminalId)
@@ -76,7 +82,7 @@ public class PosOfflineSyncService {
     public Optional<OfflineSyncLog> findByTerminalAndOfflineTxId(UUID terminalId, String offlineTxId) {
         return db.sql("""
             SELECT id, terminal_id, offline_tx_id, idempotency_key, sync_status,
-                   conflict_reason, resolution_applied, synced_at
+                   conflict_reason, resolution_applied, synced_at, payload_hash, server_order_id
             FROM pos_offline_sync_log WHERE terminal_id = :terminalId AND offline_tx_id = :offlineTxId
             """)
             .param("terminalId", terminalId)
@@ -85,19 +91,55 @@ public class PosOfflineSyncService {
             .optional();
     }
 
+    static String computePayloadHash(OfflineOrderPayload payload) {
+        return Idempotency.hash(payload);
+    }
+
     @Transactional
     public SyncResult syncOfflineOrder(OfflineOrderPayload payload) {
+        if (payload == null) {
+            throw ApiException.badRequest("invalid_argument", "Offline sync payload is required");
+        }
+        if (payload.terminalId() == null) {
+            throw ApiException.badRequest("invalid_argument", "terminalId is required");
+        }
+        if (payload.idempotencyKey() == null || payload.idempotencyKey().isBlank()) {
+            throw ApiException.badRequest("invalid_argument", "idempotencyKey is required");
+        }
+        if (payload.offlineTxId() == null || payload.offlineTxId().isBlank()) {
+            throw ApiException.badRequest("invalid_argument", "offlineTxId is required");
+        }
+        if (payload.items() == null || payload.items().isEmpty()) {
+            throw ApiException.badRequest("invalid_argument", "Order items are required");
+        }
+
+        // Serialize concurrent retries for the same (terminal_id, idempotency_key)
+        db.sql("SELECT pg_advisory_xact_lock(hashtextextended('pos-sync:' || :t || ':' || :k, 0))")
+                .param("t", payload.terminalId().toString())
+                .param("k", payload.idempotencyKey())
+                .query((rs, n) -> 1)
+                .single();
+
+        String payloadHash = computePayloadHash(payload);
+
         // 1. Idempotency check: duplicate sync rejection/return scoped by (terminal_id, idempotency_key) or (terminal_id, offline_tx_id)
         Optional<OfflineSyncLog> existingLog = findByTerminalAndIdempotencyKey(payload.terminalId(), payload.idempotencyKey())
                 .or(() -> findByTerminalAndOfflineTxId(payload.terminalId(), payload.offlineTxId()));
         if (existingLog.isPresent()) {
+            OfflineSyncLog existing = existingLog.get();
+            if (existing.payloadHash() != null
+                    && !MessageDigest.isEqual(
+                            existing.payloadHash().getBytes(StandardCharsets.UTF_8),
+                            payloadHash.getBytes(StandardCharsets.UTF_8))) {
+                throw ApiException.idempotencyConflict();
+            }
             return new SyncResult(
                     payload.offlineTxId(),
                     payload.idempotencyKey(),
-                    existingLog.get().syncStatus(),
-                    null,
-                    existingLog.get().resolutionApplied(),
-                    "Already processed under idempotency key " + existingLog.get().idempotencyKey()
+                    existing.syncStatus(),
+                    existing.serverOrderId(),
+                    existing.resolutionApplied(),
+                    "Already processed under idempotency key " + existing.idempotencyKey()
             );
         }
 
@@ -131,10 +173,12 @@ public class PosOfflineSyncService {
                 db.sql("""
                     INSERT INTO pos_offline_sync_log (
                         id, terminal_id, offline_tx_id, idempotency_key,
-                        sync_status, conflict_reason, resolution_applied, synced_at
+                        sync_status, conflict_reason, resolution_applied, synced_at,
+                        payload_hash, server_order_id
                     ) VALUES (
                         :id, :terminalId, :offlineTxId, :idempotencyKey,
-                        'REJECTED', :reason, 'REJECT_FLAGGED', now()
+                        'REJECTED', :reason, 'REJECT_FLAGGED', now(),
+                        :payloadHash, NULL
                     )
                     """)
                     .param("id", logId)
@@ -142,6 +186,7 @@ public class PosOfflineSyncService {
                     .param("offlineTxId", payload.offlineTxId())
                     .param("idempotencyKey", payload.idempotencyKey())
                     .param("reason", "Total mismatch: payload=" + payload.totalPesewas() + ", expected=" + expectedTotal)
+                    .param("payloadHash", payloadHash)
                     .update();
 
                 return new SyncResult(payload.offlineTxId(), payload.idempotencyKey(), "REJECTED", null, "REJECT_FLAGGED", "Offline sync rejected due to calculation mismatch");
@@ -188,10 +233,12 @@ public class PosOfflineSyncService {
         db.sql("""
             INSERT INTO pos_offline_sync_log (
                 id, terminal_id, offline_tx_id, idempotency_key,
-                sync_status, conflict_reason, resolution_applied, synced_at
+                sync_status, conflict_reason, resolution_applied, synced_at,
+                payload_hash, server_order_id
             ) VALUES (
                 :id, :terminalId, :offlineTxId, :idempotencyKey,
-                :syncStatus, :conflictReason, :resolutionApplied, now()
+                :syncStatus, :conflictReason, :resolutionApplied, now(),
+                :payloadHash, :serverOrderId
             )
             """)
             .param("id", logId)
@@ -201,6 +248,8 @@ public class PosOfflineSyncService {
             .param("syncStatus", syncStatus)
             .param("conflictReason", conflictReason)
             .param("resolutionApplied", resolutionApplied)
+            .param("payloadHash", payloadHash)
+            .param("serverOrderId", order.id())
             .update();
 
         return new SyncResult(payload.offlineTxId(), payload.idempotencyKey(), syncStatus, order.id(), resolutionApplied, "Successfully synced");

@@ -206,7 +206,7 @@ public class DeveloperService {
         }
         var ep = Map.of("id", e.id().toString(), "url", e.url(), "secret", e.secret());
 
-        String eventId = UUID.randomUUID().toString();
+        UUID pingEventId = UUID.randomUUID();
         String payload = """
                 {
                   "id": "%s",
@@ -216,9 +216,9 @@ public class DeveloperService {
                     "merchantId": "%s",
                     "message": "ELEPAY Webhook connectivity test"
                   }
-                }""".formatted(eventId, OffsetDateTime.now(), merchantId);
+                }""".formatted(pingEventId, OffsetDateTime.now(), merchantId);
 
-        return executeAndLogDelivery(merchantId, UUID.fromString(ep.get("id")), UUID.fromString(eventId),
+        return executeAndLogDelivery(merchantId, UUID.fromString(ep.get("id")), null, pingEventId,
                 "ping", ep.get("url"), ep.get("secret"), payload, false);
     }
 
@@ -300,24 +300,28 @@ public class DeveloperService {
         audit.record(replayedBy, "developer.webhook_delivery_replayed", "merchant:" + merchantId,
                 Map.of("originalLogId", logId.toString(), "endpointId", old.endpointId().toString()));
 
-        return executeAndLogDelivery(merchantId, old.endpointId(), old.eventId(), old.eventType(),
+        UUID headerEventId = old.eventId() != null ? old.eventId() : UUID.randomUUID();
+        return executeAndLogDelivery(merchantId, old.endpointId(), old.eventId(), headerEventId, old.eventType(),
                 old.requestUrl(), ep, old.requestPayload(), true);
     }
 
-    private ReplayResult executeAndLogDelivery(UUID merchantId, UUID endpointId, UUID eventId,
+    private ReplayResult executeAndLogDelivery(UUID merchantId, UUID endpointId, UUID eventId, UUID headerEventId,
                                                String eventType, String url, String secret,
                                                String payload, boolean isManualRetry) {
         long t = System.currentTimeMillis() / 1000;
         String signature = "t=" + t + ",v1=" + Webhooks.sign(secret, t + "." + payload);
         UUID logId = UUID.randomUUID();
         UUID deliveryId = UUID.randomUUID();
+        UUID effectiveHeaderEventId = headerEventId != null
+                ? headerEventId
+                : (eventId != null ? eventId : UUID.randomUUID());
 
         String reqHeadersJson = """
                 {
                   "Content-Type": "application/json",
                   "Elepay-Event-Id": "%s",
                   "Elepay-Signature": "%s"
-                }""".formatted(eventId, signature);
+                }""".formatted(effectiveHeaderEventId, signature);
 
         long start = System.currentTimeMillis();
         Integer statusCode = null;
@@ -328,7 +332,7 @@ public class DeveloperService {
             responseBody = "Blocked destination: " + unsafe;
             statusCode = 400;
         } else try {
-            statusCode = webhooks.sendSigned(url, eventId, signature, payload);
+            statusCode = webhooks.sendSigned(url, effectiveHeaderEventId, signature, payload);
             responseBody = "Receiver returned HTTP " + statusCode;
             if (statusCode >= 200 && statusCode < 300) {
                 status = "DELIVERED";

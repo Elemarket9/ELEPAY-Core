@@ -36,7 +36,7 @@ class LargePayoutHandler implements ApprovedActionHandler {
             UUID merchant = UUID.fromString(String.valueOf(payload.get("merchantId")));
             String key = String.valueOf(payload.get("idempotencyKey"));
             MerchantPayouts.BatchInput batchInput = json.convertValue(payload.get("request"), MerchantPayouts.BatchInput.class);
-            payouts.executeBatch(merchant, key, batchInput, proposal.reviewedBy());
+            payouts.executeBatch(merchant, key, batchInput, proposal.reviewedBy(), true);
             return;
         }
         if (payload.get("destinationId") == null) return;
@@ -44,6 +44,6 @@ class LargePayoutHandler implements ApprovedActionHandler {
         long amount = payload.get("amount") instanceof Number n ? n.longValue() : Long.parseLong(String.valueOf(payload.get("amount")));
         UUID destination = UUID.fromString(String.valueOf(payload.get("destinationId")));
         String key = String.valueOf(payload.get("idempotencyKey"));
-        payouts.executeWithdrawal(merchant, key, new MerchantPayouts.Withdrawal(amount, destination), proposal.reviewedBy());
+        payouts.executeWithdrawal(merchant, key, new MerchantPayouts.Withdrawal(amount, destination), proposal.reviewedBy(), true);
     }
 }

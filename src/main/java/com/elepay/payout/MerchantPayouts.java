@@ -94,6 +94,11 @@ public class MerchantPayouts {
     }
 
     public Payouts.Batch executeWithdrawal(UUID merchantId, String key, Withdrawal request, String actor) {
+        return executeWithdrawal(merchantId, key, request, actor, false);
+    }
+
+    Payouts.Batch executeWithdrawal(UUID merchantId, String key, Withdrawal request, String actor,
+                                    boolean makerCheckerApproved) {
         Payouts.Batch batch = tx.execute(s -> idempotency.execute("merchant-withdrawal:" + merchantId, key, request,
                 Payouts.Batch.class, () -> {
                     var dest = access.activeDestination(merchantId, request.destinationId())
@@ -114,7 +119,7 @@ public class MerchantPayouts {
                             "withdrawal-" + key, request.amount(),
                             new Payouts.Destination(dest.type(), dest.network(), dest.accountNumber(), dest.accountName()),
                             null, dest.verifiedName())),
-                            null, actor);
+                            null, actor, makerCheckerApproved);
                 }));
         submitAfterCommit(batch.id());
         return payouts.batch(batch.id());
@@ -181,6 +186,11 @@ public class MerchantPayouts {
     }
 
     public Payouts.Batch executeBatch(UUID merchantId, String key, BatchInput request, String actor) {
+        return executeBatch(merchantId, key, request, actor, false);
+    }
+
+    Payouts.Batch executeBatch(UUID merchantId, String key, BatchInput request, String actor,
+                               boolean makerCheckerApproved) {
         if (enforceBatchDestinationAllowlist) {
             validateBatchDestinations(merchantId, request.items());
         }
@@ -188,7 +198,7 @@ public class MerchantPayouts {
                 Payouts.Batch.class, () -> payouts.create("merchant", merchantId, request.items().stream()
                         .map(i -> new Payouts.Item(i.reference(), i.amount(),
                                 new Payouts.Destination(i.type(), i.network(), i.accountNumber(), i.accountName()),
-                                i.platform(), null)).toList(), request.description(), actor)));
+                                i.platform(), null)).toList(), request.description(), actor, makerCheckerApproved)));
         submitAfterCommit(batch.id());
         return payouts.batch(batch.id());
     }
@@ -221,11 +231,30 @@ public class MerchantPayouts {
                         || p.clientReference().startsWith("auto-withdrawal-"))).toList();
     }
 
+    private MerchantAccess.Access requireWithdrawOrPayout(UUID merchantId) {
+        try {
+            return access.require(merchantId, WITHDRAW);
+        } catch (ApiException withdrawDenied) {
+            if (withdrawDenied.status() == org.springframework.http.HttpStatus.FORBIDDEN
+                    || (withdrawDenied.status() == org.springframework.http.HttpStatus.NOT_FOUND
+                        && com.elepay.identity.Actor.current().isApiKey())) {
+                return access.require(merchantId, PAYOUT);
+            }
+            throw withdrawDenied;
+        }
+    }
+
     @PostMapping("/payouts/{reference}/retry")
     public Payouts.Batch retry(@PathVariable UUID merchantId, @PathVariable String reference,
                                @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-        // Authorize caller against merchant BEFORE looking up payout to avoid cross-tenant existence oracle.
-        access.require(merchantId, VIEW);
+        // Authorize caller for WITHDRAW or PAYOUT BEFORE looking up payout to avoid both
+        // cross-tenant (404) and intra-tenant VIEW-only (403) existence oracles.
+        var preAuth = requireWithdrawOrPayout(merchantId);
+        if (preAuth.actor().isApiKey() && !preAuth.actor().isPayoutKey()) {
+            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                    "payout_key_required",
+                    "Secret keys (sk_live) cannot initiate payouts or withdrawals alone; use a dedicated payout_live key");
+        }
         if (key == null || key.isBlank()) {
             throw ApiException.badRequest("missing_idempotency_key", "Idempotency-Key header is required");
         }
@@ -245,11 +274,6 @@ public class MerchantPayouts {
         String clientRef = row.clientRef() == null ? "" : row.clientRef();
         boolean isWithdrawal = clientRef.contains("withdrawal-");
         var a = access.require(merchantId, isWithdrawal ? WITHDRAW : PAYOUT);
-        if (a.actor().isApiKey() && !a.actor().isPayoutKey()) {
-            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
-                    "payout_key_required",
-                    "Secret keys (sk_live) cannot initiate payouts or withdrawals alone; use a dedicated payout_live key");
-        }
         if (isWithdrawal || enforceBatchDestinationAllowlist || a.actor().isApiKey()) {
             validateDestinationAllowlist(merchantId, row.type(), row.network(), row.accountNumber(),
                     row.accountName(), java.time.OffsetDateTime.now());

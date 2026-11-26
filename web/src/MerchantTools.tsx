@@ -1089,12 +1089,12 @@ export function CustomersAndLoyalty({ merchantId }: { merchantId: string }) {
       if (action.kind === "purchase") {
         const amount = money(action.value);
         if (!amount) { setError("Enter the purchase amount"); return; }
-        const r = await api<{ pointsDelta: number; newPointsBalance: number }>(`/v1/customers/${action.customer.id}/purchases`, { body: { amountPesewas: amount } });
+        const r = await api<{ pointsDelta: number; newPointsBalance: number }>(`/v1/customers/${action.customer.id}/purchases`, { body: { amountPesewas: amount }, idempotencyKey: newKey() });
         setNotice(`${action.customer.fullName} earned ${r.pointsDelta} points (now ${r.newPointsBalance}).`);
       } else {
         const points = Number(action.value);
         if (!Number.isInteger(points) || points <= 0) { setError("Enter whole points to redeem"); return; }
-        const r = await api<{ newPointsBalance: number; monetaryEquivalentPesewas: number }>(`/v1/customers/${action.customer.id}/redeem`, { body: { points } });
+        const r = await api<{ newPointsBalance: number; monetaryEquivalentPesewas: number }>(`/v1/customers/${action.customer.id}/redeem`, { body: { points }, idempotencyKey: newKey() });
         setNotice(`Redeemed ${points} points (worth ${formatMoney(r.monetaryEquivalentPesewas)} off). ${r.newPointsBalance} points left.`);
       }
       setAction(null); await reload();

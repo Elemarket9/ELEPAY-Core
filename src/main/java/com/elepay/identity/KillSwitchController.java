@@ -171,11 +171,17 @@ public class KillSwitchController {
             // Re-enabling a killed module is an ops_admin action regardless of dual-control mode,
             // matching global/merchant unfreeze.
             actor.requireOpsAdmin();
-        }
-        if (enabled && dualControl) {
-            propose("MODULE_ENABLE", "module", moduleKey, null,
-                    Map.of("target", "module", "module", moduleKey, "frozen", false),
-                    reason, actor.subject());
+            String disabler = killSwitchService.moduleDisabledBy(moduleKey);
+            if (disabler != null && disabler.equals(actor.subject())) {
+                throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                        "maker_checker_self_approval",
+                        "Dual control violation: the operator who disabled this module cannot re-enable it");
+            }
+            if (dualControl) {
+                propose("MODULE_ENABLE", "module", moduleKey, null,
+                        Map.of("target", "module", "module", moduleKey, "frozen", false),
+                        reason, actor.subject());
+            }
         }
         killSwitchService.setModuleEnabled(moduleKey, enabled, reason, actor.subject());
         return Map.of(

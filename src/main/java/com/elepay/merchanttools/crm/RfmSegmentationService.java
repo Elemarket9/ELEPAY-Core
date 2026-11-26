@@ -1,5 +1,6 @@
 package com.elepay.merchanttools.crm;
 
+import com.elepay.common.ApiException;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -96,6 +97,10 @@ public class RfmSegmentationService {
      */
     @Transactional
     public RfmScores recordCustomerPurchase(UUID customerId, long purchaseAmountPesewas) {
+        if (purchaseAmountPesewas < 0) {
+            throw ApiException.badRequest("invalid_argument", "Purchase amount cannot be negative");
+        }
+
         var customer = db.sql("""
             SELECT id, total_spend_pesewas, transaction_count
             FROM crm_customer WHERE id = ? FOR UPDATE
@@ -105,8 +110,14 @@ public class RfmSegmentationService {
                 rs.getInt("transaction_count")
         }).single();
 
-        long newSpend = ((Long) customer[0]) + purchaseAmountPesewas;
-        int newCount = ((Integer) customer[1]) + 1;
+        long newSpend;
+        int newCount;
+        try {
+            newSpend = Math.addExact((Long) customer[0], purchaseAmountPesewas);
+            newCount = Math.addExact((Integer) customer[1], 1);
+        } catch (ArithmeticException e) {
+            throw ApiException.badRequest("amount_overflow", "Customer total spend exceeds maximum supported value");
+        }
         OffsetDateTime now = OffsetDateTime.now();
 
         RfmScores rfm = calculateRfm(now, newCount, newSpend);

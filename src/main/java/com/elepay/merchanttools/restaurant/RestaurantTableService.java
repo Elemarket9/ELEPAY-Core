@@ -63,6 +63,9 @@ public class RestaurantTableService {
 
     @Transactional
     public RestaurantTable createTable(UUID merchantId, UUID sectionId, String tableNumber, int capacity) {
+        if (capacity <= 0) {
+            throw new IllegalArgumentException("Table capacity must be positive");
+        }
         UUID id = UUID.randomUUID();
         db.sql("""
             INSERT INTO restaurant_table (id, merchant_id, section_id, table_number, capacity, status)
@@ -76,6 +79,19 @@ public class RestaurantTableService {
             .update();
 
         return getTable(id).orElseThrow();
+    }
+
+    public UUID tableBranchId(UUID tableId) {
+        return db.sql("""
+            SELECT COALESCE(t.waiter_branch_id, o.branch_id)
+            FROM restaurant_table t
+            LEFT JOIN pos_order o ON o.id = t.current_order_id
+            WHERE t.id = :id
+            """)
+            .param("id", tableId)
+            .query(UUID.class)
+            .optional()
+            .orElse(null);
     }
 
     public Optional<RestaurantTable> getTable(UUID id) {

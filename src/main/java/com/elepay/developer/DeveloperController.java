@@ -79,6 +79,7 @@ public class DeveloperController {
             @PathVariable UUID merchantId,
             @RequestParam(required = false) String environment
     ) {
+        Actor.current().requireUser();
         return service.listApiKeys(merchantId, environment);
     }
 
@@ -123,6 +124,7 @@ public class DeveloperController {
             @PathVariable UUID merchantId,
             @RequestParam(required = false) String environment
     ) {
+        Actor.current().requireUser();
         return service.listWebhooks(merchantId, environment);
     }
 
@@ -167,6 +169,7 @@ public class DeveloperController {
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "50") int limit
     ) {
+        Actor.current().requireUser();
         int safeLimit = Math.max(1, Math.min(limit, 200));
         return service.listDeliveryLogs(merchantId, endpointId, status, safeLimit);
     }
@@ -176,6 +179,7 @@ public class DeveloperController {
             @PathVariable UUID merchantId,
             @PathVariable UUID logId
     ) {
+        Actor.current().requireUser();
         return service.getDeliveryLog(merchantId, logId);
     }
 
@@ -185,6 +189,7 @@ public class DeveloperController {
             @PathVariable UUID logId
     ) {
         Actor actor = Actor.current();
+        actor.requireUser();
         return service.replayDelivery(merchantId, logId, actor.subject());
     }
 
@@ -238,6 +243,7 @@ public class DeveloperController {
 
     @GetMapping("/merchants/{merchantId}/certifications")
     public List<DeveloperService.PartnerCertificationView> listCertifications(@PathVariable UUID merchantId) {
+        Actor.current().requireUser();
         return service.listCertifications(merchantId);
     }
 
@@ -247,6 +253,7 @@ public class DeveloperController {
             @PathVariable UUID certId
     ) {
         Actor actor = Actor.current();
+        actor.requireUser();
         return service.runCertificationTests(merchantId, certId, actor.subject());
     }
 }

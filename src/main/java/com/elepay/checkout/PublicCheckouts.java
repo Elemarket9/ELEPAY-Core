@@ -130,6 +130,8 @@ class PublicCheckouts {
             if (request.network() == null || !NETWORKS.contains(request.network())) {
                 throw ApiException.badRequest("invalid_network", "Choose mtn, telecel or airteltigo");
             }
+        } else if (request.phone() != null && !request.phone().isBlank()) {
+            msisdn = References.msisdn(request.phone());
         }
         String phone = msisdn;
         int attempts = payAttempts.computeIfAbsent(reference, r -> new AtomicInteger()).incrementAndGet();

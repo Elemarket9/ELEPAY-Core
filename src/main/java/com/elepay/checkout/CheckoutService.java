@@ -410,6 +410,15 @@ class CheckoutService {
         if (c.status().equals("processing")) {
             throw ApiException.conflict("payment_in_progress", "Another payment for this checkout is in progress");
         }
+        String boundPhone = db.sql("SELECT payer_phone FROM checkout WHERE reference = :r")
+                .param("r", reference).query(String.class).optional().orElse(null);
+        if (boundPhone != null) {
+            String customerPhone = customers.phoneOf(customer).orElse(null);
+            if (customerPhone == null || !boundPhone.equals(customerPhone)) {
+                throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                        "payer_phone_mismatch", "This checkout is bound to a different phone number");
+            }
+        }
         long fee = customerFee("wallet", c.subtotal());
         long total = Math.addExact(c.subtotal(), fee);
         if (transferLimits != null) {
@@ -441,8 +450,9 @@ class CheckoutService {
         if (current.status().equals("paid")) return status(reference);
         String boundPhone = db.sql("SELECT payer_phone FROM checkout WHERE reference = :r")
                 .param("r", reference).query(String.class).optional().orElse(null);
-        if (boundPhone != null && msisdn != null && !boundPhone.equals(msisdn)) {
-            throw ApiException.badRequest("payer_mismatch", "This checkout is bound to a different phone number");
+        if (boundPhone != null && (msisdn == null || !boundPhone.equals(msisdn))) {
+            throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                    "payer_phone_mismatch", "This checkout is bound to a different phone number");
         }
         var inFlight = db.sql("SELECT id FROM payment_attempt WHERE checkout_id = :c AND status = 'pending'")
                 .param("c", current.id()).query(UUID.class).optional();
@@ -878,11 +888,12 @@ class CheckoutService {
                 .param("c", c.id()).param("l", line).update();
         db.sql("""
                 INSERT INTO dispute (id, checkout_id, line, amount, reason, status, hold_tx, rail_case, opened_by,
-                    seller_part, fee_part, platform_part)
-                VALUES (:id, :c, :l, :amount, :reason, 'open', :tx, :case, :by, :seller, :fee, :platform)""")
+                    seller_part, seller_reserved_part, fee_part, platform_part)
+                VALUES (:id, :c, :l, :amount, :reason, 'open', :tx, :case, :by, :seller, :sellerReserved, :fee, :platform)""")
                 .param("id", id).param("c", c.id()).param("l", line).param("amount", amount).param("reason", reason)
                 .param("tx", hold.transactionId()).param("case", providerCase).param("by", actor)
-                .param("seller", t.seller()).param("fee", t.fee()).param("platform", t.platform()).update();
+                .param("seller", t.seller()).param("sellerReserved", t.sellerFromReserved())
+                .param("fee", t.fee()).param("platform", t.platform()).update();
         audit.record(actor, "dispute.opened", "checkout:" + reference, Map.of("line", line, "amount", amount));
         outbox.publish("dispute", id, "dispute.opened", Map.of("dispute", id.toString(), "checkout", reference,
                 "line", line, "amount", amount), setOf(a.merchantId(), c.collectorId()));
@@ -892,12 +903,12 @@ class CheckoutService {
 
     @Transactional
     Dispute resolveDispute(String actor, UUID id, String outcome, String note) {
-        record Held(UUID checkout, int line, long amount, String status, long seller, long fee, long platform) {}
+        record Held(UUID checkout, int line, long amount, String status, long seller, long sellerReserved, long fee, long platform) {}
         Held d = db.sql("""
-                SELECT d.checkout_id, d.line, d.amount, d.status, d.seller_part, d.fee_part, d.platform_part
+                SELECT d.checkout_id, d.line, d.amount, d.status, d.seller_part, d.seller_reserved_part, d.fee_part, d.platform_part
                 FROM dispute d WHERE d.id = :id FOR UPDATE""").param("id", id)
                 .query((rs, i) -> new Held(rs.getObject(1, UUID.class), rs.getInt(2), rs.getLong(3), rs.getString(4),
-                        rs.getLong(5), rs.getLong(6), rs.getLong(7)))
+                        rs.getLong(5), rs.getLong(6), rs.getLong(7), rs.getLong(8)))
                 .optional().orElseThrow(() -> ApiException.notFound("Dispute not found"));
         if (!d.status().equals("open")) throw ApiException.conflict("dispute_closed", "Dispute is already resolved");
         if (!Set.of("merchant_won", "customer_won").contains(outcome)) {
@@ -919,8 +930,12 @@ class CheckoutService {
         UUID refundId = null;
         if (outcome.equals("merchant_won")) {
             // Each party gets back exactly what the hold took, into the bucket the line is now in.
+            // Any portion originally pulled from the rolling reserve must return to reserved, not pending/available.
             boolean pending = !settled && !legacy;
-            if (seller > 0) legs.add(Leg.credit(Ledger.code("merchant", a.merchantId(), pending ? "pending" : "available", Ledger.GHS), seller));
+            long sellerReserved = legacy ? 0L : Math.min(seller, Math.max(0L, d.sellerReserved()));
+            long sellerNonReserved = seller - sellerReserved;
+            if (sellerReserved > 0) legs.add(Leg.credit(reserved, sellerReserved));
+            if (sellerNonReserved > 0) legs.add(Leg.credit(Ledger.code("merchant", a.merchantId(), pending ? "pending" : "available", Ledger.GHS), sellerNonReserved));
             if (fee > 0) legs.add(Leg.credit(pending ? Ledger.DEFERRED_REVENUE : Ledger.REVENUE, fee));
             if (platform > 0) legs.add(Leg.credit(Ledger.code("merchant", c.collectorId(), pending ? "pending" : "available", Ledger.GHS), platform));
             db.sql("""
@@ -930,12 +945,19 @@ class CheckoutService {
                            pending_amount = pending_amount + :p, platform_pending = platform_pending + :pp,
                            fee_deferred = fee_deferred + :fd,
                            settled_amount = settled_amount + :sa, platform_settled = platform_settled + :ps,
-                           fee_recognized = fee_recognized + :fr
+                           fee_recognized = fee_recognized + :fr,
+                           reserve_released = greatest(reserve_released - :sr, 0),
+                           release_status = CASE
+                               WHEN :sr > 0 AND greatest(reserve_released - :sr, 0) = 0 THEN 'HELD'
+                               WHEN :sr > 0 AND greatest(reserve_released - :sr, 0) < reserve_amount THEN 'PARTIALLY_RELEASED'
+                               ELSE release_status
+                           END
                     WHERE checkout_id = :c AND line = :l""")
                     .param("amount", d.amount()).param("fee", legacy ? 0 : fee).param("platform", platform)
-                    .param("p", pending ? seller : 0).param("pp", pending ? platform : 0).param("fd", pending ? fee : 0)
-                    .param("sa", pending ? 0 : seller).param("ps", pending ? 0 : platform)
+                    .param("p", pending ? sellerNonReserved : 0).param("pp", pending ? platform : 0).param("fd", pending ? fee : 0)
+                    .param("sa", pending ? 0 : sellerNonReserved).param("ps", pending ? 0 : platform)
                     .param("fr", pending || legacy ? 0 : fee)
+                    .param("sr", sellerReserved)
                     .param("c", c.id()).param("l", a.line()).update();
         } else {
             boolean toWallet = "wallet".equals(c.paymentMethod());

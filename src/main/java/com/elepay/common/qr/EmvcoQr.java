@@ -55,7 +55,7 @@ public final class EmvcoQr {
      */
     public static String calculateCrc(String data) {
         int crc = 0xFFFF;
-        byte[] bytes = data.getBytes(StandardCharsets.ISO_8859_1);
+        byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
         for (byte b : bytes) {
             crc = ((crc << 8) & 0xFFFF) ^ CRC_TABLE[((crc >> 8) ^ (b & 0xFF)) & 0xFF];
         }
@@ -64,8 +64,46 @@ public final class EmvcoQr {
 
     public static String tlv(String tag, String value) {
         if (value == null) return "";
+        if (tag == null || tag.length() != 2 || !isTwoAsciiDigits(tag.getBytes(StandardCharsets.UTF_8), 0)) {
+            throw new IllegalArgumentException("EMVCo TLV tag must be 2 ASCII digits: " + tag);
+        }
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > 99) {
+            throw new IllegalArgumentException(
+                    "EMVCo TLV value for tag " + tag + " exceeds maximum length of 99 bytes: " + bytes.length);
+        }
         return String.format("%s%02d%s", tag, bytes.length, value);
+    }
+
+    private static boolean isTwoAsciiDigits(byte[] bytes, int offset) {
+        if (offset + 2 > bytes.length) return false;
+        byte b0 = bytes[offset];
+        byte b1 = bytes[offset + 1];
+        return b0 >= '0' && b0 <= '9' && b1 >= '0' && b1 <= '9';
+    }
+
+    private static int parseTwoAsciiDigits(byte[] bytes, int offset) {
+        return (bytes[offset] - '0') * 10 + (bytes[offset + 1] - '0');
+    }
+
+    private static String truncateUtf8(String value, int maxChars, int maxBytes) {
+        if (value == null) return "";
+        StringBuilder sb = new StringBuilder();
+        int charCount = 0;
+        int byteCount = 0;
+        int i = 0;
+        while (i < value.length() && charCount < maxChars) {
+            int cp = value.codePointAt(i);
+            int cpChars = Character.charCount(cp);
+            if (charCount + cpChars > maxChars) break;
+            int cpBytes = cp <= 0x7F ? 1 : (cp <= 0x7FF ? 2 : (cp <= 0xFFFF ? 3 : 4));
+            if (byteCount + cpBytes > maxBytes) break;
+            sb.appendCodePoint(cp);
+            charCount += cpChars;
+            byteCount += cpBytes;
+            i += cpChars;
+        }
+        return sb.toString();
     }
 
     public static Map<String, String> parseTlv(String raw) {
@@ -73,28 +111,56 @@ public final class EmvcoQr {
         if (raw == null) {
             return result;
         }
+        byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
         int index = 0;
-        while (index + 4 <= raw.length()) {
-            String tag = raw.substring(index, index + 2);
-            int len;
-            try {
-                len = Integer.parseInt(raw.substring(index + 2, index + 4));
-            } catch (NumberFormatException e) {
+        while (index + 4 <= bytes.length) {
+            if (!isTwoAsciiDigits(bytes, index) || !isTwoAsciiDigits(bytes, index + 2)) {
                 break;
             }
-            if (len < 0) {
-                break;
-            }
+            String tag = new String(bytes, index, 2, StandardCharsets.UTF_8);
+            int len = parseTwoAsciiDigits(bytes, index + 2);
             int valStart = index + 4;
             int valEnd = valStart + len;
-            if (valEnd > raw.length() || valEnd < valStart) {
+            if (valEnd > bytes.length || valEnd < valStart) {
                 break;
             }
-            String value = raw.substring(valStart, valEnd);
+            String value = new String(bytes, valStart, len, StandardCharsets.UTF_8);
             result.put(tag, value);
             index = valEnd;
         }
         return result;
+    }
+
+    private record StrictTlvResult(boolean valid, Map<String, String> tags) {}
+
+    private static StrictTlvResult parseTlvStrict(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return new StrictTlvResult(false, Map.of());
+        }
+        byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+        Map<String, String> tags = new LinkedHashMap<>();
+        int idx = 0;
+        while (idx + 4 <= bytes.length) {
+            if (!isTwoAsciiDigits(bytes, idx) || !isTwoAsciiDigits(bytes, idx + 2)) {
+                return new StrictTlvResult(false, tags);
+            }
+            String tag = new String(bytes, idx, 2, StandardCharsets.UTF_8);
+            int len = parseTwoAsciiDigits(bytes, idx + 2);
+            int valStart = idx + 4;
+            int valEnd = valStart + len;
+            if (valEnd > bytes.length || valEnd < valStart) {
+                return new StrictTlvResult(false, tags);
+            }
+            if (tags.containsKey(tag)) {
+                return new StrictTlvResult(false, tags);
+            }
+            tags.put(tag, new String(bytes, valStart, len, StandardCharsets.UTF_8));
+            idx = valEnd;
+        }
+        if (idx != bytes.length) {
+            return new StrictTlvResult(false, tags);
+        }
+        return new StrictTlvResult(true, tags);
     }
 
     public static Builder builder() {
@@ -190,14 +256,12 @@ public final class EmvcoQr {
             // 58: Country Code
             sb.append(tlv(TAG_COUNTRY_CODE, countryCode != null ? countryCode : DEFAULT_COUNTRY));
 
-            // 59: Merchant Name (sanitized max 25 chars)
-            String safeName = merchantName != null ? merchantName : "ELEPAY Merchant";
-            if (safeName.length() > 25) safeName = safeName.substring(0, 25);
+            // 59: Merchant Name (sanitized max 25 chars and <= 99 UTF-8 bytes)
+            String safeName = truncateUtf8(merchantName != null ? merchantName : "ELEPAY Merchant", 25, 99);
             sb.append(tlv(TAG_MERCHANT_NAME, safeName));
 
-            // 60: Merchant City (max 15 chars)
-            String safeCity = merchantCity != null ? merchantCity : DEFAULT_CITY;
-            if (safeCity.length() > 15) safeCity = safeCity.substring(0, 15);
+            // 60: Merchant City (max 15 chars and <= 99 UTF-8 bytes)
+            String safeCity = truncateUtf8(merchantCity != null ? merchantCity : DEFAULT_CITY, 15, 99);
             sb.append(tlv(TAG_MERCHANT_CITY, safeCity));
 
             // 62: Additional Data Field (reference)
@@ -233,29 +297,30 @@ public final class EmvcoQr {
             Map<String, String> tags
     ) {}
 
+    private static boolean isNestedTemplateTag(String tag) {
+        if (tag == null || tag.length() != 2) return false;
+        int num = (tag.charAt(0) - '0') * 10 + (tag.charAt(1) - '0');
+        return (num >= 26 && num <= 51) || num == 62 || num == 64 || (num >= 80 && num <= 99);
+    }
+
     public static Decoded decode(String qrPayload) {
         if (qrPayload == null || qrPayload.length() < 10) {
             return new Decoded(false, null, null, null, null, null, null, null, null, null, null, Map.of(), null, null, Map.of());
         }
+        byte[] payloadBytes = qrPayload.getBytes(StandardCharsets.UTF_8);
         boolean hasDuplicateOrTrailing = false;
         Map<String, String> tags = new LinkedHashMap<>();
         int idx = 0;
-        while (idx + 4 <= qrPayload.length()) {
-            String tag = qrPayload.substring(idx, idx + 2);
-            int len;
-            try {
-                len = Integer.parseInt(qrPayload.substring(idx + 2, idx + 4));
-            } catch (NumberFormatException e) {
+        while (idx + 4 <= payloadBytes.length) {
+            if (!isTwoAsciiDigits(payloadBytes, idx) || !isTwoAsciiDigits(payloadBytes, idx + 2)) {
                 hasDuplicateOrTrailing = true;
                 break;
             }
-            if (len < 0) {
-                hasDuplicateOrTrailing = true;
-                break;
-            }
+            String tag = new String(payloadBytes, idx, 2, StandardCharsets.UTF_8);
+            int len = parseTwoAsciiDigits(payloadBytes, idx + 2);
             int valStart = idx + 4;
             int valEnd = valStart + len;
-            if (valEnd > qrPayload.length() || valEnd < valStart) {
+            if (valEnd > payloadBytes.length || valEnd < valStart) {
                 hasDuplicateOrTrailing = true;
                 break;
             }
@@ -263,16 +328,16 @@ public final class EmvcoQr {
                 hasDuplicateOrTrailing = true;
                 break;
             }
-            tags.put(tag, qrPayload.substring(valStart, valEnd));
+            tags.put(tag, new String(payloadBytes, valStart, len, StandardCharsets.UTF_8));
             idx = valEnd;
             if (TAG_CRC.equals(tag)) {
-                if (idx != qrPayload.length()) {
+                if (idx != payloadBytes.length) {
                     hasDuplicateOrTrailing = true;
                 }
                 break;
             }
         }
-        if (idx != qrPayload.length()) {
+        if (idx != payloadBytes.length) {
             hasDuplicateOrTrailing = true;
         }
 
@@ -288,22 +353,50 @@ public final class EmvcoQr {
         String additionalDataRaw = tags.get(TAG_ADDITIONAL_DATA);
         String crc = tags.get(TAG_CRC);
 
-        Map<String, String> sub26 = merchantAccountInfo != null ? parseTlv(merchantAccountInfo) : Map.of();
+        boolean nestedValid = true;
+        Map<String, String> sub26 = Map.of();
+        if (merchantAccountInfo != null) {
+            StrictTlvResult parsed26 = parseTlvStrict(merchantAccountInfo);
+            if (!parsed26.valid()) {
+                nestedValid = false;
+            } else {
+                sub26 = parsed26.tags();
+            }
+        }
         String merchantCode = sub26.get("01");
 
-        Map<String, String> additionalData = additionalDataRaw != null ? parseTlv(additionalDataRaw) : Map.of();
+        Map<String, String> additionalData = Map.of();
+        if (additionalDataRaw != null) {
+            StrictTlvResult parsed62 = parseTlvStrict(additionalDataRaw);
+            if (!parsed62.valid()) {
+                nestedValid = false;
+            } else {
+                additionalData = parsed62.tags();
+            }
+        }
+
+        // Validate any other nested EMVCo templates (27-51, 64, 80-99) strictly as well
+        for (Map.Entry<String, String> entry : tags.entrySet()) {
+            String t = entry.getKey();
+            if (!TAG_MERCHANT_ACCOUNT_INFO.equals(t) && !TAG_ADDITIONAL_DATA.equals(t) && isNestedTemplateTag(t)) {
+                if (!parseTlvStrict(entry.getValue()).valid()) {
+                    nestedValid = false;
+                }
+            }
+        }
 
         boolean validCrc = false;
         String calculatedCrc = null;
         if (!hasDuplicateOrTrailing && crc != null && crc.length() == 4
-                && qrPayload.length() >= 8
+                && payloadBytes.length >= 8
                 && qrPayload.endsWith("6304" + crc)) {
             String prefix = qrPayload.substring(0, qrPayload.length() - 4);
             calculatedCrc = calculateCrc(prefix);
             validCrc = calculatedCrc.equalsIgnoreCase(crc);
         }
 
-        boolean valid = !hasDuplicateOrTrailing && validCrc && "01".equals(formatIndicator) && merchantAccountInfo != null;
+        boolean valid = !hasDuplicateOrTrailing && nestedValid && validCrc
+                && "01".equals(formatIndicator) && merchantAccountInfo != null;
 
         return new Decoded(
                 valid,

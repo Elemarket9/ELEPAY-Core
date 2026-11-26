@@ -180,6 +180,10 @@ public class StockTransferService {
             if (qtyReceived == null || qtyReceived.compareTo(BigDecimal.ZERO) < 0) {
                 throw new IllegalArgumentException("Received quantity cannot be negative");
             }
+            if (item.quantitySent() != null && item.quantitySent().compareTo(BigDecimal.ZERO) > 0
+                    && qtyReceived.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("Received quantity must be positive for dispatched transfer items");
+            }
             if (qtyReceived.compareTo(item.quantitySent()) > 0) {
                 throw new IllegalArgumentException("Received quantity (" + qtyReceived
                         + ") cannot exceed dispatched quantity (" + item.quantitySent() + ")");

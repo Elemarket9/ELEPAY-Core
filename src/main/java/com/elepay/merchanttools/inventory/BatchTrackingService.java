@@ -39,6 +39,12 @@ public class BatchTrackingService {
             BigDecimal quantity,
             long costPricePesewas
     ) {
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Batch quantity must be positive");
+        }
+        if (costPricePesewas < 0) {
+            throw new IllegalArgumentException("Batch cost price cannot be negative");
+        }
         UUID id = UUID.randomUUID();
         db.sql("""
             INSERT INTO inventory_batch (

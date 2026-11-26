@@ -36,6 +36,11 @@ public class CustomerDirectory {
                 .query(Long.class).single() > 0;
     }
 
+    public Optional<String> phoneOf(UUID customer) {
+        return db.sql("SELECT phone FROM customer WHERE id = :id").param("id", customer)
+                .query(String.class).optional();
+    }
+
     /**
      * Adds a line to a customer's wallet history. Other modules record wallet payments, refunds and
      * remittances through this method; the wallet module owns the table.

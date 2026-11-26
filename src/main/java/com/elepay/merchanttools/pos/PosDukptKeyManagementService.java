@@ -6,13 +6,16 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.UUID;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,22 +39,73 @@ public class PosDukptKeyManagementService {
     private final JdbcClient db;
     private final KmsSecretProvider kmsSecretProvider;
     private final String bdkHex;
+    private final String ephemeralSandboxBdkHex;
 
     public PosDukptKeyManagementService(
             JdbcClient db,
             KmsSecretProvider kmsSecretProvider,
-            @Value("${elepay.pos.dukpt.bdk-hex:}") String bdkHex) {
+            String bdkHex) {
+        this(db, kmsSecretProvider, bdkHex, null);
+    }
+
+    @Autowired
+    public PosDukptKeyManagementService(
+            JdbcClient db,
+            KmsSecretProvider kmsSecretProvider,
+            @Value("${elepay.pos.dukpt.bdk-hex:}") String bdkHex,
+            Environment env) {
         this.db = db;
         this.kmsSecretProvider = kmsSecretProvider;
         this.bdkHex = bdkHex == null ? "" : bdkHex.trim();
+        if (this.bdkHex.isBlank() && isNonProductionContext(env)) {
+            byte[] ephemeral = new byte[16];
+            new SecureRandom().nextBytes(ephemeral);
+            this.ephemeralSandboxBdkHex = HEX_UPPER.formatHex(ephemeral);
+        } else {
+            this.ephemeralSandboxBdkHex = "";
+        }
+    }
+
+    /**
+     * True only in an explicit non-production/sandbox context, never in production/live mode.
+     * Mirrors {@link KmsSecretProvider} fail-closed semantics: no hardcoded key is ever used.
+     */
+    private static boolean isNonProductionContext(Environment env) {
+        if (env == null) return false;
+        String declaredEnv = env.getProperty("elepay.environment", "");
+        if ("production".equalsIgnoreCase(declaredEnv) || "prod".equalsIgnoreCase(declaredEnv)) {
+            return false;
+        }
+        for (String profile : env.getActiveProfiles()) {
+            if (profile.equalsIgnoreCase("prod") || profile.equalsIgnoreCase("production")) {
+                return false;
+            }
+        }
+        if (env.getProperty("elepay.rails.sandbox.enabled", Boolean.class, false)) {
+            return true;
+        }
+        for (String profile : env.getActiveProfiles()) {
+            if (profile.equalsIgnoreCase("test") || profile.equalsIgnoreCase("sandbox")
+                    || profile.equalsIgnoreCase("dev")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String bdk() {
-        if (bdkHex.isBlank() || bdkHex.equalsIgnoreCase(PUBLIC_TEST_BDK)) {
+        if (bdkHex.equalsIgnoreCase(PUBLIC_TEST_BDK)) {
             throw ApiException.unprocessable("dukpt_key_missing",
                     "The POS base derivation key must be supplied from a KMS or HSM");
         }
-        return bdkHex;
+        if (!bdkHex.isBlank()) {
+            return bdkHex;
+        }
+        if (!ephemeralSandboxBdkHex.isBlank()) {
+            return ephemeralSandboxBdkHex;
+        }
+        throw ApiException.unprocessable("dukpt_key_missing",
+                "The POS base derivation key must be supplied from a KMS or HSM");
     }
 
     public record TerminalDukptProfile(
@@ -80,7 +134,7 @@ public class PosDukptKeyManagementService {
             String encryptedPinBlock
     ) {}
 
-    @Transactional
+    @Transactional(noRollbackFor = ApiException.class)
     public TerminalDukptProfile provisionTerminal(UUID terminalUuid, UUID merchantId, String baseKeyId) {
         if (terminalUuid == null) {
             throw ApiException.badRequest("invalid_terminal_id", "Terminal UUID must not be null");
@@ -88,7 +142,7 @@ public class PosDukptKeyManagementService {
         return provisionInternal(terminalUuid.toString(), terminalUuid, merchantId, baseKeyId);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = ApiException.class)
     public TerminalDukptProfile provisionTerminal(String terminalId, UUID merchantId, String baseKeyId) {
         if (terminalId == null || terminalId.isBlank()) {
             throw ApiException.badRequest("invalid_terminal_id", "Terminal ID must not be blank");

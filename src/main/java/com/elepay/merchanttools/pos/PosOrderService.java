@@ -180,77 +180,101 @@ public class PosOrderService {
                 || item.unitPricePesewas() < 0 || item.discountPesewas() < 0 || item.taxPesewas() < 0) {
             throw new IllegalArgumentException("Invalid POS item amounts");
         }
+        long basePrice;
         if (item.variantId() == null) {
-            return item.unitPricePesewas();
+            basePrice = item.unitPricePesewas();
+        } else {
+            basePrice = db.sql("SELECT retail_price_pesewas FROM inventory_variant WHERE id = :id AND merchant_id = :m")
+                    .param("id", item.variantId())
+                    .param("m", merchantId)
+                    .query(Long.class)
+                    .optional()
+                    .orElseThrow(() -> ApiException.notFound("Variant not found"));
         }
-        long basePrice = db.sql("SELECT retail_price_pesewas FROM inventory_variant WHERE id = :id AND merchant_id = :m")
-                .param("id", item.variantId())
-                .param("m", merchantId)
-                .query(Long.class)
-                .optional()
-                .orElseThrow(() -> ApiException.notFound("Variant not found"));
         long modifierPrice = resolveModifierAdditionalPrice(merchantId, item.modifiersJson());
         return Math.addExact(basePrice, modifierPrice);
     }
 
     private long resolveModifierAdditionalPrice(UUID merchantId, String modifiersJson) {
-        if (modifiersJson == null || modifiersJson.isBlank() || "[]".equals(modifiersJson.trim())) {
-            return 0L;
-        }
-        JsonNode root;
-        try {
-            root = json.readTree(modifiersJson);
-        } catch (Exception e) {
-            throw ApiException.badRequest("invalid_modifiers", "Invalid modifiers JSON");
-        }
-        if (!root.isArray()) {
-            throw ApiException.badRequest("invalid_modifiers", "Modifiers must be a JSON array");
-        }
         long total = 0L;
         java.util.Set<UUID> seenOptionIds = new java.util.HashSet<>();
         java.util.Map<UUID, Integer> groupCounts = new java.util.HashMap<>();
-        for (JsonNode node : root) {
-            String rawId = null;
-            if (node.isString()) {
-                rawId = node.asString();
-            } else if (node.isObject()) {
-                if (node.hasNonNull("optionId")) rawId = node.get("optionId").asString();
-                else if (node.hasNonNull("id")) rawId = node.get("id").asString();
+
+        if (modifiersJson != null && !modifiersJson.isBlank() && !"[]".equals(modifiersJson.trim())) {
+            JsonNode root;
+            try {
+                root = json.readTree(modifiersJson);
+            } catch (Exception e) {
+                throw ApiException.badRequest("invalid_modifiers", "Invalid modifiers JSON");
             }
-            if (rawId != null && !rawId.isBlank()) {
-                UUID optionId;
-                try {
-                    optionId = UUID.fromString(rawId);
-                } catch (IllegalArgumentException e) {
-                    throw ApiException.badRequest("invalid_modifiers", "Invalid modifier option ID");
+            if (!root.isArray()) {
+                throw ApiException.badRequest("invalid_modifiers", "Modifiers must be a JSON array");
+            }
+            for (JsonNode node : root) {
+                String rawId = null;
+                if (node.isString()) {
+                    rawId = node.asString();
+                } else if (node.isObject()) {
+                    if (node.hasNonNull("optionId")) rawId = node.get("optionId").asString();
+                    else if (node.hasNonNull("id")) rawId = node.get("id").asString();
                 }
-                if (!seenOptionIds.add(optionId)) {
-                    throw ApiException.badRequest("duplicate_modifier", "Duplicate modifier option selected");
+                if (rawId != null && !rawId.isBlank()) {
+                    UUID optionId;
+                    try {
+                        optionId = UUID.fromString(rawId);
+                    } catch (IllegalArgumentException e) {
+                        throw ApiException.badRequest("invalid_modifiers", "Invalid modifier option ID");
+                    }
+                    if (!seenOptionIds.add(optionId)) {
+                        throw ApiException.badRequest("duplicate_modifier", "Duplicate modifier option selected");
+                    }
+                    record ModRow(UUID groupId, long price, int maxSelection) {}
+                    ModRow mod = db.sql("""
+                            SELECT o.group_id, o.additional_price_pesewas, g.max_selection
+                            FROM restaurant_modifier_option o
+                            JOIN restaurant_modifier_group g ON g.id = o.group_id
+                            WHERE o.id = :id AND g.merchant_id = :m
+                            """)
+                            .param("id", optionId)
+                            .param("m", merchantId)
+                            .query((rs, i) -> new ModRow(
+                                    rs.getObject(1, UUID.class),
+                                    rs.getLong(2),
+                                    rs.getInt(3)))
+                            .optional()
+                            .orElseThrow(() -> ApiException.notFound("Modifier option not found"));
+                    if (mod.price() < 0) {
+                        throw ApiException.badRequest("invalid_modifier_price", "Modifier price cannot be negative");
+                    }
+                    int count = groupCounts.merge(mod.groupId(), 1, Integer::sum);
+                    if (mod.maxSelection() > 0 && count > mod.maxSelection()) {
+                        throw ApiException.badRequest("modifier_max_selection_exceeded",
+                                "Selected modifiers exceed group maximum of " + mod.maxSelection());
+                    }
+                    total = Math.addExact(total, mod.price());
                 }
-                record ModRow(UUID groupId, long price, int maxSelection) {}
-                ModRow mod = db.sql("""
-                        SELECT o.group_id, o.additional_price_pesewas, g.max_selection
-                        FROM restaurant_modifier_option o
-                        JOIN restaurant_modifier_group g ON g.id = o.group_id
-                        WHERE o.id = :id AND g.merchant_id = :m
-                        """)
-                        .param("id", optionId)
-                        .param("m", merchantId)
-                        .query((rs, i) -> new ModRow(
-                                rs.getObject(1, UUID.class),
-                                rs.getLong(2),
-                                rs.getInt(3)))
-                        .optional()
-                        .orElseThrow(() -> ApiException.notFound("Modifier option not found"));
-                if (mod.price() < 0) {
-                    throw ApiException.badRequest("invalid_modifier_price", "Modifier price cannot be negative");
-                }
-                int count = groupCounts.merge(mod.groupId(), 1, Integer::sum);
-                if (mod.maxSelection() > 0 && count > mod.maxSelection()) {
-                    throw ApiException.badRequest("modifier_max_selection_exceeded",
-                            "Selected modifiers exceed group maximum of " + mod.maxSelection());
-                }
-                total = Math.addExact(total, mod.price());
+            }
+        }
+
+        record RequiredGroup(UUID id, String name, int minSelection, boolean isRequired) {}
+        List<RequiredGroup> requiredGroups = db.sql("""
+                SELECT id, name, min_selection, is_required
+                FROM restaurant_modifier_group
+                WHERE merchant_id = :m AND (is_required = true OR min_selection > 0)
+                """)
+                .param("m", merchantId)
+                .query((rs, i) -> new RequiredGroup(
+                        rs.getObject(1, UUID.class),
+                        rs.getString(2),
+                        rs.getInt(3),
+                        rs.getBoolean(4)))
+                .list();
+        for (RequiredGroup group : requiredGroups) {
+            int requiredMin = Math.max(group.minSelection(), group.isRequired() ? 1 : 0);
+            int selected = groupCounts.getOrDefault(group.id(), 0);
+            if (selected < requiredMin) {
+                throw ApiException.badRequest("required_modifier_missing",
+                        "Modifier group '" + group.name() + "' requires at least " + requiredMin + " selection(s)");
             }
         }
         return total;

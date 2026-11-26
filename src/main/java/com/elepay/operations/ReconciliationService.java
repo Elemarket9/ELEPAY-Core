@@ -140,6 +140,7 @@ public class ReconciliationService {
     public UploadResult uploadAndReconcile(@Valid @RequestBody StatementUploadRequest request) {
         Actor actor = Actor.current();
         actor.requireFinance();
+        validateStatementLines(request.lines());
         UUID actorUuid = resolveActorUuid(actor.subject());
 
         // Duplicate statement ingestion protection (content SHA-256)
@@ -153,6 +154,36 @@ public class ReconciliationService {
                     () -> doUploadAndReconcile(request, actor, actorUuid));
         }
         return doUploadAndReconcile(request, actor, actorUuid);
+    }
+
+    private void validateStatementLines(List<StatementLineInput> lines) {
+        if (lines == null) {
+            throw ApiException.badRequest("invalid_statement_line", "Statement lines are required");
+        }
+        Set<String> supportedCurrencies = new HashSet<>(
+                db.sql("SELECT UPPER(code) FROM currency").query(String.class).list());
+        for (StatementLineInput line : lines) {
+            if (line == null) {
+                throw ApiException.badRequest("invalid_statement_line", "Statement line must not be null");
+            }
+            if (line.amountPesewas() <= 0) {
+                throw ApiException.badRequest("invalid_statement_line",
+                        "Statement line amountPesewas must be positive");
+            }
+            if (line.feePesewas() < 0) {
+                throw ApiException.badRequest("invalid_statement_line",
+                        "Statement line feePesewas must be non-negative");
+            }
+            String cur = normalizeCurrency(line.currency());
+            if (cur.isEmpty() || !supportedCurrencies.contains(cur)) {
+                throw ApiException.badRequest("unsupported_currency",
+                        "Unsupported statement line currency: " + line.currency());
+            }
+        }
+    }
+
+    private static String normalizeCurrency(String currency) {
+        return currency != null ? currency.trim().toUpperCase(Locale.ROOT) : Ledger.GHS;
     }
 
     private UploadResult doUploadAndReconcile(StatementUploadRequest request, Actor actor, UUID actorUuid) {
@@ -175,7 +206,7 @@ public class ReconciliationService {
 
         for (StatementLineInput line : request.lines()) {
             UUID lineId = UUID.randomUUID();
-            String cur = line.currency() != null ? line.currency().toUpperCase() : Ledger.GHS;
+            String cur = normalizeCurrency(line.currency());
 
             db.sql("""
                     INSERT INTO statement_line (id, upload_id, external_reference, amount_pesewas, currency,
@@ -315,7 +346,7 @@ public class ReconciliationService {
 
         for (StatementLineInput line : lines) {
             UUID lineId = UUID.randomUUID();
-            String cur = line.currency() != null ? line.currency().toUpperCase() : Ledger.GHS;
+            String cur = normalizeCurrency(line.currency());
             OffsetDateTime txTime = line.transactionTime() != null ? line.transactionTime() : now;
 
             RailRow matchedRow = null;
@@ -579,7 +610,12 @@ public class ReconciliationService {
             Map<String, Long> suspenseTotalsByCurrency = new HashMap<>();
             for (BulkLineEntry e : unmatchedEntries) {
                 if (e.input().amountPesewas() > 0) {
-                    suspenseTotalsByCurrency.merge(e.currency(), e.input().amountPesewas(), Long::sum);
+                    try {
+                        suspenseTotalsByCurrency.merge(e.currency(), e.input().amountPesewas(), Math::addExact);
+                    } catch (ArithmeticException ex) {
+                        throw ApiException.badRequest("statement_amount_overflow",
+                                "Unmatched statement line totals exceed maximum supported amount");
+                    }
                 }
             }
             for (var curEntry : suspenseTotalsByCurrency.entrySet()) {
@@ -792,9 +828,9 @@ public class ReconciliationService {
 
     private void postSuspenseItemBacking(UUID keyId, String rail, String currency, long amountPesewas, String description) {
         if (amountPesewas <= 0) return;
-        String cur = currency != null ? currency.toUpperCase() : Ledger.GHS;
-        String suspenseAccount = "platform:suspense:" + cur.toLowerCase();
-        String clearingAccount = "system:clearing:" + rail.toLowerCase() + ":" + cur;
+        String cur = normalizeCurrency(currency);
+        String suspenseAccount = "system:suspense:" + cur;
+        String clearingAccount = "system:clearing:" + rail.toLowerCase(Locale.ROOT) + ":" + cur;
         ledger.openSystem(suspenseAccount, "suspense", cur, true);
         ledger.openSystem(clearingAccount, "clearing", cur, true);
         ledger.post(Ledger.Posting.of("suspense-open", keyId.toString() + ":" + cur, "suspense_item", List.of(
@@ -1207,8 +1243,8 @@ public class ReconciliationService {
         if (item.proposedTargetAccount() != null && !item.proposedTargetAccount().isBlank()) {
             validateSuspenseTargetAccount(item.proposedTargetAccount());
             long amt = item.amountPesewas();
-            String cur = item.currency() != null ? item.currency().toUpperCase() : Ledger.GHS;
-            String suspenseAccount = "platform:suspense:" + cur.toLowerCase();
+            String cur = normalizeCurrency(item.currency());
+            String suspenseAccount = "system:suspense:" + cur;
             ledger.openSystem(suspenseAccount, "suspense", cur, true);
             ledger.post(Ledger.Posting.of("suspense-clearing", id.toString(), "suspense_clearing", List.of(
                     Leg.debit(suspenseAccount, amt),

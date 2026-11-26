@@ -203,11 +203,11 @@ class PayoutBatchIT extends PostgresTestBase {
         String token = api.token(subject);
         JsonNode lookup = api.call("POST", "/v1/wallet/recipients/lookup", token, null,
                 Map.of("rail", "momo", "phone", "0245550005", "network", "mtn")).body();
-        assertThat(lookup.get("verifiedName").asString()).isEqualTo("SIMULATED ACCOUNT HOLDER 0005");
+        assertThat(lookup.get("verifiedName").asString()).isEqualTo("SIMULATED A*** H*** 0***");
         var sent = api.call("POST", "/v1/wallet/transfers/confirmed", token, UUID.randomUUID().toString(),
                 Map.of("confirmationId", lookup.get("confirmationId").asString(), "amount", 3_000));
         assertThat(sent.status()).isEqualTo(200);
-        assertThat(sent.body().get("verifiedName").asString()).isEqualTo("SIMULATED ACCOUNT HOLDER 0005");
+        assertThat(sent.body().get("verifiedName").asString()).isEqualTo("SIMULATED A*** H*** 0***");
         assertThat(ledger.balance(Ledger.code("customer", customer, "reserved", "GHS"))).isEqualTo(3_000);
         api.call("POST", "/v1/ops/rails/recover", ops, null, null);
         assertThat(ledger.balance(Ledger.code("customer", customer, "reserved", "GHS"))).isZero();

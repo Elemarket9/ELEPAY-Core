@@ -54,6 +54,10 @@ public class FxDualReconciliationService {
     public DualReconReport reconcileDual(String partner, String period, String sourceCurrency,
                                          String destinationCurrency, long statedClosingClearingBalance,
                                          List<DualStatementLine> lines, String actor) {
+        if (statedClosingClearingBalance == Long.MIN_VALUE) {
+            throw ApiException.badRequest("invalid_statement_line",
+                    "Stated closing clearing balance is out of supported range");
+        }
         String pair = sourceCurrency + "/" + destinationCurrency;
         UUID statementId = UUID.randomUUID();
         List<DualReconItem> items = new ArrayList<>();
@@ -106,8 +110,15 @@ public class FxDualReconciliationService {
             long intDstAmt = (long) t[5];
             String intStatus = (String) t[8];
 
-            long srcDiff = line.sourceAmount() - intSrcAmt;
-            long dstDiff = line.destinationAmount() - intDstAmt;
+            long srcDiff;
+            long dstDiff;
+            try {
+                srcDiff = Math.subtractExact(line.sourceAmount(), intSrcAmt);
+                dstDiff = Math.subtractExact(line.destinationAmount(), intDstAmt);
+            } catch (ArithmeticException e) {
+                throw ApiException.badRequest("statement_amount_overflow",
+                        "Statement line discrepancy exceeds maximum supported amount");
+            }
 
             String result;
             String detail = null;
@@ -153,7 +164,13 @@ public class FxDualReconciliationService {
         // Authoritative ledger clearing balance check for destination currency
         String partnerClearingCode = "system:clearing:fx-" + partner + ":" + destinationCurrency;
         long computedClearingBalance = ledger.balance(partnerClearingCode);
-        long balanceDifference = statedClosingClearingBalance - computedClearingBalance;
+        long balanceDifference;
+        try {
+            balanceDifference = Math.subtractExact(statedClosingClearingBalance, computedClearingBalance);
+        } catch (ArithmeticException e) {
+            throw ApiException.badRequest("statement_amount_overflow",
+                    "Clearing balance discrepancy exceeds maximum supported amount");
+        }
 
         String overallStatus = (balanceDifference == 0 && items.stream().allMatch(i -> i.result().equals("matched")))
                 ? "matched" : "discrepancy";

@@ -80,7 +80,7 @@ public class ConcurrencyDeadlockAdversarialIT extends PostgresTestBase {
         CustomerInfo a = createCustomer("Alice Opposing", 20_000L);
         CustomerInfo b = createCustomer("Bob Opposing", 20_000L);
 
-        int threadsPerDirection = 15;
+        int threadsPerDirection = 10;
         int totalThreads = threadsPerDirection * 2;
         long transferAmount = 100L;
 

@@ -76,20 +76,31 @@ public class RestaurantController {
 
     @PostMapping("/tables/{tableId}/status")
     public RestaurantTableService.RestaurantTable updateTableStatus(@PathVariable UUID tableId, @RequestParam TableStatus status) {
-        access.operate(TABLE, tableId);
+        var caller = access.operateAccess(TABLE, tableId);
+        if (caller != null && caller.branchScoped()) {
+            access.requireBranch(caller, tableService.tableBranchId(tableId));
+        }
         return tableService.updateTableStatus(tableId, status);
     }
 
     @PostMapping("/tables/{tableId}/seat")
     public RestaurantTableService.RestaurantTable seatTable(@PathVariable UUID tableId, @RequestParam UUID orderId) {
-        UUID merchantId = access.operate(TABLE, tableId);
+        UUID merchantId = access.owner(TABLE, tableId);
+        var caller = access.operateAccess(merchantId);
         access.belongs(merchantId, ORDER, orderId);
+        if (caller != null && caller.branchScoped()) {
+            access.requireBranch(caller, tableService.tableBranchId(tableId));
+            access.requireOrderBranch(caller, orderId);
+        }
         return tableService.seatTable(tableId, orderId);
     }
 
     @PostMapping("/tables/{tableId}/vacate")
     public RestaurantTableService.RestaurantTable vacateTable(@PathVariable UUID tableId, @RequestParam(defaultValue = "true") boolean markDirty) {
-        access.operate(TABLE, tableId);
+        var caller = access.operateAccess(TABLE, tableId);
+        if (caller != null && caller.branchScoped()) {
+            access.requireBranch(caller, tableService.tableBranchId(tableId));
+        }
         return tableService.vacateTable(tableId, markDirty);
     }
 
@@ -131,7 +142,12 @@ public class RestaurantController {
         if (req.tableId() != null) access.belongs(req.merchantId(), TABLE, req.tableId());
         if (req.items() == null || req.items().isEmpty())
             throw com.elepay.common.ApiException.badRequest("items_required", "A kitchen ticket needs at least one item");
-        for (KdsService.KdsItemInput item : req.items()) access.belongs(req.merchantId(), ORDER_ITEM, item.orderItemId());
+        for (KdsService.KdsItemInput item : req.items()) {
+            if (item == null) {
+                throw com.elepay.common.ApiException.badRequest("invalid_item", "Kitchen item cannot be null");
+            }
+            access.belongs(req.merchantId(), ORDER_ITEM, item.orderItemId());
+        }
         return kdsService.createTicket(
                 req.merchantId(), req.orderId(), req.tableId(), req.diningMode(),
                 req.serverName(), req.course(), req.items(), req.notes(), req.clientRef()
@@ -234,9 +250,10 @@ public class RestaurantController {
     @PostMapping("/kds/print-jobs/claim")
     public ResponseEntity<KdsPrintService.PrintJob> claimPrintJob(@RequestParam UUID merchantId,
                                                                   @RequestParam(required = false) String deviceId) {
-        access.operate(merchantId);
+        var caller = access.operateAccess(merchantId);
         String effectiveDeviceId = resolveKitchenDeviceId(deviceId);
-        return printService.claimNext(merchantId, effectiveDeviceId).map(ResponseEntity::ok)
+        UUID branchId = caller != null && caller.branchScoped() ? caller.branchId() : null;
+        return printService.claimNext(merchantId, effectiveDeviceId, branchId).map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
@@ -244,9 +261,16 @@ public class RestaurantController {
 
     @PostMapping("/kds/print-jobs/{jobId}/result")
     public KdsPrintService.PrintJob reportPrintResult(@PathVariable UUID jobId, @RequestBody PrintResultRequest req) {
-        access.operate(PRINT_JOB, jobId);
+        var caller = access.operateAccess(PRINT_JOB, jobId);
+        UUID branchId = caller != null && caller.branchScoped() ? caller.branchId() : null;
+        if (branchId != null) {
+            UUID jobBranchId = printService.printJobBranchId(jobId);
+            if (!branchId.equals(jobBranchId)) {
+                throw com.elepay.common.ApiException.forbidden("Print job does not belong to your branch");
+            }
+        }
         String effectiveDeviceId = resolveKitchenDeviceId(req.deviceId());
-        return printService.report(jobId, effectiveDeviceId, Boolean.TRUE.equals(req.printed()), req.error());
+        return printService.report(jobId, effectiveDeviceId, Boolean.TRUE.equals(req.printed()), req.error(), branchId);
     }
 
     private static String resolveKitchenDeviceId(String requestedDeviceId) {

@@ -1,5 +1,6 @@
 package com.elepay.merchanttools.crm;
 
+import com.elepay.common.ApiException;
 import java.time.OffsetDateTime;
 import java.util.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -66,22 +67,75 @@ public class MarketingCampaignService {
             List<OutboundMessage> dispatchedMessages
     ) {}
 
+    public static String normalizePhone(String raw) {
+        if (raw == null) return "";
+        String cleaned = raw.trim().replaceAll("[\\s\\-()]", "");
+        if (cleaned.startsWith("0") && cleaned.length() == 10 && cleaned.chars().allMatch(Character::isDigit)) {
+            return "+233" + cleaned.substring(1);
+        }
+        if (cleaned.startsWith("233") && cleaned.length() == 12 && cleaned.chars().allMatch(Character::isDigit)) {
+            return "+" + cleaned;
+        }
+        return cleaned;
+    }
+
     @Transactional
     public CustomerProfile registerCustomer(UUID merchantId, String customerCode, String fullName,
                                             String phone, String email, String address) {
+        if (fullName == null || fullName.isBlank()) {
+            throw ApiException.badRequest("invalid_argument", "Customer name is required");
+        }
+        String trimmedName = fullName.strip();
+        if (trimmedName.length() > 128) {
+            throw ApiException.badRequest("invalid_argument", "Customer full name must not exceed 128 characters");
+        }
+        String normalizedPhone = normalizePhone(phone);
+        if (normalizedPhone.isBlank() || normalizedPhone.length() > 32 || !normalizedPhone.matches("\\+?\\d{9,15}")) {
+            throw ApiException.badRequest("invalid_argument", "Enter a valid phone number");
+        }
+        String trimmedEmail = (email == null || email.isBlank()) ? null : email.strip();
+        if (trimmedEmail != null && trimmedEmail.length() > 128) {
+            throw ApiException.badRequest("invalid_argument", "Email must not exceed 128 characters");
+        }
+        String trimmedAddress = (address == null || address.isBlank()) ? null : address.strip();
+        if (trimmedAddress != null && trimmedAddress.length() > 255) {
+            throw ApiException.badRequest("invalid_argument", "Address must not exceed 255 characters");
+        }
+
+        // Serialize per-merchant customer numbering and duplicate-phone checks across concurrent requests.
+        db.sql("SELECT pg_advisory_xact_lock(hashtextextended('crm-customer:' || ?, 0))")
+                .param(merchantId.toString())
+                .query((rs, n) -> 1)
+                .single();
+
+        long existingPhone = db.sql("SELECT count(*) FROM crm_customer WHERE merchant_id = ? AND phone = ?")
+                .params(merchantId, normalizedPhone)
+                .query(Long.class).single();
+        if (existingPhone > 0) {
+            throw ApiException.conflict("duplicate_phone", "A customer with this phone number already exists");
+        }
+
+        String resolvedCode = (customerCode == null || customerCode.isBlank())
+                ? nextCustomerCode(merchantId)
+                : customerCode.strip();
+        if (resolvedCode.length() > 32) {
+            throw ApiException.badRequest("invalid_argument", "Customer code must not exceed 32 characters");
+        }
+
         UUID id = UUID.randomUUID();
         db.sql("""
             INSERT INTO crm_customer
             (id, merchant_id, customer_code, full_name, phone, email, address,
              total_spend_pesewas, transaction_count, rfm_segment, loyalty_tier)
             VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'NEW_CUSTOMERS', 'BRONZE')
-        """).params(id, merchantId, customerCode, fullName, phone, email, address)
+        """).params(id, merchantId, resolvedCode, trimmedName, normalizedPhone, trimmedEmail, trimmedAddress)
         .update();
 
         // Also initialize loyalty account
         loyaltyService.getOrCreateAccount(merchantId, id);
 
-        return new CustomerProfile(id, merchantId, customerCode, fullName, phone, email, 0L, 0, "NEW_CUSTOMERS", "BRONZE");
+        return new CustomerProfile(id, merchantId, resolvedCode, trimmedName, normalizedPhone, trimmedEmail,
+                0L, 0, "NEW_CUSTOMERS", "BRONZE");
     }
 
     @Transactional

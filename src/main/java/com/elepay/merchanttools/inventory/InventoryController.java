@@ -186,7 +186,15 @@ public class InventoryController {
         access.manage(req.merchantId());
         access.belongs(req.merchantId(), WAREHOUSE, req.sourceWarehouseId());
         access.belongs(req.merchantId(), WAREHOUSE, req.destWarehouseId());
-        req.items().forEach(item -> access.belongs(req.merchantId(), VARIANT, item.variantId()));
+        if (req.items() == null || req.items().isEmpty()) {
+            throw new IllegalArgumentException("Transfer order must include at least one item");
+        }
+        for (StockTransferService.TransferItemInput item : req.items()) {
+            if (item == null || item.variantId() == null) {
+                throw new IllegalArgumentException("Transfer item and variantId are required");
+            }
+            access.belongs(req.merchantId(), VARIANT, item.variantId());
+        }
         return transferService.createTransferOrder(
                 req.merchantId(), req.sourceWarehouseId(), req.destWarehouseId(),
                 req.items(), req.trackingNumber(), req.notes()
@@ -228,7 +236,15 @@ public class InventoryController {
         access.manage(req.merchantId());
         access.belongs(req.merchantId(), SUPPLIER, req.supplierId());
         access.belongs(req.merchantId(), WAREHOUSE, req.warehouseId());
-        req.items().forEach(item -> access.belongs(req.merchantId(), VARIANT, item.variantId()));
+        if (req.items() == null || req.items().isEmpty()) {
+            throw new IllegalArgumentException("Purchase order must include at least one item");
+        }
+        for (PurchaseOrderService.PoItemInput item : req.items()) {
+            if (item == null || item.variantId() == null) {
+                throw new IllegalArgumentException("Purchase order item and variantId are required");
+            }
+            access.belongs(req.merchantId(), VARIANT, item.variantId());
+        }
         return poService.createPurchaseOrder(req.merchantId(), req.supplierId(), req.warehouseId(), req.poNumber(), req.items());
     }
 

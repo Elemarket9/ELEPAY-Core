@@ -1,6 +1,7 @@
 package com.elepay.merchanttools.inventory;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -114,8 +115,15 @@ public class PurchaseOrderService {
                     || item.unitCostPesewas() < 0) {
                 throw new IllegalArgumentException("PO item quantity must be positive and unit cost non-negative");
             }
-            long lineCost = Math.multiplyExact(item.unitCostPesewas(), item.quantityOrdered().longValue());
-            totalCostPesewas = Math.addExact(totalCostPesewas, lineCost);
+            try {
+                long lineCost = item.quantityOrdered()
+                        .multiply(BigDecimal.valueOf(item.unitCostPesewas()))
+                        .setScale(0, RoundingMode.HALF_UP)
+                        .longValueExact();
+                totalCostPesewas = Math.addExact(totalCostPesewas, lineCost);
+            } catch (ArithmeticException e) {
+                throw new IllegalArgumentException("PO total cost overflow", e);
+            }
         }
 
         UUID poId = UUID.randomUUID();

@@ -5,8 +5,13 @@ import com.elepay.identity.Actor;
 import com.elepay.merchanttools.MerchantToolAccess;
 import com.elepay.merchanttools.accounting.MerchantGeneralLedgerService;
 import com.elepay.payout.Payouts;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -124,20 +129,133 @@ public class PayrollController {
                 .orElseThrow(() -> ApiException.unprocessable("payout_batch_not_found", "No payout batch with that reference for this merchant"));
         Payouts.Batch batch = payouts.batch(batchId);
         List<PayrollManagementService.PayslipItem> slips = payroll.listPayslipsForRun(runId);
-        long net = slips.stream().mapToLong(PayrollManagementService.PayslipItem::netPayPesewas).sum();
-        if (batch.total() != net || batch.itemCount() != slips.size())
-            throw ApiException.unprocessable("payout_batch_mismatch",
-                    "That payout batch does not match this payroll (" + slips.size() + " staff, net " + net + " pesewas)");
-        long failedCount = batch.statusCounts() == null ? 0L : batch.statusCounts().getOrDefault("failed", 0L);
-        if (failedCount > 0) {
-            throw ApiException.unprocessable("payout_batch_failed",
-                    "Cannot link a payout batch that has failed items (" + failedCount + " failed)");
-        }
+        validatePayoutBatch(batch, slips);
         try {
             return payroll.recordPayoutSubmission(merchantId, runId, batch.reference());
         } catch (IllegalStateException | IllegalArgumentException e) {
             throw ApiException.conflict("payroll_state", e.getMessage());
+        } catch (DataIntegrityViolationException e) {
+            throw ApiException.conflict("payroll_state",
+                    "Payout batch reference " + batch.reference() + " is already linked to another payroll run");
         }
+    }
+
+    private record PayoutTarget(String destinationKey, long amountPesewas) {}
+
+    /**
+     * Validates that a payout batch is fully completed (all items succeeded, zero failed/pending/submitted),
+     * has the exact total and item count, and matches every payroll payslip 1-to-1 by normalized recipient
+     * destination and net pay amount.
+     */
+    public static void validatePayoutBatch(Payouts.Batch batch, List<PayrollManagementService.PayslipItem> slips) {
+        if (batch == null) {
+            throw ApiException.unprocessable("payout_batch_not_found", "Payout batch not found");
+        }
+        Map<String, Long> statusCounts = batch.statusCounts() == null ? Map.of() : batch.statusCounts();
+        List<Payouts.Payout> items = batch.items() == null ? List.of() : batch.items();
+
+        long failedCount = statusCounts.getOrDefault("failed", 0L)
+                + statusCounts.getOrDefault("rejected", 0L)
+                + statusCounts.getOrDefault("returned", 0L);
+        if (failedCount == 0L) {
+            failedCount = items.stream()
+                    .filter(Objects::nonNull)
+                    .filter(p -> isFailedStatus(p.status()))
+                    .count();
+        }
+        if (failedCount > 0) {
+            throw ApiException.unprocessable("payout_batch_failed",
+                    "Cannot link a payout batch that has failed items (" + failedCount + " failed)");
+        }
+
+        int totalItems = batch.itemCount();
+        long succeededCount = statusCounts.getOrDefault("succeeded", 0L)
+                + statusCounts.getOrDefault("completed", 0L);
+        boolean allSucceeded = totalItems > 0
+                && items.size() == totalItems
+                && succeededCount == totalItems
+                && items.stream().allMatch(p -> p != null && isSucceededStatus(p.status()));
+        if (!allSucceeded) {
+            throw ApiException.unprocessable("payout_batch_incomplete",
+                    "Cannot link a payout batch until all items have succeeded (" + succeededCount + " of " + totalItems + " succeeded)");
+        }
+
+        long net = slips.stream().mapToLong(PayrollManagementService.PayslipItem::netPayPesewas).sum();
+        if (batch.total() != net || totalItems != slips.size()) {
+            throw ApiException.unprocessable("payout_batch_mismatch",
+                    "That payout batch does not match this payroll (" + slips.size() + " staff, net " + net + " pesewas)");
+        }
+
+        Map<PayoutTarget, Integer> expectedTargets = new HashMap<>();
+        for (PayrollManagementService.PayslipItem slip : slips) {
+            String key = normalizePayslipDestination(slip.paymentMethod(), slip.destinationAccount());
+            if (key == null) {
+                throw ApiException.unprocessable("payout_batch_mismatch",
+                        "Payslip destination is invalid or missing for employee " + slip.employeeName());
+            }
+            expectedTargets.merge(new PayoutTarget(key, slip.netPayPesewas()), 1, Integer::sum);
+        }
+
+        Map<PayoutTarget, Integer> actualTargets = new HashMap<>();
+        for (Payouts.Payout item : items) {
+            String key = normalizePayoutDestination(item.destination());
+            if (key == null) {
+                throw ApiException.unprocessable("payout_batch_mismatch",
+                        "Payout batch item " + item.reference() + " has an invalid destination");
+            }
+            actualTargets.merge(new PayoutTarget(key, item.amount()), 1, Integer::sum);
+        }
+
+        if (!expectedTargets.equals(actualTargets)) {
+            throw ApiException.unprocessable("payout_batch_mismatch",
+                    "Payout batch recipient destinations and amounts do not match the payroll run payslips");
+        }
+    }
+
+    private static boolean isFailedStatus(String status) {
+        if (status == null) return false;
+        String s = status.strip().toLowerCase(Locale.ROOT);
+        return "failed".equals(s) || "rejected".equals(s) || "returned".equals(s);
+    }
+
+    private static boolean isSucceededStatus(String status) {
+        if (status == null) return false;
+        String s = status.strip().toLowerCase(Locale.ROOT);
+        return "succeeded".equals(s) || "completed".equals(s);
+    }
+
+    private static String normalizePayslipDestination(String paymentMethod, String destinationAccount) {
+        if (destinationAccount == null || destinationAccount.isBlank()) return null;
+        String[] parts = destinationAccount.strip().split(":", 2);
+        if (parts.length != 2) return null;
+        String method = paymentMethod == null ? "" : paymentMethod.strip().toUpperCase(Locale.ROOT);
+        String network = parts[0].strip().toUpperCase(Locale.ROOT);
+        String account = parts[1].strip();
+        if (network.isEmpty() || account.isEmpty()) return null;
+        return canonicalDestination(method, network, account);
+    }
+
+    private static String normalizePayoutDestination(Payouts.Destination dest) {
+        if (dest == null || dest.type() == null || dest.network() == null || dest.accountNumber() == null) return null;
+        String method = dest.type().strip().toUpperCase(Locale.ROOT);
+        String network = dest.network().strip().toUpperCase(Locale.ROOT);
+        String account = dest.accountNumber().strip();
+        if (method.isEmpty() || network.isEmpty() || account.isEmpty()) return null;
+        return canonicalDestination(method, network, account);
+    }
+
+    private static String canonicalDestination(String method, String network, String account) {
+        if ("MOMO".equals(method)) {
+            String digits = account.replaceAll("[^0-9]", "");
+            if (digits.startsWith("0") && digits.length() == 10) {
+                digits = "233" + digits.substring(1);
+            }
+            if (digits.isEmpty()) return null;
+            return "MOMO:" + network + ":" + digits;
+        }
+        String cleanAccount = account.replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
+        if (cleanAccount.isEmpty()) return null;
+        return method + ":" + network + ":" + cleanAccount;
     }
 
     private static void guard(Runnable r) {

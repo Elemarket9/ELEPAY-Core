@@ -935,6 +935,11 @@
           "confirmationId" : {
             "format" : "uuid",
             "type" : "string"
+          },
+          "currency" : {
+            "maxLength" : 3,
+            "minLength" : 0,
+            "type" : "string"
           }
         },
         "required" : [ "confirmationId" ],
@@ -3486,8 +3491,18 @@
             "minLength" : 0,
             "type" : "string"
           },
+          "amount" : {
+            "exclusiveMinimum" : 0,
+            "format" : "int64",
+            "type" : "integer"
+          },
           "bankCode" : {
             "maxLength" : 20,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "currency" : {
+            "maxLength" : 3,
             "minLength" : 0,
             "type" : "string"
           },
@@ -5457,6 +5472,10 @@
           "customerName" : {
             "type" : "string"
           },
+          "discountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
           "expiryDate" : {
             "format" : "date",
             "type" : "string"
@@ -5478,6 +5497,14 @@
           },
           "status" : {
             "type" : "string"
+          },
+          "subtotalPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "taxPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
           },
           "totalPesewas" : {
             "format" : "int64",
@@ -7217,6 +7244,11 @@
             "format" : "uuid",
             "type" : "string"
           },
+          "currency" : {
+            "maxLength" : 3,
+            "minLength" : 0,
+            "type" : "string"
+          },
           "recipient" : {
             "format" : "uuid",
             "type" : "string"
@@ -8611,6 +8643,13 @@
             "format" : "uuid",
             "type" : "string"
           }
+        }, {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
         } ],
         "requestBody" : {
           "content" : {
@@ -8646,6 +8685,13 @@
           "required" : true,
           "schema" : {
             "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : false,
+          "schema" : {
             "type" : "string"
           }
         } ],

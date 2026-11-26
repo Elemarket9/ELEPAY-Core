@@ -58,7 +58,7 @@ class RecipientConfirmationIT extends PostgresTestBase {
         for (var r : List.of(a, b, c)) {
             assertThat(r.status()).isEqualTo(200);
             assertThat(r.body().get("status").asString()).isEqualTo("verified");
-            assertThat(r.body().get("verifiedName").asString()).isEqualTo("Ama Mensah");
+            assertThat(r.body().get("verifiedName").asString()).isEqualTo("Ama M***");
             assertThat(r.body().get("destination").asString()).isEqualTo("+" + recipientPhone);
         }
         // Only the name needed for confirmation is returned.
@@ -163,7 +163,7 @@ class RecipientConfirmationIT extends PostgresTestBase {
         UUID confirmation = UUID.fromString(lookup(senderToken, recipientPhone).body().get("confirmationId").asString());
         var preview = api.call("POST", "/v1/wallet/transfers/preview", senderToken, null,
                 Map.of("confirmationId", confirmation, "amount", 2500)).body();
-        assertThat(preview.get("verifiedName").asString()).isEqualTo("Ama Mensah");
+        assertThat(preview.get("verifiedName").asString()).isEqualTo("Ama M***");
         assertThat(preview.get("destination").asString()).isEqualTo("+" + recipientPhone);
         assertThat(preview.get("amount").asLong()).isEqualTo(2500);
         assertThat(preview.get("fee").asLong()).isZero();
@@ -181,7 +181,7 @@ class RecipientConfirmationIT extends PostgresTestBase {
         var retry = api.call("POST", "/v1/wallet/transfers/confirmed", senderToken, key, body);
         assertThat(first.status()).isEqualTo(200);
         assertThat(retry.body()).isEqualTo(first.body());
-        assertThat(first.body().get("verifiedName").asString()).isEqualTo("Ama Mensah");
+        assertThat(first.body().get("verifiedName").asString()).isEqualTo("Ama M***");
         // Same key, changed instructions.
         assertThat(api.call("POST", "/v1/wallet/transfers/confirmed", senderToken, key,
                 Map.of("confirmationId", confirmation, "amount", 4001)).status()).isEqualTo(409);

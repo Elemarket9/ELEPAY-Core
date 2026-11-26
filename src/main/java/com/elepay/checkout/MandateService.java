@@ -32,7 +32,8 @@ import java.util.*;
 @Service
 @RestController
 public class MandateService {
-    private static final Set<String> ALLOWED_FREQUENCIES = Set.of("daily", "weekly", "monthly", "ad_hoc");
+    private static final Set<String> ALLOWED_FREQUENCIES = Set.of(
+            "daily", "weekly", "biweekly", "monthly", "quarterly", "yearly", "ad_hoc");
 
     private final JdbcClient db;
     private final Ledger ledger;
@@ -44,6 +45,12 @@ public class MandateService {
 
     private final TransactionTemplate tx;
     private final TransactionTemplate txRequiresNew;
+    private com.elepay.wallet.TransferLimits transferLimits;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTransferLimits(com.elepay.wallet.TransferLimits transferLimits) {
+        this.transferLimits = transferLimits;
+    }
 
     public MandateService(JdbcClient db, Ledger ledger, MerchantAccess merchants, CustomerDirectory customers,
                           Idempotency idempotency, Outbox outbox, Audit audit, PlatformTransactionManager tm) {
@@ -237,18 +244,39 @@ public class MandateService {
                 () -> doChargeMandate(merchantId, mandateId, key, request.amount(), request.description())));
     }
 
-    private MandateCharge doChargeMandate(UUID merchantId, UUID mandateId, String key, long amount, String description) {
-        var mandateOpt = db.sql("""
-                SELECT id, customer_id, merchant_id, currency, max_amount_pesewas, frequency, status,
-                       consent_reference, created_at, updated_at
-                FROM mandate WHERE id = :id AND merchant_id = :m FOR UPDATE""")
-                .param("id", mandateId).param("m", merchantId)
-                .query(MandateService::mapMandate).optional();
+    private record LockedMandate(Mandate mandate, OffsetDateTime lastChargedAt, OffsetDateTime nextBillingAt) {}
 
-        if (mandateOpt.isEmpty()) {
+    private static OffsetDateTime computeNextBillingAt(String frequency, OffsetDateTime chargedAt) {
+        if (frequency == null) return null;
+        return switch (frequency.toLowerCase(Locale.ROOT)) {
+            case "daily" -> chargedAt.plusDays(1);
+            case "weekly" -> chargedAt.plusWeeks(1);
+            case "biweekly" -> chargedAt.plusWeeks(2);
+            case "monthly" -> chargedAt.plusMonths(1);
+            case "quarterly" -> chargedAt.plusMonths(3);
+            case "yearly" -> chargedAt.plusYears(1);
+            case "ad_hoc" -> null;
+            default -> null;
+        };
+    }
+
+    private MandateCharge doChargeMandate(UUID merchantId, UUID mandateId, String key, long amount, String description) {
+        var lockedOpt = db.sql("""
+                SELECT id, customer_id, merchant_id, currency, max_amount_pesewas, frequency, status,
+                       consent_reference, created_at, updated_at, last_charged_at, next_billing_at
+                FROM mandate WHERE id = :id AND merchant_id = :m FOR NO KEY UPDATE""")
+                .param("id", mandateId).param("m", merchantId)
+                .query((rs, i) -> new LockedMandate(
+                        mapMandate(rs, i),
+                        rs.getObject(11, OffsetDateTime.class),
+                        rs.getObject(12, OffsetDateTime.class)))
+                .optional();
+
+        if (lockedOpt.isEmpty()) {
             throw ApiException.notFound("Mandate not found");
         }
-        Mandate mandate = mandateOpt.get();
+        LockedMandate locked = lockedOpt.get();
+        Mandate mandate = locked.mandate();
 
         if (!"active".equals(mandate.status())) {
             throw ApiException.conflict("mandate_not_active", "Mandate status is " + mandate.status());
@@ -273,30 +301,58 @@ public class MandateService {
             return existingCharge.get();
         }
 
-        UUID chargeId = UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now();
+
+        // Enforce mandate billing frequency (non-ad_hoc mandates cannot be charged again before next_billing_at)
+        if (!"ad_hoc".equalsIgnoreCase(mandate.frequency())) {
+            OffsetDateTime effectiveNext = locked.nextBillingAt() != null
+                    ? locked.nextBillingAt()
+                    : (locked.lastChargedAt() != null ? computeNextBillingAt(mandate.frequency(), locked.lastChargedAt()) : null);
+            if (effectiveNext != null && now.isBefore(effectiveNext)) {
+                throw ApiException.conflict("mandate_frequency_exceeded",
+                        "Mandate (" + mandate.frequency() + ") cannot be charged again until " + effectiveNext);
+            }
+        }
+
+        // Enforce BoG KYC tier daily/monthly limits before debiting customer wallet
+        if (transferLimits != null) {
+            transferLimits.check(mandate.customerId(), amount);
+        }
+
+        UUID chargeId = UUID.randomUUID();
         String customerAccount = Ledger.code("customer", mandate.customerId(), "available", mandate.currency());
         String merchantAccount = Ledger.code("merchant", merchantId, "pending", mandate.currency());
 
-        boolean postedSuccessfully = false;
+        Ledger.Posted posted = null;
         try {
-            ledger.post(Ledger.Posting.of("mandate-charge", chargeId.toString(), "mandate_charge", List.of(
+            posted = ledger.post(Ledger.Posting.of("mandate-charge", chargeId.toString(), "mandate_charge", List.of(
                     Leg.debit(customerAccount, amount),
                     Leg.credit(merchantAccount, amount)
             )).describedAs(description != null ? description : "Recurring mandate charge " + mandateId));
-            postedSuccessfully = true;
         } catch (ApiException e) {
             // Customer wallet balance insufficient
-            postedSuccessfully = false;
+            posted = null;
         }
 
-        if (postedSuccessfully) {
+        if (posted != null) {
             db.sql("""
                     INSERT INTO mandate_charge (id, mandate_id, amount_pesewas, idempotency_key, status,
                                                 failure_reason, attempt_count, next_retry_at, created_at)
                     VALUES (:id, :m, :amt, :k, 'succeeded', NULL, 1, NULL, :now)""")
                     .param("id", chargeId).param("m", mandateId).param("amt", amount).param("k", key)
                     .param("now", now).update();
+
+            OffsetDateTime nextBilling = computeNextBillingAt(mandate.frequency(), now);
+            db.sql("""
+                    UPDATE mandate
+                    SET last_charged_at = :now, next_billing_at = :nextBilling, updated_at = :now
+                    WHERE id = :id""")
+                    .param("now", now).param("nextBilling", nextBilling).param("id", mandateId).update();
+
+            String opRef = "MND-" + chargeId.toString().replace("-", "").substring(0, 12).toUpperCase(Locale.ROOT);
+            customers.recordOperation(opRef, mandate.customerId(), "payment", amount, "completed",
+                    description != null ? description : "Recurring mandate charge " + mandateId,
+                    posted.transactionId(), chargeId);
 
             audit.record("merchant:" + merchantId, "mandate.charge_succeeded", "charge:" + chargeId,
                     Map.of("mandate", mandateId, "amount", amount));
@@ -353,12 +409,38 @@ public class MandateService {
         if (scheduleOpt.isEmpty() || !"active".equals(scheduleOpt.get().status())) return;
 
         DunningSchedule schedule = scheduleOpt.get();
-        var charge = db.sql("SELECT * FROM mandate_charge WHERE id = :id FOR UPDATE")
+        var charge = db.sql("""
+                SELECT id, mandate_id, amount_pesewas, idempotency_key, status, failure_reason,
+                       attempt_count, next_retry_at, created_at
+                FROM mandate_charge WHERE id = :id FOR UPDATE""")
                 .param("id", schedule.chargeId()).query(MandateService::mapCharge).single();
-        var mandate = db.sql("SELECT * FROM mandate WHERE id = :id FOR UPDATE")
+        var mandate = db.sql("""
+                SELECT id, customer_id, merchant_id, currency, max_amount_pesewas, frequency, status,
+                       consent_reference, created_at, updated_at
+                FROM mandate WHERE id = :id FOR UPDATE""")
                 .param("id", charge.mandateId()).query(MandateService::mapMandate).single();
 
         OffsetDateTime now = OffsetDateTime.now();
+
+        if (!"active".equals(mandate.status())) {
+            db.sql("UPDATE dunning_schedule SET status = 'abandoned', last_attempt_at = :now, next_attempt_at = NULL WHERE id = :id")
+                    .param("now", now).param("id", schedule.id()).update();
+            return;
+        }
+
+        if (!customers.isActive(mandate.customerId())) {
+            db.sql("UPDATE dunning_schedule SET status = 'abandoned', last_attempt_at = :now, next_attempt_at = NULL WHERE id = :id")
+                    .param("now", now).param("id", schedule.id()).update();
+            db.sql("UPDATE mandate SET status = 'suspended', updated_at = :now WHERE id = :id")
+                    .param("now", now).param("id", mandate.id()).update();
+            audit.record("system", "dunning.abandoned", "mandate:" + mandate.id(),
+                    Map.of("scheduleId", schedule.id(), "reason", "customer_not_active"));
+            outbox.publish("mandate", mandate.id(), "mandate.suspended",
+                    Map.of("mandateId", mandate.id().toString(), "reason", "customer_not_active"),
+                    Set.of(mandate.merchantId()));
+            return;
+        }
+
         int nextStep = schedule.scheduleStep() + 1;
         if (nextStep > schedule.maxSteps()) {
             // Auto-suspend exhausted mandate

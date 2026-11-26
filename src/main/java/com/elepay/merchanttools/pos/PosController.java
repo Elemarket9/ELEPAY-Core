@@ -177,6 +177,7 @@ public class PosController {
     public PosCashierService.Shift openShift(@RequestBody OpenShiftRequest req) {
         var caller = access.operateAccess(req.merchantId());
         access.belongs(req.merchantId(), TERMINAL, req.terminalId());
+        access.requireTerminal(caller, req.terminalId());
         access.belongs(req.merchantId(), CASHIER, req.cashierId());
         var terminal = terminalService.getTerminal(req.terminalId())
                 .orElseThrow(() -> ApiException.notFound("Terminal not found"));
@@ -191,6 +192,7 @@ public class PosController {
         var caller = access.operateAccess(SHIFT, shiftId);
         var shift = cashierService.getShift(shiftId)
                 .orElseThrow(() -> ApiException.notFound("Shift not found"));
+        access.requireTerminal(caller, shift.terminalId());
         var terminal = terminalService.getTerminal(shift.terminalId())
                 .orElseThrow(() -> ApiException.notFound("Terminal not found"));
         access.requireBranch(caller, terminal.branchId());
@@ -200,6 +202,7 @@ public class PosController {
     @GetMapping("/shifts/active/{terminalId}")
     public ResponseEntity<PosCashierService.Shift> getActiveShift(@PathVariable UUID terminalId) {
         var caller = access.viewAccess(TERMINAL, terminalId);
+        access.requireTerminal(caller, terminalId);
         var terminal = terminalService.getTerminal(terminalId)
                 .orElseThrow(() -> ApiException.notFound("Terminal not found"));
         access.requireBranch(caller, terminal.branchId());
@@ -215,6 +218,7 @@ public class PosController {
     public PosCartService.HeldCart holdCart(@RequestBody HoldCartRequest req) {
         var caller = access.operateAccess(req.merchantId());
         access.belongs(req.merchantId(), TERMINAL, req.terminalId());
+        access.requireTerminal(caller, req.terminalId());
         access.belongs(req.merchantId(), CASHIER, req.cashierId());
         var terminal = terminalService.getTerminal(req.terminalId())
                 .orElseThrow(() -> ApiException.notFound("Terminal not found"));
@@ -225,6 +229,7 @@ public class PosController {
     @GetMapping("/carts/held/{terminalId}")
     public List<PosCartService.HeldCart> listHeldCarts(@PathVariable UUID terminalId) {
         var caller = access.viewAccess(TERMINAL, terminalId);
+        access.requireTerminal(caller, terminalId);
         var terminal = terminalService.getTerminal(terminalId)
                 .orElseThrow(() -> ApiException.notFound("Terminal not found"));
         access.requireBranch(caller, terminal.branchId());
@@ -236,6 +241,7 @@ public class PosController {
         var caller = access.operateAccess(CART, cartId);
         var cart = cartService.getHeldCart(cartId)
                 .orElseThrow(() -> ApiException.notFound("Held cart not found"));
+        access.requireTerminal(caller, cart.terminalId());
         var terminal = terminalService.getTerminal(cart.terminalId())
                 .orElseThrow(() -> ApiException.notFound("Terminal not found"));
         access.requireBranch(caller, terminal.branchId());

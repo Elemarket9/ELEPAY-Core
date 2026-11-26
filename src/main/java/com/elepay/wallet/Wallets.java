@@ -37,9 +37,15 @@ public class Wallets {
     private final Outbox outbox;
     private final EmtechCapture regulatory;
     private final KillSwitchService killSwitch;
+    private com.elepay.risk.RiskEngineService riskEngine;
 
     @org.springframework.beans.factory.annotation.Value("${elepay.wallet.require-recipient-confirmation:true}")
     private boolean requireRecipientConfirmation = true;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setRiskEngine(com.elepay.risk.RiskEngineService riskEngine) {
+        this.riskEngine = riskEngine;
+    }
 
     Wallets(JdbcClient db, Ledger ledger, Idempotency idempotency, Audit audit, TransferLimits limits, Outbox outbox,
             EmtechCapture regulatory,
@@ -63,9 +69,13 @@ public class Wallets {
                            @NotBlank @jakarta.validation.constraints.Pattern(regexp = "[A-Z]{2}") String country,
                            @NotBlank @jakarta.validation.constraints.Pattern(regexp = "PROFILE|GHANA_CARD") String source) {}
     public record Wallet(UUID customerId, List<Ledger.Account> accounts) {}
-    public record Transfer(@NotNull UUID recipient, @Positive long amount, UUID confirmationId) {
+    public record Transfer(@NotNull UUID recipient, @Positive long amount, UUID confirmationId,
+                           @Size(max = 3) String currency) {
         public Transfer(UUID recipient, long amount) {
-            this(recipient, amount, null);
+            this(recipient, amount, null, null);
+        }
+        public Transfer(UUID recipient, long amount, UUID confirmationId) {
+            this(recipient, amount, confirmationId, null);
         }
     }
     public record Receipt(UUID transactionId, String reference, long amount, String currency, Long senderBalance) {
@@ -146,7 +156,7 @@ public class Wallets {
         String coarseIp = "MOBILE_USSD".equals(payChannel) ? null : http.getRemoteAddr();
         return idempotency.execute(scope, key, request, Receipt.class,
                 () -> send(sender, scope, key, request.recipient(), request.amount(), request.confirmationId(),
-                        payChannel, coarseIp));
+                        payChannel, coarseIp, request.currency(), true));
     }
 
     /** Posts a wallet-to-wallet transfer; callers own idempotency and authorization. */
@@ -161,6 +171,11 @@ public class Wallets {
 
     public Receipt send(UUID sender, String scope, String key, UUID recipient, long amount, UUID confirmationId,
                         String channel, String ephemeralIp) {
+        return send(sender, scope, key, recipient, amount, confirmationId, channel, ephemeralIp, null, true);
+    }
+
+    public Receipt send(UUID sender, String scope, String key, UUID recipient, long amount, UUID confirmationId,
+                        String channel, String ephemeralIp, String currency, boolean requireAmountBinding) {
         if (killSwitch != null) {
             if (!killSwitch.isModuleEnabled("consumer-w2w")) {
                 throw ApiException.notFound("FEATURE_NOT_ENABLED", "This module is disabled");
@@ -171,6 +186,8 @@ public class Wallets {
             throw ApiException.badRequest("confirmation_required", "Confirm the recipient name before sending");
         }
         if (sender.equals(recipient)) throw ApiException.badRequest("same_wallet", "Choose a different wallet");
+        String reqCurrency = (currency == null || currency.isBlank())
+                ? Ledger.GHS : currency.trim().toUpperCase(java.util.Locale.ROOT);
         // Lock both customer rows in id order (Algorithm 002)
         List<UUID> active = db.sql("""
                 SELECT id FROM customer
@@ -184,9 +201,10 @@ public class Wallets {
 
         // Verify single-use confirmation token if supplied (Algorithm 038)
         if (confirmationId != null) {
-            record ConfRow(UUID id, UUID sender, UUID recipient, String status, OffsetDateTime expiresAt) {}
+            record ConfRow(UUID id, UUID sender, UUID recipient, String status, OffsetDateTime expiresAt,
+                           Long amount, String currency) {}
             ConfRow conf = db.sql("""
-                    SELECT id, sender_customer_id, recipient_customer_id, status, expires_at
+                    SELECT id, sender_customer_id, recipient_customer_id, status, expires_at, amount, currency
                     FROM recipient_confirmation WHERE id = :id FOR UPDATE""")
                     .param("id", confirmationId)
                     .query((rs, i) -> new ConfRow(
@@ -194,7 +212,9 @@ public class Wallets {
                             rs.getObject(2, UUID.class),
                             rs.getObject(3, UUID.class),
                             rs.getString(4),
-                            rs.getObject(5, OffsetDateTime.class)
+                            rs.getObject(5, OffsetDateTime.class),
+                            rs.getObject(6, Long.class),
+                            rs.getString(7)
                     )).optional().orElseThrow(() -> ApiException.notFound("Recipient confirmation not found"));
 
             if (!conf.sender().equals(sender) || !conf.recipient().equals(recipient)) {
@@ -206,9 +226,33 @@ public class Wallets {
             if (!conf.expiresAt().isAfter(OffsetDateTime.now())) {
                 throw ApiException.conflict("confirmation_expired", "The recipient confirmation expired. Check the recipient again.");
             }
+            if (requireAmountBinding && (conf.amount() == null || conf.currency() == null)) {
+                throw ApiException.conflict("confirmation_unbound",
+                        "Recipient confirmation must be bound to an explicit amount and currency");
+            }
+            if (conf.amount() != null && conf.amount().longValue() != amount) {
+                throw ApiException.conflict("confirmation_mismatch", "Confirmation amount does not match transfer amount");
+            }
+            if (conf.currency() != null && !conf.currency().equalsIgnoreCase(reqCurrency)) {
+                throw ApiException.conflict("confirmation_mismatch", "Confirmation currency does not match transfer currency");
+            }
+        }
+        if (!Ledger.GHS.equalsIgnoreCase(reqCurrency)) {
+            throw ApiException.badRequest("unsupported_currency", "Wallet transfers currently support GHS only");
         }
 
         String reference = References.next("WLT");
+
+        // Fraud & Risk Engine evaluation before posting (Algorithms 023-024)
+        if (riskEngine != null) {
+            var assessment = riskEngine.assessTransaction(new com.elepay.risk.RiskEngineService.AssessmentRequest(
+                    sender.toString(), reference, "WALLET_TRANSFER", amount, Ledger.GHS,
+                    recipient.toString(), null, null, null, null, null, false, false, false, false, false, null));
+            if (assessment.decision() == com.elepay.risk.RiskDecision.REJECT) {
+                throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,
+                        "risk_blocked", "Transfer blocked by risk engine: " + assessment.explanation());
+            }
+        }
 
         // Atomic double-entry posting with account row locks and funds check (Algorithm 001)
         UUID transaction = ledger.post(Ledger.Posting.of(scope, key, "wallet_transfer", List.of(

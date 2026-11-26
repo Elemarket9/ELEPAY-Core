@@ -302,7 +302,7 @@ public class RailTransactions {
                 ledger.openSystem(clearingAcct, "clearing", cur, true);
                 if (fee > 0) {
                     String feeAcct = "system:rail_fees:" + cur;
-                    ledger.openSystem(feeAcct, "rail_fees", cur, false);
+                    ledger.openSystem(feeAcct, "rail_fees", cur, true);
                     ledger.post(Ledger.Posting.of("rail-fee", t.reference(), "rail_fee", List.of(
                             Ledger.Leg.debit(feeAcct, fee),
                             Ledger.Leg.credit(clearingAcct, fee))));

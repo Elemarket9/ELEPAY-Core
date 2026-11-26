@@ -122,6 +122,12 @@ public class Payouts {
      */
     @Transactional
     public Batch create(String ownerType, UUID owner, List<Item> items, String batchDescription, String actor) {
+        return create(ownerType, owner, items, batchDescription, actor, false);
+    }
+
+    @Transactional
+    Batch create(String ownerType, UUID owner, List<Item> items, String batchDescription, String actor,
+                 boolean makerCheckerApproved) {
         if (items == null || items.isEmpty() || items.size() > MAX_BATCH) {
             throw ApiException.badRequest("invalid_batch", "A batch needs 1 to " + MAX_BATCH + " items");
         }
@@ -138,11 +144,14 @@ public class Payouts {
             killSwitchService.requirePayoutsAllowed("merchant".equalsIgnoreCase(ownerType) ? owner : null);
         }
         UUID batchId = UUID.randomUUID();
-        if (riskEngine != null && !"merchant".equalsIgnoreCase(ownerType)) {
+        if (riskEngine != null) {
+            String riskActor = "merchant".equalsIgnoreCase(ownerType)
+                    ? "merchant:" + owner
+                    : (actor != null ? actor : ownerType + ":" + owner);
             var assessment = riskEngine.assessTransaction(new com.elepay.risk.RiskEngineService.AssessmentRequest(
-                    actor != null ? actor : ownerType + ":" + owner, batchId.toString(), "PAYOUT", total, Ledger.GHS,
+                    riskActor, batchId.toString(), "PAYOUT", total, Ledger.GHS,
                     owner.toString(), null, null, null, null, null, false, false, false, false, false, null));
-            if (assessment.decision() == com.elepay.risk.RiskDecision.REJECT) {
+            if (!makerCheckerApproved && assessment.decision() == com.elepay.risk.RiskDecision.REJECT) {
                 throw ApiException.conflict("risk_blocked", "Payout blocked by risk engine: " + assessment.explanation());
             }
         }

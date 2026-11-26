@@ -4,6 +4,7 @@ import com.elepay.merchanttools.accounting.MerchantGeneralLedgerService;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.*;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -338,6 +339,15 @@ public class PayrollManagementService {
             throw new IllegalStateException("Payroll run must be APPROVED before submitting it to payouts (current: " + run.status() + ")");
         }
 
+        Integer alreadyLinkedRun = db.sql("""
+                SELECT COUNT(*) FROM payroll_run
+                WHERE payout_batch_reference = ? AND id <> ?""")
+                .params(payoutBatchReference, runId)
+                .query(Integer.class).single();
+        if (alreadyLinkedRun != null && alreadyLinkedRun > 0) {
+            throw new IllegalStateException("Payout batch reference " + payoutBatchReference + " is already linked to another payroll run");
+        }
+
         Integer alreadyLinked = db.sql("""
                 SELECT COUNT(*) FROM payroll_payslip
                 WHERE payout_reference = ? AND payroll_run_id <> ?""")
@@ -348,8 +358,18 @@ public class PayrollManagementService {
         }
 
         OffsetDateTime now = OffsetDateTime.now();
-        int moved = db.sql("UPDATE payroll_run SET status = 'PAYMENT_SUBMITTED', executed_at = ? WHERE id = ? AND status = 'APPROVED'")
-                .params(now, runId).update();
+        int moved;
+        try {
+            moved = db.sql("""
+                    UPDATE payroll_run
+                    SET status = 'PAYMENT_SUBMITTED',
+                        executed_at = ?,
+                        payout_batch_reference = ?
+                    WHERE id = ? AND status = 'APPROVED'""")
+                    .params(now, payoutBatchReference, runId).update();
+        } catch (DataIntegrityViolationException e) {
+            throw new IllegalStateException("Payout batch reference " + payoutBatchReference + " is already linked to another payroll run", e);
+        }
         if (moved != 1) throw new IllegalStateException("Payroll run was already submitted");
 
         db.sql("""

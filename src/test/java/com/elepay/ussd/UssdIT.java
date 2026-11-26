@@ -65,10 +65,10 @@ class UssdIT extends PostgresTestBase {
         step(b, "start", "");
         step(b, "continue", "2");
         JsonNode confirm = step(b, "continue", "0" + recipientPhone.substring(3));
-        assertThat(confirm.get("message").asString()).contains("Kojo Recipient").contains("+" + recipientPhone);
+        assertThat(confirm.get("message").asString()).contains("Kojo R***").contains("+" + recipientPhone);
         assertThat(step(b, "continue", "25.50").get("message").asString()).contains("GHS 25.50").contains("Enter PIN");
         JsonNode sent = step(b, "continue", "4826");
-        assertThat(sent.get("message").asString()).startsWith("Sent GHS 25.50 to Kojo Recipient");
+        assertThat(sent.get("message").asString()).startsWith("Sent GHS 25.50 to Kojo R***");
         assertThat(ledger.balance(Ledger.code("customer", recipient, "available", "GHS"))).isEqualTo(2_550);
         assertThat(ledger.balance(Ledger.code("customer", customer, "available", "GHS"))).isEqualTo(7_450);
     }

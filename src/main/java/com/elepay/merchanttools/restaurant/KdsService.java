@@ -140,6 +140,22 @@ public class KdsService {
             throw ApiException.badRequest("items_required", "A kitchen ticket needs at least one item");
         if (clientRef != null && (clientRef.isBlank() || clientRef.length() > 64))
             throw ApiException.badRequest("client_ref_invalid", "clientRef must be 1-64 characters");
+        for (KdsItemInput item : items) {
+            if (item == null || item.itemName() == null || item.itemName().isBlank())
+                throw ApiException.badRequest("item_name_required", "Every kitchen item needs a name");
+            if (item.quantity() != null && item.quantity().signum() <= 0)
+                throw ApiException.badRequest("item_quantity_invalid", "Item quantity must be positive");
+            if (item.orderItemId() != null) {
+                UUID itemOrderId = db.sql("SELECT order_id FROM pos_order_item WHERE id = :id")
+                        .param("id", item.orderItemId())
+                        .query(UUID.class)
+                        .optional()
+                        .orElseThrow(() -> ApiException.badRequest("invalid_order_item", "Order item not found"));
+                if (orderId == null || !orderId.equals(itemOrderId)) {
+                    throw ApiException.badRequest("order_item_mismatch", "Order item does not belong to the specified order");
+                }
+            }
+        }
         if (clientRef != null) {
             Optional<KdsTicket> existing = findByClientRef(merchantId, clientRef);
             if (existing.isPresent()) return existing.get();
@@ -178,10 +194,6 @@ public class KdsService {
                 .param("n", number).param("id", ticketId).update();
 
         for (KdsItemInput item : items) {
-            if (item.itemName() == null || item.itemName().isBlank())
-                throw ApiException.badRequest("item_name_required", "Every kitchen item needs a name");
-            if (item.quantity() != null && item.quantity().signum() <= 0)
-                throw ApiException.badRequest("item_quantity_invalid", "Item quantity must be positive");
             UUID variant = item.orderItemId() == null ? null : db.sql(
                     "SELECT variant_id FROM pos_order_item WHERE id = :id")
                     .param("id", item.orderItemId()).query(UUID.class).optional().orElse(null);

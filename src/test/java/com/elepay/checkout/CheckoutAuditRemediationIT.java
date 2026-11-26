@@ -97,22 +97,29 @@ class CheckoutAuditRemediationIT extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("Finding 1: Seller cannot unilaterally release their own retained reserve; collector can")
+    @DisplayName("Finding 1: Seller and merchant owner cannot unilaterally release retained reserve; ops can")
     void testSellerCannotSelfReleaseReserve() {
         String ref = createPaidReserveCheckout(5_000L, 2000); // 1,000 reserved
 
-        // Seller attempts to release their own reserve -> rejected with 404
+        // Seller attempts to release their own reserve -> rejected with 403 (ops only)
         var sellerAttempt = api.call("POST",
                 "/v1/merchants/" + seller + "/checkouts/" + ref + "/allocations/0/release-reserve",
                 sellerOwner, null, Map.of("amount", 1_000L, "reason", "self-release"));
-        assertThat(sellerAttempt.status()).isEqualTo(404);
+        assertThat(sellerAttempt.status()).isEqualTo(403);
         assertThat(ledger.balance(Ledger.code("merchant", seller, "reserved", "GHS"))).isEqualTo(1_000L);
 
-        // Marketplace collector releases reserve -> succeeds
-        var collectorRelease = api.call("POST",
+        // Marketplace owner also cannot unilaterally release retained reserve -> rejected with 403
+        var mpAttempt = api.call("POST",
                 "/v1/merchants/" + marketplace + "/checkouts/" + ref + "/allocations/0/release-reserve",
-                mpOwner, null, Map.of("amount", 1_000L, "reason", "approved release"));
-        assertThat(collectorRelease.status()).isEqualTo(200);
+                mpOwner, null, Map.of("amount", 1_000L, "reason", "owner-release"));
+        assertThat(mpAttempt.status()).isEqualTo(403);
+        assertThat(ledger.balance(Ledger.code("merchant", seller, "reserved", "GHS"))).isEqualTo(1_000L);
+
+        // Ops releases reserve -> succeeds
+        var opsRelease = api.call("POST",
+                "/v1/merchants/" + marketplace + "/checkouts/" + ref + "/allocations/0/release-reserve",
+                ops, null, Map.of("amount", 1_000L, "reason", "approved release"));
+        assertThat(opsRelease.status()).isEqualTo(200);
         assertThat(ledger.balance(Ledger.code("merchant", seller, "reserved", "GHS"))).isEqualTo(0L);
     }
 
@@ -144,10 +151,10 @@ class CheckoutAuditRemediationIT extends PostgresTestBase {
     void testReleaseReserveBeforeSettleDueDoesNotStrandFunds() {
         String ref = createPaidReserveCheckout(5_000L, 2000); // 4,000 pending, 1,000 reserved
 
-        // Release reserve before delivery confirmation / settlement
+        // Ops releases reserve before delivery confirmation / settlement
         var rel = api.call("POST",
                 "/v1/merchants/" + marketplace + "/checkouts/" + ref + "/allocations/0/release-reserve",
-                mpOwner, null, Map.of("amount", 1_000L, "reason", "early release"));
+                ops, null, Map.of("amount", 1_000L, "reason", "early release"));
         assertThat(rel.status()).isEqualTo(200);
 
         // Confirm delivery and run settleDue

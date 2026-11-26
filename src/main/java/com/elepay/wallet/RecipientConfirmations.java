@@ -81,16 +81,25 @@ class RecipientConfirmations {
 
     record LookupRequest(@NotBlank @Size(max = 10) String rail, @Size(max = 40) String phone,
                          @Size(max = 20) String network, @Size(max = 20) String bankCode,
-                         @Size(max = 34) String accountNumber) {}
+                         @Size(max = 34) String accountNumber,
+                         @Positive Long amount, @Size(max = 3) String currency) {
+        LookupRequest(String rail, String phone, String network, String bankCode, String accountNumber) {
+            this(rail, phone, network, bankCode, accountNumber, null, null);
+        }
+    }
 
     /**
      * {@code status}: verified, not_found, recipient_unavailable or verification_unavailable.
-     * Only a verified result carries a name and confirmation id.
+     * Only a verified result carries a masked name and confirmation id.
      */
     record LookupResult(String status, String rail, String destination, String verifiedName, UUID confirmationId,
                         OffsetDateTime expiresAt, String message) {}
 
-    record ConfirmedTransfer(@NotNull UUID confirmationId, @Positive long amount) {}
+    record ConfirmedTransfer(@NotNull UUID confirmationId, @Positive long amount, @Size(max = 3) String currency) {
+        ConfirmedTransfer(UUID confirmationId, long amount) {
+            this(confirmationId, amount, null);
+        }
+    }
 
     record Preview(UUID confirmationId, String rail, String destination, String verifiedName, long amount, long fee,
                    long total, String currency, OffsetDateTime expiresAt) {}
@@ -101,7 +110,7 @@ class RecipientConfirmations {
 
     private record Confirmation(UUID id, UUID sender, String rail, String destination, String network,
                                 UUID recipient, String recipientAccount, String name, String status,
-                                OffsetDateTime expiresAt) {}
+                                OffsetDateTime expiresAt, Long amount, String currency) {}
 
     // ---- lookup ---------------------------------------------------------------------------
 
@@ -116,6 +125,15 @@ class RecipientConfirmations {
     LookupResult lookupFor(String actorSubject, UUID sender, LookupRequest request) {
         String rail = request.rail().toLowerCase();
         if (!RAILS.contains(rail)) throw ApiException.badRequest("invalid_rail", "Choose wallet, momo or bank");
+        String boundCurrency = null;
+        if (request.currency() != null && !request.currency().isBlank()) {
+            boundCurrency = request.currency().trim().toUpperCase(java.util.Locale.ROOT);
+            if (!boundCurrency.matches("[A-Z]{3}")) {
+                throw ApiException.badRequest("invalid_currency", "Currency must be a 3-letter ISO code");
+            }
+        } else if (request.amount() != null) {
+            boundCurrency = Ledger.GHS;
+        }
         String destination;
         String network = null;
         switch (rail) {
@@ -140,12 +158,12 @@ class RecipientConfirmations {
         enforceLimits(actorSubject, sender, rail, hash);
 
         return switch (rail) {
-            case "wallet" -> lookupWallet(sender, destination, hash);
-            default -> lookupExternal(sender, rail, network, destination, hash);
+            case "wallet" -> lookupWallet(sender, destination, hash, request.amount(), boundCurrency);
+            default -> lookupExternal(sender, rail, network, destination, hash, request.amount(), boundCurrency);
         };
     }
 
-    private LookupResult lookupWallet(UUID sender, String msisdn, String hash) {
+    private LookupResult lookupWallet(UUID sender, String msisdn, String hash, Long amount, String currency) {
         record Match(UUID id, String name, String status) {}
         var match = db.sql("SELECT id, display_name, status FROM customer WHERE phone = :phone")
                 .param("phone", msisdn).query((rs, i) -> new Match(rs.getObject(1, UUID.class), rs.getString(2),
@@ -167,17 +185,19 @@ class RecipientConfirmations {
         }
         log(sender, "wallet", hash, "verified");
         return confirm(sender, "wallet", msisdn, null, match.get().id(),
-                Ledger.code("customer", match.get().id(), "available", Ledger.GHS), match.get().name(), "elepay_wallet", shown);
+                Ledger.code("customer", match.get().id(), "available", Ledger.GHS), match.get().name(), "elepay_wallet",
+                shown, amount, currency);
     }
 
-    private LookupResult lookupExternal(UUID sender, String rail, String network, String destination, String hash) {
+    private LookupResult lookupExternal(UUID sender, String rail, String network, String destination, String hash,
+                                        Long amount, String currency) {
         NameVerification.Result result = verifications.verify(rail, network, destination);
         String shown = rail.equals("momo") ? "+" + destination + " (" + network + ")" : network + " " + mask(destination);
         return switch (result.outcome()) {
             case VERIFIED -> {
                 log(sender, rail, hash, "verified");
                 yield confirm(sender, rail, destination, network, null, network + ":" + destination,
-                        result.name(), result.source(), shown);
+                        result.name(), result.source(), shown, amount, currency);
             }
             case NOT_FOUND -> {
                 log(sender, rail, hash, "not_found");
@@ -194,17 +214,20 @@ class RecipientConfirmations {
     }
 
     private LookupResult confirm(UUID sender, String rail, String destination, String network, UUID recipient,
-                                 String account, String name, String source, String shown) {
+                                 String account, String name, String source, String shown, Long amount, String currency) {
         UUID id = UUID.randomUUID();
         OffsetDateTime expires = OffsetDateTime.now().plus(ttl);
         db.sql("""
                 INSERT INTO recipient_confirmation (id, sender_customer_id, rail, destination, network,
-                    recipient_customer_id, recipient_account, verified_name, verification_source, expires_at)
-                VALUES (:id, :sender, :rail, :dest, :network, :recipient, :account, :name, :source, :expires)""")
+                    recipient_customer_id, recipient_account, verified_name, verification_source, expires_at,
+                    amount, currency)
+                VALUES (:id, :sender, :rail, :dest, :network, :recipient, :account, :name, :source, :expires,
+                    :amount, :currency)""")
                 .param("id", id).param("sender", sender).param("rail", rail).param("dest", destination)
                 .param("network", network).param("recipient", recipient).param("account", account)
-                .param("name", name).param("source", source).param("expires", expires).update();
-        return new LookupResult("verified", rail, shown, name, id, expires, null);
+                .param("name", name).param("source", source).param("expires", expires)
+                .param("amount", amount).param("currency", currency).update();
+        return new LookupResult("verified", rail, shown, maskName(name), id, expires, null);
     }
 
     private void enforceLimits(String actorSubject, UUID sender, String rail, String hash) {
@@ -241,15 +264,29 @@ class RecipientConfirmations {
         return "•••• " + account.substring(Math.max(0, account.length() - 4));
     }
 
+    static String maskName(String name) {
+        if (name == null || name.isBlank()) return name;
+        String[] parts = name.trim().split("\\s+");
+        if (parts.length == 1) {
+            String p = parts[0];
+            return p.length() <= 2 ? p.charAt(0) + "***" : p.substring(0, 2) + "***";
+        }
+        StringBuilder sb = new StringBuilder(parts[0]);
+        for (int i = 1; i < parts.length; i++) {
+            sb.append(' ').append(parts[i].charAt(0)).append("***");
+        }
+        return sb.toString();
+    }
+
     // ---- preview and execution ------------------------------------------------------------
 
     @PostMapping("/transfers/preview")
     @Transactional(readOnly = true)
     public Preview preview(@Valid @RequestBody ConfirmedTransfer request) {
         UUID sender = wallets.customer(Actor.current());
-        Confirmation c = validate(sender, request.confirmationId(), false);
+        Confirmation c = validate(sender, request.confirmationId(), false, request.amount(), request.currency());
         long fee = com.elepay.fees.FeeSchedule.calculate(DOMESTIC_TRANSFER_FEE_PLAN, request.amount());
-        return new Preview(c.id(), c.rail(), display(c), c.name(), request.amount(), fee,
+        return new Preview(c.id(), c.rail(), display(c), maskName(c.name()), request.amount(), fee,
                 Math.addExact(request.amount(), fee), Ledger.GHS, c.expiresAt());
     }
 
@@ -263,12 +300,13 @@ class RecipientConfirmations {
     ConfirmedReceipt transferFor(String actorSubject, UUID sender, String key, ConfirmedTransfer request) {
         String scope = "confirmed-transfer:" + sender;
         ConfirmedReceipt receipt = tx.execute(s -> idempotency.execute(scope, key, request, ConfirmedReceipt.class, () -> {
-            Confirmation c = validate(sender, request.confirmationId(), true);
+            Confirmation c = validate(sender, request.confirmationId(), true, request.amount(), request.currency());
             long fee = com.elepay.fees.FeeSchedule.calculate(DOMESTIC_TRANSFER_FEE_PLAN, request.amount());
             if (c.rail().equals("wallet")) {
-                Wallets.Receipt r = wallets.send(sender, scope, key, c.recipient(), request.amount(), c.id());
+                Wallets.Receipt r = wallets.send(sender, scope, key, c.recipient(), request.amount(), c.id(),
+                        null, null, request.currency(), false);
                 return new ConfirmedReceipt(r.transactionId(), r.reference(), r.amount(), fee, r.amount() + fee,
-                        r.currency(), c.name(), display(c), "completed", null);
+                        r.currency(), maskName(c.name()), display(c), "completed", null);
             }
             limits.check(sender, request.amount());
             // MoMo and bank transfers leave ELEPAY as a payout to the confirmed account.
@@ -286,7 +324,7 @@ class RecipientConfirmations {
                     .param("cp", c.name() + " " + display(c))
                     .param("tx", reservation).param("payout", item.id()).update();
             return new ConfirmedReceipt(reservation, item.reference(), request.amount(), fee, request.amount() + fee,
-                    Ledger.GHS, c.name(), display(c), "submitted", batch.id());
+                    Ledger.GHS, maskName(c.name()), display(c), "submitted", batch.id());
         }));
         if (receipt != null && receipt.payoutBatch() != null) {
             payouts.submit(receipt.payoutBatch());
@@ -303,15 +341,16 @@ class RecipientConfirmations {
                 .param("tx", tx).param("id", confirmation).update();
     }
 
-    private Confirmation validate(UUID sender, UUID id, boolean lock) {
+    private Confirmation validate(UUID sender, UUID id, boolean lock, long amount, String currency) {
         Confirmation c = db.sql("""
                 SELECT id, sender_customer_id, rail, destination, network, recipient_customer_id, recipient_account,
-                       verified_name, status, expires_at
+                       verified_name, status, expires_at, amount, currency
                 FROM recipient_confirmation WHERE id = :id""" + (lock ? " FOR UPDATE" : ""))
                 .param("id", id)
                 .query((rs, i) -> new Confirmation(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class),
                         rs.getString(3), rs.getString(4), rs.getString(5), rs.getObject(6, UUID.class),
-                        rs.getString(7), rs.getString(8), rs.getString(9), rs.getObject(10, OffsetDateTime.class)))
+                        rs.getString(7), rs.getString(8), rs.getString(9), rs.getObject(10, OffsetDateTime.class),
+                        rs.getObject(11, Long.class), rs.getString(12)))
                 .optional().orElse(null);
         // Another sender's confirmation is indistinguishable from a missing one.
         if (c == null || !c.sender().equals(sender)) throw ApiException.notFound("Recipient confirmation not found");
@@ -320,6 +359,17 @@ class RecipientConfirmations {
         }
         if (!c.expiresAt().isAfter(OffsetDateTime.now())) {
             throw ApiException.conflict("confirmation_expired", "The recipient confirmation expired. Check the recipient again.");
+        }
+        String reqCurrency = (currency == null || currency.isBlank())
+                ? Ledger.GHS : currency.trim().toUpperCase(java.util.Locale.ROOT);
+        if (c.amount() != null && c.amount().longValue() != amount) {
+            throw ApiException.conflict("confirmation_mismatch", "Confirmation amount does not match transfer amount");
+        }
+        if (c.currency() != null && !c.currency().equalsIgnoreCase(reqCurrency)) {
+            throw ApiException.conflict("confirmation_mismatch", "Confirmation currency does not match transfer currency");
+        }
+        if (!Ledger.GHS.equalsIgnoreCase(reqCurrency)) {
+            throw ApiException.badRequest("unsupported_currency", "Wallet transfers currently support GHS only");
         }
         if (c.rail().equals("wallet")) {
             Boolean stillValid = db.sql("SELECT status = 'active' AND phone = :phone FROM customer WHERE id = :id")

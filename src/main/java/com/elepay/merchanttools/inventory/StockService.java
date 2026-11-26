@@ -121,6 +121,16 @@ public class StockService {
             UUID referenceId,
             String notes
     ) {
+        if (quantityChange == null || quantityChange.compareTo(BigDecimal.ZERO) == 0) {
+            throw new IllegalArgumentException("Stock adjustment quantity must be non-zero");
+        }
+        if (movementType == null) {
+            throw new IllegalArgumentException("Movement type is required");
+        }
+        if ((movementType == MovementType.RECEIVED || movementType == MovementType.TRANSFER_IN)
+                && quantityChange.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Inbound stock movement quantity must be positive");
+        }
         Stock stock = getOrCreateStock(warehouseId, variantId);
         BigDecimal newQuantity = stock.quantityOnHand().add(quantityChange);
         if (newQuantity.compareTo(BigDecimal.ZERO) < 0) {
@@ -163,6 +173,9 @@ public class StockService {
 
     @Transactional
     public Stock reserveStock(UUID warehouseId, UUID variantId, BigDecimal quantity) {
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Reservation quantity must be positive");
+        }
         Stock stock = getOrCreateStock(warehouseId, variantId);
         BigDecimal available = stock.quantityAvailable();
         if (available.compareTo(quantity) < 0) {

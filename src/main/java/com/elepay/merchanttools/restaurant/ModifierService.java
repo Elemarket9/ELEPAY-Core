@@ -41,6 +41,15 @@ public class ModifierService {
             int maxSelection,
             boolean isRequired
     ) {
+        if (minSelection < 0) {
+            throw new IllegalArgumentException("Modifier group minSelection cannot be negative");
+        }
+        if (maxSelection < 0) {
+            throw new IllegalArgumentException("Modifier group maxSelection cannot be negative");
+        }
+        if (maxSelection > 0 && maxSelection < minSelection) {
+            throw new IllegalArgumentException("Modifier group maxSelection cannot be less than minSelection");
+        }
         UUID id = UUID.randomUUID();
         db.sql("""
             INSERT INTO restaurant_modifier_group (

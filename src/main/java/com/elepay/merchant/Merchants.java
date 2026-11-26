@@ -482,7 +482,7 @@ class Merchants {
         var a = access.require(id, MANAGE);
         a.actor().requireUser();
         var rowOpt = db.sql("""
-                SELECT oob_verification_status, COALESCE(oob_attempts, 0), updated_at
+                SELECT oob_verification_status, COALESCE(oob_attempts, 0), updated_at, COALESCE(oob_resend_count, 0)
                 FROM settlement_destination
                 WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'
                 FOR UPDATE""")
@@ -490,16 +490,18 @@ class Merchants {
                 .query((rs, i) -> new Object[]{
                         rs.getString(1),
                         rs.getInt(2),
-                        rs.getObject(3, java.time.OffsetDateTime.class)})
+                        rs.getObject(3, java.time.OffsetDateTime.class),
+                        rs.getInt(4)})
                 .optional();
         if (rowOpt.isEmpty()) throw ApiException.notFound("Destination not found");
         String status = (String) rowOpt.get()[0];
         int attempts = (Integer) rowOpt.get()[1];
         java.time.OffsetDateTime updatedAt = (java.time.OffsetDateTime) rowOpt.get()[2];
+        int resendCount = (Integer) rowOpt.get()[3];
         if ("confirmed".equals(status)) {
             return Map.of("destinationId", destination, "oobVerificationStatus", "confirmed", "resent", false);
         }
-        if (attempts >= 5) {
+        if (attempts >= 5 || resendCount >= 5) {
             throw ApiException.forbidden("Out-of-band confirmation is locked; remove and re-add the destination");
         }
         java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
@@ -517,6 +519,7 @@ class Merchants {
                 UPDATE settlement_destination
                 SET oob_token_hash = :oobHash,
                     oob_expires_at = :oobExp,
+                    oob_resend_count = COALESCE(oob_resend_count, 0) + 1,
                     updated_at = now()
                 WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m""")
                 .param("oobHash", oobHash).param("oobExp", oobExpires)

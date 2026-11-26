@@ -116,21 +116,15 @@ public class MerchantGeneralLedgerService {
     @Transactional
     public void initializeStandardChartOfAccounts(UUID merchantId) {
         for (var std : GhanaianChartOfAccounts.STANDARD_CHART) {
-            Optional<UUID> existing = db.sql("""
-                SELECT id FROM merchant_gl_account
-                WHERE merchant_id = ? AND account_code = ?
-            """).params(merchantId, std.code()).query(UUID.class).optional();
-
-            if (existing.isEmpty()) {
-                UUID id = UUID.randomUUID();
-                db.sql("""
-                    INSERT INTO merchant_gl_account
-                    (id, merchant_id, account_code, account_name, account_category, subcategory, normal_balance, balance_pesewas, currency, is_active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'GHS', true)
-                """).params(id, merchantId, std.code(), std.name(), std.category().name(),
-                        std.subcategory(), std.normalBalance().name())
-                .update();
-            }
+            UUID id = UUID.randomUUID();
+            db.sql("""
+                INSERT INTO merchant_gl_account
+                (id, merchant_id, account_code, account_name, account_category, subcategory, normal_balance, balance_pesewas, currency, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'GHS', true)
+                ON CONFLICT (merchant_id, account_code) DO NOTHING
+            """).params(id, merchantId, std.code(), std.name(), std.category().name(),
+                    std.subcategory(), std.normalBalance().name())
+            .update();
         }
     }
 
@@ -292,11 +286,92 @@ public class MerchantGeneralLedgerService {
         ));
     }
 
+    private List<GlAccount> listAccountsAsOf(UUID merchantId, LocalDate asOfDate) {
+        LocalDate effectiveAsOf = asOfDate != null ? asOfDate : LocalDate.now();
+        return db.sql("""
+            SELECT a.id, a.merchant_id, a.account_code, a.account_name, a.account_category,
+                   a.subcategory, a.normal_balance, a.currency, a.is_active,
+                   CASE WHEN a.normal_balance = 'DEBIT'
+                        THEN COALESCE(agg.total_debit, 0) - COALESCE(agg.total_credit, 0)
+                        ELSE COALESCE(agg.total_credit, 0) - COALESCE(agg.total_debit, 0)
+                   END AS balance_pesewas
+            FROM merchant_gl_account a
+            LEFT JOIN (
+                SELECT l.account_id,
+                       SUM(l.debit_pesewas) AS total_debit,
+                       SUM(l.credit_pesewas) AS total_credit
+                FROM merchant_gl_journal_line l
+                JOIN merchant_gl_journal_entry e ON e.id = l.journal_entry_id
+                WHERE e.merchant_id = ?
+                  AND e.status IN ('POSTED', 'REVERSED')
+                  AND e.entry_date <= ?
+                GROUP BY l.account_id
+            ) agg ON agg.account_id = a.id
+            WHERE a.merchant_id = ?
+            ORDER BY a.account_code ASC
+        """).params(merchantId, effectiveAsOf, merchantId)
+        .query((rs, rowNum) -> new GlAccount(
+                rs.getObject("id", UUID.class),
+                rs.getObject("merchant_id", UUID.class),
+                rs.getString("account_code"),
+                rs.getString("account_name"),
+                GlAccountCategory.valueOf(rs.getString("account_category")),
+                rs.getString("subcategory"),
+                NormalBalance.valueOf(rs.getString("normal_balance")),
+                rs.getLong("balance_pesewas"),
+                rs.getString("currency"),
+                rs.getBoolean("is_active")
+        )).list();
+    }
+
+    private List<GlAccount> listAccountsForPeriod(UUID merchantId, LocalDate fromDate, LocalDate toDate) {
+        LocalDate effectiveTo = toDate != null ? toDate : LocalDate.now();
+        LocalDate effectiveFrom = fromDate != null ? fromDate : effectiveTo.withDayOfMonth(1);
+        if (effectiveFrom.isAfter(effectiveTo)) {
+            throw new IllegalArgumentException("Start date cannot be after end date");
+        }
+        return db.sql("""
+            SELECT a.id, a.merchant_id, a.account_code, a.account_name, a.account_category,
+                   a.subcategory, a.normal_balance, a.currency, a.is_active,
+                   CASE WHEN a.normal_balance = 'DEBIT'
+                        THEN COALESCE(agg.total_debit, 0) - COALESCE(agg.total_credit, 0)
+                        ELSE COALESCE(agg.total_credit, 0) - COALESCE(agg.total_debit, 0)
+                   END AS balance_pesewas
+            FROM merchant_gl_account a
+            LEFT JOIN (
+                SELECT l.account_id,
+                       SUM(l.debit_pesewas) AS total_debit,
+                       SUM(l.credit_pesewas) AS total_credit
+                FROM merchant_gl_journal_line l
+                JOIN merchant_gl_journal_entry e ON e.id = l.journal_entry_id
+                WHERE e.merchant_id = ?
+                  AND e.status IN ('POSTED', 'REVERSED')
+                  AND e.entry_date BETWEEN ? AND ?
+                GROUP BY l.account_id
+            ) agg ON agg.account_id = a.id
+            WHERE a.merchant_id = ?
+            ORDER BY a.account_code ASC
+        """).params(merchantId, effectiveFrom, effectiveTo, merchantId)
+        .query((rs, rowNum) -> new GlAccount(
+                rs.getObject("id", UUID.class),
+                rs.getObject("merchant_id", UUID.class),
+                rs.getString("account_code"),
+                rs.getString("account_name"),
+                GlAccountCategory.valueOf(rs.getString("account_category")),
+                rs.getString("subcategory"),
+                NormalBalance.valueOf(rs.getString("normal_balance")),
+                rs.getLong("balance_pesewas"),
+                rs.getString("currency"),
+                rs.getBoolean("is_active")
+        )).list();
+    }
+
     /**
      * Generates a complete Trial Balance report verifying arithmetic equality of debits and credits.
      */
     public TrialBalanceReport generateTrialBalance(UUID merchantId, LocalDate asOfDate) {
-        List<GlAccount> accounts = listAccounts(merchantId);
+        LocalDate effectiveAsOf = asOfDate != null ? asOfDate : LocalDate.now();
+        List<GlAccount> accounts = listAccountsAsOf(merchantId, effectiveAsOf);
         List<TrialBalanceLine> lines = new ArrayList<>();
         long totalDebit = 0;
         long totalCredit = 0;
@@ -333,14 +408,16 @@ public class MerchantGeneralLedgerService {
             totalCredit += creditPart;
         }
 
-        return new TrialBalanceReport(merchantId, asOfDate, lines, totalDebit, totalCredit, totalDebit == totalCredit);
+        return new TrialBalanceReport(merchantId, effectiveAsOf, lines, totalDebit, totalCredit, totalDebit == totalCredit);
     }
 
     /**
      * Generates automated Profit & Loss Statement (Income Statement) for a date range.
      */
     public ProfitAndLossReport generateProfitAndLoss(UUID merchantId, LocalDate fromDate, LocalDate toDate) {
-        List<GlAccount> accounts = listAccounts(merchantId);
+        LocalDate effectiveTo = toDate != null ? toDate : LocalDate.now();
+        LocalDate effectiveFrom = fromDate != null ? fromDate : effectiveTo.withDayOfMonth(1);
+        List<GlAccount> accounts = listAccountsForPeriod(merchantId, effectiveFrom, effectiveTo);
 
         long revenue = 0;
         long cogs = 0;
@@ -359,14 +436,15 @@ public class MerchantGeneralLedgerService {
         long grossProfit = revenue - cogs;
         long netProfit = grossProfit - expenses;
 
-        return new ProfitAndLossReport(merchantId, fromDate, toDate, revenue, cogs, grossProfit, expenses, netProfit);
+        return new ProfitAndLossReport(merchantId, effectiveFrom, effectiveTo, revenue, cogs, grossProfit, expenses, netProfit);
     }
 
     /**
      * Generates automated Balance Sheet as of a specified date.
      */
     public BalanceSheetReport generateBalanceSheet(UUID merchantId, LocalDate asOfDate) {
-        List<GlAccount> accounts = listAccounts(merchantId);
+        LocalDate effectiveAsOf = asOfDate != null ? asOfDate : LocalDate.now();
+        List<GlAccount> accounts = listAccountsAsOf(merchantId, effectiveAsOf);
 
         long assets = 0;
         long liabilities = 0;
@@ -391,6 +469,6 @@ public class MerchantGeneralLedgerService {
 
         boolean isBalanced = (assets == liabilities + totalEquityAndNetIncome);
 
-        return new BalanceSheetReport(merchantId, asOfDate, assets, liabilities, equity, netIncome, isBalanced);
+        return new BalanceSheetReport(merchantId, effectiveAsOf, assets, liabilities, equity, netIncome, isBalanced);
     }
 }
