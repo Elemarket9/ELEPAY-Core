@@ -246,7 +246,7 @@ public class MakerCheckerService {
         }
     }
 
-    private static void validateProposalPayload(String actionType, String resourceId, UUID merchantId, Map<String, Object> payload) {
+    static void validateProposalPayload(String actionType, String resourceId, UUID merchantId, Map<String, Object> payload) {
         switch (actionType) {
             case "KILL_SWITCH_CHANGE" -> {
                 Object targetObj = payload.get("target");
@@ -278,12 +278,88 @@ public class MakerCheckerService {
                     throw ApiException.badRequest("invalid_proposal_payload", "MERCHANT_UNFREEZE requires merchantId");
                 }
             }
+            case "ESCROW_RELEASE" -> {
+                if (merchantId == null) {
+                    throw ApiException.badRequest("invalid_proposal_payload", "ESCROW_RELEASE requires merchantId");
+                }
+                Object ref = payload.get("reference");
+                if (ref == null || String.valueOf(ref).isBlank() || "null".equalsIgnoreCase(String.valueOf(ref).trim())) {
+                    throw ApiException.badRequest("invalid_proposal_payload", "ESCROW_RELEASE requires non-blank payload.reference");
+                }
+                if (parseWholeNonNegativeInt(payload.get("line")) == null) {
+                    throw ApiException.badRequest("invalid_proposal_payload", "ESCROW_RELEASE requires non-negative integer payload.line");
+                }
+                Long amt = parseWholePositiveLong(payload.get("amount"));
+                if (amt == null || amt <= 0) {
+                    throw ApiException.badRequest("invalid_proposal_payload", "ESCROW_RELEASE requires positive integer payload.amount");
+                }
+            }
             default -> {
                 if ((resourceId == null || resourceId.isBlank()) && payload.isEmpty()) {
                     throw ApiException.badRequest("invalid_proposal_payload", actionType + " requires a resourceId or non-empty payload");
                 }
             }
         }
+    }
+
+    private static Integer parseWholeNonNegativeInt(Object value) {
+        Long whole = parseWholeLong(value);
+        if (whole == null || whole < 0 || whole > Integer.MAX_VALUE) {
+            return null;
+        }
+        return whole.intValue();
+    }
+
+    private static Long parseWholePositiveLong(Object value) {
+        Long whole = parseWholeLong(value);
+        return (whole != null && whole > 0) ? whole : null;
+    }
+
+    private static Long parseWholeLong(Object value) {
+        if (value == null) return null;
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            return ((Number) value).longValue();
+        }
+        if (value instanceof java.math.BigInteger bi) {
+            try {
+                return bi.longValueExact();
+            } catch (ArithmeticException e) {
+                return null;
+            }
+        }
+        if (value instanceof java.math.BigDecimal bd) {
+            try {
+                return bd.longValueExact();
+            } catch (ArithmeticException e) {
+                return null;
+            }
+        }
+        if (value instanceof Float || value instanceof Double) {
+            double d = ((Number) value).doubleValue();
+            if (!Double.isFinite(d)) return null;
+            try {
+                return java.math.BigDecimal.valueOf(d).longValueExact();
+            } catch (ArithmeticException e) {
+                return null;
+            }
+        }
+        if (value instanceof Number n) {
+            try {
+                return new java.math.BigDecimal(n.toString()).longValueExact();
+            } catch (RuntimeException e) {
+                return null;
+            }
+        }
+        if (value instanceof String s) {
+            String trimmed = s.trim();
+            if (trimmed.isEmpty() || "null".equalsIgnoreCase(trimmed)) return null;
+            try {
+                return Long.parseLong(trimmed);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     @Transactional

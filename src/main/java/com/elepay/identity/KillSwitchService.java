@@ -75,11 +75,28 @@ public class KillSwitchService {
     private volatile String globalFrozenBy = null;
     private final Set<UUID> frozenMerchants = ConcurrentHashMap.newKeySet();
     private final Map<UUID, String> merchantFrozenBy = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> configuredDefaults;
     private final Map<String, Boolean> moduleStates = new ConcurrentHashMap<>();
     private final Map<String, String> moduleChangedBy = new ConcurrentHashMap<>();
     private final Map<String, String> moduleDisabledBy = new ConcurrentHashMap<>();
     private volatile boolean controlsUnreadable = false;
     private volatile boolean redisObservedHealthy = false;
+
+    public KillSwitchService(
+            JdbcClient db,
+            Audit audit,
+            OpsQueue ops,
+            StringRedisTemplate redis,
+            boolean strictStage1,
+            boolean posEnabled,
+            boolean fxEnabled,
+            boolean consumerWalletEnabled,
+            boolean ussdEnabled,
+            boolean mandatesEnabled
+    ) {
+        this(db, audit, ops, redis, strictStage1, posEnabled, fxEnabled,
+                consumerWalletEnabled, ussdEnabled, mandatesEnabled, true);
+    }
 
     @Autowired
     public KillSwitchService(
@@ -92,7 +109,8 @@ public class KillSwitchService {
             @Value("${elepay.stage1.module.fx.enabled:true}") boolean fxEnabled,
             @Value("${elepay.stage1.module.consumer-wallet.enabled:true}") boolean consumerWalletEnabled,
             @Value("${elepay.stage1.module.ussd.enabled:true}") boolean ussdEnabled,
-            @Value("${elepay.stage1.module.mandates.enabled:true}") boolean mandatesEnabled
+            @Value("${elepay.stage1.module.mandates.enabled:true}") boolean mandatesEnabled,
+            @Value("${elepay.stage1.module.restaurant.enabled:true}") boolean restaurantEnabled
     ) {
         this.db = db;
         this.audit = audit;
@@ -100,28 +118,32 @@ public class KillSwitchService {
         this.redis = redis;
         this.redisBreaker = new RedisBreaker(5_000L);
 
+        Map<String, Boolean> defaults = new LinkedHashMap<>();
         // Default-off non-Stage-1 modules
-        moduleStates.put("lending", !strictStage1);
-        moduleStates.put("virtual-cards", !strictStage1);
-        moduleStates.put("bill-payments", !strictStage1);
-        moduleStates.put("agent-banking", !strictStage1);
-        moduleStates.put("fx-trading", !strictStage1);
+        defaults.put("lending", !strictStage1);
+        defaults.put("virtual-cards", !strictStage1);
+        defaults.put("bill-payments", !strictStage1);
+        defaults.put("agent-banking", !strictStage1);
+        defaults.put("fx-trading", !strictStage1);
 
         // Runtime-togglable modules
-        moduleStates.put("pos", posEnabled);
-        moduleStates.put("fx", fxEnabled);
-        moduleStates.put("consumer-wallet", consumerWalletEnabled);
-        moduleStates.put("consumer-w2w", consumerWalletEnabled);
-        moduleStates.put("ussd", ussdEnabled);
-        moduleStates.put("mandates", mandatesEnabled);
+        defaults.put("pos", posEnabled);
+        defaults.put("fx", fxEnabled);
+        defaults.put("consumer-wallet", consumerWalletEnabled);
+        defaults.put("consumer-w2w", consumerWalletEnabled);
+        defaults.put("ussd", ussdEnabled);
+        defaults.put("mandates", mandatesEnabled);
 
         // Launch payment switches (on by default; the admin dashboard turns them off and on at runtime).
         // Rail switches stop NEW payments only: status checks, recovery of in-flight payments and refunds go on.
-        moduleStates.put(CARD_PAYMENTS, true);
-        moduleStates.put(MTN_COLLECTIONS, true);
-        moduleStates.put(MTN_PAYOUTS, true);
-        moduleStates.put(CHECKOUT, true);
-        moduleStates.put(RESTAURANT, true);
+        defaults.put(CARD_PAYMENTS, true);
+        defaults.put(MTN_COLLECTIONS, true);
+        defaults.put(MTN_PAYOUTS, true);
+        defaults.put(CHECKOUT, true);
+        defaults.put(RESTAURANT, restaurantEnabled);
+
+        this.configuredDefaults = Map.copyOf(defaults);
+        moduleStates.putAll(this.configuredDefaults);
         loadControls();
     }
 
@@ -137,7 +159,10 @@ public class KillSwitchService {
                         String key = rs.getString(1);
                         boolean enabled = rs.getBoolean(2);
                         String updatedBy = rs.getString(3);
-                        moduleStates.put(key, enabled);
+                        boolean isSeedRow = updatedBy == null || "system".equalsIgnoreCase(updatedBy.trim());
+                        if (!isSeedRow || !configuredDefaults.containsKey(key)) {
+                            moduleStates.put(key, enabled);
+                        }
                         if (updatedBy != null) {
                             moduleChangedBy.put(key, updatedBy);
                             if (!enabled) {
@@ -167,6 +192,14 @@ public class KillSwitchService {
         } catch (RuntimeException e) {
             controlsUnreadable = true;
         }
+    }
+
+    void reload() {
+        moduleStates.clear();
+        moduleStates.putAll(configuredDefaults);
+        moduleChangedBy.clear();
+        moduleDisabledBy.clear();
+        loadControls();
     }
 
     public String globalFrozenBy() { return globalFrozenBy; }
@@ -238,6 +271,10 @@ public class KillSwitchService {
         }
         if (actor != null) {
             moduleChangedBy.put(key, actor);
+            if ("consumer-wallet".equals(key) || "consumer-w2w".equals(key)) {
+                moduleChangedBy.put("consumer-wallet", actor);
+                moduleChangedBy.put("consumer-w2w", actor);
+            }
         }
         if (!enabled) {
             if (actor != null) {
@@ -255,13 +292,19 @@ public class KillSwitchService {
             }
         }
         if (db != null) {
-            db.sql("""
-                    INSERT INTO module_kill_switch (module_key, enabled, stage, reason, updated_by, updated_at)
-                    VALUES (:k, :e, :s, :r, :by, now())
-                    ON CONFLICT (module_key) DO UPDATE SET
-                        enabled = :e, reason = :r, updated_by = :by, updated_at = now()""")
-                    .param("k", key).param("e", enabled).param("s", enabled ? 1 : 2)
-                    .param("r", reason).param("by", actor != null ? actor : "system").update();
+            String dbActor = actor != null ? actor : "runtime-system";
+            List<String> dbKeys = ("consumer-wallet".equals(key) || "consumer-w2w".equals(key))
+                    ? List.of("consumer-wallet", "consumer-w2w")
+                    : List.of(key);
+            for (String dbKey : dbKeys) {
+                db.sql("""
+                        INSERT INTO module_kill_switch (module_key, enabled, stage, reason, updated_by, updated_at)
+                        VALUES (:k, :e, :s, :r, :by, now())
+                        ON CONFLICT (module_key) DO UPDATE SET
+                            enabled = :e, reason = :r, updated_by = :by, updated_at = now()""")
+                        .param("k", dbKey).param("e", enabled).param("s", enabled ? 1 : 2)
+                        .param("r", reason).param("by", dbActor).update();
+            }
         }
         if (audit != null && actor != null) {
             audit.record(actor, enabled ? "kill_switch.module_enabled" : "kill_switch.module_disabled",
@@ -503,6 +546,11 @@ public class KillSwitchService {
         moduleStates.put("consumer-w2w", true);
         moduleStates.put("ussd", true);
         moduleStates.put("mandates", true);
+        moduleStates.put(CARD_PAYMENTS, true);
+        moduleStates.put(MTN_COLLECTIONS, true);
+        moduleStates.put(MTN_PAYOUTS, true);
+        moduleStates.put(CHECKOUT, true);
+        moduleStates.put(RESTAURANT, true);
         for (var entry : moduleStates.entrySet()) {
             writeRedis(REDIS_MODULE_PREFIX + entry.getKey(), Boolean.toString(entry.getValue()));
         }

@@ -9,6 +9,7 @@ import com.elepay.common.qr.EmvcoQr;
 import com.elepay.identity.Actor;
 import com.elepay.merchant.MerchantAccess;
 import com.elepay.rails.RailTransactions;
+import com.elepay.security.DualControl;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import java.time.OffsetDateTime;
@@ -33,10 +34,12 @@ class Checkouts {
     private final JdbcClient db;
     private final TransactionTemplate tx;
     private final com.elepay.common.FinancialTxRetry txRetry;
+    private final DualControl dualControl;
     private final String publicBaseUrl;
 
     Checkouts(CheckoutService checkouts, MerchantAccess access, Idempotency idempotency, RailTransactions rails,
-              JdbcClient db, PlatformTransactionManager tm, @Value("${elepay.public-base-url}") String publicBaseUrl) {
+              JdbcClient db, PlatformTransactionManager tm, DualControl dualControl,
+              @Value("${elepay.public-base-url}") String publicBaseUrl) {
         this.checkouts = checkouts;
         this.access = access;
         this.idempotency = idempotency;
@@ -44,6 +47,7 @@ class Checkouts {
         this.db = db;
         this.tx = new TransactionTemplate(tm);
         this.txRetry = new com.elepay.common.FinancialTxRetry(tm);
+        this.dualControl = dualControl;
         this.publicBaseUrl = publicBaseUrl;
     }
 
@@ -260,7 +264,7 @@ class Checkouts {
                 rules, request.changeReason(), a.actor().subject());
     }
 
-    /** Releases retained merchant reserves (ops only, idempotent). */
+    /** Releases retained merchant reserves (ops only, idempotent, dual-controlled when enforced). */
     @PostMapping("/checkouts/{reference}/allocations/{line}/release-reserve")
     public CheckoutService.ReserveRelease releaseReserve(@PathVariable UUID merchantId,
                                                          @PathVariable String reference,
@@ -272,6 +276,14 @@ class Checkouts {
         if (key == null || key.isBlank()) {
             throw ApiException.badRequest("missing_idempotency_key", "Idempotency-Key header is required");
         }
+        Map<String, Object> proposalPayload = new java.util.LinkedHashMap<>();
+        proposalPayload.put("reference", reference);
+        proposalPayload.put("line", line);
+        proposalPayload.put("amount", request.amount());
+        if (request.reason() != null) proposalPayload.put("reason", request.reason());
+        proposalPayload.put("idempotencyKey", key);
+        dualControl.hold("ESCROW_RELEASE", "checkout_allocation", reference + ":" + line,
+                merchantId, proposalPayload, request.reason(), actor);
         return txRetry.execute(() -> idempotency.execute("reserve-release:" + merchantId, key,
                 Map.of("reference", reference, "line", line, "request", request), CheckoutService.ReserveRelease.class,
                 () -> checkouts.releaseReserve(merchantId, reference, line, request.amount(), request.reason(), actor.subject(), key)));

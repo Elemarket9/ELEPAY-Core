@@ -3,6 +3,7 @@ package com.elepay.security;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.elepay.common.DormantModules;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 
@@ -11,6 +12,7 @@ class ProductionSafetyCheckTest {
     MockEnvironment safe() {
         return new MockEnvironment()
                 .withProperty("elepay.rails.sandbox.enabled", "false")
+                .withProperty(DormantModules.PROPERTY, "false")
                 .withProperty("spring.security.oauth2.resourceserver.jwt.issuer-uri", "https://id.elepay.example/realms/elepay")
                 .withProperty("elepay.security.signing-secret", "Qm9kZ2V0LXJhbmRvbS1zZWNyZXQtdmFsdWUtNDJ4eXo=")
                 .withProperty("elepay.vault.master-key", "o3Hc0gWk0Gk2cJ7Vq0r9b2p8Yz1mN4tE6aS5dF7gH8k=")
@@ -87,5 +89,42 @@ class ProductionSafetyCheckTest {
         var env = safe().withProperty("elepay.emtech.enabled", "true");
         assertThat(ProductionSafetyCheck.problems(env))
                 .anyMatch(p -> p.contains("elepay.emtech.enabled"));
+    }
+
+    @Test
+    void dormantModulesMustBeExplicitlyFalseInProduction() {
+        var enabled = safe().withProperty(DormantModules.PROPERTY, "true");
+        assertThat(ProductionSafetyCheck.problems(enabled))
+                .anyMatch(p -> p.contains(DormantModules.PROPERTY));
+        assertThatThrownBy(() -> new ProductionSafetyCheck(enabled))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(DormantModules.PROPERTY);
+
+        var invalid = safe().withProperty(DormantModules.PROPERTY, "invalid");
+        assertThat(ProductionSafetyCheck.problems(invalid))
+                .anyMatch(p -> p.contains(DormantModules.PROPERTY));
+
+        var blank = safe().withProperty(DormantModules.PROPERTY, "");
+        assertThat(ProductionSafetyCheck.problems(blank))
+                .anyMatch(p -> p.contains(DormantModules.PROPERTY));
+
+        var base = safe();
+        var missing = new MockEnvironment();
+        for (String key : new String[]{
+                "elepay.rails.sandbox.enabled", "spring.security.oauth2.resourceserver.jwt.issuer-uri",
+                "elepay.security.signing-secret", "elepay.vault.master-key", "elepay.outbound.allow-http",
+                "elepay.outbound.allow-private-hosts", "elepay.integrity.mac-key",
+                "elepay.integrity.ed25519-private-key", "elepay.integrity.mldsa65-private-key",
+                "spring.security.oauth2.resourceserver.jwt.audiences", "server.forward-headers-strategy",
+                "elepay.pos.dukpt.bdk-hex", "elepay.environment", "elepay.security.trusted-proxies",
+                "elepay.outbound.partner-egress.allowed-hosts"}) {
+            missing.setProperty(key, base.getProperty(key));
+        }
+        assertThat(ProductionSafetyCheck.problems(missing))
+                .anyMatch(p -> p.contains(DormantModules.PROPERTY));
+
+        var upperFalse = safe().withProperty(DormantModules.PROPERTY, " FALSE ");
+        assertThat(ProductionSafetyCheck.problems(upperFalse)).isEmpty();
+        new ProductionSafetyCheck(upperFalse);
     }
 }

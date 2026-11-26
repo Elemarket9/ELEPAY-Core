@@ -1,5 +1,6 @@
 package com.elepay.security;
 
+import com.elepay.common.DormantModules;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -152,6 +153,12 @@ public class ProductionSafetyCheck {
         }
         if (!env.getProperty("elepay.stage1.strict-kill-switch-enabled", Boolean.class, true)) {
             p.add("elepay.stage1.strict-kill-switch-enabled must be true in production");
+        }
+        String dormantModulesEnabled = env.getProperty(DormantModules.PROPERTY);
+        if (dormantModulesEnabled == null || !"false".equalsIgnoreCase(dormantModulesEnabled.trim())) {
+            p.add(DormantModules.PROPERTY
+                    + " must be explicitly set to false in production (current value: '"
+                    + dormantModulesEnabled + "')");
         }
         String proxies = env.getProperty("elepay.security.trusted-proxies", "");
         if ("native".equalsIgnoreCase(env.getProperty("server.forward-headers-strategy", "")) && proxies.isBlank()) {

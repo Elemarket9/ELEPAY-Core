@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.elepay.common.ApiException;
+import com.elepay.common.DormantModules;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -104,6 +105,61 @@ class SecurityHardeningBatch2Test {
                 Map.of(), "reason", "ops-1"))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("MERCHANT_UNFREEZE");
+
+        UUID merchantId = UUID.randomUUID();
+        assertThatThrownBy(() -> service.propose("ESCROW_RELEASE", "checkout_allocation", "CHK-1:0", null,
+                Map.of("reference", "CHK-1", "line", 0, "amount", 1000L), "reason", "ops-1"))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> {
+                    ApiException apiEx = (ApiException) ex;
+                    assertThat(apiEx.status()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST);
+                    assertThat(apiEx.code()).isEqualTo("invalid_proposal_payload");
+                })
+                .hasMessageContaining("merchantId");
+
+        assertThatThrownBy(() -> service.propose("ESCROW_RELEASE", "checkout_allocation", "CHK-1:0", merchantId,
+                Map.of("reference", "   ", "line", 0, "amount", 1000L), "reason", "ops-1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("reference");
+
+        assertThatThrownBy(() -> service.propose("ESCROW_RELEASE", "checkout_allocation", "CHK-1:0", merchantId,
+                Map.of("reference", "CHK-1", "line", -1, "amount", 1000L), "reason", "ops-1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("line");
+
+        assertThatThrownBy(() -> service.propose("ESCROW_RELEASE", "checkout_allocation", "CHK-1:0", merchantId,
+                Map.of("reference", "CHK-1", "line", 1.5, "amount", 1000L), "reason", "ops-1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("line");
+
+        assertThatThrownBy(() -> service.propose("ESCROW_RELEASE", "checkout_allocation", "CHK-1:0", merchantId,
+                Map.of("reference", "CHK-1", "line", "abc", "amount", 1000L), "reason", "ops-1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("line");
+
+        assertThatThrownBy(() -> service.propose("ESCROW_RELEASE", "checkout_allocation", "CHK-1:0", merchantId,
+                Map.of("reference", "CHK-1", "line", 0, "amount", 0L), "reason", "ops-1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("amount");
+
+        assertThatThrownBy(() -> service.propose("ESCROW_RELEASE", "checkout_allocation", "CHK-1:0", merchantId,
+                Map.of("reference", "CHK-1", "line", 0, "amount", -50L), "reason", "ops-1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("amount");
+
+        assertThatThrownBy(() -> service.propose("ESCROW_RELEASE", "checkout_allocation", "CHK-1:0", merchantId,
+                Map.of("reference", "CHK-1", "line", 0, "amount", 10.5), "reason", "ops-1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("amount");
+
+        assertThatThrownBy(() -> service.propose("ESCROW_RELEASE", "checkout_allocation", "CHK-1:0", merchantId,
+                Map.of("reference", "CHK-1", "line", 0, "amount", "not-a-number"), "reason", "ops-1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("amount");
+
+        org.assertj.core.api.Assertions.assertThatNoException().isThrownBy(() ->
+                MakerCheckerService.validateProposalPayload("ESCROW_RELEASE", "CHK-1:0", merchantId,
+                        Map.of("reference", "CHK-1", "line", 0, "amount", 1500L)));
     }
 
     @Test
@@ -112,7 +168,8 @@ class SecurityHardeningBatch2Test {
 
         var relaxedStage1 = new MockEnvironment();
         for (String key : new String[]{
-                "elepay.rails.sandbox.enabled", "spring.security.oauth2.resourceserver.jwt.issuer-uri",
+                "elepay.rails.sandbox.enabled", DormantModules.PROPERTY,
+                "spring.security.oauth2.resourceserver.jwt.issuer-uri",
                 "elepay.security.signing-secret", "elepay.vault.master-key", "elepay.outbound.allow-http",
                 "elepay.outbound.allow-private-hosts", "elepay.integrity.mac-key",
                 "elepay.integrity.ed25519-private-key", "elepay.integrity.mldsa65-private-key",
@@ -126,6 +183,11 @@ class SecurityHardeningBatch2Test {
                 .anyMatch(p -> p.contains("elepay.stage1.strict-kill-switch-enabled"));
 
         relaxedStage1.setProperty("elepay.stage1.strict-kill-switch-enabled", "true");
+        relaxedStage1.setProperty(DormantModules.PROPERTY, "true");
+        assertThat(ProductionSafetyCheck.problems(relaxedStage1))
+                .anyMatch(p -> p.contains(DormantModules.PROPERTY));
+
+        relaxedStage1.setProperty(DormantModules.PROPERTY, "false");
         relaxedStage1.setProperty("elepay.security.trusted-proxies", "0.0.0.0/1");
         assertThat(ProductionSafetyCheck.problems(relaxedStage1))
                 .anyMatch(p -> p.contains("trusted-proxies"));
