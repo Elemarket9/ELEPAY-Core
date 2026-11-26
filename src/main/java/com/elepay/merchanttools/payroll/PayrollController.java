@@ -128,6 +128,11 @@ public class PayrollController {
         if (batch.total() != net || batch.itemCount() != slips.size())
             throw ApiException.unprocessable("payout_batch_mismatch",
                     "That payout batch does not match this payroll (" + slips.size() + " staff, net " + net + " pesewas)");
+        long failedCount = batch.statusCounts() == null ? 0L : batch.statusCounts().getOrDefault("failed", 0L);
+        if (failedCount > 0) {
+            throw ApiException.unprocessable("payout_batch_failed",
+                    "Cannot link a payout batch that has failed items (" + failedCount + " failed)");
+        }
         try {
             return payroll.recordPayoutSubmission(merchantId, runId, batch.reference());
         } catch (IllegalStateException | IllegalArgumentException e) {

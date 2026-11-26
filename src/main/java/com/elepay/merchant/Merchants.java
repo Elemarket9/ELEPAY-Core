@@ -481,20 +481,34 @@ class Merchants {
     public Map<String, Object> resendOob(@PathVariable UUID id, @PathVariable UUID destination) {
         var a = access.require(id, MANAGE);
         a.actor().requireUser();
-        var statusOpt = db.sql("""
-                SELECT oob_verification_status
+        var rowOpt = db.sql("""
+                SELECT oob_verification_status, COALESCE(oob_attempts, 0), updated_at
                 FROM settlement_destination
                 WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m AND status = 'active'
                 FOR UPDATE""")
                 .param("d", destination).param("m", id)
-                .query(String.class).optional();
-        if (statusOpt.isEmpty()) throw ApiException.notFound("Destination not found");
-        if ("confirmed".equals(statusOpt.get())) {
+                .query((rs, i) -> new Object[]{
+                        rs.getString(1),
+                        rs.getInt(2),
+                        rs.getObject(3, java.time.OffsetDateTime.class)})
+                .optional();
+        if (rowOpt.isEmpty()) throw ApiException.notFound("Destination not found");
+        String status = (String) rowOpt.get()[0];
+        int attempts = (Integer) rowOpt.get()[1];
+        java.time.OffsetDateTime updatedAt = (java.time.OffsetDateTime) rowOpt.get()[2];
+        if ("confirmed".equals(status)) {
             return Map.of("destinationId", destination, "oobVerificationStatus", "confirmed", "resent", false);
+        }
+        if (attempts >= 5) {
+            throw ApiException.forbidden("Out-of-band confirmation is locked; remove and re-add the destination");
+        }
+        java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
+        if (updatedAt != null && updatedAt.plusSeconds(30).isAfter(now)) {
+            throw ApiException.tooManyRequests("Please wait 30 seconds before requesting another confirmation code");
         }
         String oobToken = References.digits(6);
         String oobHash = com.elepay.common.Idempotency.sha256(oobToken);
-        java.time.OffsetDateTime oobExpires = java.time.OffsetDateTime.now().plusMinutes(15);
+        java.time.OffsetDateTime oobExpires = now.plusMinutes(15);
         String phone = access.contactPhone(id).orElse(null);
         String email = db.sql("SELECT contact_email FROM merchant WHERE id = :id").param("id", id)
                 .query(String.class).optional().orElse(null);
@@ -503,7 +517,6 @@ class Merchants {
                 UPDATE settlement_destination
                 SET oob_token_hash = :oobHash,
                     oob_expires_at = :oobExp,
-                    oob_attempts = 0,
                     updated_at = now()
                 WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m""")
                 .param("oobHash", oobHash).param("oobExp", oobExpires)

@@ -64,9 +64,18 @@ public class FxDualReconciliationService {
         long totalFee = 0;
 
         for (DualStatementLine line : lines) {
-            totalSource += line.sourceAmount();
-            totalDest += line.destinationAmount();
-            totalFee += line.feeAmount();
+            if (line.sourceAmount() < 0 || line.destinationAmount() < 0 || line.feeAmount() < 0) {
+                throw com.elepay.common.ApiException.badRequest("invalid_statement_line",
+                        "Statement amounts and fees must be non-negative");
+            }
+            try {
+                totalSource = Math.addExact(totalSource, line.sourceAmount());
+                totalDest = Math.addExact(totalDest, line.destinationAmount());
+                totalFee = Math.addExact(totalFee, line.feeAmount());
+            } catch (ArithmeticException e) {
+                throw com.elepay.common.ApiException.badRequest("statement_amount_overflow",
+                        "Statement line totals exceed maximum supported amount");
+            }
 
             var internal = db.sql("""
                     SELECT id, reference, source_currency, source_amount, destination_currency, destination_amount,

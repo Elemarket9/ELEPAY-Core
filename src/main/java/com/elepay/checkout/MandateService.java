@@ -233,7 +233,7 @@ public class MandateService {
         }
         merchants.require(merchantId, MerchantAccess.Permission.COLLECT);
 
-        return tx.execute(s -> idempotency.execute("mandate-charge:" + merchantId, key, request, MandateCharge.class,
+        return tx.execute(s -> idempotency.execute("mandate-charge:" + merchantId + ":" + mandateId, key, request, MandateCharge.class,
                 () -> doChargeMandate(merchantId, mandateId, key, request.amount(), request.description())));
     }
 
@@ -241,7 +241,7 @@ public class MandateService {
         var mandateOpt = db.sql("""
                 SELECT id, customer_id, merchant_id, currency, max_amount_pesewas, frequency, status,
                        consent_reference, created_at, updated_at
-                FROM mandate WHERE id = :id AND merchant_id = :m""")
+                FROM mandate WHERE id = :id AND merchant_id = :m FOR UPDATE""")
                 .param("id", mandateId).param("m", merchantId)
                 .query(MandateService::mapMandate).optional();
 
@@ -257,12 +257,16 @@ public class MandateService {
             throw ApiException.badRequest("amount_exceeds_mandate_max",
                     "Charge amount " + amount + " exceeds mandate ceiling " + mandate.maxAmountPesewas());
         }
+        if (!customers.isActive(mandate.customerId())) {
+            throw ApiException.forbidden("Customer account is not active and cannot be debited");
+        }
 
-        // Check if charge with this idempotency key already exists for this mandate
+        // Check if charge with this idempotency key already exists for THIS mandate (scoped)
         var existingCharge = db.sql("""
                 SELECT id, mandate_id, amount_pesewas, idempotency_key, status, failure_reason,
                        attempt_count, next_retry_at, created_at
-                FROM mandate_charge WHERE idempotency_key = :k""")
+                FROM mandate_charge WHERE mandate_id = :m AND idempotency_key = :k""")
+                .param("m", mandateId)
                 .param("k", key)
                 .query(MandateService::mapCharge).optional();
         if (existingCharge.isPresent()) {

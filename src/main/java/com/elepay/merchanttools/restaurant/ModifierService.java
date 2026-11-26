@@ -83,6 +83,9 @@ public class ModifierService {
 
     @Transactional
     public ModifierOption addModifierOption(UUID groupId, String name, long additionalPricePesewas) {
+        if (additionalPricePesewas < 0) {
+            throw new IllegalArgumentException("Modifier additional price cannot be negative");
+        }
         UUID id = UUID.randomUUID();
         db.sql("""
             INSERT INTO restaurant_modifier_option (id, group_id, name, additional_price_pesewas)

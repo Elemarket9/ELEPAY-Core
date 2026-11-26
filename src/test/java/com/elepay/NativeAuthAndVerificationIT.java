@@ -89,13 +89,17 @@ class NativeAuthAndVerificationIT extends PostgresTestBase {
         assertThat(loginVerified.get("verified").asBoolean()).isTrue();
         assertThat(loginVerified.get("accessToken").asString()).isNotBlank();
 
-        // 7. Password reset requires both Email + SMS codes
+        // 7. Password reset requires both Email + SMS codes, and reset challenge CANNOT be used on /v1/auth/verify (CRIT-01)
         JsonNode forgot = http.post().uri("/v1/auth/forgot-password")
                 .body(Map.of("identifier", email))
                 .retrieve().body(JsonNode.class);
         String resetChallengeId = forgot.get("challengeId").asString();
         var resetEmail = verificationDelivery.lastDispatchedForTest("email", email);
         var resetSms = verificationDelivery.lastDispatchedForTest("sms", phone);
+        int hijackStatus = http.post().uri("/v1/auth/verify")
+                .body(Map.of("challengeId", resetChallengeId, "emailCode", resetEmail.code(), "smsCode", resetSms.code()))
+                .exchange((req, res) -> res.getStatusCode().value());
+        assertThat(hijackStatus).isEqualTo(403);
         JsonNode resetRes = http.post().uri("/v1/auth/reset-password")
                 .body(Map.of(
                         "challengeId", resetChallengeId,

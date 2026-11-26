@@ -213,6 +213,9 @@ public class StockService {
             UUID referenceId,
             String notes
     ) {
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Deduction quantity must be positive");
+        }
         Stock stock = getOrCreateStock(warehouseId, variantId);
         if (stock.quantityOnHand().compareTo(quantity) < 0) {
             throw new IllegalStateException("Insufficient stock on hand: onHand=" + stock.quantityOnHand() + ", requested=" + quantity);

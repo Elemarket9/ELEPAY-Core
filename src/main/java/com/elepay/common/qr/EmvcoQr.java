@@ -237,7 +237,45 @@ public final class EmvcoQr {
         if (qrPayload == null || qrPayload.length() < 10) {
             return new Decoded(false, null, null, null, null, null, null, null, null, null, null, Map.of(), null, null, Map.of());
         }
-        Map<String, String> tags = parseTlv(qrPayload);
+        boolean hasDuplicateOrTrailing = false;
+        Map<String, String> tags = new LinkedHashMap<>();
+        int idx = 0;
+        while (idx + 4 <= qrPayload.length()) {
+            String tag = qrPayload.substring(idx, idx + 2);
+            int len;
+            try {
+                len = Integer.parseInt(qrPayload.substring(idx + 2, idx + 4));
+            } catch (NumberFormatException e) {
+                hasDuplicateOrTrailing = true;
+                break;
+            }
+            if (len < 0) {
+                hasDuplicateOrTrailing = true;
+                break;
+            }
+            int valStart = idx + 4;
+            int valEnd = valStart + len;
+            if (valEnd > qrPayload.length() || valEnd < valStart) {
+                hasDuplicateOrTrailing = true;
+                break;
+            }
+            if (tags.containsKey(tag)) {
+                hasDuplicateOrTrailing = true;
+                break;
+            }
+            tags.put(tag, qrPayload.substring(valStart, valEnd));
+            idx = valEnd;
+            if (TAG_CRC.equals(tag)) {
+                if (idx != qrPayload.length()) {
+                    hasDuplicateOrTrailing = true;
+                }
+                break;
+            }
+        }
+        if (idx != qrPayload.length()) {
+            hasDuplicateOrTrailing = true;
+        }
+
         String formatIndicator = tags.get(TAG_PAYLOAD_FORMAT_INDICATOR);
         String pointOfInitiation = tags.get(TAG_POINT_OF_INITIATION_METHOD);
         String merchantAccountInfo = tags.get(TAG_MERCHANT_ACCOUNT_INFO);
@@ -257,14 +295,15 @@ public final class EmvcoQr {
 
         boolean validCrc = false;
         String calculatedCrc = null;
-        if (crc != null && crc.length() == 4 && qrPayload.contains("6304" + crc)) {
-            int crcPos = qrPayload.lastIndexOf("6304");
-            String prefix = qrPayload.substring(0, crcPos + 4);
+        if (!hasDuplicateOrTrailing && crc != null && crc.length() == 4
+                && qrPayload.length() >= 8
+                && qrPayload.endsWith("6304" + crc)) {
+            String prefix = qrPayload.substring(0, qrPayload.length() - 4);
             calculatedCrc = calculateCrc(prefix);
             validCrc = calculatedCrc.equalsIgnoreCase(crc);
         }
 
-        boolean valid = validCrc && "01".equals(formatIndicator) && merchantAccountInfo != null;
+        boolean valid = !hasDuplicateOrTrailing && validCrc && "01".equals(formatIndicator) && merchantAccountInfo != null;
 
         return new Decoded(
                 valid,

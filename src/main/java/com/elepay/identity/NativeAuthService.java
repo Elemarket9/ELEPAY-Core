@@ -172,6 +172,9 @@ public class NativeAuthService {
             throw ApiException.badRequest("challenge_required", "Verification challenge ID is required");
         }
         ChallengeRow ch = loadChallengeForUpdate(challengeId);
+        if (!"register".equals(ch.purpose()) && !"login".equals(ch.purpose())) {
+            throw ApiException.forbidden("This verification challenge cannot be used to sign in");
+        }
         OffsetDateTime now = OffsetDateTime.now();
         if (ch.consumedAt() != null) {
             throw ApiException.forbidden("This verification challenge has already been used");

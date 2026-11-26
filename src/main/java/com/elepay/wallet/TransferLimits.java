@@ -115,7 +115,7 @@ public class TransferLimits {
                            AND o.status NOT IN ('failed', 'returned')), 0),
                        count(*) FILTER (WHERE o.created_at >= statement_timestamp() - interval '1 minute')
                 FROM wallet_operation o
-                WHERE o.customer_id = :sender AND o.kind = 'transfer_out'
+                WHERE o.customer_id = :sender AND o.kind IN ('transfer_out', 'payment')
                   AND o.created_at >= date_trunc('month', statement_timestamp(), 'Africa/Accra')
                 """).param("sender", sender)
                 .query((row, index) -> new Usage(row.getBigDecimal(1), row.getBigDecimal(2), row.getLong(3)))
@@ -170,7 +170,7 @@ public class TransferLimits {
     }
 
     /** Tier maximum balance applies to every credit, including top-ups. */
-    @Transactional(propagation = Propagation.REQUIRED)
+    @Transactional(propagation = Propagation.REQUIRED, noRollbackFor = ApiException.class)
     public void checkCredit(UUID customer, long amount) {
         if (amount <= 0) throw ApiException.badRequest("invalid_amount", "Amount must be positive");
         record CustomerStatus(int kycTier) {}

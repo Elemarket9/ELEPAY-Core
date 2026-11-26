@@ -190,6 +190,9 @@ public class RecipeCostingService {
     // Atomically deduct recipe ingredients from warehouse stock when a dish is prepared/ordered
     @Transactional
     public void deductRecipeStock(UUID menuItemVariantId, BigDecimal dishQuantity, UUID warehouseId, UUID referenceId) {
+        if (dishQuantity == null || dishQuantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("dishQuantity must be positive");
+        }
         Optional<Recipe> recipeOpt = findByMenuItemVariant(menuItemVariantId);
         if (recipeOpt.isEmpty()) {
             return; // No recipe configured for this menu item, skip

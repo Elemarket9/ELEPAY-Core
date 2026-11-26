@@ -207,6 +207,8 @@ public class PosOrderService {
             throw ApiException.badRequest("invalid_modifiers", "Modifiers must be a JSON array");
         }
         long total = 0L;
+        java.util.Set<UUID> seenOptionIds = new java.util.HashSet<>();
+        java.util.Map<UUID, Integer> groupCounts = new java.util.HashMap<>();
         for (JsonNode node : root) {
             String rawId = null;
             if (node.isString()) {
@@ -222,18 +224,33 @@ public class PosOrderService {
                 } catch (IllegalArgumentException e) {
                     throw ApiException.badRequest("invalid_modifiers", "Invalid modifier option ID");
                 }
-                long add = db.sql("""
-                        SELECT o.additional_price_pesewas
+                if (!seenOptionIds.add(optionId)) {
+                    throw ApiException.badRequest("duplicate_modifier", "Duplicate modifier option selected");
+                }
+                record ModRow(UUID groupId, long price, int maxSelection) {}
+                ModRow mod = db.sql("""
+                        SELECT o.group_id, o.additional_price_pesewas, g.max_selection
                         FROM restaurant_modifier_option o
                         JOIN restaurant_modifier_group g ON g.id = o.group_id
                         WHERE o.id = :id AND g.merchant_id = :m
                         """)
                         .param("id", optionId)
                         .param("m", merchantId)
-                        .query(Long.class)
+                        .query((rs, i) -> new ModRow(
+                                rs.getObject(1, UUID.class),
+                                rs.getLong(2),
+                                rs.getInt(3)))
                         .optional()
                         .orElseThrow(() -> ApiException.notFound("Modifier option not found"));
-                total = Math.addExact(total, add);
+                if (mod.price() < 0) {
+                    throw ApiException.badRequest("invalid_modifier_price", "Modifier price cannot be negative");
+                }
+                int count = groupCounts.merge(mod.groupId(), 1, Integer::sum);
+                if (mod.maxSelection() > 0 && count > mod.maxSelection()) {
+                    throw ApiException.badRequest("modifier_max_selection_exceeded",
+                            "Selected modifiers exceed group maximum of " + mod.maxSelection());
+                }
+                total = Math.addExact(total, mod.price());
             }
         }
         return total;

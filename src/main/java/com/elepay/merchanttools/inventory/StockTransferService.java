@@ -77,7 +77,13 @@ public class StockTransferService {
             .param("notes", notes)
             .update();
 
+        if (items == null || items.isEmpty()) {
+            throw new IllegalArgumentException("Transfer order must include at least one item");
+        }
         for (TransferItemInput item : items) {
+            if (item == null || item.quantity() == null || item.quantity().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("Transfer item quantity must be positive");
+            }
             UUID itemId = UUID.randomUUID();
             db.sql("""
                 INSERT INTO inventory_transfer_item (
@@ -107,6 +113,18 @@ public class StockTransferService {
             .optional();
     }
 
+    private TransferOrder lockTransferOrder(UUID id) {
+        return db.sql("""
+            SELECT id, merchant_id, source_warehouse_id, destination_warehouse_id,
+                   status, tracking_number, notes, dispatched_at, received_at, created_at
+            FROM inventory_transfer_order WHERE id = :id FOR UPDATE
+            """)
+            .param("id", id)
+            .query(TransferOrder.class)
+            .optional()
+            .orElseThrow();
+    }
+
     public List<TransferItem> listTransferItems(UUID transferId) {
         return db.sql("""
             SELECT id, transfer_id, variant_id, quantity_sent, quantity_received
@@ -119,7 +137,7 @@ public class StockTransferService {
 
     @Transactional
     public TransferOrder dispatchTransferOrder(UUID transferId) {
-        TransferOrder order = getTransferOrder(transferId).orElseThrow();
+        TransferOrder order = lockTransferOrder(transferId);
         if (!"REQUESTED".equals(order.status())) {
             throw new IllegalStateException("Transfer order cannot be dispatched from status: " + order.status());
         }
@@ -149,7 +167,7 @@ public class StockTransferService {
 
     @Transactional
     public TransferOrder receiveTransferOrder(UUID transferId, Map<UUID, BigDecimal> receivedQuantities) {
-        TransferOrder order = getTransferOrder(transferId).orElseThrow();
+        TransferOrder order = lockTransferOrder(transferId);
         if (!"DISPATCHED".equals(order.status())) {
             throw new IllegalStateException("Transfer order cannot be received from status: " + order.status());
         }
@@ -159,6 +177,13 @@ public class StockTransferService {
             BigDecimal qtyReceived = receivedQuantities != null && receivedQuantities.containsKey(item.variantId())
                     ? receivedQuantities.get(item.variantId())
                     : item.quantitySent();
+            if (qtyReceived == null || qtyReceived.compareTo(BigDecimal.ZERO) < 0) {
+                throw new IllegalArgumentException("Received quantity cannot be negative");
+            }
+            if (qtyReceived.compareTo(item.quantitySent()) > 0) {
+                throw new IllegalArgumentException("Received quantity (" + qtyReceived
+                        + ") cannot exceed dispatched quantity (" + item.quantitySent() + ")");
+            }
 
             db.sql("""
                 UPDATE inventory_transfer_item

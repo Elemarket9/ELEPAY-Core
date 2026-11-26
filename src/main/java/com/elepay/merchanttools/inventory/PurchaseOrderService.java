@@ -105,9 +105,17 @@ public class PurchaseOrderService {
             String poNumber,
             List<PoItemInput> items
     ) {
+        if (items == null || items.isEmpty()) {
+            throw new IllegalArgumentException("Purchase order must include at least one item");
+        }
         long totalCostPesewas = 0;
         for (PoItemInput item : items) {
-            totalCostPesewas += item.unitCostPesewas() * item.quantityOrdered().longValue();
+            if (item == null || item.quantityOrdered() == null || item.quantityOrdered().compareTo(BigDecimal.ZERO) <= 0
+                    || item.unitCostPesewas() < 0) {
+                throw new IllegalArgumentException("PO item quantity must be positive and unit cost non-negative");
+            }
+            long lineCost = Math.multiplyExact(item.unitCostPesewas(), item.quantityOrdered().longValue());
+            totalCostPesewas = Math.addExact(totalCostPesewas, lineCost);
         }
 
         UUID poId = UUID.randomUUID();
@@ -159,6 +167,18 @@ public class PurchaseOrderService {
             .optional();
     }
 
+    private PurchaseOrder lockPurchaseOrder(UUID id) {
+        return db.sql("""
+            SELECT id, merchant_id, supplier_id, warehouse_id, po_number, status,
+                   total_cost_pesewas, issued_at, completed_at, created_at
+            FROM inventory_purchase_order WHERE id = :id FOR UPDATE
+            """)
+            .param("id", id)
+            .query(PurchaseOrder.class)
+            .optional()
+            .orElseThrow();
+    }
+
     public List<PoItem> listPoItems(UUID poId) {
         return db.sql("""
             SELECT id, po_id, variant_id, unit_cost_pesewas, quantity_ordered, quantity_received
@@ -184,7 +204,7 @@ public class PurchaseOrderService {
 
     @Transactional
     public PurchaseOrder receivePoItems(UUID poId, Map<UUID, BigDecimal> receivedQuantities) {
-        PurchaseOrder po = getPurchaseOrder(poId).orElseThrow();
+        PurchaseOrder po = lockPurchaseOrder(poId);
         if (!"ISSUED".equals(po.status()) && !"PARTIAL_RECEIVED".equals(po.status())) {
             throw new IllegalStateException("PO cannot be received in status: " + po.status());
         }
@@ -197,6 +217,13 @@ public class PurchaseOrderService {
             BigDecimal newlyReceived = receivedQuantities != null && receivedQuantities.containsKey(item.variantId())
                     ? receivedQuantities.get(item.variantId())
                     : item.quantityOrdered().subtract(alreadyReceived);
+
+            if (newlyReceived == null || newlyReceived.compareTo(BigDecimal.ZERO) < 0) {
+                throw new IllegalArgumentException("Received quantity cannot be negative");
+            }
+            if (alreadyReceived.add(newlyReceived).compareTo(item.quantityOrdered()) > 0) {
+                throw new IllegalArgumentException("Cumulative received quantity exceeds ordered quantity (" + item.quantityOrdered() + ")");
+            }
 
             if (newlyReceived.compareTo(BigDecimal.ZERO) > 0) {
                 BigDecimal totalReceived = alreadyReceived.add(newlyReceived);

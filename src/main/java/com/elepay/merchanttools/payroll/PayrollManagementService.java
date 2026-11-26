@@ -274,21 +274,34 @@ public class PayrollManagementService {
      */
     @Transactional
     public void approvePayrollRun(UUID merchantId, UUID runId, String approvedBy) {
+        if (approvedBy == null || approvedBy.isBlank()) {
+            throw com.elepay.common.ApiException.forbidden("Approver identity is required");
+        }
+        var rowOpt = db.sql("""
+                SELECT status, initiated_by FROM payroll_run
+                WHERE id = ? AND merchant_id = ? FOR UPDATE""")
+                .params(runId, merchantId)
+                .query((rs, i) -> new String[]{rs.getString(1), rs.getString(2)})
+                .optional();
+        if (rowOpt.isEmpty() || !"SUBMITTED".equals(rowOpt.get()[0])) {
+            throw new IllegalStateException("Only a submitted payroll can be approved");
+        }
+        String initiatedBy = rowOpt.get()[1];
+        if (initiatedBy != null && initiatedBy.equalsIgnoreCase(approvedBy.trim())) {
+            throw com.elepay.common.ApiException.forbidden(
+                    "Maker-checker violation: the payroll initiator cannot approve their own payroll run");
+        }
         if (db.sql("UPDATE payroll_run SET status = 'APPROVED', approved_by = ? WHERE id = ? AND merchant_id = ? AND status = 'SUBMITTED'")
-                .params(approvedBy, runId, merchantId).update() != 1)
+                .params(approvedBy.trim(), runId, merchantId).update() != 1)
             throw new IllegalStateException("Only a submitted payroll can be approved");
     }
 
-    /**
-     * Hands an approved payroll run to a real payout batch (see recordPayoutSubmission) and posts salary
-     * expense, SSNIT and PAYE liabilities, and net wages owed to the merchant GL.
-     */
-    @Transactional
     /**
      * Records that an approved payroll was handed to ELEPAY Payouts as a real payout batch. Nothing here moves
      * money: the payslips become SUBMITTED with the batch reference, and net wages are booked as owed (Accrued
      * Wages) until the payout settles. Payment outcomes are tracked on the payout batch, not invented here.
      */
+    @Transactional
     public PayrollRunSummary recordPayoutSubmission(UUID merchantId, UUID runId, String payoutBatchReference) {
         if (payoutBatchReference == null || !payoutBatchReference.matches("[A-Za-z0-9_.:-]{3,64}"))
             throw new IllegalArgumentException("A real payout batch reference is required");
@@ -318,6 +331,15 @@ public class PayrollManagementService {
 
         if (!"APPROVED".equals(run.status())) {
             throw new IllegalStateException("Payroll run must be APPROVED before submitting it to payouts (current: " + run.status() + ")");
+        }
+
+        Integer alreadyLinked = db.sql("""
+                SELECT COUNT(*) FROM payroll_payslip
+                WHERE payout_reference = ? AND payroll_run_id <> ?""")
+                .params(payoutBatchReference, runId)
+                .query(Integer.class).single();
+        if (alreadyLinked != null && alreadyLinked > 0) {
+            throw new IllegalStateException("Payout batch reference " + payoutBatchReference + " is already linked to another payroll run");
         }
 
         OffsetDateTime now = OffsetDateTime.now();

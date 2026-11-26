@@ -61,12 +61,13 @@ public class PosOfflineSyncService {
             String message
     ) {}
 
-    public Optional<OfflineSyncLog> findByIdempotencyKey(String idempotencyKey) {
+    public Optional<OfflineSyncLog> findByTerminalAndIdempotencyKey(UUID terminalId, String idempotencyKey) {
         return db.sql("""
             SELECT id, terminal_id, offline_tx_id, idempotency_key, sync_status,
                    conflict_reason, resolution_applied, synced_at
-            FROM pos_offline_sync_log WHERE idempotency_key = :key
+            FROM pos_offline_sync_log WHERE terminal_id = :terminalId AND idempotency_key = :key
             """)
+            .param("terminalId", terminalId)
             .param("key", idempotencyKey)
             .query(OfflineSyncLog.class)
             .optional();
@@ -86,8 +87,8 @@ public class PosOfflineSyncService {
 
     @Transactional
     public SyncResult syncOfflineOrder(OfflineOrderPayload payload) {
-        // 1. Idempotency check: duplicate sync rejection/return by idempotencyKey or (terminal_id, offline_tx_id)
-        Optional<OfflineSyncLog> existingLog = findByIdempotencyKey(payload.idempotencyKey())
+        // 1. Idempotency check: duplicate sync rejection/return scoped by (terminal_id, idempotency_key) or (terminal_id, offline_tx_id)
+        Optional<OfflineSyncLog> existingLog = findByTerminalAndIdempotencyKey(payload.terminalId(), payload.idempotencyKey())
                 .or(() -> findByTerminalAndOfflineTxId(payload.terminalId(), payload.offlineTxId()));
         if (existingLog.isPresent()) {
             return new SyncResult(

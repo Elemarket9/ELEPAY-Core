@@ -268,12 +268,21 @@ public class KillSwitchService {
         if (path.startsWith("/v1/rails/card/tokens")) {
             return isModuleEnabled(CARD_PAYMENTS) ? null : CARD_PAYMENTS;
         }
-        // 6b. Checkout: creating checkouts and paying them. Order lookups and status pages stay up so
-        // customers who already paid can still see their order.
-        if (path.matches("/v1/merchants/[^/]+/checkouts/?") || path.matches("/v1/public/checkouts/[^/]+/pay(/.*)?")) {
-            return isModuleEnabled(CHECKOUT) ? null : CHECKOUT;
+        // 6b. Checkout: creating checkouts (merchant API, public links, merchant codes) and paying them.
+        // Order lookups and status pages stay up so customers who already paid can still see their order.
+        if (path.matches("/v1/merchants/[^/]+/checkouts/?")
+                || path.matches("/v1/public/checkouts/[^/]+/pay(/.*)?")
+                || path.matches("/v1/public/links/[^/]+/checkouts/?")
+                || path.matches("/v1/public/merchants/[^/]+/checkouts/?")
+                || (path.startsWith("/v1/checkouts/") && path.endsWith("/pay/wallet"))) {
+            if (!isModuleEnabled(CHECKOUT)) {
+                return CHECKOUT;
+            }
         }
-        // 6c. Restaurant ordering and kitchen screens
+        // 6c. Restaurant ordering and kitchen screens (waiter orders also respect the POS kill switch)
+        if (path.startsWith("/v1/restaurant/waiter/") && !isModuleEnabled("pos")) {
+            return "pos";
+        }
         if (path.startsWith("/v1/restaurant") || path.startsWith("/v1/public/kitchen")) {
             return isModuleEnabled(RESTAURANT) ? null : RESTAURANT;
         }

@@ -253,14 +253,15 @@ class Checkouts {
                 rules, request.changeReason(), a.actor().subject());
     }
 
-    /** Releases retained merchant reserves. */
+    /** Releases retained merchant reserves (ops only). */
     @PostMapping("/checkouts/{reference}/allocations/{line}/release-reserve")
     public CheckoutService.ReserveRelease releaseReserve(@PathVariable UUID merchantId,
                                                          @PathVariable String reference,
                                                          @PathVariable int line,
                                                          @Valid @RequestBody ReserveReleaseRequest request) {
-        var a = access.require(merchantId, MANAGE);
-        return checkouts.releaseReserve(merchantId, reference, line, request.amount(), request.reason(), a.actor().subject());
+        var actor = com.elepay.identity.Actor.current();
+        actor.requireOps();
+        return checkouts.releaseReserve(merchantId, reference, line, request.amount(), request.reason(), actor.subject());
     }
 
     // ---- refunds ----------------------------------------------------------------------------

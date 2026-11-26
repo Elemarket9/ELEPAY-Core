@@ -125,6 +125,9 @@ public class PosNfcPaymentService {
             throw ApiException.conflict("terminal_not_active", "POS terminal is not ACTIVE");
         }
 
+        if ("VOIDED".equalsIgnoreCase(lockedOrder.status()) || "CANCELLED".equalsIgnoreCase(lockedOrder.status())) {
+            throw ApiException.conflict("order_voided", "Cannot process NFC payment on a " + lockedOrder.status() + " order");
+        }
         long remaining = Math.subtractExact(lockedOrder.totalPesewas(), lockedOrder.paidPesewas());
         if ("PAID".equals(lockedOrder.status()) || remaining <= 0) {
             throw ApiException.conflict("order_paid", "Order is already paid");

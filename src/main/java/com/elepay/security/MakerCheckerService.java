@@ -108,7 +108,7 @@ public class MakerCheckerService {
             OffsetDateTime expiresAt
     ) {}
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public Proposal propose(
             String actionType,
             String resourceType,
