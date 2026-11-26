@@ -228,7 +228,9 @@ class AdversarialWalletRiskCheckoutRegressionTest extends PostgresTestBase {
         String ownerToken = api.token("chk-owner-" + s);
         UUID merchantId = createApprovedMerchant(ownerToken);
 
-        String boundPhone = TestApi.uniquePhone();
+        // Avoid SimulatedRail magic last digits (1=decline, 2=timeout_succeeded, 3=hold, 4=lost)
+        String rawBound = TestApi.uniquePhone();
+        String boundPhone = rawBound.substring(0, rawBound.length() - 1) + "5";
         String otherPhone = TestApi.uniquePhone();
         String boundToken = api.token("chk-bound-" + s);
         String otherToken = api.token("chk-other-" + s);
