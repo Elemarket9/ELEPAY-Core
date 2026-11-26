@@ -4,6 +4,7 @@ services:
     image: prom/prometheus:v2.54.1
     volumes:
       - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/monitoring/financial-alerts.yml:/etc/prometheus/financial-alerts.yml:ro
       - promdata:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'

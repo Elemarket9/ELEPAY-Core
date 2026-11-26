@@ -29,7 +29,8 @@ public class Outbox {
 
     public java.util.List<MerchantEvent> eventsFor(UUID merchant, long after, int limit) {
         return db.sql("""
-                SELECT id, sequence, event_type, aggregate_id, created_at, payload::text FROM outbox_event
+                SELECT e.id, sequence, event_type, aggregate_id, created_at, coalesce(e.payload, a.payload)::text
+                FROM outbox_event e LEFT JOIN outbox_payload_archive a ON a.event_id = e.id
                 WHERE :m = ANY(merchant_ids) AND sequence > :after ORDER BY sequence LIMIT :limit""")
                 .param("m", merchant).param("after", after).param("limit", Math.min(Math.max(limit, 1), 500))
                 .query((rs, i) -> new MerchantEvent(rs.getObject(1, UUID.class), rs.getLong(2), rs.getString(3),
@@ -43,6 +44,7 @@ public class Outbox {
         var body = new java.util.LinkedHashMap<String, Object>();
         body.put("eventId", id.toString());
         body.put("type", type);
+        body.put("schemaVersion", 1);
         body.put("data", payload);
         db.sql("""
                 INSERT INTO outbox_event (id, aggregate_type, aggregate_id, event_type, payload, merchant_ids)

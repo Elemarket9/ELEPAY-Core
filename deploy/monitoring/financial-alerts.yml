@@ -1,0 +1,17 @@
+groups:
+  - name: elepay-financial-integrity
+    rules:
+      - alert: ElepayLedgerDrift
+        expr: elepay_ledger_accounts_with_drift > 0
+        labels: {severity: critical}
+        annotations: {summary: "A ledger balance differs from its journal reconstruction"}
+      - alert: ElepayOutboxDead
+        expr: elepay_outbox_dead > 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "Financial events need investigation before replay"}
+      - alert: ElepayOutboxDelay
+        expr: elepay_outbox_oldest_pending_seconds > 300
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "An unpublished event has waited at least five minutes"}

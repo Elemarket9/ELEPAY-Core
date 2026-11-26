@@ -40,31 +40,53 @@ public class OutboxDispatcher {
         this.enabled = enabled;
     }
 
+    @Value("${elepay.outbox.batch-size:100}")
+    private int batchSize = 100;
+
+    @Value("${elepay.outbox.max-attempts:12}")
+    private int maxAttempts = 12;
+
     @Scheduled(fixedDelayString = "${elepay.outbox.poll-ms:1000}")
     void poll() {
-        if (enabled) dispatchBatch(100);
+        if (enabled) dispatchBatch(batchSize);
+    }
+
+    @Value("${elepay.outbox.archive-after-days:0}")
+    private int archiveAfterDays;
+
+    @Scheduled(fixedDelayString = "${elepay.outbox.archive-poll-ms:60000}")
+    void archivePublished() {
+        if (enabled && archiveAfterDays > 0) {
+            db.sql("SELECT archive_published_outbox(:days, :batch)")
+                    .param("days", archiveAfterDays).param("batch", Math.clamp(batchSize, 1, 1000))
+                    .query(Long.class).single();
+        }
     }
 
     /** Delivers up to {@code limit} events; returns the number marked published. */
     public int dispatchBatch(int limit) {
+        UUID claim = UUID.randomUUID();
         List<Outbox.Event> batch = claimTx.execute(status -> {
-            List<Outbox.Event> claimed = db.sql("""
-                    SELECT id, sequence, aggregate_type, aggregate_id, event_type, payload::text, merchant_ids
-                    FROM outbox_event
-                    WHERE published_at IS NULL AND next_attempt_at <= now()
-                    ORDER BY sequence LIMIT :limit FOR NO KEY UPDATE SKIP LOCKED""")
-                    .param("limit", limit)
+            return db.sql("""
+                    WITH due AS (
+                        SELECT e.id FROM outbox_event e
+                        WHERE e.published_at IS NULL AND e.dead_at IS NULL AND e.next_attempt_at <= now()
+                          AND NOT EXISTS (
+                              SELECT 1 FROM outbox_event earlier
+                              WHERE earlier.aggregate_type = e.aggregate_type AND earlier.aggregate_id = e.aggregate_id
+                                AND earlier.published_at IS NULL AND earlier.sequence < e.sequence)
+                        ORDER BY e.sequence LIMIT :limit FOR NO KEY UPDATE OF e SKIP LOCKED
+                    )
+                    UPDATE outbox_event e SET claim_token = :claim, next_attempt_at = now() + interval '60 seconds'
+                    FROM due WHERE e.id = due.id
+                    RETURNING e.id, e.sequence, e.aggregate_type, e.aggregate_id, e.event_type, e.payload::text, e.merchant_ids""")
+                    .param("claim", claim).param("limit", Math.clamp(limit, 1, 1000))
                     .query((rs, i) -> {
                         Array array = rs.getArray(7);
                         UUID[] merchants = array == null ? new UUID[0] : (UUID[]) array.getArray();
                         return new Outbox.Event(rs.getObject(1, UUID.class), rs.getLong(2), rs.getString(3),
                                 rs.getString(4), rs.getString(5), rs.getString(6), merchants);
                     }).list();
-            for (Outbox.Event event : claimed) {
-                db.sql("UPDATE outbox_event SET next_attempt_at = now() + interval '60 seconds' WHERE id = :id")
-                        .param("id", event.id()).update();
-            }
-            return claimed;
         });
         if (batch == null || batch.isEmpty()) return 0;
 
@@ -72,18 +94,25 @@ public class OutboxDispatcher {
         for (Outbox.Event event : batch) {
             try {
                 deliver(event);
-                claimTx.executeWithoutResult(status ->
-                        db.sql("UPDATE outbox_event SET published_at = now(), attempts = attempts + 1, last_error = NULL, next_attempt_at = now() WHERE id = :id")
-                                .param("id", event.id()).update());
-                done++;
+                Integer updated = claimTx.execute(status ->
+                        db.sql("""
+                                UPDATE outbox_event SET published_at = now(), attempts = attempts + 1,
+                                    last_error = NULL, claim_token = NULL, next_attempt_at = now()
+                                WHERE id = :id AND claim_token = :claim AND published_at IS NULL""")
+                                .param("id", event.id()).param("claim", claim).update());
+                if (updated != null) done += updated;
             } catch (RuntimeException e) {
-                log.warn("Outbox event {} delivery failed: {}", event.id(), e.toString());
+                String failureType = e.getClass().getSimpleName();
+                log.warn("Outbox delivery failed for event {} ({})", event.id(), failureType);
                 claimTx.executeWithoutResult(status ->
                         db.sql("""
-                                UPDATE outbox_event SET attempts = attempts + 1, last_error = :err,
-                                       next_attempt_at = now() + make_interval(secs => least(300, power(2, attempts)))
-                                WHERE id = :id""")
-                                .param("id", event.id()).param("err", String.valueOf(e.getMessage())).update());
+                                UPDATE outbox_event SET attempts = attempts + 1, last_error = :err, claim_token = NULL,
+                                       dead_at = CASE WHEN attempts + 1 >= :max THEN now() END,
+                                       next_attempt_at = now() + make_interval(secs =>
+                                           (0.5 + random() / 2) * least(300, power(2, least(attempts, 9))))
+                                WHERE id = :id AND claim_token = :claim AND published_at IS NULL""")
+                                .param("claim", claim).param("max", Math.max(1, maxAttempts))
+                                .param("id", event.id()).param("err", failureType).update());
             }
         }
         return done;

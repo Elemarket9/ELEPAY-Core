@@ -379,46 +379,26 @@ public class IngestionWorkerPool implements SmartLifecycle {
 
     private List<ClaimedItem> claimBatch(int batchLimit) {
         List<ClaimedItem> result = claimTx.execute(status -> {
-            List<ClaimedItem> rows = db.sql("""
-                    SELECT id, tenant_id, event_type, scope, idempotency_key,
-                           payload::text AS payload_json, attempts, max_attempts
-                    FROM ingestion_event
-                    WHERE status = 'PENDING' AND next_attempt_at <= now()
-                    ORDER BY next_attempt_at, created_at
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT :batch""")
-                    .param("batch", batchLimit)
-                    .query((rs, rowNum) -> {
-                        int nextAttempt = rs.getInt("attempts") + 1;
-                        int maxAttempts = rs.getInt("max_attempts");
-                        IngestionRecord rec = new IngestionRecord(
-                                rs.getObject("id", UUID.class),
-                                rs.getObject("tenant_id", UUID.class),
-                                rs.getString("event_type"),
-                                rs.getString("scope"),
-                                rs.getString("idempotency_key"),
-                                rs.getString("payload_json"),
-                                nextAttempt);
-                        return new ClaimedItem(rec, nextAttempt, maxAttempts);
-                    })
-                    .list();
-
-            for (ClaimedItem item : rows) {
-                db.sql("""
-                        UPDATE ingestion_event
-                        SET status = 'PROCESSING',
-                            locked_by = :workerId,
-                            locked_at = now(),
-                            lease_expires_at = now() + make_interval(secs => :leaseSeconds),
-                            attempts = attempts + 1,
-                            updated_at = now()
-                        WHERE id = :id""")
-                        .param("workerId", workerId)
-                        .param("leaseSeconds", leaseSeconds)
-                        .param("id", item.record().id())
-                        .update();
-            }
-            return rows;
+            String claim = workerId + "/" + UUID.randomUUID();
+            return db.sql("""
+                    WITH due AS (
+                        SELECT id FROM ingestion_event WHERE status = 'PENDING' AND next_attempt_at <= now()
+                        ORDER BY next_attempt_at, created_at, id LIMIT :batch FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE ingestion_event e SET status = 'PROCESSING', locked_by = :claim, locked_at = now(),
+                        lease_expires_at = now() + make_interval(secs => :leaseSeconds),
+                        attempts = attempts + 1, updated_at = now()
+                    FROM due WHERE e.id = due.id
+                    RETURNING e.id, e.tenant_id, e.event_type, e.scope, e.idempotency_key,
+                              e.payload::text AS payload_json, e.attempts, e.max_attempts""")
+                    .param("claim", claim).param("leaseSeconds", leaseSeconds).param("batch", batchLimit)
+                    .query((rs, i) -> {
+                        int attempts = rs.getInt("attempts");
+                        var record = new IngestionRecord(rs.getObject("id", UUID.class),
+                                rs.getObject("tenant_id", UUID.class), rs.getString("event_type"),
+                                rs.getString("scope"), rs.getString("idempotency_key"), rs.getString("payload_json"), attempts);
+                        return new ClaimedItem(record, attempts, rs.getInt("max_attempts"), claim);
+                    }).list();
         });
         return result == null ? List.of() : result;
     }
@@ -429,16 +409,14 @@ public class IngestionWorkerPool implements SmartLifecycle {
         if (handler == null) {
             String message = "No IngestionHandler registered for event_type=" + rec.eventType();
             log.error("Marking ingestion {} DEAD: {}", rec.id(), message);
-            markDead(rec.id(), message);
-            metrics.recordDead();
+            if (markDead(item, message)) metrics.recordDead();
             return;
         }
 
         long startNanos = System.nanoTime();
         try {
             String resultJson = handler.handle(rec);
-            markCompleted(rec.id(), resultJson);
-            metrics.recordCompleted(Duration.ofNanos(System.nanoTime() - startNanos));
+            if (markCompleted(item, resultJson)) metrics.recordCompleted(Duration.ofNanos(System.nanoTime() - startNanos));
         } catch (Exception e) {
             String errorText = truncateError(e);
             if (item.attempts() < item.maxAttempts()) {
@@ -446,54 +424,28 @@ public class IngestionWorkerPool implements SmartLifecycle {
                 double delaySeconds = Math.max(0.05d, delayMs / 1000.0d);
                 log.warn("Ingestion {} (type={}, attempt={}/{}) failed, retrying in {}ms: {}",
                         rec.id(), rec.eventType(), item.attempts(), item.maxAttempts(), delayMs, errorText);
-                scheduleRetry(rec.id(), delaySeconds, errorText);
-                metrics.recordRetried();
+                if (scheduleRetry(item, delaySeconds, errorText)) metrics.recordRetried();
             } else {
                 log.error("Ingestion {} (type={}, attempt={}/{}) exhausted retries, moving to DEAD: {}",
                         rec.id(), rec.eventType(), item.attempts(), item.maxAttempts(), errorText);
-                markDead(rec.id(), errorText);
-                metrics.recordDead();
+                if (markDead(item, errorText)) metrics.recordDead();
             }
         }
     }
 
-    private void markCompleted(UUID id, String resultJson) {
-        updateTx.executeWithoutResult(status -> {
-            if (resultJson == null) {
+    private boolean markCompleted(ClaimedItem item, String resultJson) {
+        return updateTx.execute(status ->
                 db.sql("""
-                        UPDATE ingestion_event
-                        SET status = 'COMPLETED',
-                            result = NULL,
-                            last_error = NULL,
-                            completed_at = now(),
-                            locked_by = NULL,
-                            locked_at = NULL,
-                            lease_expires_at = NULL,
-                            updated_at = now()
-                        WHERE id = :id""")
-                        .param("id", id)
-                        .update();
-            } else {
-                db.sql("""
-                        UPDATE ingestion_event
-                        SET status = 'COMPLETED',
-                            result = CAST(:res AS jsonb),
-                            last_error = NULL,
-                            completed_at = now(),
-                            locked_by = NULL,
-                            locked_at = NULL,
-                            lease_expires_at = NULL,
-                            updated_at = now()
-                        WHERE id = :id""")
-                        .param("res", resultJson)
-                        .param("id", id)
-                        .update();
-            }
-        });
+                        UPDATE ingestion_event SET status = 'COMPLETED', result = CAST(:res AS jsonb),
+                            last_error = NULL, completed_at = now(), locked_by = NULL, locked_at = NULL,
+                            lease_expires_at = NULL, updated_at = now()
+                        WHERE id = :id AND status = 'PROCESSING' AND locked_by = :claim""")
+                        .param("res", resultJson, java.sql.Types.VARCHAR)
+                        .param("claim", item.claim()).param("id", item.record().id()).update()) == 1;
     }
 
-    private void scheduleRetry(UUID id, double delaySeconds, String errorText) {
-        updateTx.executeWithoutResult(status ->
+    private boolean scheduleRetry(ClaimedItem item, double delaySeconds, String errorText) {
+        return updateTx.execute(status ->
                 db.sql("""
                         UPDATE ingestion_event
                         SET status = 'PENDING',
@@ -503,15 +455,15 @@ public class IngestionWorkerPool implements SmartLifecycle {
                             locked_at = NULL,
                             lease_expires_at = NULL,
                             updated_at = now()
-                        WHERE id = :id""")
+                        WHERE id = :id AND status = 'PROCESSING' AND locked_by = :claim""")
                         .param("delaySecs", delaySeconds)
                         .param("err", errorText)
-                        .param("id", id)
-                        .update());
+                        .param("claim", item.claim()).param("id", item.record().id())
+                        .update()) == 1;
     }
 
-    private void markDead(UUID id, String errorText) {
-        updateTx.executeWithoutResult(status ->
+    private boolean markDead(ClaimedItem item, String errorText) {
+        return updateTx.execute(status ->
                 db.sql("""
                         UPDATE ingestion_event
                         SET status = 'DEAD',
@@ -520,10 +472,10 @@ public class IngestionWorkerPool implements SmartLifecycle {
                             locked_at = NULL,
                             lease_expires_at = NULL,
                             updated_at = now()
-                        WHERE id = :id""")
+                        WHERE id = :id AND status = 'PROCESSING' AND locked_by = :claim""")
                         .param("err", errorText)
-                        .param("id", id)
-                        .update());
+                        .param("claim", item.claim()).param("id", item.record().id())
+                        .update()) == 1;
     }
 
     /** Equal-jitter exponential backoff bounded by {@code [baseBackoffMs/2, maxBackoffMs]}. */
@@ -588,5 +540,5 @@ public class IngestionWorkerPool implements SmartLifecycle {
         }
     }
 
-    private record ClaimedItem(IngestionRecord record, int attempts, int maxAttempts) {}
+    private record ClaimedItem(IngestionRecord record, int attempts, int maxAttempts, String claim) {}
 }

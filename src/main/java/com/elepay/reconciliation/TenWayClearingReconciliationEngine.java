@@ -98,6 +98,11 @@ public class TenWayClearingReconciliationEngine {
         return null;
     }
 
+    private static <T> void indexCandidate(Map<String, T> index, Set<String> ambiguous, String ref, T row) {
+        T previous = index.putIfAbsent(ref, row);
+        if (previous != null && !previous.equals(row)) ambiguous.add(ref);
+    }
+
     private static boolean isCreditMark(String dcMark) {
         return "C".equalsIgnoreCase(dcMark) || "RD".equalsIgnoreCase(dcMark);
     }
@@ -185,11 +190,15 @@ public class TenWayClearingReconciliationEngine {
         for (StmtLine line : statementLines) {
             String sr = line.searchRef();
             if (sr != null && !sr.isBlank()) {
-                refSet.add(sr);
+                if (!refSet.add(sr)) {
+                    throw ApiException.conflict("ambiguous_statement_reference",
+                            "Multiple bank statement lines share a reference; investigate before reconciliation");
+                }
             }
         }
         List<String> allRefs = new ArrayList<>(refSet);
 
+        Set<String> ambiguous = new HashSet<>();
         Map<String, CarrierRow> carrierMap = new HashMap<>(allRefs.size());
         Map<String, LedgerRow> ledgerMap = new HashMap<>(allRefs.size());
 
@@ -222,8 +231,8 @@ public class TenWayClearingReconciliationEngine {
                                         rs.getString(5));
                                 String r1 = rs.getString(2);
                                 String r2 = rs.getString(3);
-                                if (r1 != null) carrierMap.putIfAbsent(r1, cr);
-                                if (r2 != null) carrierMap.putIfAbsent(r2, cr);
+                                if (r1 != null) indexCandidate(carrierMap, ambiguous, r1, cr);
+                                if (r2 != null) indexCandidate(carrierMap, ambiguous, r2, cr);
                             }
                         }
                     }
@@ -258,13 +267,13 @@ public class TenWayClearingReconciliationEngine {
                                 String ik = rs.getString(2);
                                 String desc = rs.getString(3);
                                 if (ik != null) {
-                                    ledgerMap.putIfAbsent(ik, lr);
+                                    indexCandidate(ledgerMap, ambiguous, ik, lr);
                                     int colon = ik.lastIndexOf(':');
                                     if (colon >= 0 && colon + 1 < ik.length()) {
-                                        ledgerMap.putIfAbsent(ik.substring(colon + 1), lr);
+                                        indexCandidate(ledgerMap, ambiguous, ik.substring(colon + 1), lr);
                                     }
                                 }
-                                if (desc != null) ledgerMap.putIfAbsent(desc, lr);
+                                if (desc != null) indexCandidate(ledgerMap, ambiguous, desc, lr);
                             }
                         }
                     }
@@ -285,8 +294,8 @@ public class TenWayClearingReconciliationEngine {
                             CarrierRow cr = new CarrierRow(rs.getObject(1, UUID.class), rs.getLong(4), rs.getString(5));
                             String r1 = rs.getString(2);
                             String r2 = rs.getString(3);
-                            if (r1 != null) carrierMap.putIfAbsent(r1, cr);
-                            if (r2 != null) carrierMap.putIfAbsent(r2, cr);
+                            if (r1 != null) indexCandidate(carrierMap, ambiguous, r1, cr);
+                            if (r2 != null) indexCandidate(carrierMap, ambiguous, r2, cr);
                             return cr;
                         }).list();
 
@@ -304,13 +313,13 @@ public class TenWayClearingReconciliationEngine {
                             String ik = rs.getString(2);
                             String desc = rs.getString(3);
                             if (ik != null) {
-                                ledgerMap.putIfAbsent(ik, lr);
+                                indexCandidate(ledgerMap, ambiguous, ik, lr);
                                 int colon = ik.lastIndexOf(':');
                                 if (colon >= 0 && colon + 1 < ik.length()) {
-                                    ledgerMap.putIfAbsent(ik.substring(colon + 1), lr);
+                                    indexCandidate(ledgerMap, ambiguous, ik.substring(colon + 1), lr);
                                 }
                             }
-                            if (desc != null) ledgerMap.putIfAbsent(desc, lr);
+                            if (desc != null) indexCandidate(ledgerMap, ambiguous, desc, lr);
                             return lr;
                         }).list();
             }
@@ -323,7 +332,7 @@ public class TenWayClearingReconciliationEngine {
         int missingInLedger = 0;
         int missingInBank = 0;
         long totalVariance = 0L;
-        boolean allowFallbackLike = statementLines.size() <= 200;
+        boolean allowScopedLookup = statementLines.size() <= 200;
         LocalDate minDate = null;
         LocalDate maxDate = null;
 
@@ -342,6 +351,10 @@ public class TenWayClearingReconciliationEngine {
             String ledgerKind = null;
 
             if (searchRef != null && !searchRef.isBlank()) {
+                if (ambiguous.contains(searchRef)) {
+                    throw ApiException.conflict("ambiguous_clearing_reference",
+                            "Multiple internal records match the bank reference; investigation required");
+                }
                 CarrierRow cr = carrierMap.get(searchRef);
                 if (cr != null) {
                     railSessionId = cr.id();
@@ -350,26 +363,27 @@ public class TenWayClearingReconciliationEngine {
                 }
 
                 LedgerRow lr = ledgerMap.get(searchRef);
-                if (lr == null && allowFallbackLike) {
-                    var ledgerOpt = db.sql("""
+                if (lr == null && allowScopedLookup) {
+                    var candidates = db.sql("""
                         SELECT jt.id, COALESCE(SUM(je.amount), 0) AS total_amount, jt.kind
                         FROM journal_transaction jt
                         JOIN journal_entry je ON je.transaction_id = jt.id AND je.amount > 0 AND je.currency = :currency
-                        WHERE jt.idempotency_key = :ref OR jt.idempotency_key LIKE :refPattern OR jt.description LIKE :descPattern
+                        WHERE right(jt.idempotency_key, length(CAST(:ref AS text)) + 1) = ':' || CAST(:ref AS text)
                         GROUP BY jt.id, jt.posted_at, jt.kind
-                        ORDER BY jt.posted_at DESC LIMIT 1
+                        LIMIT 2
                     """)
                             .param("currency", currency)
                             .param("ref", searchRef)
-                            .param("refPattern", "%" + searchRef + "%")
-                            .param("descPattern", "%" + searchRef + "%")
                             .query((rs, rowNum) -> new LedgerRow(
                                     rs.getObject("id", UUID.class),
                                     rs.getLong("total_amount"),
                                     rs.getString("kind")))
-                            .optional();
-                    if (ledgerOpt.isPresent()) {
-                        lr = ledgerOpt.get();
+                            .list();
+                    if (candidates.size() > 1) {
+                        throw ApiException.conflict("ambiguous_clearing_reference", "Multiple scoped ledger references match");
+                    }
+                    if (!candidates.isEmpty()) {
+                        lr = candidates.getFirst();
                         ledgerMap.put(searchRef, lr);
                     }
                 }
