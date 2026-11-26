@@ -56,7 +56,7 @@ class CheckoutDisputeService {
         Take t = CheckoutService.take(a, amount);
         String reserved = Ledger.code("merchant", a.merchantId(), "reserved", Ledger.GHS);
         UUID id = UUID.randomUUID();
-        List<Leg> legs = CheckoutStore.takeLegs(c, a, t);
+        List<Leg> legs = CheckoutStore.takeLegs(ledger, c, a, t);
         legs.add(Leg.credit(reserved, amount));
         Ledger.Posted hold;
         try {
@@ -130,7 +130,12 @@ class CheckoutDisputeService {
             long sellerNonReserved = seller - sellerReserved;
             if (sellerReserved > 0) legs.add(Leg.credit(reserved, sellerReserved));
             if (sellerNonReserved > 0) legs.add(Leg.credit(Ledger.code("merchant", a.merchantId(), pending ? "pending" : "available", Ledger.GHS), sellerNonReserved));
-            if (fee > 0) legs.add(Leg.credit(pending ? Ledger.DEFERRED_REVENUE : Ledger.REVENUE, fee));
+            if (fee > 0) {
+                String feeAccount = pending
+                        ? ledger.openStripedSystem(Ledger.DEFERRED_REVENUE, "deferred_revenue", Ledger.GHS, true, c.id())
+                        : ledger.openStripedSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false, c.id());
+                legs.add(Leg.credit(feeAccount, fee));
+            }
             if (platform > 0) legs.add(Leg.credit(Ledger.code("merchant", c.collectorId(), pending ? "pending" : "available", Ledger.GHS), platform));
             db.sql("""
                     UPDATE checkout_allocation SET disputed = disputed - :amount,

@@ -333,9 +333,10 @@ public class Payouts {
         if (!event.purpose().equals("payout")) return;
         var p = lock(event.purposeId()).orElseThrow();
         if (!Set.of("reserved", "submitted").contains(p.status())) return;
+        String clearing = ledger.openStripedSystem(Ledger.clearing(event.rail()), "clearing", Ledger.GHS, true, p.id());
         var posted = ledger.post(Ledger.Posting.of("payout-complete", p.id().toString(), "payout_completion", List.of(
                 Leg.debit(bucket(p.ownerType(), p.owner(), "reserved"), p.amount()),
-                Leg.credit(Ledger.clearing(event.rail()), p.amount()))).describedAs(p.reference()));
+                Leg.credit(clearing, p.amount()))).describedAs(p.reference()));
         db.sql("UPDATE payout SET status = 'succeeded', completion_tx = :tx, completed_at = now() WHERE id = :id")
                 .param("tx", posted.transactionId()).param("id", p.id()).update();
         publish(p, "payout.succeeded", null);
@@ -366,8 +367,9 @@ public class Payouts {
             ops.raise("payout_return_unexpected", "high", "payout:" + p.reference(), Map.of("status", p.status()));
             return;
         }
+        String clearing = ledger.openStripedSystem(Ledger.clearing(event.rail()), "clearing", Ledger.GHS, true, p.id());
         var posted = ledger.post(Ledger.Posting.of("payout-return", p.id().toString(), "payout_return", List.of(
-                Leg.debit(Ledger.clearing(event.rail()), p.amount()),
+                Leg.debit(clearing, p.amount()),
                 Leg.credit(bucket(p.ownerType(), p.owner(), "available"), p.amount()))).describedAs(p.reference()));
         db.sql("UPDATE payout SET status = 'returned', return_tx = :tx, failure_reason = :r WHERE id = :id")
                 .param("tx", posted.transactionId()).param("r", event.reason()).param("id", p.id()).update();

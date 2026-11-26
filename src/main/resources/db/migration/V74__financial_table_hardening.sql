@@ -78,7 +78,7 @@ BEGIN
     AND t.tgenabled <> 'O';
 
     IF disabled_count > 0 THEN
-        RAISE EXCEPTION 'Disabling immutability or balance-integrity triggers on financial ledger or audit tables is strictly forbidden'
+        RAISE EXCEPTION 'Disabling immutability triggers on financial ledger or audit tables is strictly forbidden'
             USING ERRCODE = '42501';
     END IF;
 END;

@@ -250,10 +250,10 @@ class CheckoutCompletionService {
             legs.add(Leg.credit(ledger.open("merchant", c.collectorId(), "pending", Ledger.GHS), platform));
         }
         if (deferred > 0) {
-            legs.add(Leg.credit(ledger.openSystem(Ledger.DEFERRED_REVENUE, "deferred_revenue", Ledger.GHS, true), deferred));
+            legs.add(Leg.credit(ledger.openStripedSystem(Ledger.DEFERRED_REVENUE, "deferred_revenue", Ledger.GHS, true, c.id()), deferred));
         }
         if (customerFee > 0) {
-            legs.add(Leg.credit(ledger.openSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false), customerFee));
+            legs.add(Leg.credit(ledger.openStripedSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false, c.id()), customerFee));
         }
         var posted = ledger.post(Ledger.Posting.of("checkout-payment", c.id().toString(), "checkout_payment", legs)
                 .describedAs(c.reference()).withMetadata(Map.of("checkout", c.reference(), "method", method)));
@@ -304,15 +304,15 @@ class CheckoutCompletionService {
         String attemptMethod = (String) attempt[1];
         Checkout c = store.load(checkoutId, true);
         db.sql("UPDATE payment_attempt SET status = 'succeeded' WHERE id = :id").param("id", event.purposeId()).update();
+        String clearing = ledger.openStripedSystem(Ledger.clearing(event.rail()), "clearing", Ledger.GHS, true, c.id());
         if (c.status().equals("paid")) {
             // Defensive: the unique active-attempt index makes this unreachable; never credit twice.
             ops.raise("checkout_double_payment", "high", "checkout:" + c.reference(), Map.of("railTx", event.railTxId().toString()));
             ledger.post(Ledger.Posting.of("checkout-overpayment", event.railTxId().toString(), "suspense", List.of(
-                    Leg.debit(Ledger.clearing(event.rail()), event.amount()), Leg.credit(Ledger.SUSPENSE, event.amount()))));
+                    Leg.debit(clearing, event.amount()), Leg.credit(Ledger.SUSPENSE, event.amount()))));
             return;
         }
         String method = c.paymentMethod() != null ? c.paymentMethod() : attemptMethod;
-        String clearing = ledger.openSystem(Ledger.clearing(event.rail()), "clearing", Ledger.GHS, true);
         complete(c, method, clearing, null, c.customerFee(), event.amount());
     }
 

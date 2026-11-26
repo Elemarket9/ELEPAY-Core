@@ -2,6 +2,7 @@ package com.elepay.agents;
 
 import com.elepay.ledger.Ledger;
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -105,9 +106,9 @@ public class AgentCommissionEngine {
             UUID txnId = UUID.randomUUID();
             String ref = "COMM-PAY-" + txnId.toString().substring(0, 8).toUpperCase();
 
-            var posted = ledger.post(Ledger.Posting.of("agent-commission", ref, "agent_commission_payout", List.of(
-                    Ledger.Leg.debit(Ledger.REVENUE, accrued),
-                    Ledger.Leg.credit(agentFloat, accrued))));
+            List<Ledger.Leg> legs = new ArrayList<>(ledger.debitAcrossStripes(Ledger.REVENUE, accrued));
+            legs.add(Ledger.Leg.credit(agentFloat, accrued));
+            var posted = ledger.post(Ledger.Posting.of("agent-commission", ref, "agent_commission_payout", legs));
 
             db.sql("""
                 UPDATE agent_float_account

@@ -120,6 +120,8 @@ class MarketplaceSplitHardeningTest {
         Ledger mockLedger = Mockito.mock(Ledger.class);
         Mockito.when(mockLedger.openSystem(Mockito.anyString(), Mockito.anyString(), Mockito.anyString(), Mockito.anyBoolean()))
                 .thenAnswer(inv -> inv.getArgument(0));
+        Mockito.when(mockLedger.openStripedSystem(Mockito.anyString(), Mockito.anyString(), Mockito.anyString(), Mockito.anyBoolean(), Mockito.any()))
+                .thenAnswer(inv -> inv.getArgument(0));
         Mockito.when(mockLedger.open(Mockito.anyString(), Mockito.any(), Mockito.anyString(), Mockito.anyString()))
                 .thenAnswer(inv -> Ledger.code(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2), inv.getArgument(3)));
         Mockito.when(mockLedger.post(Mockito.any()))

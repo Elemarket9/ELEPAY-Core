@@ -360,16 +360,18 @@ class MarketplaceReferenceScenarioTest extends PostgresTestBase {
         long techPlatform = techAllocation.platformFeePesewas();
         UUID techMerchantId = subMerchants.get(0).id();
 
+        var refundLegs = new java.util.ArrayList<Leg>();
+        refundLegs.add(Leg.debit(Ledger.code("merchant", techMerchantId, "pending", "GHS"), techNet));
+        refundLegs.add(Leg.debit(Ledger.code("merchant", enterprise.id(), "pending", "GHS"), techCommission));
+        refundLegs.addAll(ledger.debitAcrossStripes(Ledger.REVENUE, techPlatform));
+        String refundClearing = ledger.openSystem(ledger.clearingStripe("test_wallet", "GHS", orderReference), "clearing", "GHS", true);
+        refundLegs.add(Leg.credit(refundClearing, 30_000L)); // return to clearing
+
         ledger.post(Posting.of(
                 "enterprise:refund",
                 "REFUND-REV-" + orderReference,
                 "refund:item_reversal",
-                List.of(
-                        Leg.debit(Ledger.code("merchant", techMerchantId, "pending", "GHS"), techNet),
-                        Leg.debit(Ledger.code("merchant", enterprise.id(), "pending", "GHS"), techCommission),
-                        Leg.debit(Ledger.REVENUE, techPlatform),
-                        Leg.credit(clearingCode, 30_000L) // return to clearing
-                )
+                refundLegs
         ).describedAs("Item level refund reversal for TechGadgets Wireless Headphones"));
 
         // =========================================================================

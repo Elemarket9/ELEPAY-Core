@@ -79,9 +79,11 @@ public class EnterpriseCheckoutService {
         splitResult.validateConservation();
 
         // 3. Prepare ledger accounts
+        UUID checkoutId = UUID.nameUUIDFromBytes((request.enterpriseId() + ":" + request.orderReference()).getBytes());
         String currency = request.currency();
         String channel = sanitizeCode(request.paymentChannel());
-        String clearingAccount = ledger.openSystem("system:clearing:" + channel + ":" + currency, "clearing", currency, true);
+        String clearingAccount = ledger.openStripedSystem(
+                "system:clearing:" + channel + ":" + currency, "clearing", currency, true, checkoutId);
 
         // Open sub-merchant accounts
         for (CalculatedMerchantAllocation alloc : splitResult.merchantAllocations()) {
@@ -100,7 +102,8 @@ public class EnterpriseCheckoutService {
         ledger.open("merchant", request.enterpriseId(), "pending", currency);
 
         // Open platform revenue account (currency-parameterized)
-        String revenueAccount = ledger.openSystem("system:revenue:" + currency, "revenue", currency, false);
+        String revenueAccount = ledger.openStripedSystem(
+                "system:revenue:" + currency, "revenue", currency, false, checkoutId);
 
         // 4. Construct double-entry journal legs
         List<Leg> legs = new ArrayList<>();
@@ -174,7 +177,6 @@ public class EnterpriseCheckoutService {
                 .update();
         }
 
-        UUID checkoutId = UUID.nameUUIDFromBytes((request.enterpriseId() + ":" + request.orderReference()).getBytes());
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
         EnterpriseCheckoutResult result = new EnterpriseCheckoutResult(

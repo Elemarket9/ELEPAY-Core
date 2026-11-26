@@ -58,6 +58,10 @@ class EnterpriseItemRefundTest {
         when(ledger.open(any(), any(), any(), any())).thenAnswer(invocation ->
                 invocation.getArgument(0) + ":" + invocation.getArgument(1) + ":" + invocation.getArgument(2) + ":" + invocation.getArgument(3));
         when(ledger.openSystem(any(), any(), any(), any(Boolean.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(ledger.openStripedSystem(any(), any(), any(), any(Boolean.class), any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(ledger.debitAcrossStripes(any(), any(Long.class)))
+                .thenAnswer(invocation -> List.of(Ledger.Leg.debit(invocation.getArgument(0), invocation.getArgument(1))));
         when(ledger.post(any())).thenReturn(new Ledger.Posted(UUID.randomUUID(), false));
 
         refundCalculator = new EnterpriseItemRefundCalculator();

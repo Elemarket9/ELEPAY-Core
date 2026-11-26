@@ -104,13 +104,23 @@ class CheckoutStore {
     }
 
     /** Debit legs that pull a {@link Take} out of the seller, ELEPAY and marketplace accounts. */
-    static List<Leg> takeLegs(Checkout c, Allocation a, Take t) {
+    static List<Leg> takeLegs(Ledger ledger, Checkout c, Allocation a, Take t) {
         List<Leg> legs = new ArrayList<>();
         if (t.sellerFromPending() > 0) legs.add(Leg.debit(Ledger.code("merchant", a.merchantId(), "pending", Ledger.GHS), t.sellerFromPending()));
         if (t.sellerFromReserved() > 0) legs.add(Leg.debit(Ledger.code("merchant", a.merchantId(), "reserved", Ledger.GHS), t.sellerFromReserved()));
         if (t.sellerFromAvailable() > 0) legs.add(Leg.debit(Ledger.code("merchant", a.merchantId(), "available", Ledger.GHS), t.sellerFromAvailable()));
-        if (t.feeFromDeferred() > 0) legs.add(Leg.debit(Ledger.DEFERRED_REVENUE, t.feeFromDeferred()));
-        if (t.feeFromRevenue() > 0) legs.add(Leg.debit(Ledger.REVENUE, t.feeFromRevenue()));
+        if (t.feeFromDeferred() > 0) {
+            String deferredStripe = ledger.openStripedSystem(Ledger.DEFERRED_REVENUE, "deferred_revenue", Ledger.GHS, true, c.id());
+            legs.add(Leg.debit(deferredStripe, t.feeFromDeferred()));
+        }
+        if (t.feeFromRevenue() > 0) {
+            String revenueStripe = ledger.openStripedSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false, c.id());
+            if (ledger.rawBalance(revenueStripe) >= t.feeFromRevenue()) {
+                legs.add(Leg.debit(revenueStripe, t.feeFromRevenue()));
+            } else {
+                legs.addAll(ledger.debitAcrossStripes(Ledger.REVENUE, t.feeFromRevenue()));
+            }
+        }
         if (t.platformFromPending() > 0) legs.add(Leg.debit(Ledger.code("merchant", c.collectorId(), "pending", Ledger.GHS), t.platformFromPending()));
         if (t.platformFromAvailable() > 0) legs.add(Leg.debit(Ledger.code("merchant", c.collectorId(), "available", Ledger.GHS), t.platformFromAvailable()));
         return legs;

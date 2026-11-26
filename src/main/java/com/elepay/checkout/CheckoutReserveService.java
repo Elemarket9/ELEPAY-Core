@@ -171,33 +171,40 @@ class CheckoutReserveService {
                     "currency", currency), Set.of(merchant));
             byBatch.put(entry.getKey(), settlementBatch(id));
         }
-        Map<String, Long> feesByCurrency = new LinkedHashMap<>();
+        record FeeStripeKey(String currency, int stripe) {}
+        Map<FeeStripeKey, Long> feesByKey = new LinkedHashMap<>();
+        Map<FeeStripeKey, UUID> sampleCheckoutByKey = new LinkedHashMap<>();
         for (Due d : due) {
             if (d.fee() > 0) {
-                feesByCurrency.merge(d.currency(), d.fee(), Math::addExact);
+                FeeStripeKey key = new FeeStripeKey(d.currency(), ledger.stripeIndex(d.checkout()));
+                feesByKey.merge(key, d.fee(), Math::addExact);
+                sampleCheckoutByKey.putIfAbsent(key, d.checkout());
             }
         }
-        Map<String, UUID> feeTxByCurrency = new LinkedHashMap<>();
-        for (var entry : feesByCurrency.entrySet()) {
-            String cur = entry.getKey();
+        Map<FeeStripeKey, UUID> feeTxByKey = new LinkedHashMap<>();
+        for (var entry : feesByKey.entrySet()) {
+            FeeStripeKey key = entry.getKey();
+            String cur = key.currency();
             long curFees = entry.getValue();
+            UUID sampleCheckout = sampleCheckoutByKey.get(key);
             UUID run = UUID.randomUUID();
-            String deferredAcc = ledger.openSystem("system:deferred_revenue:" + cur, "deferred_revenue", cur, true);
-            String revenueAcc = ledger.openSystem("system:revenue:" + cur, "revenue", cur, false);
+            String deferredAcc = ledger.openStripedSystem("system:deferred_revenue:" + cur, "deferred_revenue", cur, true, sampleCheckout);
+            String revenueAcc = ledger.openStripedSystem("system:revenue:" + cur, "revenue", cur, false, sampleCheckout);
             UUID txId = ledger.post(Ledger.Posting.of("fee-recognition", run.toString(), "fee_recognition", List.of(
                     Leg.debit(deferredAcc, curFees), Leg.credit(revenueAcc, curFees)))
                     .describedAs("Fees earned on settled lines (" + cur + ")")).transactionId();
-            feeTxByCurrency.put(cur, txId);
+            feeTxByKey.put(key, txId);
         }
         for (Due d : due) {
             SettlementBatch batch = byBatch.get(new BatchKey(d.pending() > 0 ? d.merchant() : d.collector(), d.currency()));
+            FeeStripeKey feeKey = new FeeStripeKey(d.currency(), ledger.stripeIndex(d.checkout()));
             db.sql("""
                     UPDATE checkout_allocation SET settled_amount = settled_amount + pending_amount, pending_amount = 0,
                            platform_settled = platform_settled + platform_pending, platform_pending = 0,
                            fee_recognized = fee_recognized + fee_deferred, fee_deferred = 0,
                            settled_at = now(), settlement_tx = :tx, settlement_batch = :batch
                     WHERE checkout_id = :c AND line = :l""")
-                    .param("tx", batch != null ? batch.journalTx() : feeTxByCurrency.get(d.currency()))
+                    .param("tx", batch != null ? batch.journalTx() : feeTxByKey.get(feeKey))
                     .param("batch", batch != null ? batch.id() : null)
                     .param("c", d.checkout()).param("l", d.line()).update();
         }

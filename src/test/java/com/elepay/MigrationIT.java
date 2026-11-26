@@ -42,11 +42,24 @@ class MigrationIT {
              ResultSet rs = s.executeQuery("SELECT code FROM ledger_account WHERE owner_type = 'system'")) {
             var codes = new java.util.ArrayList<String>();
             while (rs.next()) codes.add(rs.getString(1));
-            assertThat(codes).containsExactlyInAnyOrder(
+            var unstriped = codes.stream().filter(code -> !code.matches(".*:s\\d{2,3}$")).toList();
+            var striped = codes.stream().filter(code -> code.matches(".*:s\\d{2,3}$")).toList();
+            assertThat(unstriped).containsExactlyInAnyOrder(
                     "system:revenue:GHS", "system:suspense:GHS", "system:refunds_in_flight:GHS",
                     "system:clearing:sandbox:GHS", "system:rail_fees:GHS", "system:revenue:USD",
                     "system:fx_clearing:GHS", "system:fx_clearing:USD", "system:fx_in_flight:USD",
                     "system:fx_in_flight:GHS", "system:deferred_revenue:GHS", "system:revenue:earned:GHS");
+            var expectedStripes = new java.util.ArrayList<String>();
+            for (String base : java.util.List.of(
+                    "system:clearing:sandbox:GHS", "system:clearing:mtn:GHS",
+                    "system:clearing:telecel:GHS", "system:clearing:airteltigo:GHS",
+                    "system:clearing:ghipss:GHS", "system:clearing:card:GHS",
+                    "system:deferred_revenue:GHS", "system:revenue:GHS")) {
+                for (int i = 0; i < 64; i++) {
+                    expectedStripes.add(base + ":s" + String.format("%02d", i));
+                }
+            }
+            assertThat(striped).hasSize(512).containsExactlyInAnyOrderElementsOf(expectedStripes);
         }
     }
 

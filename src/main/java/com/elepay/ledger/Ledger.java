@@ -2,12 +2,18 @@ package com.elepay.ledger;
 
 import com.elepay.common.ApiException;
 import com.elepay.common.Idempotency;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -25,10 +31,23 @@ public class Ledger {
 
     private final JdbcClient db;
     private final ObjectMapper json;
+    private final int systemStripes;
+    private final Set<String> knownStripes = ConcurrentHashMap.newKeySet();
 
-    public Ledger(JdbcClient db, ObjectMapper json) {
+    @Autowired
+    public Ledger(JdbcClient db, ObjectMapper json,
+                  @Value("${elepay.ledger.system-stripes:64}") int systemStripes) {
+        if (systemStripes < 1 || systemStripes > 256) {
+            throw new IllegalArgumentException(
+                    "elepay.ledger.system-stripes must be between 1 and 256, got " + systemStripes);
+        }
         this.db = db;
         this.json = json;
+        this.systemStripes = systemStripes;
+    }
+
+    public Ledger(JdbcClient db, ObjectMapper json) {
+        this(db, json, 64);
     }
 
     /** One side of a posting. Positive amounts increase the account balance. */
@@ -208,6 +227,53 @@ public class Ledger {
     public static final String SUSPENSE = "system:suspense:GHS";
     public static final String REFUNDS_IN_FLIGHT = "system:refunds_in_flight:GHS";
 
+    /** Configured number of stripes per hot system account (1..256). */
+    public int stripeCount() {
+        return systemStripes;
+    }
+
+    /** Deterministic stripe index in {@code [0, stripeCount() - 1]} for a routing key. */
+    public int stripeIndex(Object routingKey) {
+        if (systemStripes <= 1 || routingKey == null) {
+            return 0;
+        }
+        byte[] bytes = routingKey.toString().getBytes(StandardCharsets.UTF_8);
+        int h = 0x811c9dc5;
+        for (byte b : bytes) {
+            h ^= (b & 0xff);
+            h *= 0x01000193;
+        }
+        // Murmur3 32-bit finalizer for uniform avalanche across stripe buckets.
+        h ^= (h >>> 16);
+        h *= 0x85ebca6b;
+        h ^= (h >>> 13);
+        h *= 0xc2b2ae35;
+        h ^= (h >>> 16);
+        return Math.floorMod(h, systemStripes);
+    }
+
+    /** Returns the striped account code for {@code baseCode} and {@code routingKey}. */
+    public String stripedCode(String baseCode, Object routingKey) {
+        if (systemStripes <= 1) {
+            return baseCode;
+        }
+        return baseCode + ":s" + String.format("%02d", stripeIndex(routingKey));
+    }
+
+    /** Returns true when {@code code} ends with a stripe suffix ({@code :s00}..{@code :s255}). */
+    public static boolean isStripeCode(String code) {
+        if (code == null) return false;
+        int idx = code.lastIndexOf(":s");
+        if (idx <= 0) return false;
+        int digitLen = code.length() - (idx + 2);
+        if (digitLen < 2 || digitLen > 3) return false;
+        for (int i = idx + 2; i < code.length(); i++) {
+            char ch = code.charAt(i);
+            if (ch < '0' || ch > '9') return false;
+        }
+        return true;
+    }
+
     /** Creates a system account with an explicit code (clearing, partner accounts) if needed. */
     @Transactional
     public String openSystem(String code, String bucket, String currency, boolean allowNegative) {
@@ -218,12 +284,61 @@ public class Ledger {
         return code;
     }
 
-    /** Codes of system accounts in a bucket whose code starts with {@code prefix}. */
+    /**
+     * Opens (if needed) the deterministic stripe for a hot system account and caches its
+     * existence only after transaction commit so rolled-back transactions cannot poison the cache.
+     */
+    @Transactional
+    public String openStripedSystem(String baseCode, String bucket, String currency,
+                                    boolean allowNegative, Object routingKey) {
+        String code = stripedCode(baseCode, routingKey);
+        if (knownStripes.contains(code)) {
+            return code;
+        }
+        db.sql("""
+                INSERT INTO ledger_account (code, owner_type, bucket, currency, allow_negative)
+                VALUES (:c, 'system', :b, :cur, :neg) ON CONFLICT (code) DO NOTHING""")
+                .param("c", code).param("b", bucket).param("cur", currency).param("neg", allowNegative).update();
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    knownStripes.add(code);
+                }
+            });
+        } else {
+            knownStripes.add(code);
+        }
+        return code;
+    }
+
+    @Transactional
+    public String clearingStripe(String provider, String currency, Object routingKey) {
+        return openStripedSystem("system:clearing:" + provider + ":" + currency, "clearing", currency, true, routingKey);
+    }
+
+    @Transactional
+    public String clearingStripe(String provider, Object routingKey) {
+        return clearingStripe(provider, GHS, routingKey);
+    }
+
+    @Transactional
+    public String deferredRevenueStripe(String currency, Object routingKey) {
+        return openStripedSystem("system:deferred_revenue:" + currency, "deferred_revenue", currency, true, routingKey);
+    }
+
+    @Transactional
+    public String revenueStripe(String currency, Object routingKey) {
+        return openStripedSystem("system:revenue:" + currency, "revenue", currency, false, routingKey);
+    }
+
+    /** Codes of unstriped system accounts in a bucket whose code starts with {@code prefix}. */
     public List<String> systemCodes(String prefix, String bucket, String currency) {
         return db.sql("""
                 SELECT code FROM ledger_account
                 WHERE owner_type = 'system' AND bucket = :b AND currency = :c AND starts_with(code, :p) ORDER BY code""")
-                .param("b", bucket).param("c", currency).param("p", prefix).query(String.class).list();
+                .param("b", bucket).param("c", currency).param("p", prefix).query(String.class).list()
+                .stream().filter(c -> !isStripeCode(c)).toList();
     }
 
     /** Owners whose account in this bucket holds a positive balance. */
@@ -246,9 +361,75 @@ public class Ledger {
         return code;
     }
 
-    public long balance(String code) {
+    /** Exact single-row balance for {@code exactCode} without stripe aggregation. */
+    public long rawBalance(String exactCode) {
         return db.sql("SELECT balance FROM ledger_account WHERE code = :code")
-                .param("code", code).query(Long.class).optional().orElse(0L);
+                .param("code", exactCode).query(Long.class).optional().orElse(0L);
+    }
+
+    /**
+     * Balance of an account. For unstriped {@code system:} base codes, transparently aggregates
+     * the base account plus all {@code :sNN} stripes.
+     */
+    public long balance(String code) {
+        if (code != null && code.startsWith("system:") && !isStripeCode(code)) {
+            return db.sql("""
+                    SELECT COALESCE(SUM(balance), 0)::bigint
+                    FROM ledger_account
+                    WHERE code = :code OR starts_with(code, :stripePrefix)""")
+                    .param("code", code)
+                    .param("stripePrefix", code + ":s")
+                    .query(Long.class).single();
+        }
+        return rawBalance(code);
+    }
+
+    /** Per-stripe balances (including base code if present) ordered by account code. */
+    public Map<String, Long> stripeBalances(String baseCode) {
+        Map<String, Long> balances = new LinkedHashMap<>();
+        db.sql("""
+                SELECT code, balance
+                FROM ledger_account
+                WHERE code = :code OR starts_with(code, :stripePrefix)
+                ORDER BY code""")
+                .param("code", baseCode)
+                .param("stripePrefix", baseCode + ":s")
+                .query((rs, i) -> balances.put(rs.getString(1), rs.getLong(2))).list();
+        return balances;
+    }
+
+    /**
+     * Allocates debit legs across the base account and positive-balance stripes for {@code baseCode}.
+     * Candidate rows are locked in {@code id} order (matching {@link #lock(Collection)}) to prevent
+     * AB-BA deadlocks, then drained deterministically by account code.
+     */
+    @Transactional
+    public List<Leg> debitAcrossStripes(String baseCode, long amount) {
+        if (amount <= 0) {
+            throw ApiException.badRequest("invalid_amount", "Leg amount must be positive");
+        }
+        List<Account> candidates = new ArrayList<>(db.sql("""
+                SELECT id, code, owner_type, owner_id, bucket, currency, allow_negative, balance
+                FROM ledger_account
+                WHERE (code = :base OR starts_with(code, :stripePrefix))
+                  AND balance > 0
+                ORDER BY id FOR UPDATE""")
+                .param("base", baseCode)
+                .param("stripePrefix", baseCode + ":s")
+                .query(Ledger::account).list());
+        candidates.sort(Comparator.comparing(Account::code));
+        List<Leg> legs = new ArrayList<>();
+        long remaining = amount;
+        for (Account account : candidates) {
+            if (remaining == 0) break;
+            long take = Math.min(account.balance(), remaining);
+            legs.add(Leg.debit(account.code(), take));
+            remaining -= take;
+        }
+        if (remaining > 0) {
+            throw ApiException.insufficientFunds();
+        }
+        return legs;
     }
 
     /**

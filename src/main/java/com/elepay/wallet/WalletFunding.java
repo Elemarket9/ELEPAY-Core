@@ -173,12 +173,13 @@ class WalletFunding {
         if (op.isEmpty()) return;
         UUID customer = (UUID) op.get()[0];
         String reference = (String) op.get()[1];
+        String clearing = ledger.openStripedSystem(Ledger.clearing(event.rail()), "clearing", Ledger.GHS, true, event.purposeId());
         try {
             limits.checkCredit(customer, event.amount());
         } catch (ApiException e) {
             var suspensePosted = ledger.post(Ledger.Posting.of("wallet-topup-suspense", event.purposeId().toString(),
                     "suspense", List.of(
-                            Ledger.Leg.debit(Ledger.clearing(event.rail()), event.amount()),
+                            Ledger.Leg.debit(clearing, event.amount()),
                             Ledger.Leg.credit(Ledger.SUSPENSE, event.amount())))
                     .describedAs(reference + " tier limit exceeded"));
             db.sql("UPDATE wallet_operation SET status = 'failed', journal_tx = :tx, updated_at = now() WHERE id = :id")
@@ -192,7 +193,7 @@ class WalletFunding {
             return;
         }
         var posted = ledger.post(Ledger.Posting.of("wallet-topup", event.purposeId().toString(), "wallet_topup", List.of(
-                Ledger.Leg.debit(Ledger.clearing(event.rail()), event.amount()),
+                Ledger.Leg.debit(clearing, event.amount()),
                 Ledger.Leg.credit(CustomerDirectory.available(customer), event.amount()))).describedAs(reference));
         db.sql("UPDATE wallet_operation SET status = 'completed', journal_tx = :tx, updated_at = now() WHERE id = :id")
                 .param("tx", posted.transactionId()).param("id", event.purposeId()).update();

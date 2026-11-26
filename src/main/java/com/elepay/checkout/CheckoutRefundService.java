@@ -81,7 +81,7 @@ class CheckoutRefundService {
                 ? Idempotency.sha256(access.merchantId() + ":" + reference + ":" + line + ":" + idempotencyKey)
                 : id.toString();
         boolean toWallet = c.paymentMethod().equals("wallet");
-        List<Leg> legs = CheckoutStore.takeLegs(c, a, t);
+        List<Leg> legs = CheckoutStore.takeLegs(ledger, c, a, t);
         legs.add(Leg.credit(toWallet ? CustomerDirectory.available(c.customerId()) : Ledger.REFUNDS_IN_FLIGHT, amount));
         var posted = ledger.post(Ledger.Posting.of("refund", ledgerKey, "refund", legs)
                 .relatedTo(c.journalTx()).describedAs(refundRef)
@@ -133,8 +133,9 @@ class CheckoutRefundService {
                 .param("id", event.purposeId()).query((rs, i) -> new Object[]{rs.getString(1), rs.getLong(2)}).optional();
         if (refund.isEmpty()) return;
         long amount = (long) refund.get()[1];
+        String clearing = ledger.openStripedSystem(Ledger.clearing(event.rail()), "clearing", Ledger.GHS, true, event.purposeId());
         var posted = ledger.post(Ledger.Posting.of("refund-completion", event.purposeId().toString(), "refund_completion",
-                List.of(Leg.debit(Ledger.REFUNDS_IN_FLIGHT, amount), Leg.credit(Ledger.clearing(event.rail()), amount))));
+                List.of(Leg.debit(Ledger.REFUNDS_IN_FLIGHT, amount), Leg.credit(clearing, amount))));
         db.sql("UPDATE refund SET status = 'completed', completion_tx = :tx WHERE id = :id")
                 .param("tx", posted.transactionId()).param("id", event.purposeId()).update();
         regulatory.refund(event.purposeId());

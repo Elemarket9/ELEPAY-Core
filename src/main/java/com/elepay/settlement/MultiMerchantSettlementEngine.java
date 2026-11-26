@@ -200,11 +200,11 @@ public class MultiMerchantSettlementEngine {
             legs.add(Leg.credit(ledger.open("merchant", collectorId, "pending", Ledger.GHS), split.totalPlatformFee()));
         }
         if (split.totalMerchantFee() > 0) {
-            legs.add(Leg.credit(ledger.openSystem(Ledger.DEFERRED_REVENUE, "deferred_revenue", Ledger.GHS, true),
+            legs.add(Leg.credit(ledger.openStripedSystem(Ledger.DEFERRED_REVENUE, "deferred_revenue", Ledger.GHS, true, checkoutId),
                     split.totalMerchantFee()));
         }
         if (split.customerFee() > 0) {
-            legs.add(Leg.credit(ledger.openSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false), split.customerFee()));
+            legs.add(Leg.credit(ledger.openStripedSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false, checkoutId), split.customerFee()));
         }
 
         var posted = ledger.post(Ledger.Posting.of("checkout-payment", checkoutId.toString(), "checkout_payment", legs)
@@ -297,8 +297,8 @@ public class MultiMerchantSettlementEngine {
             throw new IllegalArgumentException("Batch ID is required");
         }
 
-        String deferredAcc = ledger.openSystem(Ledger.DEFERRED_REVENUE, "deferred_revenue", Ledger.GHS, true);
-        String revenueAcc = ledger.openSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false);
+        String deferredAcc = ledger.openStripedSystem(Ledger.DEFERRED_REVENUE, "deferred_revenue", Ledger.GHS, true, batchId);
+        String revenueAcc = ledger.openStripedSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false, batchId);
         var posted = ledger.post(Ledger.Posting.of("fee-recognition", batchId.toString(), "fee_recognition", List.of(
                 Leg.debit(deferredAcc, amount),
                 Leg.credit(revenueAcc, amount)

@@ -301,10 +301,17 @@ public class EnterpriseRefundService {
             legs.add(Leg.debit(Ledger.code("merchant", request.enterpriseId(), "pending", currency), totalCommissionClawback));
         }
 
+        UUID checkoutId = UUID.nameUUIDFromBytes((request.enterpriseId() + ":" + request.orderReference()).getBytes());
+
         // Debit platform service fee from platform revenue account (currency-parameterized)
-        String revenueAccount = ledger.openSystem("system:revenue:" + currency, "revenue", currency, false);
+        String revenueBase = "system:revenue:" + currency;
         if (totalPlatformFeeClawback > 0) {
-            legs.add(Leg.debit(revenueAccount, totalPlatformFeeClawback));
+            String revenueAccount = ledger.openStripedSystem(revenueBase, "revenue", currency, false, checkoutId);
+            if (ledger.rawBalance(revenueAccount) >= totalPlatformFeeClawback) {
+                legs.add(Leg.debit(revenueAccount, totalPlatformFeeClawback));
+            } else {
+                legs.addAll(ledger.debitAcrossStripes(revenueBase, totalPlatformFeeClawback));
+            }
         }
 
         // Credit destination
@@ -317,14 +324,14 @@ public class EnterpriseRefundService {
                             "destinationDetails.connectorId is required for an external wallet refund");
                 }
                 String channel = sanitizeCode(connectorId);
-                destinationAccount = ledger.openSystem("system:clearing:" + channel + ":" + currency, "clearing", currency, true);
+                destinationAccount = ledger.openStripedSystem("system:clearing:" + channel + ":" + currency, "clearing", currency, true, checkoutId);
             }
             case DOMESTIC_MOMO -> {
                 String network = request.destinationDetails().getOrDefault("network", "mtn");
-                destinationAccount = ledger.openSystem("system:clearing:" + network.toLowerCase() + ":" + currency, "clearing", currency, true);
+                destinationAccount = ledger.openStripedSystem("system:clearing:" + network.toLowerCase() + ":" + currency, "clearing", currency, true, checkoutId);
             }
             case BANK_ACCOUNT -> {
-                destinationAccount = ledger.openSystem("system:clearing:bank:" + currency, "clearing", currency, true);
+                destinationAccount = ledger.openStripedSystem("system:clearing:bank:" + currency, "clearing", currency, true, checkoutId);
             }
             case INTERNAL_WALLET -> {
                 UUID customerUuid = UUID.nameUUIDFromBytes(request.externalCustomerId().getBytes());
