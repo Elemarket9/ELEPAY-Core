@@ -2,9 +2,9 @@
 /**
  * Plugin Name: ELEPAY Payment Gateway for WooCommerce
  * Plugin URI: https://elepay.com/developer/woocommerce
- * Description: Accept direct Ghanaian payment rails (MTN MoMo, Telecel Cash, AT Money, GhIPSS GhQR, Direct Card) seamlessly on your WooCommerce store via ELEPAY.
- * Version: 1.2.0
- * Author: ELEPAY Technologies Ltd
+ * Description: Optional WooCommerce gateway for ELEPAY merchant checkout. Payment availability depends on configured and authorized ELEPAY rails.
+ * Version: 1.3.0
+ * Author: ELEPAY
  * Author URI: https://elepay.com
  * Text Domain: woocommerce-elepay
  * Domain Path: /languages
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('WC_ELEPAY_VERSION', '1.2.0');
+define('WC_ELEPAY_VERSION', '1.3.0');
 define('WC_ELEPAY_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WC_ELEPAY_PLUGIN_URL', plugin_dir_url(__FILE__));
 
