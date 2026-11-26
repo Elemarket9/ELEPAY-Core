@@ -89,6 +89,24 @@ class PlatformApiIT extends PostgresTestBase {
     }
 
     @Test
+    void approvedMarketplaceCanEnrollAndLaterAttestPendingSellers() {
+        String path = "/v1/merchants/" + marketplace + "/seller-directory/sync";
+        String credential = key(marketplace, mpOwner, "seller_sync");
+        var profile = Map.of("kind","merchant","legalName","Test Seller","tradingName","Test Seller","contactPhone","0241234567");
+        var batch = List.of(Map.of("externalSellerId","verified","profile",profile,"marketplaceApproved",true),
+                Map.of("externalSellerId","pending","profile",profile));
+        var result = withKey("POST", path, credential, null, batch);
+        assertThat(result.status()).as(result.body().toString()).isEqualTo(200);
+        assertThat(result.body().get(0).get("status").asString()).isEqualTo("active");
+        assertThat(result.body().get(1).get("status").asString()).isEqualTo("pending_review");
+        var approval = List.of(Map.of("externalSellerId","pending","marketplaceApproved",true));
+        var enrolled = withKey("POST", path, credential, null, approval).body().get(0);
+        assertThat(enrolled.get("merchantId")).isEqualTo(result.body().get(1).get("merchantId"));
+        assertThat(enrolled.get("status").asString()).isEqualTo("active");
+        assertThat(withKey("POST", path, credential, null, approval).body().get(0)).isEqualTo(enrolled);
+    }
+
+    @Test
     void platformCreatesQueriesAndCancelsOrdersAndRecoversEvents() {
         String collect = key(marketplace, mpOwner, "view", "collect", "refund");
         Map<String, Object> order = Map.of("orderReference", "ELM-1001", "description", "Sample Marketplace order 1001",

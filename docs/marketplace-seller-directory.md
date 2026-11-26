@@ -2,9 +2,9 @@
 
 Use a server-side marketplace credential with the explicit seller_sync scope to POST an array to /v1/merchants/{marketplace}/seller-directory/sync. A marketplace owner or admin can also sync. Each request accepts 1–500 sellers. Each seller commits independently and results follow input order. Repeating or concurrently submitting a seller ID returns the same ELEPAY identity within that marketplace.
 
-    [{"externalSellerId":"vendor-42","profile":{"kind":"merchant","legalName":"Example Trading Ltd","tradingName":"Example Trading","contactPhone":"0241234567"},"evidenceReference":"partner-review-42"}]
+    [{"externalSellerId":"vendor-42","profile":{"kind":"merchant","legalName":"Example Trading Ltd","tradingName":"Example Trading","contactPhone":"0241234567"},"marketplaceApproved":true,"evidenceReference":"partner-review-42"}]
 
-New managed merchants begin in pending_review. Operators can configure elepay.onboarding.trusted-marketplaces with a comma-separated list of marketplace UUIDs authorized to attest completed seller checks under their onboarding agreement. Only configure this after agreeing what evidence the partner must retain. For these marketplaces a nonblank evidence reference attests eligibility. An external seller ID by itself cannot activate a merchant. Resync a managed profile to update its trading name or submit the attestation. Legal identity and contact changes require review.
+An active marketplace can enroll sellers it has verified by sending marketplaceApproved=true. ELEPAY records the marketplace and the authenticated caller, then makes the managed seller active in the same transaction. evidenceReference is optional. Omit marketplaceApproved or send false for a new seller awaiting approval. Later send just externalSellerId and marketplaceApproved=true to enroll that pending seller. Replays preserve the original identity and never reopen suspended or rejected accounts. Resync a managed profile to update its trading name. Legal identity and contact changes require review.
 
 For an existing independent ELEPAY merchant, send externalSellerId and merchantCode instead of profile. The merchant accepts through the existing invitation API. A marketplace cannot manage an independent merchant's payout details through the directory.
 

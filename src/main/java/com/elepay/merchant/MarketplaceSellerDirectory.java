@@ -9,9 +9,7 @@ import jakarta.validation.constraints.Size;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -21,7 +19,7 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/v1/merchants/{marketplace}/seller-directory")
 class MarketplaceSellerDirectory {
     record Entry(@NotBlank @Pattern(regexp="[A-Za-z0-9._:-]{1,128}") String externalSellerId,
-                 String merchantCode, Merchants.Application profile, @Size(max=200) String evidenceReference) {}
+                 String merchantCode, Merchants.Application profile, Boolean marketplaceApproved, @Size(max=200) String evidenceReference) {}
     record Result(String externalSellerId, UUID merchantId, String status, boolean payoutDestinationReady, String detail) {}
 
     private final JdbcClient db;
@@ -30,18 +28,15 @@ class MarketplaceSellerDirectory {
     private final Validator validation;
     private final Audit audit;
     private final TransactionTemplate tx;
-    private final Set<String> trusted;
 
     MarketplaceSellerDirectory(JdbcClient db, MerchantAccess access, Merchants merchants, Validator validation,
-            Audit audit, PlatformTransactionManager tm,
-            @Value("${elepay.onboarding.trusted-marketplaces:}") Set<String> trusted) {
+            Audit audit, PlatformTransactionManager tm) {
         this.db = db;
         this.access = access;
         this.merchants = merchants;
         this.validation = validation;
         this.audit = audit;
         this.tx = new TransactionTemplate(tm);
-        this.trusted = trusted;
     }
 
     @PostMapping("/sync")
@@ -86,16 +81,9 @@ class MarketplaceSellerDirectory {
                         .param("legal", entry.profile().legalName()).param("phone", com.elepay.common.References.msisdn(entry.profile().contactPhone()))
                         .param("email", entry.profile().contactEmail()).param("reg", entry.profile().registrationNumber()).update();
                 if (updated == 0) throw ApiException.conflict("identity_review_required", "Identity and contact changes require review");
-                if (trusted.contains(marketplace.toString()) && entry.evidenceReference() != null && !entry.evidenceReference().isBlank()) {
-                    db.sql("""
-                            UPDATE marketplace_seller_directory SET evidence_reference=:e
-                            WHERE marketplace_id=:m AND seller_id=:s AND evidence_reference IS NULL""")
-                            .param("e", entry.evidenceReference()).param("m", marketplace).param("s", existing.get()).update();
-                    db.sql("""
-                            UPDATE merchant SET status='active', reviewed_by=:by, reviewed_at=now()
-                            WHERE id=:s AND status='pending_review' AND reviewed_at IS NULL""")
-                            .param("by", "partner-attestation:" + marketplace).param("s", existing.get()).update();
-                }
+            }
+            if (Boolean.TRUE.equals(entry.marketplaceApproved())) {
+                attestManagedSeller(marketplace, existing.get(), entry.evidenceReference(), actor);
             }
             return status(marketplace, entry.externalSellerId());
         }
@@ -105,10 +93,6 @@ class MarketplaceSellerDirectory {
             if (entry.profile() == null || !validation.validate(entry.profile()).isEmpty() || !"merchant".equals(entry.profile().kind()))
                 throw ApiException.badRequest("profile_required", "Supply a valid merchant application");
             seller = merchants.provision(entry.profile(), actor);
-            if (trusted.contains(marketplace.toString()) && entry.evidenceReference() != null && !entry.evidenceReference().isBlank()) {
-                db.sql("UPDATE merchant SET status='active', reviewed_by=:by, reviewed_at=now() WHERE id=:s")
-                        .param("by", "partner-attestation:" + marketplace).param("s", seller).update();
-            }
         } else {
             if (entry.profile() != null)
                 throw ApiException.badRequest("ambiguous_seller", "Supply a profile or an existing merchant code");
@@ -123,8 +107,31 @@ class MarketplaceSellerDirectory {
                 .param("m", marketplace).param("e", entry.externalSellerId()).param("s", seller)
                 .param("managed", managed).param("evidence", entry.evidenceReference()).update();
         if (inserted == 0) throw ApiException.conflict("seller_mapping_conflict", "Merchant already mapped");
+        if (managed && Boolean.TRUE.equals(entry.marketplaceApproved())) {
+            attestManagedSeller(marketplace, seller, entry.evidenceReference(), actor);
+        }
         audit.record(actor, "marketplace.seller_synced", "merchant:" + marketplace, Map.of("seller", seller.toString()));
         return status(marketplace, entry.externalSellerId());
+    }
+
+    private void attestManagedSeller(UUID marketplace, UUID seller, String evidence, String actor) {
+        int activated = db.sql("""
+                UPDATE merchant SET status='active', reviewed_by=:by, reviewed_at=now()
+                WHERE id=:s AND status='pending_review' AND reviewed_at IS NULL
+                AND EXISTS (SELECT 1 FROM marketplace_seller_directory d
+                    JOIN marketplace_seller r USING (marketplace_id,seller_id)
+                    JOIN merchant parent ON parent.id=d.marketplace_id
+                    WHERE d.marketplace_id=:m AND d.seller_id=:s AND d.managed AND r.status='active'
+                    AND parent.kind='marketplace' AND parent.status='active')""")
+                .param("by", "partner-attestation:" + marketplace).param("s", seller).param("m", marketplace).update();
+        if (activated == 1) {
+            db.sql("""
+                    UPDATE marketplace_seller_directory SET evidence_reference=COALESCE(:e,evidence_reference)
+                    WHERE marketplace_id=:m AND seller_id=:s""")
+                    .param("e", evidence).param("m", marketplace).param("s", seller).update();
+            audit.record(actor, "marketplace.seller_approval_attested", "merchant:" + seller,
+                    Map.of("marketplaceId", marketplace.toString()));
+        }
     }
 
     private UUID managedSeller(UUID marketplace, String externalId) {
