@@ -26,9 +26,11 @@ public class ReplicaHealthTracker {
     public static final Duration DEFAULT_COOLDOWN = Duration.ofSeconds(15);
 
     private static final String LAG_PROBE_SQL =
-            "SELECT CASE WHEN pg_is_in_recovery() "
-                    + "THEN COALESCE(EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000, 0) "
-                    + "ELSE 0 END";
+            "SELECT CASE "
+                    + "WHEN NOT pg_is_in_recovery() THEN 0 "
+                    + "WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0 "
+                    + "ELSE COALESCE(EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000, 0) "
+                    + "END";
 
     private record CellHealthState(
             boolean healthy,

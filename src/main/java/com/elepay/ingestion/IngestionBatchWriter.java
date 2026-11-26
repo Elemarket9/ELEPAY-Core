@@ -60,8 +60,9 @@ public class IngestionBatchWriter implements IngestionQueue, SmartLifecycle {
 
     private static final String INSERT_SQL = """
             INSERT INTO ingestion_event (
-                id, tenant_id, event_type, scope, idempotency_key, payload_hash, payload, max_attempts
-            ) VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?)
+                id, tenant_id, event_type, scope, idempotency_key, payload_hash, payload, max_attempts,
+                ordering_key, broker_provider, broker_message_id
+            ) VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?, ?, ?)
             ON CONFLICT (scope, idempotency_key) DO NOTHING
             """;
 
@@ -113,6 +114,7 @@ public class IngestionBatchWriter implements IngestionQueue, SmartLifecycle {
     private final IngestionProperties properties;
     private final IngestionMetrics metrics;
     private final ArrayBlockingQueue<PendingEntry> queue;
+    private final Object admissionLock = new Object();
     private final int capacity;
     private final int highWatermark;
 
@@ -164,15 +166,13 @@ public class IngestionBatchWriter implements IngestionQueue, SmartLifecycle {
             throw ApiException.badRequest("command_required", "Ingestion command is required");
         }
         ensureRunningForEnqueue();
-        if (queue.size() >= highWatermark) {
-            recordBackpressure();
-            throw backpressureException();
-        }
         String payloadHash = canonicalPayloadHash(cmd.payloadJson());
         PendingEntry entry = new PendingEntry(UUID.randomUUID(), cmd, payloadHash, new CompletableFuture<>());
-        if (!queue.offer(entry)) {
-            recordBackpressure();
-            throw backpressureException();
+        synchronized (admissionLock) {
+            if (queue.size() >= highWatermark || !queue.offer(entry)) {
+                recordBackpressure();
+                throw backpressureException();
+            }
         }
         return awaitReceipt(entry.future, properties.getEnqueueTimeoutMs());
     }
@@ -183,11 +183,6 @@ public class IngestionBatchWriter implements IngestionQueue, SmartLifecycle {
             return List.of();
         }
         ensureRunningForEnqueue();
-        int currentSize = queue.size();
-        if (currentSize >= highWatermark || currentSize + cmds.size() > capacity) {
-            recordBackpressure();
-            throw backpressureException();
-        }
         List<PendingEntry> entries = new ArrayList<>(cmds.size());
         for (IngestionCommand cmd : cmds) {
             if (cmd == null) {
@@ -199,10 +194,37 @@ public class IngestionBatchWriter implements IngestionQueue, SmartLifecycle {
                     canonicalPayloadHash(cmd.payloadJson()),
                     new CompletableFuture<>()));
         }
-        for (PendingEntry entry : entries) {
-            if (!queue.offer(entry)) {
+        synchronized (admissionLock) {
+            int currentSize = queue.size();
+            if (entries.size() > capacity || (currentSize == 0 && entries.size() >= highWatermark)) {
                 recordBackpressure();
                 throw backpressureException();
+            }
+            long waitDeadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.min(250L, properties.getEnqueueTimeoutMs()));
+            while ((queue.size() >= highWatermark || queue.size() + entries.size() > capacity)
+                    && System.nanoTime() < waitDeadlineNs) {
+                try {
+                    admissionLock.wait(2L);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            currentSize = queue.size();
+            if (currentSize >= highWatermark || currentSize + entries.size() > capacity) {
+                recordBackpressure();
+                throw backpressureException();
+            }
+            List<PendingEntry> admitted = new ArrayList<>(entries.size());
+            for (PendingEntry entry : entries) {
+                if (!queue.offer(entry)) {
+                    for (PendingEntry rollback : admitted) {
+                        queue.remove(rollback);
+                    }
+                    recordBackpressure();
+                    throw backpressureException();
+                }
+                admitted.add(entry);
             }
         }
         long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(properties.getEnqueueTimeoutMs());
@@ -340,6 +362,9 @@ public class IngestionBatchWriter implements IngestionQueue, SmartLifecycle {
                 if (batchSize > 1) {
                     queue.drainTo(batch, batchSize - 1);
                 }
+                synchronized (admissionLock) {
+                    admissionLock.notifyAll();
+                }
                 // Clear any shutdown interrupt flag before executing the JDBC drain commit.
                 Thread.interrupted();
                 flushBatch(batch);
@@ -421,6 +446,9 @@ public class IngestionBatchWriter implements IngestionQueue, SmartLifecycle {
                 ps.setString(6, entry.payloadHash);
                 ps.setString(7, entry.cmd.payloadJson());
                 ps.setInt(8, maxAttempts);
+                ps.setString(9, entry.cmd.orderingKey());
+                ps.setString(10, entry.cmd.brokerProvider());
+                ps.setString(11, entry.cmd.brokerMessageId());
             }
 
             @Override

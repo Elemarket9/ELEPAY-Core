@@ -1,6 +1,7 @@
 package com.elepay.checkout;
 
 import com.elepay.common.ApiException;
+import com.elepay.common.Idempotency;
 import com.elepay.common.References;
 import com.elepay.ingestion.IngestionHandler;
 import com.elepay.ingestion.IngestionRecord;
@@ -24,17 +25,20 @@ class AsyncCheckoutHandler implements IngestionHandler {
     static final String EVENT_TYPE = "CHECKOUT_CREATE";
 
     private final CheckoutService checkouts;
+    private final Idempotency idempotency;
     private final JdbcClient db;
     private final TransactionTemplate tx;
     private final ObjectMapper json;
     private final String publicBaseUrl;
 
     AsyncCheckoutHandler(CheckoutService checkouts,
+                         Idempotency idempotency,
                          JdbcClient db,
                          PlatformTransactionManager tm,
                          ObjectMapper json,
                          @Value("${elepay.public-base-url}") String publicBaseUrl) {
         this.checkouts = checkouts;
+        this.idempotency = idempotency;
         this.db = db;
         this.tx = new TransactionTemplate(tm);
         this.json = json;
@@ -89,30 +93,32 @@ class AsyncCheckoutHandler implements IngestionHandler {
                     .toList();
         }
 
-        Checkouts.CheckoutCreated created = tx.execute(s -> {
-            var c = checkouts.create(
-                    merchantId,
-                    branchId,
-                    null,
-                    allocations,
-                    request.description(),
-                    request.expiresInMinutes() == null ? 60 : request.expiresInMinutes(),
-                    createdBy,
-                    request.orderReference());
-            if (request.payerPhone() != null && !request.payerPhone().isBlank()) {
-                db.sql("UPDATE checkout SET payer_phone = :p WHERE reference = :r")
-                        .param("p", References.msisdn(request.payerPhone()))
-                        .param("r", c.reference())
-                        .update();
-            }
-            return new Checkouts.CheckoutCreated(
-                    c.reference(),
-                    request.orderReference(),
-                    c.status(),
-                    c.subtotal(),
-                    publicBaseUrl + "/pay/" + c.reference(),
-                    c.expiresAt());
-        });
+        Checkouts.CheckoutCreated created = tx.execute(s ->
+                idempotency.execute("checkout-create:" + merchantId, record.idempotencyKey(), request,
+                        Checkouts.CheckoutCreated.class, () -> {
+                            var c = checkouts.create(
+                                    merchantId,
+                                    branchId,
+                                    null,
+                                    allocations,
+                                    request.description(),
+                                    request.expiresInMinutes() == null ? 60 : request.expiresInMinutes(),
+                                    createdBy,
+                                    request.orderReference());
+                            if (request.payerPhone() != null && !request.payerPhone().isBlank()) {
+                                db.sql("UPDATE checkout SET payer_phone = :p WHERE reference = :r")
+                                        .param("p", References.msisdn(request.payerPhone()))
+                                        .param("r", c.reference())
+                                        .update();
+                            }
+                            return new Checkouts.CheckoutCreated(
+                                    c.reference(),
+                                    request.orderReference(),
+                                    c.status(),
+                                    c.subtotal(),
+                                    publicBaseUrl + "/pay/" + c.reference(),
+                                    c.expiresAt());
+                        }));
 
         return json.writeValueAsString(created);
     }

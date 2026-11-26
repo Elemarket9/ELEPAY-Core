@@ -20,11 +20,14 @@ class CheckoutOperations {
     private final CheckoutService checkouts;
     private final RailTransactions rails;
     private final DualControl dualControl;
+    private final com.elepay.common.FinancialTxRetry txRetry;
 
-    CheckoutOperations(CheckoutService checkouts, RailTransactions rails, DualControl dualControl) {
+    CheckoutOperations(CheckoutService checkouts, RailTransactions rails, DualControl dualControl,
+                       com.elepay.common.FinancialTxRetry txRetry) {
         this.checkouts = checkouts;
         this.rails = rails;
         this.dualControl = dualControl;
+        this.txRetry = txRetry;
     }
 
     record OpenDispute(@NotBlank String checkout, @JsonAlias("allocationLine") @Min(0) int line, @Positive long amount,
@@ -38,8 +41,8 @@ class CheckoutOperations {
     public CheckoutService.Dispute open(@Valid @RequestBody OpenDispute request) {
         Actor actor = Actor.current();
         actor.requireSupport();
-        return checkouts.openDispute(actor.subject(), request.checkout(), request.line(), request.amount(),
-                request.reason(), request.caseReference());
+        return txRetry.execute(() -> checkouts.openDispute(actor.subject(), request.checkout(), request.line(),
+                request.amount(), request.reason(), request.caseReference()));
     }
 
     @PostMapping("/disputes/{id}/resolve")
@@ -51,7 +54,7 @@ class CheckoutOperations {
         payload.put("outcome", request.outcome());
         if (request.note() != null) payload.put("note", request.note()); // never persist the literal "null"
         dualControl.hold("DISPUTE_RESOLUTION", "dispute", id.toString(), null, payload, request.note(), actor);
-        var dispute = checkouts.resolveDispute(actor.subject(), id, request.outcome(), request.note());
+        var dispute = txRetry.execute(() -> checkouts.resolveDispute(actor.subject(), id, request.outcome(), request.note()));
         // A customer-won dispute paid by MoMo or card goes back through the original rail, only
         // after the resolution commits so the rail intent is durable before the network call.
         checkouts.disputeRefundRailTx(id).ifPresent(tx -> AfterCommit.run(() -> rails.submit(tx)));

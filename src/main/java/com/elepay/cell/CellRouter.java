@@ -6,8 +6,9 @@ import java.util.UUID;
 /**
  * Resolves merchants to sharding cells and manages explicit assignments and ring topology.
  */
-public interface CellRouter {
+public interface CellRouter extends com.elepay.ingestion.IngestionWorkerPool.TenantCellResolver {
 
+    @Override
     String resolveCell(UUID merchantId);
 
     Map<String, Integer> ringDistribution();

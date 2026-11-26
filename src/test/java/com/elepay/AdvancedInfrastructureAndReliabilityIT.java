@@ -117,6 +117,9 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
         Boolean ev2PublishedEarly = db.sql("SELECT published_at IS NOT NULL FROM outbox_event WHERE id = :id")
                 .param("id", ev2).query(Boolean.class).single();
         assertThat(ev2PublishedEarly).as("ev2 must not overtake unpublished ev1 for the same aggregate").isFalse();
+        assertThat(outbox.eventsFor(merchantId, 0L, 100))
+                .as("Outbox.eventsFor must not leak unpublished PENDING events")
+                .noneMatch(e -> e.id().equals(ev1) || e.id().equals(ev2));
 
         // Now make ev1 due: both ev1 and ev2 publish in sequence order
         db.sql("UPDATE outbox_event SET next_attempt_at = now() WHERE id = :id").param("id", ev1).update();
@@ -126,8 +129,11 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
         Integer bothPublished = db.sql("SELECT count(*)::int FROM outbox_event WHERE id IN (:e1, :e2) AND status = 'PUBLISHED'")
                 .param("e1", ev1).param("e2", ev2).query(Integer.class).single();
         assertThat(bothPublished).isEqualTo(2);
+        assertThat(outbox.eventsFor(merchantId, 0L, 100))
+                .extracting(Outbox.MerchantEvent::id)
+                .contains(ev1, ev2);
 
-        // 3. Dead-letter transition after max_attempts & controlled replay
+        // 3. Real OutboxDispatcher dead-letter transition after max_attempts & controlled replay
         UUID dlqEvent = tx.execute(s -> outbox.publish("checkout", "dlq-" + aggId, "test.dlq.event", 2, Map.of("x", 1), List.of(merchantId)));
         db.sql("UPDATE outbox_event SET max_attempts = 1 WHERE id = :id").param("id", dlqEvent).update();
         AtomicBoolean failConsumer = new AtomicBoolean(true);
@@ -138,14 +144,26 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
                 if (failConsumer.get()) throw new IllegalStateException("downstream outage");
             }
         };
-        // Invoke dispatcher with failing consumer via direct SQL state verification
-        db.sql("UPDATE outbox_event SET status = 'DEAD', dead_at = now(), attempts = 1, last_error = 'downstream outage' WHERE id = :id")
-                .param("id", dlqEvent).update();
-        assertThat(outbox.listDeadLetters(50)).anyMatch(d -> d.id().equals(dlqEvent));
-        assertThat(outbox.replayDeadLetter(dlqEvent)).isTrue();
-        outboxDispatcher.dispatchBatch(50);
-        String replayedStatus = db.sql("SELECT status FROM outbox_event WHERE id = :id").param("id", dlqEvent).query(String.class).single();
-        assertThat(replayedStatus).isEqualTo("PUBLISHED");
+        outboxDispatcher.registerConsumer(testConsumer);
+        try {
+            outboxDispatcher.dispatchBatch(50);
+            String deadStatus = db.sql("SELECT status FROM outbox_event WHERE id = :id")
+                    .param("id", dlqEvent).query(String.class).single();
+            assertThat(deadStatus).isEqualTo("DEAD");
+            assertThat(outbox.listDeadLetters(50)).anyMatch(d -> d.id().equals(dlqEvent));
+            assertThat(outbox.eventsFor(merchantId, 0L, 100))
+                    .as("Outbox.eventsFor must not leak DEAD events")
+                    .noneMatch(e -> e.id().equals(dlqEvent));
+
+            failConsumer.set(false);
+            assertThat(outbox.replayDeadLetter(dlqEvent)).isTrue();
+            outboxDispatcher.dispatchBatch(50);
+            String replayedStatus = db.sql("SELECT status FROM outbox_event WHERE id = :id")
+                    .param("id", dlqEvent).query(String.class).single();
+            assertThat(replayedStatus).isEqualTo("PUBLISHED");
+        } finally {
+            outboxDispatcher.unregisterConsumer(testConsumer);
+        }
 
         // 4. Retention archival moves aged published events into outbox_event_archive
         db.sql("UPDATE outbox_event SET published_at = now() - interval '45 days' WHERE id IN (:e1, :e2)")
@@ -159,34 +177,63 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
 
     @Test
     @Order(2)
-    @DisplayName("Req 3 & 13: Durable Message Broker publisher confirmations, acks/nacks, poison DLQ & 1,000 / 5,000 / 10,000 message burst benchmark")
+    @DisplayName("Req 3 & 13: Durable Message Broker publisher confirmations, orderingKey serialization, acks/nacks, poison DLQ & 1,000 / 5,000 / 10,000 message burst benchmark")
     void durableMessageBrokerAnd10kBurstBenchmark() throws Exception {
         UUID tenantId = UUID.randomUUID();
         String topic = "BENCH_TOPIC_" + UUID.randomUUID().toString().substring(0, 8);
         AtomicInteger processedCount = new AtomicInteger(0);
+        List<String> orderedKeysObserved = Collections.synchronizedList(new ArrayList<>());
 
         workerPool.registerHandler(new IngestionHandler() {
             @Override public String eventType() { return topic; }
             @Override public String handle(IngestionRecord record) {
                 processedCount.incrementAndGet();
+                if (record.idempotencyKey().startsWith("ord-seq-")) {
+                    orderedKeysObserved.add(record.idempotencyKey());
+                }
                 return "{\"processed\":true}";
             }
         });
 
         try {
-            // 1. Publisher confirmation never marks paymentCompleted=true at queue acceptance
+            // 1. Publisher confirmation never marks paymentCompleted=true at queue acceptance and persists ordering_key & broker_message_id atomically
             BrokerMessage single = BrokerMessage.of(tenantId, topic, "broker-single", "k-single", "acct-1", "{\"amt\":1000}");
             PublishConfirmation confirm = broker.publishDurable(single);
             assertThat(confirm.durableAccepted()).isTrue();
             assertThat(confirm.paymentCompleted()).isFalse();
+            String persistedOrdKey = db.sql("SELECT ordering_key FROM ingestion_event WHERE id = :id")
+                    .param("id", confirm.messageId()).query(String.class).single();
+            String persistedMsgId = db.sql("SELECT broker_message_id FROM ingestion_event WHERE id = :id")
+                    .param("id", confirm.messageId()).query(String.class).single();
+            assertThat(persistedOrdKey).isEqualTo("acct-1");
+            assertThat(persistedMsgId).isEqualTo(single.messageId().toString());
 
-            // 2. Poison message negativeAcknowledge isolates directly to DEAD (DLQ)
+            // Verify per-ordering_key sequential execution across multiple queued messages
+            String sharedOrderKey = "seq-order-" + UUID.randomUUID();
+            broker.publishDurable(BrokerMessage.of(tenantId, topic, "broker-ord", "ord-seq-1", sharedOrderKey, "{\"step\":1}"));
+            broker.publishDurable(BrokerMessage.of(tenantId, topic, "broker-ord", "ord-seq-2", sharedOrderKey, "{\"step\":2}"));
+            broker.publishDurable(BrokerMessage.of(tenantId, topic, "broker-ord", "ord-seq-3", sharedOrderKey, "{\"step\":3}"));
+            long ordDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (orderedKeysObserved.size() < 3 && System.nanoTime() < ordDeadline) {
+                workerPool.drainNow();
+                if (orderedKeysObserved.size() < 3) {
+                    Thread.sleep(20L);
+                }
+            }
+            assertThat(orderedKeysObserved).containsExactly("ord-seq-1", "ord-seq-2", "ord-seq-3");
+
+            // 2. Poison message negativeAcknowledge isolates directly to DEAD (DLQ), and non-poison nacks increment attempts to DEAD
             BrokerMessage poison = BrokerMessage.of(tenantId, "UNREGISTERED_POISON_TOPIC", "broker-poison", "k-poison", "acct-2", "{\"bad\":true}");
             PublishConfirmation poisonConfirm = broker.publishDurable(poison);
             broker.negativeAcknowledge(poisonConfirm.messageId(), "corrupted payload schema", true);
             String poisonStatus = db.sql("SELECT status FROM ingestion_event WHERE id = :id")
                     .param("id", poisonConfirm.messageId()).query(String.class).single();
             assertThat(poisonStatus).isEqualTo("DEAD");
+
+            // Terminal DEAD row must not be overwritten by late acknowledge()
+            broker.acknowledge(poisonConfirm.messageId(), "{\"late\":true}");
+            assertThat(db.sql("SELECT status FROM ingestion_event WHERE id = :id")
+                    .param("id", poisonConfirm.messageId()).query(String.class).single()).isEqualTo("DEAD");
 
             // 3. Benchmark 1,000, 5,000, and 10,000 durable message bursts (in 100-item micro-batches across virtual threads)
             for (int totalMessages : List.of(1_000, 5_000, 10_000)) {
@@ -235,6 +282,9 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
             assertThat(lag.provider()).isNotBlank();
             assertThat(lag.deadLetterCount()).isGreaterThanOrEqualTo(1L);
         } finally {
+            db.sql("UPDATE ingestion_event SET status = 'COMPLETED', completed_at = now() WHERE event_type = :topic AND status = 'PENDING'")
+                    .param("topic", topic)
+                    .update();
             workerPool.unregisterHandler(topic);
         }
     }
@@ -282,6 +332,12 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
         Map<String, Object> reqPayload = Map.of("amount", 15000, "rail", "mtn");
         idempotency.markAmbiguousOutcome(ambScope, ambKey, reqPayload, "RAIL-TX-AMB-1");
 
+        // Mismatched request_hash on markAmbiguousOutcome must throw 409 idempotency_conflict
+        assertThatThrownBy(() -> idempotency.markAmbiguousOutcome(
+                ambScope, ambKey, Map.of("amount", 99999, "rail", "mtn"), "RAIL-TX-AMB-1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("idempotency key");
+
         assertThatThrownBy(() -> tx.execute(s -> idempotency.executeFinancial(
                 tenantId, "PAYMENT_INITIATION", ambScope, ambKey, "RAIL-TX-AMB-1", 365,
                 reqPayload, Map.class, () -> Map.of("shouldNotRun", true))))
@@ -294,6 +350,10 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
                 tenantId, "PAYMENT_INITIATION", ambScope, ambKey, "RAIL-TX-AMB-1", 365,
                 reqPayload, Map.class, () -> Map.of("shouldNotRun", true)));
         assertThat(resolved.get("resolved")).isEqualTo(true);
+
+        // Late markAmbiguousOutcome after COMPLETED must NEVER downgrade COMPLETED back to AMBIGUOUS_OUTCOME
+        idempotency.markAmbiguousOutcome(ambScope, ambKey, reqPayload, "RAIL-TX-AMB-1");
+        assertThat(idempotency.inspect(ambScope, ambKey).orElseThrow().status()).isEqualTo("COMPLETED");
     }
 
     @Test
@@ -301,17 +361,35 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
     @DisplayName("Req 5: PgBouncer connection pooling compatibility, session-dependent detection, 4 workload budgets & credential rotation")
     void pgBouncerConnectionPoolingAndWorkloadBudgets() {
         assertThat(poolManager.isSessionDependentOperation("SELECT pg_advisory_lock(123)")).isTrue();
+        assertThat(poolManager.isSessionDependentOperation("SELECT pg_try_advisory_lock (123)")).isTrue();
+        assertThat(poolManager.isSessionDependentOperation("SELECT pg_advisory_lock_shared(123)")).isTrue();
+        assertThat(poolManager.isSessionDependentOperation("SELECT pg_advisory_lock(1), pg_advisory_xact_lock(2)")).isTrue();
         assertThat(poolManager.isSessionDependentOperation("SELECT pg_advisory_xact_lock(123)")).isFalse();
         assertThat(poolManager.isSessionDependentOperation("LISTEN channel_events")).isTrue();
+        assertThat(poolManager.isSessionDependentOperation("NOTIFY channel_events, 'payload'")).isTrue();
+        assertThat(poolManager.isSessionDependentOperation("PREPARE stmt1 AS SELECT 1")).isTrue();
+        assertThat(poolManager.isSessionDependentOperation("CREATE TEMP TABLE tmp_recon (id int)")).isTrue();
+
+        com.zaxxer.hikari.HikariConfig cfg = new com.zaxxer.hikari.HikariConfig();
+        PgBouncerConnectionPoolManager.applyPgBouncerAndTlsProperties(cfg, true, "verify-full");
+        assertThat(cfg.getDataSourceProperties().getProperty("prepareThreshold")).isEqualTo("0");
+        assertThat(cfg.getDataSourceProperties().getProperty("preparedStatementCacheQueries")).isEqualTo("0");
+        assertThat(cfg.getDataSourceProperties().getProperty("preparedStatementCacheSizeMiB")).isEqualTo("0");
+        assertThat(cfg.getDataSourceProperties().getProperty("sslmode")).isEqualTo("verify-full");
 
         for (WorkloadBudget budget : WorkloadBudget.values()) {
             String res = poolManager.executeWithBudget(budget, () -> "ok-" + budget.name());
             assertThat(res).isEqualTo("ok-" + budget.name());
         }
 
+        // Live credential rotation unwraps underlying HikariDataSource pool(s)
+        var pg = PostgresTestBase.DATABASE;
+        assertThat(poolManager.rotateCredentials(pg.username(), pg.password())).isTrue();
+
         var snap = poolManager.snapshot();
         assertThat(snap.transactionalLimit()).isGreaterThan(snap.reportingLimit());
         assertThat(snap.reportingLimit()).isGreaterThanOrEqualTo(snap.reconciliationLimit());
+        assertThat(snap.credentialRotations()).isGreaterThanOrEqualTo(1L);
     }
 
     @Test
@@ -334,8 +412,8 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
                 Leg.credit(custAcct, 10_000L)
         )));
 
-        // 1. Batch posting with 3 items where item #2 has insufficient funds (50,000 > 10,000):
-        // Savepoint isolation must commit items #1 (3,000) and #3 (2,000) while isolating item #2!
+        // 1. Batch posting with 4 items where item #2 has insufficient funds (50,000 > 10,000) and item #3 has null kind:
+        // Savepoint isolation must commit items #1 (3,000) and #4 (2,000) while isolating items #2 and #3!
         List<Posting> mixedBatch = List.of(
                 Posting.of("batch:test", "b1-" + customerId, "spend", List.of(
                         Leg.debit(custAcct, 3_000L),
@@ -343,17 +421,22 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
                 Posting.of("batch:test", "b2-overdraft-" + customerId, "spend", List.of(
                         Leg.debit(custAcct, 50_000L),
                         Leg.credit(merchAAcct, 50_000L))),
-                Posting.of("batch:test", "b3-" + customerId, "spend", List.of(
+                Posting.of("batch:test", "b3-null-kind-" + customerId, null, List.of(
+                        Leg.debit(custAcct, 1_000L),
+                        Leg.credit(merchAAcct, 1_000L))),
+                Posting.of("batch:test", "b4-" + customerId, "spend", List.of(
                         Leg.debit(custAcct, 2_000L),
                         Leg.credit(merchBAcct, 2_000L)))
         );
 
         List<Ledger.BatchPostingOutcome> outcomes = ledger.postBatch(mixedBatch);
-        assertThat(outcomes).hasSize(3);
+        assertThat(outcomes).hasSize(4);
         assertThat(outcomes.get(0).succeeded()).isTrue();
         assertThat(outcomes.get(1).succeeded()).isFalse();
         assertThat(outcomes.get(1).error().code()).isEqualTo("insufficient_funds");
-        assertThat(outcomes.get(2).succeeded()).isTrue();
+        assertThat(outcomes.get(2).succeeded()).isFalse();
+        assertThat(outcomes.get(2).error().code()).isEqualTo("invalid_posting");
+        assertThat(outcomes.get(3).succeeded()).isTrue();
 
         assertThat(ledger.balance(custAcct)).isEqualTo(5_000L);
         assertThat(ledger.balance(merchAAcct)).isEqualTo(3_000L);
@@ -448,16 +531,27 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
         assertThat(migratedA.homeCellId()).isEqualTo("cell-alpha");
         assertThat(migratedA.fencingToken()).isEqualTo(2L);
 
-        // Stale fencing token (1 < 2) MUST be rejected with 409 cell_fencing_violation
+        // Stale fencing token (1 < 2) MUST be rejected with 409 cell_fencing_violation, both directly and on initiateCrossCellTransfer
         assertThatThrownBy(() -> cellDirectory.assertAuthoritativeCellAndFencingToken(acctA, "cell-0", 1L))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("fencing");
+        assertThatThrownBy(() -> cellDirectory.initiateCrossCellTransfer(
+                "xcell-stale-" + UUID.randomUUID(), "cell-alpha", "cell-beta", acctA, acctB, 1_000L, 1L))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("fencing");
 
         // 2. Successful cross-cell transfer: RESERVED_IN_TRANSIT -> SETTLED
+        String xcellKey1 = "xcell-settle-" + UUID.randomUUID();
         var tx1 = cellDirectory.initiateCrossCellTransfer(
-                "xcell-settle-" + UUID.randomUUID(), "cell-alpha", "cell-beta", acctA, acctB, 10_000L, 2L);
+                xcellKey1, "cell-alpha", "cell-beta", acctA, acctB, 10_000L, 2L);
         assertThat(tx1.state()).isEqualTo("RESERVED_IN_TRANSIT");
         assertThat(ledger.balance(acctA)).isEqualTo(15_000L);
+
+        // Reusing idempotencyKey with different amount must throw 409 idempotency_conflict
+        assertThatThrownBy(() -> cellDirectory.initiateCrossCellTransfer(
+                xcellKey1, "cell-alpha", "cell-beta", acctA, acctB, 99_000L, 2L))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("idempotency key");
 
         // While RESERVED_IN_TRANSIT, 13-domain reconciliation must still be 100% balanced (0 variance!)
         var midRecon = reconciliationService.runReconciliation(Cadence.INTRADAY, "ops-auditor");
@@ -477,19 +571,32 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
         assertThat(compTx2.state()).isEqualTo("COMPENSATED");
         assertThat(ledger.balance(acctA)).isEqualTo(15_000L);
 
-        // 4. Dual-control compensating adjustment enforces 4-eyes principle (initiator != approver)
-        assertThatThrownBy(() -> reconciliationService.postAuthorizedCompensatingAdjustment(
-                "adj-self-" + UUID.randomUUID(), "ops1@elepay", "ops1@elepay",
-                acctB, acctA, 500L, "Self-approval attempt", "RECON-1"))
+        // 4. Two-step 4-eyes compensating adjustment workflow (proposeAdjustment -> approveAdjustment / rejectAdjustment)
+        var rejectedProposal = reconciliationService.proposeAdjustment(
+                "adj-reject-" + UUID.randomUUID(), "ops-maker@elepay",
+                acctB, acctA, 300L, "Disputed fee adjustment", "RECON-0");
+        assertThat(rejectedProposal.status()).isEqualTo("PENDING");
+        var afterReject = reconciliationService.rejectAdjustment(rejectedProposal.proposalId(), "ops-checker@elepay", "Insufficient evidence");
+        assertThat(afterReject.status()).isEqualTo("REJECTED");
+        assertThatThrownBy(() -> reconciliationService.approveAdjustment(rejectedProposal.proposalId(), "ops-checker@elepay", "Late approve"))
+                .isInstanceOf(ApiException.class);
+
+        var validProposal = reconciliationService.proposeAdjustment(
+                "adj-2step-" + UUID.randomUUID(), "ops-maker@elepay",
+                acctB, acctA, 500L, "Verified fee rebate adjustment", "RECON-1");
+        // Self-approval attempt on 2-step proposal must be rejected with 403 Forbidden
+        assertThatThrownBy(() -> reconciliationService.approveAdjustment(validProposal.proposalId(), "ops-maker@elepay", "Self approve"))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("four-eyes");
 
-        var adj = reconciliationService.postAuthorizedCompensatingAdjustment(
-                "adj-valid-" + UUID.randomUUID(), "ops-maker@elepay", "ops-checker@elepay",
-                acctB, acctA, 500L, "Verified fee rebate adjustment", "RECON-1");
+        var adj = reconciliationService.approveAdjustment(validProposal.proposalId(), "ops-checker@elepay", "Approved after audit");
         assertThat(adj.adjustmentTxId()).isNotNull();
         assertThat(ledger.balance(acctA)).isEqualTo(15_500L);
         assertThat(ledger.balance(acctB)).isEqualTo(9_500L);
+
+        // Double approval of already-approved proposal must be rejected with 409 Conflict
+        assertThatThrownBy(() -> reconciliationService.approveAdjustment(validProposal.proposalId(), "ops-checker2@elepay", "Duplicate approve"))
+                .isInstanceOf(ApiException.class);
 
         // Final 13-domain reconciliation check
         var finalRecon = reconciliationService.runReconciliation(Cadence.DAILY, "ops-auditor");
@@ -538,15 +645,43 @@ class AdvancedInfrastructureAndReliabilityIT extends PostgresTestBase {
         assertThat(promotion.newEpoch()).isEqualTo(initialEpoch + 1);
         assertThat(promotion.newPrimaryId()).isEqualTo(promotedNode);
 
-        // Old primary attempting to write with stale epoch MUST be fenced out (409 split_brain_fenced)
-        assertThatThrownBy(() -> replicationFencing.assertPrimaryFencingToken(initialPrimary, initialEpoch))
+        // Old primary attempting to write with stale epoch inside a transaction MUST be fenced out (409 split_brain_fenced)
+        // AND the OBSOLETE_PRIMARY_FENCED audit event MUST survive the outer transaction rollback!
+        TransactionTemplate tx = new TransactionTemplate(txManager);
+        long fencedAuditBefore = db.sql("""
+                SELECT count(*) FROM failover_audit_event
+                WHERE event_type = 'OBSOLETE_PRIMARY_FENCED' AND old_primary_id = :node""")
+                .param("node", initialPrimary).query(Long.class).single();
+        assertThatThrownBy(() -> tx.executeWithoutResult(status ->
+                replicationFencing.assertPrimaryFencingToken(initialPrimary, initialEpoch)))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("fenced");
+        long fencedAuditAfter = db.sql("""
+                SELECT count(*) FROM failover_audit_event
+                WHERE event_type = 'OBSOLETE_PRIMARY_FENCED' AND old_primary_id = :node""")
+                .param("node", initialPrimary).query(Long.class).single();
+        assertThat(fencedAuditAfter).isEqualTo(fencedAuditBefore + 1);
+        String detailsJson = db.sql("""
+                SELECT details::text FROM failover_audit_event
+                WHERE event_type = 'OBSOLETE_PRIMARY_FENCED' AND old_primary_id = :node
+                ORDER BY created_at DESC LIMIT 1""")
+                .param("node", initialPrimary).query(String.class).single();
+        assertThat(detailsJson).contains("rejectedNodeId").contains("rejectedEpoch");
 
         // Promoted primary with new epoch passes fencing check
         replicationFencing.assertPrimaryFencingToken(promotedNode, promotion.newEpoch());
 
-        // Immutable failover_audit_event rejects UPDATE/DELETE (V79 trigger)
+        // Degraded sync replication fence blocks executeAuthoritativeFinancialAction until cleared
+        replicationFencing.setSynchronousReplicationDegradedFence(true, "test-monitor", "Standby unreachable");
+        try {
+            assertThatThrownBy(() -> replicationFencing.executeAuthoritativeFinancialAction(() -> "should-fail"))
+                    .isInstanceOf(ApiException.class)
+                    .hasMessageContaining("SAFE_READ_ONLY_DEGRADED");
+        } finally {
+            replicationFencing.setSynchronousReplicationDegradedFence(false, "test-monitor", "Standby restored");
+        }
+
+        // Immutable failover_audit_event rejects UPDATE/DELETE (V79 + V80 triggers)
         assertThatThrownBy(() -> db.sql("DELETE FROM failover_audit_event WHERE id = :id")
                 .param("id", promotion.auditEventId()).update())
                 .hasStackTraceContaining("immutable");

@@ -114,12 +114,8 @@ class CheckoutStore {
             legs.add(Leg.debit(deferredStripe, t.feeFromDeferred()));
         }
         if (t.feeFromRevenue() > 0) {
-            String revenueStripe = ledger.openStripedSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false, c.id());
-            if (ledger.rawBalance(revenueStripe) >= t.feeFromRevenue()) {
-                legs.add(Leg.debit(revenueStripe, t.feeFromRevenue()));
-            } else {
-                legs.addAll(ledger.debitAcrossStripes(Ledger.REVENUE, t.feeFromRevenue()));
-            }
+            ledger.openStripedSystem(Ledger.REVENUE, "revenue", Ledger.GHS, false, c.id());
+            legs.addAll(ledger.debitStripeOrAcrossStripes(Ledger.REVENUE, c.id(), t.feeFromRevenue()));
         }
         if (t.platformFromPending() > 0) legs.add(Leg.debit(Ledger.code("merchant", c.collectorId(), "pending", Ledger.GHS), t.platformFromPending()));
         if (t.platformFromAvailable() > 0) legs.add(Leg.debit(Ledger.code("merchant", c.collectorId(), "available", Ledger.GHS), t.platformFromAvailable()));

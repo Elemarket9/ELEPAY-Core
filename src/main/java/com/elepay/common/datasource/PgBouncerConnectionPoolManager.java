@@ -125,22 +125,20 @@ public class PgBouncerConnectionPoolManager {
         return pgBouncerTransactionMode;
     }
 
+    private static final java.util.regex.Pattern SESSION_DEPENDENT_PATTERN = java.util.regex.Pattern.compile(
+            "\\b(PG_(?:TRY_)?ADVISORY_(?:LOCK|UNLOCK)(?:_SHARED|_ALL)?|LISTEN|UNLISTEN|NOTIFY|PG_NOTIFY|SET\\s+SESSION|PREPARE|DEALLOCATE|CREATE\\s+TEMP(?:ORARY)?|WITH\\s+HOLD|FLYWAY)\\b",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
     /**
      * Returns true if a SQL operation requires session-level state incompatible with PgBouncer
      * transaction pooling (e.g., session-level {@code pg_advisory_lock} rather than
      * {@code pg_advisory_xact_lock}, {@code LISTEN/NOTIFY}, {@code SET SESSION}, or Flyway DDL).
      */
     public boolean isSessionDependentOperation(String sqlOrOperationName) {
-        if (sqlOrOperationName == null) return false;
-        String upper = sqlOrOperationName.toUpperCase();
-        if (upper.contains("PG_ADVISORY_LOCK") && !upper.contains("PG_ADVISORY_XACT_LOCK")) {
-            return true;
+        if (sqlOrOperationName == null || sqlOrOperationName.isBlank()) {
+            return false;
         }
-        return upper.contains("PG_TRY_ADVISORY_LOCK(")
-                || upper.contains("LISTEN ")
-                || upper.contains("UNLISTEN ")
-                || upper.contains("FLYWAY")
-                || upper.contains("SET SESSION ");
+        return SESSION_DEPENDENT_PATTERN.matcher(sqlOrOperationName).find();
     }
 
     /**
@@ -149,6 +147,7 @@ public class PgBouncerConnectionPoolManager {
      */
     public <T> T executeWithBudget(WorkloadBudget budget, Supplier<T> action) {
         Objects.requireNonNull(budget, "budget must not be null");
+        Objects.requireNonNull(action, "action must not be null");
         Semaphore sem = semaphores.get(budget);
         boolean acquired;
         try {
@@ -187,24 +186,28 @@ public class PgBouncerConnectionPoolManager {
      * Rotates database credentials at runtime without restarting the JVM and soft-evicts idle
      * connections so new connections authenticate with the rotated credentials.
      */
-    public boolean rotateCredentials(String newUsername, String newPassword) {
+    public synchronized boolean rotateCredentials(String newUsername, String newPassword) {
         if (newUsername == null || newUsername.isBlank()) {
             throw new IllegalArgumentException("newUsername must not be blank");
         }
         Objects.requireNonNull(newPassword, "newPassword must not be null");
-        credentialRotations.incrementAndGet();
 
-        HikariDataSource hikari = unwrapHikari(dataSource);
-        if (hikari != null) {
-            hikari.getHikariConfigMXBean().setUsername(newUsername.trim());
+        java.util.Set<HikariDataSource> hikariPools = extractHikariDataSources(dataSource);
+        if (hikariPools.isEmpty()) {
+            return false;
+        }
+
+        String trimmedUser = newUsername.trim();
+        for (HikariDataSource hikari : hikariPools) {
+            hikari.getHikariConfigMXBean().setUsername(trimmedUser);
             hikari.getHikariConfigMXBean().setPassword(newPassword);
             HikariPoolMXBean pool = hikari.getHikariPoolMXBean();
             if (pool != null) {
                 pool.softEvictConnections();
             }
             log.info("Rotated database credentials and soft-evicted pool connections for {}", hikari.getPoolName());
-            return true;
         }
+        credentialRotations.incrementAndGet();
         return true;
     }
 
@@ -216,7 +219,7 @@ public class PgBouncerConnectionPoolManager {
         config.addDataSourceProperty("reWriteBatchedInserts", "true");
         config.addDataSourceProperty("prepareThreshold", pgBouncerTxMode ? "0" : "3");
         if (pgBouncerTxMode) {
-            config.addDataSourceProperty(" preparedStatementCacheQueries", "0");
+            config.addDataSourceProperty("preparedStatementCacheQueries", "0");
             config.addDataSourceProperty("preparedStatementCacheSizeMiB", "0");
         }
         if (sslMode != null && !sslMode.isBlank() && !"disable".equalsIgnoreCase(sslMode)) {
@@ -225,16 +228,40 @@ public class PgBouncerConnectionPoolManager {
         config.addDataSourceProperty("ApplicationName", "ELEPAY-Core");
     }
 
-    private static HikariDataSource unwrapHikari(DataSource ds) {
-        if (ds == null) return null;
-        if (ds instanceof HikariDataSource h) return h;
+    private static java.util.Set<HikariDataSource> extractHikariDataSources(DataSource ds) {
+        java.util.Set<HikariDataSource> result = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        collectHikariDataSources(ds, result, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+        return result;
+    }
+
+    private static void collectHikariDataSources(
+            DataSource ds,
+            java.util.Set<HikariDataSource> acc,
+            java.util.Set<DataSource> visited) {
+        if (ds == null || !visited.add(ds)) {
+            return;
+        }
+        if (ds instanceof HikariDataSource h) {
+            acc.add(h);
+            return;
+        }
+        if (ds instanceof org.springframework.jdbc.datasource.DelegatingDataSource delegating) {
+            collectHikariDataSources(delegating.getTargetDataSource(), acc, visited);
+        }
+        if (ds instanceof CellAwareRoutingDataSource routing) {
+            for (DataSource managed : routing.managedDataSources()) {
+                collectHikariDataSources(managed, acc, visited);
+            }
+        }
         try {
             if (ds.isWrapperFor(HikariDataSource.class)) {
-                return ds.unwrap(HikariDataSource.class);
+                HikariDataSource unwrapped = ds.unwrap(HikariDataSource.class);
+                if (unwrapped != null) {
+                    acc.add(unwrapped);
+                }
             }
         } catch (Exception ignored) {
         }
-        return null;
     }
 
     public PoolSnapshot snapshot() {

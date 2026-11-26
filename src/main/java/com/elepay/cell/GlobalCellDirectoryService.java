@@ -81,13 +81,14 @@ public class GlobalCellDirectoryService {
         if (accountId == null || accountId.isBlank()) {
             throw ApiException.badRequest("invalid_account_id", "accountId must not be blank");
         }
-        AccountDirectoryEntry cached = directoryCache.get(accountId);
+        String normalizedId = accountId.trim();
+        AccountDirectoryEntry cached = directoryCache.get(normalizedId);
         if (cached != null && "ACTIVE".equals(cached.state())) {
             return cached;
         }
-        Optional<AccountDirectoryEntry> existing = loadFromDb(accountId);
+        Optional<AccountDirectoryEntry> existing = loadFromDb(normalizedId);
         if (existing.isPresent()) {
-            directoryCache.put(accountId, existing.get());
+            directoryCache.put(normalizedId, existing.get());
             return existing.get();
         }
         String resolvedCell = cellRouter.resolveCell(ownerId);
@@ -96,13 +97,13 @@ public class GlobalCellDirectoryService {
                     (account_id, account_type, owner_id, home_cell_id, fencing_token, routing_version, state)
                 VALUES (:id, :type, :owner, :cell, 1, 1, 'ACTIVE')
                 ON CONFLICT (account_id) DO NOTHING""")
-                .param("id", accountId.trim())
+                .param("id", normalizedId)
                 .param("type", accountType)
                 .param("owner", ownerId)
                 .param("cell", resolvedCell)
                 .update();
-        AccountDirectoryEntry entry = loadFromDb(accountId.trim()).orElseThrow();
-        directoryCache.put(accountId.trim(), entry);
+        AccountDirectoryEntry entry = loadFromDb(normalizedId).orElseThrow();
+        directoryCache.put(normalizedId, entry);
         return entry;
     }
 
@@ -112,11 +113,19 @@ public class GlobalCellDirectoryService {
      */
     @Transactional
     public AccountDirectoryEntry migrateAccountCell(String accountId, String newCellId, long expectedFencingToken) {
-        AccountDirectoryEntry current = loadFromDbForUpdate(accountId)
-                .orElseThrow(() -> ApiException.notFound("account_not_in_directory", "Account not found: " + accountId));
+        if (accountId == null || accountId.isBlank()) {
+            throw ApiException.badRequest("invalid_account_id", "accountId must not be blank");
+        }
+        if (newCellId == null || newCellId.isBlank()) {
+            throw ApiException.badRequest("invalid_cell_id", "newCellId must not be blank");
+        }
+        String normalizedId = accountId.trim();
+        String normalizedCellId = newCellId.trim();
+        AccountDirectoryEntry current = loadFromDbForUpdate(normalizedId)
+                .orElseThrow(() -> ApiException.notFound("account_not_in_directory", "Account not found: " + normalizedId));
         if (current.fencingToken() != expectedFencingToken) {
             throw ApiException.conflict("stale_fencing_token",
-                    "Fencing token mismatch for account " + accountId + ": expected "
+                    "Fencing token mismatch for account " + normalizedId + ": expected "
                             + expectedFencingToken + " but authoritative token is " + current.fencingToken());
         }
         long nextToken = current.fencingToken() + 1;
@@ -129,15 +138,15 @@ public class GlobalCellDirectoryService {
                     state = 'ACTIVE',
                     updated_at = now()
                 WHERE account_id = :id AND fencing_token = :expected""")
-                .param("cell", newCellId)
+                .param("cell", normalizedCellId)
                 .param("token", nextToken)
                 .param("ver", nextVersion)
-                .param("id", accountId)
+                .param("id", normalizedId)
                 .param("expected", expectedFencingToken)
                 .update();
-        directoryCache.remove(accountId);
-        AccountDirectoryEntry updated = loadFromDb(accountId).orElseThrow();
-        directoryCache.put(accountId, updated);
+        directoryCache.remove(normalizedId);
+        AccountDirectoryEntry updated = loadFromDb(normalizedId).orElseThrow();
+        directoryCache.put(normalizedId, updated);
         return updated;
     }
 
@@ -145,24 +154,35 @@ public class GlobalCellDirectoryService {
      * Validates that the caller holds the current authoritative cell &amp; fencing token for an account.
      */
     public void assertAuthoritativeCellAndFencingToken(String accountId, String claimedCellId, long claimedFencingToken) {
-        AccountDirectoryEntry entry = loadFromDb(accountId)
-                .orElseThrow(() -> ApiException.notFound("account_not_in_directory", "Account not found: " + accountId));
+        if (accountId == null || accountId.isBlank()) {
+            throw ApiException.badRequest("invalid_account_id", "accountId must not be blank");
+        }
+        String normalizedId = accountId.trim();
+        AccountDirectoryEntry entry = loadFromDb(normalizedId)
+                .orElseThrow(() -> ApiException.notFound("account_not_in_directory", "Account not found: " + normalizedId));
+        if (!"ACTIVE".equals(entry.state())) {
+            directoryCache.remove(normalizedId);
+            throw ApiException.conflict("account_cell_not_active",
+                    "Account " + normalizedId + " is not in ACTIVE state (state=" + entry.state() + ")");
+        }
         if (claimedFencingToken < entry.fencingToken() || !entry.homeCellId().equals(claimedCellId)) {
-            directoryCache.remove(accountId);
+            directoryCache.remove(normalizedId);
             throw ApiException.conflict("cell_fencing_violation",
-                    "Account " + accountId + " is owned by cell " + entry.homeCellId()
+                    "Account " + normalizedId + " is owned by cell " + entry.homeCellId()
                             + " at fencing token " + entry.fencingToken()
                             + " (rejected stale cell=" + claimedCellId + ", token=" + claimedFencingToken + ")");
         }
     }
 
     public void invalidateAccountCache(String accountId) {
-        directoryCache.remove(accountId);
+        if (accountId != null) {
+            directoryCache.remove(accountId.trim());
+        }
     }
 
     /**
      * Step 1 of Recoverable Cross-Cell Financial Transfer:
-     * Reserves funds from {@code sourceAccountCode} into {@code system:cross_cell_in_transit:GHS}
+     * Reserves funds from {@code sourceAccountCode} into {@code system:cross_cell_in_transit:<CUR>}
      * and records {@code RESERVED_IN_TRANSIT}.
      */
     @Transactional
@@ -174,17 +194,30 @@ public class GlobalCellDirectoryService {
             String targetAccountCode,
             long amountMinor,
             long fencingToken) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw ApiException.badRequest("idempotency_key_required", "idempotencyKey is required");
+        }
         if (amountMinor <= 0) {
             throw ApiException.badRequest("invalid_amount", "Transfer amount must be positive");
         }
-        Optional<CrossCellTransferRecord> existing = findTransferByKey(idempotencyKey);
+        String normalizedKey = idempotencyKey.trim();
+        Optional<CrossCellTransferRecord> existing = findTransferByKey(normalizedKey);
         if (existing.isPresent()) {
+            verifyTransferParametersMatch(existing.get(), sourceCellId, targetCellId,
+                    sourceAccountCode, targetAccountCode, amountMinor);
             return existing.get();
         }
-        String inTransit = ledger.openSystem(IN_TRANSIT_ACCOUNT, "cross_cell_in_transit", Ledger.GHS, false);
+        if (sourceAccountCode != null && loadFromDb(sourceAccountCode.trim()).isPresent()) {
+            assertAuthoritativeCellAndFencingToken(sourceAccountCode.trim(), sourceCellId, fencingToken);
+        }
+        String currency = ledger.account(sourceAccountCode)
+                .map(Ledger.Account::currency)
+                .orElse(Ledger.GHS);
+        String inTransitCode = "system:cross_cell_in_transit:" + currency;
+        String inTransit = ledger.openSystem(inTransitCode, "cross_cell_in_transit", currency, false);
         Ledger.Posted debitPosted = ledger.post(Posting.of(
                 "cross-cell:reserve",
-                idempotencyKey,
+                normalizedKey,
                 "cross_cell_reserve",
                 List.of(
                         Leg.debit(sourceAccountCode, amountMinor),
@@ -193,28 +226,52 @@ public class GlobalCellDirectoryService {
         ).describedAs("Cross-cell in-transit reservation " + sourceCellId + " -> " + targetCellId));
 
         UUID transferId = UUID.randomUUID();
-        db.sql("""
+        int inserted = db.sql("""
                 INSERT INTO cross_cell_transfer
                     (id, idempotency_key, source_cell_id, target_cell_id, source_account_code,
                      target_account_code, currency, amount_minor, fencing_token, state, debit_journal_tx)
-                VALUES (:id, :key, :srcCell, :dstCell, :srcAcct, :dstAcct, 'GHS', :amt, :token,
-                        'RESERVED_IN_TRANSIT', :debitTx)""")
+                VALUES (:id, :key, :srcCell, :dstCell, :srcAcct, :dstAcct, :cur, :amt, :token,
+                        'RESERVED_IN_TRANSIT', :debitTx)
+                ON CONFLICT (idempotency_key) DO NOTHING""")
                 .param("id", transferId)
-                .param("key", idempotencyKey)
+                .param("key", normalizedKey)
                 .param("srcCell", sourceCellId)
                 .param("dstCell", targetCellId)
                 .param("srcAcct", sourceAccountCode)
                 .param("dstAcct", targetAccountCode)
+                .param("cur", currency)
                 .param("amt", amountMinor)
                 .param("token", fencingToken)
                 .param("debitTx", debitPosted.transactionId())
                 .update();
+        if (inserted == 0) {
+            CrossCellTransferRecord concurrent = findTransferByKey(normalizedKey).orElseThrow();
+            verifyTransferParametersMatch(concurrent, sourceCellId, targetCellId,
+                    sourceAccountCode, targetAccountCode, amountMinor);
+            return concurrent;
+        }
         return getTransfer(transferId).orElseThrow();
+    }
+
+    private static void verifyTransferParametersMatch(
+            CrossCellTransferRecord existing,
+            String sourceCellId,
+            String targetCellId,
+            String sourceAccountCode,
+            String targetAccountCode,
+            long amountMinor) {
+        if (!java.util.Objects.equals(existing.sourceCellId(), sourceCellId)
+                || !java.util.Objects.equals(existing.targetCellId(), targetCellId)
+                || !java.util.Objects.equals(existing.sourceAccountCode(), sourceAccountCode)
+                || !java.util.Objects.equals(existing.targetAccountCode(), targetAccountCode)
+                || existing.amountMinor() != amountMinor) {
+            throw ApiException.idempotencyConflict();
+        }
     }
 
     /**
      * Step 2A of Recoverable Cross-Cell Financial Transfer:
-     * Releases funds from {@code system:cross_cell_in_transit:GHS} into {@code targetAccountCode}
+     * Releases funds from {@code system:cross_cell_in_transit:<CUR>} into {@code targetAccountCode}
      * and marks the transfer {@code SETTLED}.
      */
     @Transactional
@@ -227,7 +284,8 @@ public class GlobalCellDirectoryService {
             throw ApiException.conflict("invalid_cross_cell_state",
                     "Cannot settle cross-cell transfer in state " + tx.state());
         }
-        String inTransit = ledger.openSystem(IN_TRANSIT_ACCOUNT, "cross_cell_in_transit", Ledger.GHS, false);
+        String currency = (tx.currency() == null || tx.currency().isBlank()) ? Ledger.GHS : tx.currency().trim();
+        String inTransit = ledger.openSystem("system:cross_cell_in_transit:" + currency, "cross_cell_in_transit", currency, false);
         Ledger.Posted creditPosted = ledger.post(Posting.of(
                 "cross-cell:settle",
                 tx.idempotencyKey(),
@@ -253,7 +311,7 @@ public class GlobalCellDirectoryService {
 
     /**
      * Step 2B of Recoverable Cross-Cell Financial Transfer (Compensation on Target Failure):
-     * Returns in-transit funds from {@code system:cross_cell_in_transit:GHS} back to
+     * Returns in-transit funds from {@code system:cross_cell_in_transit:<CUR>} back to
      * {@code sourceAccountCode} via a compensating journal entry and marks {@code COMPENSATED}.
      */
     @Transactional
@@ -266,7 +324,8 @@ public class GlobalCellDirectoryService {
             throw ApiException.conflict("invalid_cross_cell_state",
                     "Cannot compensate cross-cell transfer in state " + tx.state());
         }
-        String inTransit = ledger.openSystem(IN_TRANSIT_ACCOUNT, "cross_cell_in_transit", Ledger.GHS, false);
+        String currency = (tx.currency() == null || tx.currency().isBlank()) ? Ledger.GHS : tx.currency().trim();
+        String inTransit = ledger.openSystem("system:cross_cell_in_transit:" + currency, "cross_cell_in_transit", currency, false);
         Ledger.Posted compPosted = ledger.post(Posting.of(
                 "cross-cell:compensate",
                 tx.idempotencyKey(),

@@ -178,9 +178,10 @@ public class Idempotency {
         int effectiveRetention = Math.max(1, retentionDays);
         int claimed = db.sql("""
                 INSERT INTO idempotent_request
-                    (scope, key, tenant_id, operation_type, financial_reference, request_hash, status, expires_at)
+                    (scope, key, tenant_id, operation_type, financial_reference, request_hash, status, expires_at, locked_until)
                 VALUES (:scope, :key, :tenantId, :opType, :finRef, :hash, 'IN_PROGRESS',
-                        now() + make_interval(days => :days))
+                        now() + make_interval(days => :days),
+                        now() + interval '5 minutes')
                 ON CONFLICT (scope, key) DO NOTHING""")
                 .param("scope", scope)
                 .param("key", key)
@@ -210,7 +211,11 @@ public class Idempotency {
                         "External payment outcome is ambiguous/unknown for key '" + key
                                 + "'; automatic re-execution is blocked until reconciliation resolves the outcome");
             }
-            if (stored.response() == null) {
+            if ("FAILED".equals(stored.status())) {
+                throw ApiException.conflict("idempotency_previous_attempt_failed",
+                        "Previous attempt for key '" + key + "' failed permanently");
+            }
+            if (!"COMPLETED".equals(stored.status()) || stored.response() == null) {
                 throw ApiException.conflict("idempotency_in_progress",
                         "Operation with key '" + key + "' is currently in progress or awaits recovery");
             }
@@ -221,6 +226,7 @@ public class Idempotency {
                 UPDATE idempotent_request
                 SET response = CAST(:response AS jsonb),
                     status = 'COMPLETED',
+                    locked_until = NULL,
                     financial_reference = COALESCE(:finRef, financial_reference)
                 WHERE scope = :scope AND key = :key""")
                 .param("response", json.writeValueAsString(result))
@@ -234,10 +240,20 @@ public class Idempotency {
     /**
      * Records an ambiguous external payment outcome so retries under the same key fail closed
      * with {@code 409 ambiguous_payment_outcome} instead of blindly re-submitting to the rail.
+     * Never downgrades an already {@code COMPLETED} transaction, and rejects mismatched request hashes.
      */
     @Transactional
     public void markAmbiguousOutcome(String scope, String key, Object request, String financialReference) {
         String hash = hash(request);
+        Optional<RegistryRecord> existing = inspect(scope, key);
+        if (existing.isPresent()) {
+            if (!existing.get().requestHash().equals(hash)) {
+                throw ApiException.idempotencyConflict();
+            }
+            if ("COMPLETED".equals(existing.get().status())) {
+                return;
+            }
+        }
         db.sql("""
                 INSERT INTO idempotent_request
                     (scope, key, operation_type, financial_reference, request_hash, status, expires_at)
@@ -245,12 +261,18 @@ public class Idempotency {
                         now() + interval '365 days')
                 ON CONFLICT (scope, key) DO UPDATE SET
                     status = 'AMBIGUOUS_OUTCOME',
-                    financial_reference = COALESCE(EXCLUDED.financial_reference, idempotent_request.financial_reference)""")
+                    financial_reference = COALESCE(EXCLUDED.financial_reference, idempotent_request.financial_reference)
+                WHERE idempotent_request.status <> 'COMPLETED'
+                  AND idempotent_request.request_hash = EXCLUDED.request_hash""")
                 .param("scope", scope)
                 .param("key", key)
                 .param("finRef", financialReference)
                 .param("hash", hash)
                 .update();
+        Optional<RegistryRecord> after = inspect(scope, key);
+        if (after.isPresent() && !after.get().requestHash().equals(hash)) {
+            throw ApiException.idempotencyConflict();
+        }
     }
 
     /**
@@ -261,8 +283,11 @@ public class Idempotency {
         db.sql("""
                 UPDATE idempotent_request
                 SET status = 'COMPLETED',
+                    locked_until = NULL,
                     response = CAST(:response AS jsonb)
-                WHERE scope = :scope AND key = :key""")
+                WHERE scope = :scope
+                  AND key = :key
+                  AND status IN ('AMBIGUOUS_OUTCOME', 'IN_PROGRESS')""")
                 .param("response", json.writeValueAsString(confirmedResponse))
                 .param("scope", scope)
                 .param("key", key)

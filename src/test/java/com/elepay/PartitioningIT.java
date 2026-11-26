@@ -36,7 +36,8 @@ class PartitioningIT extends PostgresTestBase {
                 "audit_log",
                 "webhook_delivery_log",
                 "journal_transaction_archive",
-                "checkout_archive")) {
+                "checkout_archive",
+                "outbox_event_archive")) {
             String relkind = db.sql("""
                     SELECT c.relkind::text
                     FROM pg_class c
@@ -155,7 +156,7 @@ class PartitioningIT extends PostgresTestBase {
                     .param("tx", badTx).param("clearing", clearingId).param("acct", acctId).update();
         })).hasStackTraceContaining("is not balanced");
 
-        // V74 immutability blocks UPDATE, DELETE, and trigger tampering on partitioned journal_entry
+        // V74 + V80 immutability blocks UPDATE, DELETE, and trigger tampering on partitioned journal_entry and child partitions
         assertThatThrownBy(() -> db.sql("UPDATE journal_entry SET amount = 1 WHERE transaction_id = :tx")
                 .param("tx", posted.transactionId()).update())
                 .isInstanceOf(DataAccessException.class)
@@ -165,6 +166,12 @@ class PartitioningIT extends PostgresTestBase {
                 .isInstanceOf(DataAccessException.class)
                 .hasMessageContaining("immutable");
         assertThatThrownBy(() -> db.sql("ALTER TABLE journal_entry DISABLE TRIGGER journal_entry_immutable").update())
+                .isInstanceOf(DataAccessException.class)
+                .hasStackTraceContaining("strictly forbidden");
+        assertThatThrownBy(() -> db.sql("ALTER TABLE journal_entry_default DISABLE TRIGGER journal_entry_default_truncate_immutable").update())
+                .isInstanceOf(DataAccessException.class)
+                .hasStackTraceContaining("strictly forbidden");
+        assertThatThrownBy(() -> db.sql("ALTER TABLE failover_audit_event DISABLE TRIGGER failover_audit_event_immutable").update())
                 .isInstanceOf(DataAccessException.class)
                 .hasStackTraceContaining("strictly forbidden");
     }
@@ -191,7 +198,7 @@ class PartitioningIT extends PostgresTestBase {
         assertThat(secondCall).isZero();
 
         int extended = maintenance.ensurePartitions(8);
-        assertThat(extended).isGreaterThanOrEqualTo(10); // 2 extra months * 5 range-partitioned tables
+        assertThat(extended).isGreaterThanOrEqualTo(12); // 2 extra months * 6 range-partitioned tables
         assertThat(maintenance.ensurePartitions(8)).isZero();
 
         List<PartitionMaintenanceService.PartitionStat> stats = maintenance.listPartitionStats();

@@ -303,9 +303,8 @@ public class RailTransactions {
                         .param("id", id).param("pref", result.railReference()).param("fee", fee).update();
                 String cur = t.currency() == null || t.currency().isBlank()
                         ? Ledger.GHS : t.currency().toUpperCase(Locale.ROOT);
-                String clearingAcct = Ledger.GHS.equals(cur)
-                        ? Ledger.clearing(t.rail()) : "system:clearing:" + t.rail() + ":" + cur;
-                ledger.openSystem(clearingAcct, "clearing", cur, true);
+                String clearingAcct = ledger.clearingStripe(t.rail(), cur,
+                        t.purposeId() != null ? t.purposeId() : t.id());
                 if (fee > 0) {
                     String feeAcct = "system:rail_fees:" + cur;
                     ledger.openSystem(feeAcct, "rail_fees", cur, true);
@@ -426,6 +425,35 @@ public class RailTransactions {
 
     public record CallbackOutcome(boolean duplicate, String outcome) {}
 
+    private Optional<RailTx> findMatchingCallbackTx(String railName, PaymentRail.Callback callback) {
+        Optional<RailTx> match = Optional.empty();
+        if (callback.reference() != null) {
+            UUID asUuid = null;
+            try {
+                asUuid = UUID.fromString(callback.reference());
+            } catch (IllegalArgumentException ignored) {}
+            if (asUuid != null) {
+                match = db.sql("""
+                        SELECT * FROM rail_transaction
+                        WHERE reference = :r OR purpose_id = :uuid
+                        ORDER BY created_at DESC LIMIT 1""")
+                        .param("r", callback.reference()).param("uuid", asUuid)
+                        .query(RailTransactions::map).optional();
+            } else {
+                match = findByReference(callback.reference());
+            }
+        }
+        if (match.isEmpty() && callback.railReference() != null) {
+            match = db.sql("""
+                    SELECT * FROM rail_transaction
+                    WHERE rail = :p AND rail_reference = :r
+                    ORDER BY created_at DESC LIMIT 1""")
+                    .param("p", railName).param("r", callback.railReference())
+                    .query(RailTransactions::map).optional();
+        }
+        return match;
+    }
+
     /** Verifies, deduplicates and applies a rail callback. */
     public CallbackOutcome handleCallback(String railName, Map<String, String> headers, String body) {
         PaymentRail rail = rails.get(railName);
@@ -439,6 +467,26 @@ public class RailTransactions {
         JsonNode payload = json.readTree(body);
         String payloadJson = json.writeValueAsString(payload);
 
+        // Perform external HTTP status verification outside the database transaction when the callback
+        // is non-authoritative or carries no direct result, avoiding holding DB locks/connections across HTTP I/O.
+        Result preQueriedResult = callback.result();
+        if (!rail.callbacksAreAuthoritative() || preQueriedResult == null) {
+            boolean alreadySeen = db.sql("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM rail_callback WHERE rail = :rail AND dedupe_key = :key
+                    )""")
+                    .param("rail", railName).param("key", callback.dedupeKey())
+                    .query(Boolean.class).single();
+            if (alreadySeen) {
+                return new CallbackOutcome(true, "duplicate");
+            }
+            Optional<RailTx> preMatch = findMatchingCallbackTx(railName, callback);
+            if (preMatch.isPresent() && preMatch.get().rail().equals(railName)) {
+                preQueriedResult = safeQuery(rail, preMatch.get());
+            }
+        }
+        final Result effectiveCallbackResult = preQueriedResult;
+
         return txRetry.execute(() -> {
             boolean fresh = db.sql("""
                     INSERT INTO rail_callback (id, rail, dedupe_key, reference, event_type, payload)
@@ -449,31 +497,7 @@ public class RailTransactions {
                     .param("payload", payloadJson).update() == 1;
             if (!fresh) return new CallbackOutcome(true, "duplicate");
 
-            Optional<RailTx> match = Optional.empty();
-            if (callback.reference() != null) {
-                UUID asUuid = null;
-                try {
-                    asUuid = UUID.fromString(callback.reference());
-                } catch (IllegalArgumentException ignored) {}
-                if (asUuid != null) {
-                    match = db.sql("""
-                            SELECT * FROM rail_transaction
-                            WHERE reference = :r OR purpose_id = :uuid
-                            ORDER BY created_at DESC LIMIT 1""")
-                            .param("r", callback.reference()).param("uuid", asUuid)
-                            .query(RailTransactions::map).optional();
-                } else {
-                    match = findByReference(callback.reference());
-                }
-            }
-            if (match.isEmpty() && callback.railReference() != null) {
-                match = db.sql("""
-                        SELECT * FROM rail_transaction
-                        WHERE rail = :p AND rail_reference = :r
-                        ORDER BY created_at DESC LIMIT 1""")
-                        .param("p", railName).param("r", callback.railReference())
-                        .query(RailTransactions::map).optional();
-            }
+            Optional<RailTx> match = findMatchingCallbackTx(railName, callback);
             String outcome;
             if (match.isEmpty() || !match.get().rail().equals(railName)) {
                 ops.raise("callback_unknown_reference", "medium", "callback:" + railName + ":" + callback.dedupeKey(),
@@ -481,10 +505,7 @@ public class RailTransactions {
                 outcome = "unmatched";
             } else {
                 RailTx t = match.get();
-                Result result = callback.result();
-                if (!rail.callbacksAreAuthoritative() || result == null) {
-                    result = safeQuery(rail, t);
-                }
+                Result result = effectiveCallbackResult != null ? effectiveCallbackResult : safeQuery(rail, t);
                 applyLocked(t.id(), result, "callback");
                 outcome = "applied:" + result.status();
             }

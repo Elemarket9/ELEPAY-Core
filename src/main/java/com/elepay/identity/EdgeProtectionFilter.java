@@ -127,8 +127,8 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String uri = request.getRequestURI();
-        return !enabled || uri.startsWith("/actuator/health");
+        String path = RequestPaths.normalized(request);
+        return !enabled || (path != null && path.startsWith("/actuator/health"));
     }
 
     @Override
@@ -142,9 +142,9 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
             return;
         }
 
-        String uri = request.getRequestURI();
+        String rawUri = request.getRequestURI() == null ? "" : request.getRequestURI();
         String query = request.getQueryString();
-        if (uri.length() + (query == null ? 0 : query.length() + 1) > maxUriLength) {
+        if (rawUri.length() + (query == null ? 0 : query.length() + 1) > maxUriLength) {
             penaltyBox.strike(client, 3);
             reject(response, 414, "uri_too_long", "Request URI is too long.", 0, "uri_too_long");
             return;
@@ -157,7 +157,8 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
             return;
         }
 
-        boolean callbackExempt = exemptCallbacksFromShedding && isRailCallback(request.getMethod(), uri);
+        String path = RequestPaths.normalized(request);
+        boolean callbackExempt = exemptCallbacksFromShedding && isRailCallback(request.getMethod(), path);
         if (!callbackExempt && !penaltyBox.isExempt(client) && !perClient.tryAcquire("edge:" + client)) {
             penaltyBox.strike(client, 1);
             reject(response, 429, "rate_limited", "Too many requests. Slow down.", 10, "client_rate");
@@ -262,6 +263,7 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
     static final class CappedRequest extends HttpServletRequestWrapper {
         private final long limit;
         private CappedStream stream;
+        private BufferedReader reader;
 
         CappedRequest(HttpServletRequest request, long limit) {
             super(request);
@@ -280,9 +282,19 @@ public class EdgeProtectionFilter extends OncePerRequestFilter {
 
         @Override
         public BufferedReader getReader() throws IOException {
-            String enc = getCharacterEncoding();
-            Charset cs = enc == null ? StandardCharsets.UTF_8 : Charset.forName(enc);
-            return new BufferedReader(new InputStreamReader(getInputStream(), cs));
+            if (reader == null) {
+                String enc = getCharacterEncoding();
+                Charset cs = StandardCharsets.UTF_8;
+                if (enc != null && !enc.isBlank()) {
+                    try {
+                        cs = Charset.forName(enc);
+                    } catch (IllegalArgumentException ignored) {
+                        cs = StandardCharsets.UTF_8;
+                    }
+                }
+                reader = new BufferedReader(new InputStreamReader(getInputStream(), cs));
+            }
+            return reader;
         }
     }
 

@@ -44,11 +44,18 @@ public class IngestionWorkerPool implements SmartLifecycle {
     private static final int MAX_ERROR_LENGTH = 2000;
     private static final int MAX_DRAIN_ITERATIONS = 1000;
 
+    @FunctionalInterface
+    public interface TenantCellResolver {
+        String resolveCell(UUID tenantId);
+    }
+
     private final JdbcClient db;
     private final TransactionTemplate claimTx;
     private final TransactionTemplate updateTx;
     private final Map<String, IngestionHandler> handlers = new ConcurrentHashMap<>();
     private final IngestionMetrics metrics;
+    private volatile java.util.function.Function<UUID, String> tenantCellResolver;
+    private org.springframework.beans.factory.ObjectProvider<TenantCellResolver> tenantCellResolverProvider;
 
     private final boolean enabled;
     private final int maxConcurrency;
@@ -108,6 +115,16 @@ public class IngestionWorkerPool implements SmartLifecycle {
         this.workerId = "worker-" + UUID.randomUUID().toString().substring(0, 8);
         this.concurrencySemaphore = new Semaphore(this.maxConcurrency);
         this.virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    public void setTenantCellResolver(java.util.function.Function<UUID, String> tenantCellResolver) {
+        this.tenantCellResolver = tenantCellResolver;
+    }
+
+    @Autowired(required = false)
+    public void setTenantCellResolverProvider(
+            org.springframework.beans.factory.ObjectProvider<TenantCellResolver> tenantCellResolverProvider) {
+        this.tenantCellResolverProvider = tenantCellResolverProvider;
     }
 
     static int clampConcurrency(int requested) {
@@ -378,15 +395,36 @@ public class IngestionWorkerPool implements SmartLifecycle {
     }
 
     private List<ClaimedItem> claimBatch(int batchLimit) {
+        java.util.Set<String> registeredTypes = handlers.keySet();
+        if (registeredTypes.isEmpty()) {
+            return List.of();
+        }
         List<ClaimedItem> result = claimTx.execute(status -> {
-            List<ClaimedItem> rows = db.sql("""
-                    SELECT id, tenant_id, event_type, scope, idempotency_key,
-                           payload::text AS payload_json, attempts, max_attempts
-                    FROM ingestion_event
-                    WHERE status = 'PENDING' AND next_attempt_at <= now()
-                    ORDER BY next_attempt_at, created_at
-                    FOR UPDATE SKIP LOCKED
+            record CandidateRow(ClaimedItem item, String orderingKey) {}
+            List<CandidateRow> candidates = db.sql("""
+                    SELECT e.id, e.tenant_id, e.event_type, e.scope, e.idempotency_key,
+                           e.payload::text AS payload_json, e.attempts, e.max_attempts, e.ordering_key
+                    FROM ingestion_event e
+                    WHERE e.status = 'PENDING'
+                      AND e.next_attempt_at <= now()
+                      AND e.event_type IN (:types)
+                      AND (
+                          e.ordering_key IS NULL
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM ingestion_event earlier
+                              WHERE earlier.ordering_key = e.ordering_key
+                                AND earlier.status IN ('PENDING', 'PROCESSING')
+                                AND (
+                                    earlier.created_at < e.created_at
+                                    OR (earlier.created_at = e.created_at AND earlier.id::text < e.id::text)
+                                )
+                          )
+                      )
+                    ORDER BY e.next_attempt_at, e.created_at, e.id
+                    FOR UPDATE OF e SKIP LOCKED
                     LIMIT :batch""")
+                    .param("types", registeredTypes)
                     .param("batch", batchLimit)
                     .query((rs, rowNum) -> {
                         int nextAttempt = rs.getInt("attempts") + 1;
@@ -399,12 +437,19 @@ public class IngestionWorkerPool implements SmartLifecycle {
                                 rs.getString("idempotency_key"),
                                 rs.getString("payload_json"),
                                 nextAttempt);
-                        return new ClaimedItem(rec, nextAttempt, maxAttempts);
+                        return new CandidateRow(new ClaimedItem(rec, nextAttempt, maxAttempts), rs.getString("ordering_key"));
                     })
                     .list();
 
-            for (ClaimedItem item : rows) {
-                db.sql("""
+            List<ClaimedItem> claimedRows = new ArrayList<>(candidates.size());
+            java.util.Set<String> seenOrderingKeys = new java.util.HashSet<>();
+            for (CandidateRow candidate : candidates) {
+                if (candidate.orderingKey() != null && !seenOrderingKeys.add(candidate.orderingKey())) {
+                    // Only claim at most one row per ordering_key in the same batch so later rows stay PENDING
+                    continue;
+                }
+                ClaimedItem item = candidate.item();
+                int updated = db.sql("""
                         UPDATE ingestion_event
                         SET status = 'PROCESSING',
                             locked_by = :workerId,
@@ -412,15 +457,27 @@ public class IngestionWorkerPool implements SmartLifecycle {
                             lease_expires_at = now() + make_interval(secs => :leaseSeconds),
                             attempts = attempts + 1,
                             updated_at = now()
-                        WHERE id = :id""")
+                        WHERE id = :id
+                          AND status = 'PENDING'""")
                         .param("workerId", workerId)
                         .param("leaseSeconds", leaseSeconds)
                         .param("id", item.record().id())
                         .update();
+                if (updated == 1) {
+                    claimedRows.add(item);
+                }
             }
-            return rows;
+            return claimedRows;
         });
         return result == null ? List.of() : result;
+    }
+
+    private static boolean isPermanentClientError(Exception e) {
+        if (e instanceof com.elepay.common.ApiException apiEx) {
+            int code = apiEx.status().value();
+            return code == 400 || code == 401 || code == 403 || code == 404 || code == 422;
+        }
+        return false;
     }
 
     private void processItem(ClaimedItem item) {
@@ -429,38 +486,57 @@ public class IngestionWorkerPool implements SmartLifecycle {
         if (handler == null) {
             String message = "No IngestionHandler registered for event_type=" + rec.eventType();
             log.error("Marking ingestion {} DEAD: {}", rec.id(), message);
-            markDead(rec.id(), message);
-            metrics.recordDead();
+            if (markDead(rec.id(), message)) {
+                metrics.recordDead();
+            }
             return;
         }
 
         long startNanos = System.nanoTime();
         try {
+            if (rec.tenantId() != null) {
+                java.util.function.Function<UUID, String> resolver = this.tenantCellResolver;
+                if (resolver == null && tenantCellResolverProvider != null) {
+                    TenantCellResolver provided = tenantCellResolverProvider.getIfAvailable();
+                    if (provided != null) {
+                        resolver = provided::resolveCell;
+                        this.tenantCellResolver = resolver;
+                    }
+                }
+                if (resolver != null) {
+                    com.elepay.common.datasource.DataSourceRouteContext.setCellId(resolver.apply(rec.tenantId()));
+                }
+            }
             String resultJson = handler.handle(rec);
-            markCompleted(rec.id(), resultJson);
-            metrics.recordCompleted(Duration.ofNanos(System.nanoTime() - startNanos));
+            if (markCompleted(rec.id(), resultJson)) {
+                metrics.recordCompleted(Duration.ofNanos(System.nanoTime() - startNanos));
+            }
         } catch (Exception e) {
             String errorText = truncateError(e);
-            if (item.attempts() < item.maxAttempts()) {
+            if (!isPermanentClientError(e) && item.attempts() < item.maxAttempts()) {
                 long delayMs = computeBackoffMs(item.attempts());
                 double delaySeconds = Math.max(0.05d, delayMs / 1000.0d);
                 log.warn("Ingestion {} (type={}, attempt={}/{}) failed, retrying in {}ms: {}",
                         rec.id(), rec.eventType(), item.attempts(), item.maxAttempts(), delayMs, errorText);
-                scheduleRetry(rec.id(), delaySeconds, errorText);
-                metrics.recordRetried();
+                if (scheduleRetry(rec.id(), delaySeconds, errorText)) {
+                    metrics.recordRetried();
+                }
             } else {
-                log.error("Ingestion {} (type={}, attempt={}/{}) exhausted retries, moving to DEAD: {}",
+                log.error("Ingestion {} (type={}, attempt={}/{}) moving to DEAD: {}",
                         rec.id(), rec.eventType(), item.attempts(), item.maxAttempts(), errorText);
-                markDead(rec.id(), errorText);
-                metrics.recordDead();
+                if (markDead(rec.id(), errorText)) {
+                    metrics.recordDead();
+                }
             }
+        } finally {
+            com.elepay.common.datasource.DataSourceRouteContext.clear();
         }
     }
 
-    private void markCompleted(UUID id, String resultJson) {
-        updateTx.executeWithoutResult(status -> {
+    private boolean markCompleted(UUID id, String resultJson) {
+        Integer updated = updateTx.execute(status -> {
             if (resultJson == null) {
-                db.sql("""
+                return db.sql("""
                         UPDATE ingestion_event
                         SET status = 'COMPLETED',
                             result = NULL,
@@ -470,11 +546,14 @@ public class IngestionWorkerPool implements SmartLifecycle {
                             locked_at = NULL,
                             lease_expires_at = NULL,
                             updated_at = now()
-                        WHERE id = :id""")
+                        WHERE id = :id
+                          AND status = 'PROCESSING'
+                          AND locked_by = :workerId""")
                         .param("id", id)
+                        .param("workerId", workerId)
                         .update();
             } else {
-                db.sql("""
+                return db.sql("""
                         UPDATE ingestion_event
                         SET status = 'COMPLETED',
                             result = CAST(:res AS jsonb),
@@ -484,16 +563,20 @@ public class IngestionWorkerPool implements SmartLifecycle {
                             locked_at = NULL,
                             lease_expires_at = NULL,
                             updated_at = now()
-                        WHERE id = :id""")
+                        WHERE id = :id
+                          AND status = 'PROCESSING'
+                          AND locked_by = :workerId""")
                         .param("res", resultJson)
                         .param("id", id)
+                        .param("workerId", workerId)
                         .update();
             }
         });
+        return updated != null && updated == 1;
     }
 
-    private void scheduleRetry(UUID id, double delaySeconds, String errorText) {
-        updateTx.executeWithoutResult(status ->
+    private boolean scheduleRetry(UUID id, double delaySeconds, String errorText) {
+        Integer updated = updateTx.execute(status ->
                 db.sql("""
                         UPDATE ingestion_event
                         SET status = 'PENDING',
@@ -503,15 +586,19 @@ public class IngestionWorkerPool implements SmartLifecycle {
                             locked_at = NULL,
                             lease_expires_at = NULL,
                             updated_at = now()
-                        WHERE id = :id""")
+                        WHERE id = :id
+                          AND status = 'PROCESSING'
+                          AND locked_by = :workerId""")
                         .param("delaySecs", delaySeconds)
                         .param("err", errorText)
                         .param("id", id)
+                        .param("workerId", workerId)
                         .update());
+        return updated != null && updated == 1;
     }
 
-    private void markDead(UUID id, String errorText) {
-        updateTx.executeWithoutResult(status ->
+    private boolean markDead(UUID id, String errorText) {
+        Integer updated = updateTx.execute(status ->
                 db.sql("""
                         UPDATE ingestion_event
                         SET status = 'DEAD',
@@ -520,10 +607,14 @@ public class IngestionWorkerPool implements SmartLifecycle {
                             locked_at = NULL,
                             lease_expires_at = NULL,
                             updated_at = now()
-                        WHERE id = :id""")
+                        WHERE id = :id
+                          AND status = 'PROCESSING'
+                          AND locked_by = :workerId""")
                         .param("err", errorText)
                         .param("id", id)
+                        .param("workerId", workerId)
                         .update());
+        return updated != null && updated == 1;
     }
 
     /** Equal-jitter exponential backoff bounded by {@code [baseBackoffMs/2, maxBackoffMs]}. */
