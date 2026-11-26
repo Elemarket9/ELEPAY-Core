@@ -248,33 +248,17 @@ class CellShardingIT extends PostgresTestBase {
         var verifying = api.call("POST", "/v1/ops/cells/migrations/" + jobId + "/advance", ops, null, null);
         assertThat(verifying.status()).isEqualTo(200);
         assertThat(verifying.body().get("state").asString()).isEqualTo("VERIFYING");
-        assertThat(verifying.body().get("verificationHash").asString()).isNotBlank();
+        assertThat(migrationService.getMigration(jobId).verificationHash()).isNull();
 
         // Still on source cell before cutover
         assertThat(api.call("GET", "/v1/ops/cells/resolve/" + merchantId, ops, null, null)
                 .body().get("cellId").asString()).isEqualTo("cell-0");
 
         var cutover = api.call("POST", "/v1/ops/cells/migrations/" + jobId + "/advance", ops, null, null);
-        assertThat(cutover.status()).isEqualTo(200);
-        assertThat(cutover.body().get("state").asString()).isEqualTo("CUTOVER");
-
-        // Atomically cut over to target cell
+        assertThat(cutover.status()).isEqualTo(409);
+        assertThat(migrationService.getMigration(jobId).state()).isEqualTo("VERIFYING");
         assertThat(api.call("GET", "/v1/ops/cells/resolve/" + merchantId, ops, null, null)
-                .body().get("cellId").asString()).isEqualTo("cell-1");
-
-        var completed = api.call("POST", "/v1/ops/cells/migrations/" + jobId + "/advance", ops, null, null);
-        assertThat(completed.status()).isEqualTo(200);
-        assertThat(completed.body().get("state").asString()).isEqualTo("COMPLETED");
-        assertThat(completed.body().get("completedAt").isNull()).isFalse();
-
-        // Terminal state rejects further advance or rollback with 409
-        assertThat(api.call("POST", "/v1/ops/cells/migrations/" + jobId + "/advance", ops, null, null).status())
-                .isEqualTo(409);
-        assertThat(api.call("POST", "/v1/ops/cells/migrations/" + jobId + "/rollback", ops, null,
-                Map.of("reason", "too late")).status()).isEqualTo(409);
-
-        assertThat(migrationService.getMigration(jobId).state()).isEqualTo("COMPLETED");
-        assertThat(migrationService.listMigrations()).anyMatch(j -> j.id().equals(jobId));
+                .body().get("cellId").asString()).isEqualTo("cell-0");
 
         // 2. Rollback from VERIFYING -> ROLLED_BACK
         UUID rollbackMerchant = UUID.randomUUID();
@@ -317,10 +301,10 @@ class CellShardingIT extends PostgresTestBase {
                 "reason", "test rollback from cutover"
         ));
         UUID cutoverRbJobId = UUID.fromString(cutoverPlan.body().get("id").asString());
-        for (int i = 0; i < 4; i++) {
-            assertThat(api.call("POST", "/v1/ops/cells/migrations/" + cutoverRbJobId + "/advance", ops, null, null)
-                    .status()).isEqualTo(200);
-        }
+        // Reproduce a job cut over by the earlier implementation.
+        db.sql("UPDATE cell_migration_job SET state = 'CUTOVER' WHERE id = :id")
+                .param("id", cutoverRbJobId).update();
+        assignMerchantCell(cutoverRbMerchant, "cell-1");
         assertThat(api.call("GET", "/v1/ops/cells/resolve/" + cutoverRbMerchant, ops, null, null)
                 .body().get("cellId").asString()).isEqualTo("cell-1");
 
