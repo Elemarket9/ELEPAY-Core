@@ -124,7 +124,7 @@ public class ApiKeys {
         }
     }
 
-    public static final java.util.Set<String> SCOPES = java.util.Set.of("view", "collect", "refund", "withdraw", "payouts");
+    public static final java.util.Set<String> SCOPES = java.util.Set.of("view", "collect", "refund", "withdraw", "payouts", "seller_sync");
     public static final java.util.Set<String> KEY_TYPES = java.util.Set.of("publishable", "secret", "payout");
 
     @Transactional

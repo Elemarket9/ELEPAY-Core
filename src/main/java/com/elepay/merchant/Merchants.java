@@ -117,7 +117,7 @@ class Merchants {
     record Balances(UUID merchantId, String currency, long pending, long available, long reserved) {}
 
     record KeyRequest(@Size(max = 100) String label,
-                      List<@Pattern(regexp = "view|collect|refund|withdraw|payouts") String> scopes,
+                      List<@Pattern(regexp = "view|collect|refund|withdraw|payouts|seller_sync") String> scopes,
                       String keyType,
                       List<String> allowedIps) {
         KeyRequest(String label, List<String> scopes) {
@@ -141,6 +141,13 @@ class Merchants {
     public MerchantView apply(@Valid @RequestBody Application request) {
         Actor actor = Actor.current();
         actor.requireUser();
+        UUID id = provision(request, actor.subject());
+        db.sql("INSERT INTO merchant_member (merchant_id, subject, role) VALUES (:m, :s, 'owner')")
+                .param("m", id).param("s", actor.subject()).update();
+        return view(id, "owner");
+    }
+
+    UUID provision(Application request, String subject) {
         UUID id = UUID.randomUUID();
         String phone = References.msisdn(request.contactPhone());
         for (int attempt = 0; ; attempt++) {
@@ -152,15 +159,13 @@ class Merchants {
                         .param("id", id).param("legal", request.legalName()).param("trading", request.tradingName())
                         .param("kind", request.kind()).param("phone", phone).param("email", request.contactEmail())
                         .param("reg", request.registrationNumber()).param("code", References.digits(6))
-                        .param("by", actor.subject()).update();
+                        .param("by", subject).update();
             if (inserted == 1) break;
             if (attempt > 5) throw ApiException.conflict("retry", "Could not allocate a merchant code; retry");
         }
-        db.sql("INSERT INTO merchant_member (merchant_id, subject, role) VALUES (:m, :s, 'owner')")
-                .param("m", id).param("s", actor.subject()).update();
         for (String bucket : BUCKETS) ledger.open("merchant", id, bucket, Ledger.GHS);
-        audit.record(actor.subject(), "merchant.applied", "merchant:" + id, Map.of("kind", request.kind()));
-        return view(id, "owner");
+        audit.record(subject, "merchant.applied", "merchant:" + id, Map.of("kind", request.kind()));
+        return id;
     }
 
     @GetMapping("/merchants")
@@ -357,6 +362,10 @@ class Merchants {
     public Destination addDestination(@PathVariable UUID id, @Valid @RequestBody DestinationRequest request) {
         var a = access.require(id, MANAGE);
         a.actor().requireUser();
+        return registerDestination(id, request, a.actor().subject());
+    }
+
+    Destination registerDestination(UUID id, DestinationRequest request, String subject) {
         String account = request.accountNumber();
         if (request.type().equals("momo")) {
             if (!MOMO.contains(request.network())) throw ApiException.badRequest("invalid_network", "Choose mtn, telecel or airteltigo");
@@ -399,7 +408,7 @@ class Merchants {
                 VALUES (:id, 'merchant', :m, :type, :network, :account, :name, :by, :v, :vname, :vby,
                         :cooling, :oobStatus, :oobHash, :oobAt, :oobExp, :score, now())""")
                 .param("id", dest).param("m", id).param("type", request.type()).param("network", request.network())
-                .param("account", account).param("name", request.accountName()).param("by", a.actor().subject())
+                .param("account", account).param("name", request.accountName()).param("by", subject)
                 .param("v", verified ? "verified" : "unverified").param("vname", check.name())
                 .param("vby", verified ? "network:" + check.source() : null)
                 .param("cooling", coolingOffUntil)
@@ -409,7 +418,7 @@ class Merchants {
                 .param("oobExp", oobExpires)
                 .param("score", nameScore)
                 .update();
-        audit.record(a.actor().subject(), "merchant.destination_added", "merchant:" + id,
+        audit.record(subject, "merchant.destination_added", "merchant:" + id,
                 Map.of("destination", dest.toString(), "type", request.type(), "network", request.network(),
                         "accountLast4", account.substring(account.length() - 4),
                         "coolingOffHours", String.valueOf(effectiveCoolingHours),
@@ -427,6 +436,10 @@ class Merchants {
                                           @RequestBody(required = false) OobConfirmRequest request) {
         var a = access.require(id, MANAGE);
         a.actor().requireUser();
+        return confirmDestination(id, destination, request, a.actor().subject());
+    }
+
+    Map<String, Object> confirmDestination(UUID id, UUID destination, OobConfirmRequest request, String subject) {
         var rowOpt = db.sql("""
                 SELECT oob_token_hash, cooling_off_until, COALESCE(oob_attempts, 0), oob_expires_at
                 FROM settlement_destination
@@ -470,7 +483,7 @@ class Merchants {
                     updated_at = now()
                 WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m""")
                 .param("cooling", coolingOffUntil).param("d", destination).param("m", id).update();
-        audit.record(a.actor().subject(), "merchant.destination_oob_confirmed", "merchant:" + id,
+        audit.record(subject, "merchant.destination_oob_confirmed", "merchant:" + id,
                 Map.of("destination", destination.toString()));
         return Map.of("destinationId", destination, "oobVerificationStatus", "confirmed",
                 "coolingOffUntil", String.valueOf(coolingOffUntil));
@@ -481,6 +494,10 @@ class Merchants {
     public Map<String, Object> resendOob(@PathVariable UUID id, @PathVariable UUID destination) {
         var a = access.require(id, MANAGE);
         a.actor().requireUser();
+        return resendDestination(id, destination, a.actor().subject());
+    }
+
+    Map<String, Object> resendDestination(UUID id, UUID destination, String subject) {
         var rowOpt = db.sql("""
                 SELECT oob_verification_status, COALESCE(oob_attempts, 0), updated_at, COALESCE(oob_resend_count, 0)
                 FROM settlement_destination
@@ -524,7 +541,7 @@ class Merchants {
                 WHERE id = :d AND owner_type = 'merchant' AND owner_id = :m""")
                 .param("oobHash", oobHash).param("oobExp", oobExpires)
                 .param("d", destination).param("m", id).update();
-        audit.record(a.actor().subject(), "merchant.destination_oob_resent", "merchant:" + id,
+        audit.record(subject, "merchant.destination_oob_resent", "merchant:" + id,
                 Map.of("destination", destination.toString(),
                         "emailSent", String.valueOf(receipt.emailSent()),
                         "smsSent", String.valueOf(receipt.smsSent())));

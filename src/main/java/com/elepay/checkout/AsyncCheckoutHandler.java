@@ -84,7 +84,7 @@ class AsyncCheckoutHandler implements IngestionHandler {
             }
             allocations = request.allocations().stream()
                     .map(x -> new CheckoutService.AllocationRequest(
-                            x.merchantId(), x.kind(), x.amount(), x.description(), x.category(),
+                            x.recipient(merchantId, db), x.kind(), x.amount(), x.description(), x.category(),
                             x.reserveBps(), x.releaseCondition()))
                     .toList();
         }
