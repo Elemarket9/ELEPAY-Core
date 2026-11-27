@@ -6,11 +6,34 @@
 export type KdsStatus = "NEW" | "PREPARING" | "READY" | "SERVED" | "CANCELLED";
 export const KDS_FLOW: KdsStatus[] = ["NEW", "PREPARING", "READY", "SERVED"];
 
+export interface KdsUrgencyThresholds {
+  warningMinutes: number;
+  criticalMinutes: number;
+}
+
+export const DEFAULT_KDS_URGENCY: KdsUrgencyThresholds = {
+  warningMinutes: 10,
+  criticalMinutes: 15,
+};
+
+export const KDS_CANCEL_REASONS = [
+  "Out of stock",
+  "Customer cancelled",
+  "Duplicate order",
+  "Wrong item",
+  "Kitchen error",
+  "Other",
+] as const;
+
+export type KdsLane = "NEW" | "COOKING" | "READY";
+export const KDS_LANES: KdsLane[] = ["NEW", "COOKING", "READY"];
+
 export interface KdsTicket {
   id: string;
   merchantId: string;
   orderId: string;
   tableId: string | null;
+  tableNumber?: string | null;
   diningMode: string;
   serverName: string | null;
   status: KdsStatus;
@@ -24,6 +47,7 @@ export interface KdsTicket {
   clientRef: string | null;
   cancelledAt: string | null;
   changeSeq: number;
+  round?: number;
 }
 
 export interface KdsItem {
@@ -36,6 +60,7 @@ export interface KdsItem {
   course: string;
   itemStatus: KdsStatus;
   stationId: string | null;
+  autoReady?: boolean;
 }
 
 export interface KdsTicketView {
@@ -57,6 +82,7 @@ export interface KdsSyncResult {
   serverTime: string;
   tickets: KdsTicketView[];
   printerFailures: KdsPrintFailure[];
+  urgencyThresholds?: KdsUrgencyThresholds | null;
 }
 
 export interface KdsBumpResult {
@@ -83,6 +109,7 @@ export interface KdsState {
   queue: KdsQueuedAction[];
   lastSyncAt: number | null;
   printerFailures: KdsPrintFailure[];
+  urgencyThresholds?: KdsUrgencyThresholds;
   needsFullResync?: boolean;
   resyncSeenIds?: string[];
 }
@@ -93,6 +120,7 @@ export const emptyKdsState = (): KdsState => ({
   queue: [],
   lastSyncAt: null,
   printerFailures: [],
+  urgencyThresholds: { ...DEFAULT_KDS_URGENCY },
   needsFullResync: false,
 });
 
@@ -228,6 +256,13 @@ export function kdsApplySync(
   }
 
   const stillResyncing = isResyncing && result.hasMore;
+  const thresholds =
+    result.urgencyThresholds &&
+    result.urgencyThresholds.warningMinutes > 0 &&
+    result.urgencyThresholds.criticalMinutes > result.urgencyThresholds.warningMinutes
+      ? result.urgencyThresholds
+      : (state.urgencyThresholds ?? { ...DEFAULT_KDS_URGENCY });
+
   return {
     state: {
       ...state,
@@ -235,6 +270,7 @@ export function kdsApplySync(
       cursor: Math.max(state.cursor, result.cursor),
       lastSyncAt: now,
       printerFailures: result.printerFailures,
+      urgencyThresholds: thresholds,
       needsFullResync: stillResyncing,
       resyncSeenIds: stillResyncing && seenIds ? Array.from(seenIds) : undefined,
     },
@@ -255,20 +291,100 @@ export function kdsSettle(state: KdsState, actionId: string, result: KdsBumpResu
   return { ...state, queue, tickets };
 }
 
+export function kdsHasAutoReadyAtStation(view: KdsTicketView, stationId: string | null): boolean {
+  if (!stationId) return false;
+  return view.items.some(
+    (i) =>
+      (i.stationId === stationId || i.stationId === null) &&
+      i.itemStatus === "READY" &&
+      Boolean(i.autoReady),
+  );
+}
+
 export function kdsVisible(state: KdsState, stationId: string | null): KdsTicketView[] {
   return Object.values(state.tickets)
     .filter((v) => {
       const s = kdsStationStatus(v, stationId);
       if (!isLive(s)) return false;
       if (stationId && !v.items.some((i) => i.stationId === stationId || i.stationId === null)) return false;
-      return stationId ? s !== "READY" : true;
+      if (stationId && s === "READY") {
+        return kdsHasAutoReadyAtStation(v, stationId);
+      }
+      return true;
     })
     .sort((a, b) => Date.parse(a.ticket.createdAt) - Date.parse(b.ticket.createdAt));
 }
 
-export function kdsUrgency(view: KdsTicketView, now = Date.now()): "normal" | "warning" | "critical" {
+export function kdsUrgency(
+  view: KdsTicketView,
+  now = Date.now(),
+  thresholds?: KdsUrgencyThresholds | null,
+): "normal" | "warning" | "critical" {
+  const warn = thresholds?.warningMinutes ?? DEFAULT_KDS_URGENCY.warningMinutes;
+  const crit = thresholds?.criticalMinutes ?? DEFAULT_KDS_URGENCY.criticalMinutes;
   const minutes = (now - Date.parse(view.ticket.createdAt)) / 60000;
-  return minutes >= 25 ? "critical" : minutes >= 15 ? "warning" : "normal";
+  return minutes >= crit ? "critical" : minutes >= warn ? "warning" : "normal";
+}
+
+export interface KdsCourseGroup {
+  course: string | null;
+  items: KdsItem[];
+}
+
+const COURSE_ORDER: Record<string, number> = {
+  APPETIZER: 1,
+  MAIN: 2,
+  DESSERT: 3,
+  BEVERAGE: 4,
+};
+
+function courseRank(course: string | null): number {
+  if (!course) return 6;
+  return COURSE_ORDER[course] ?? 5;
+}
+
+/**
+ * Group non-cancelled items by course in the same order as KitchenTicketText:
+ * APPETIZER -> MAIN -> DESSERT -> BEVERAGE -> other named courses -> ungrouped (ALL/blank).
+ */
+export function kdsGroupByCourse(items: KdsItem[]): KdsCourseGroup[] {
+  const buckets = new Map<string, KdsCourseGroup>();
+  for (const item of items) {
+    if (item.itemStatus === "CANCELLED") continue;
+    const raw = (item.course ?? "").trim().toUpperCase();
+    const normalized = !raw || raw === "ALL" ? null : raw;
+    const key = normalized ?? "__ALL__";
+    let group = buckets.get(key);
+    if (!group) {
+      group = { course: normalized, items: [] };
+      buckets.set(key, group);
+    }
+    group.items.push(item);
+  }
+  return Array.from(buckets.values()).sort((a, b) => {
+    const diff = courseRank(a.course) - courseRank(b.course);
+    if (diff !== 0) return diff;
+    return (a.course ?? "").localeCompare(b.course ?? "");
+  });
+}
+
+export function kdsStatusToLane(status: KdsStatus): KdsLane | null {
+  if (status === "NEW") return "NEW";
+  if (status === "PREPARING") return "COOKING";
+  if (status === "READY") return "READY";
+  return null;
+}
+
+export function kdsGroupByLane(
+  tickets: KdsTicketView[],
+  stationId: string | null,
+): Record<KdsLane, KdsTicketView[]> {
+  const lanes: Record<KdsLane, KdsTicketView[]> = { NEW: [], COOKING: [], READY: [] };
+  for (const v of tickets) {
+    const lane = kdsStatusToLane(kdsStationStatus(v, stationId));
+    if (lane) lanes[lane].push(v);
+  }
+  return lanes;
 }
 
 export function kdsElapsed(view: KdsTicketView, now = Date.now()): string {

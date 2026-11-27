@@ -14,6 +14,13 @@ import {
   type SeatSplitGroup,
 } from "./posHelpers";
 
+import {
+  buildItemSplitGroups,
+  computeTargetTenderAmount,
+  normalizeSplitPlan,
+  validateBankTransferInput,
+} from "./PosTenderPanel";
+
 describe("POS & Terminal Helpers", () => {
   it("detects Stage 1 FEATURE_NOT_ENABLED ApiError", () => {
     expect(isFeatureNotEnabled(new ApiError(404, "FEATURE_NOT_ENABLED", "This module is disabled in Stage 1"))).toBe(true);
@@ -73,6 +80,25 @@ describe("POS & Terminal Helpers", () => {
     });
     expect("tableId" in retailPayload).toBe(false);
     expect(retailPayload.items[0].seatNumber).toBeNull();
+    expect("discountReason" in retailPayload).toBe(false);
+
+    const discountedPayload = buildPosOrderPayload({
+      merchantId: "m-1",
+      terminalId: "term-123",
+      cashierId: "cash-456",
+      orderType: "DINE_IN",
+      lines: [
+        { variantId: "v-1", label: "Jollof Rice", unitPricePesewas: 4500, qty: 1, seatNumber: 1 },
+      ],
+      discountPesewas: 500,
+      taxPesewas: 0,
+      discountReason: "Loyalty promo",
+      managerBadgeNumber: "MGR-1",
+      managerPin: "9876",
+    });
+    expect(discountedPayload.discountReason).toBe("Loyalty promo");
+    expect(discountedPayload.managerBadgeNumber).toBe("MGR-1");
+    expect(discountedPayload.managerPin).toBe("9876");
   });
 
   it("classifies terminal payment statuses (including SETTLED), rail failure polling, and KDS labels", () => {
@@ -209,5 +235,94 @@ describe("POS & Terminal Helpers", () => {
     expect(legacyNfc.checkoutRef).toBe("chk_nfc_legacy");
     expect(legacyNfc.authCode).toBe("AUTH999");
     expect(legacyNfc.cardScheme).toBe("MASTERCARD");
+  });
+
+  it("validates BANK_TRANSFER reference and amount without allowing overpayment", () => {
+    // Missing or blank reference rejected
+    expect(validateBankTransferInput({ amountInput: "50.00", reference: "   ", maxAmountPesewas: 5000 })).toEqual({
+      ok: false,
+      error: "Bank transfer reference is required (e.g. GIP/NIP ref).",
+    });
+
+    // Over-length reference (> 128 chars) rejected
+    expect(
+      validateBankTransferInput({ amountInput: "50.00", reference: "R".repeat(129), maxAmountPesewas: 5000 }),
+    ).toEqual({
+      ok: false,
+      error: "Bank transfer reference must be 128 characters or fewer.",
+    });
+
+    // Amount exceeding balance rejected (no change given on bank transfer)
+    const over = validateBankTransferInput({ amountInput: "60.00", reference: "GIP-123", maxAmountPesewas: 5000 });
+    expect(over.ok).toBe(false);
+
+    // Blank amount defaults to full remaining balance
+    expect(
+      validateBankTransferInput({ amountInput: "", reference: "  GIP-2026-001  ", maxAmountPesewas: 4500 }),
+    ).toEqual({
+      ok: true,
+      amountPesewas: 4500,
+      reference: "GIP-2026-001",
+    });
+
+    // Partial bank transfer allowed up to remaining balance
+    expect(
+      validateBankTransferInput({ amountInput: "20.00", reference: "NIP-882", maxAmountPesewas: 4500 }),
+    ).toEqual({
+      ok: true,
+      amountPesewas: 2000,
+      reference: "NIP-882",
+    });
+  });
+
+  it("computes target tender amount from active split, remaining order balance, or cart total", () => {
+    // Uses split amount when paying a sub-bill
+    expect(
+      computeTargetTenderAmount({
+        order: { totalPesewas: 10000, paidPesewas: 3334 },
+        totalPesewas: 10000,
+        splitAmountPesewas: 3333,
+      }),
+    ).toBe(3333);
+
+    // Uses remaining balance (not ord.totalPesewas) for PARTIAL order
+    expect(
+      computeTargetTenderAmount({
+        order: { totalPesewas: 10000, paidPesewas: 4000 },
+        totalPesewas: 10000,
+        splitAmountPesewas: null,
+      }),
+    ).toBe(6000);
+
+    // Falls back to cart total before order is created
+    expect(
+      computeTargetTenderAmount({
+        order: null,
+        totalPesewas: 8500,
+      }),
+    ).toBe(8500);
+  });
+
+  it("normalizes SplitPlan responses and builds ordered item split groups", () => {
+    const plan = normalizeSplitPlan({
+      orderId: "ord-1",
+      orderStatus: "PARTIAL",
+      totalPesewas: 10000,
+      paidPesewas: 3334,
+      splitType: "EVEN",
+      splits: [
+        { splitKey: "even:1", label: "Split 1", amountPesewas: 3334, paidPesewas: 3334, remainingPesewas: 0, status: "PAID" },
+        { splitKey: "even:2", label: "Split 2", amountPesewas: 3333, paidPesewas: 0, remainingPesewas: 3333, status: "OPEN" },
+      ],
+    });
+    expect(plan.subBills).toHaveLength(2);
+    expect(plan.subBills[0].remainingPesewas).toBe(0);
+    expect(plan.subBills[1].remainingPesewas).toBe(3333);
+
+    const groups = buildItemSplitGroups(["i1", "i2", "i3"], { i1: 2, i2: 1, i3: 2 });
+    expect(groups).toEqual([
+      { label: "Bill 1", itemIds: ["i2"] },
+      { label: "Bill 2", itemIds: ["i1", "i3"] },
+    ]);
   });
 });

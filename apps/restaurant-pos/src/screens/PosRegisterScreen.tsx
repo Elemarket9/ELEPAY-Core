@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Modal,
   Pressable,
@@ -10,45 +10,87 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   buildPosOrderPayload,
+  cartLineKey,
   catalogItemLabel,
   CatalogRow,
   colors,
   computeCartTotals,
   DiningTable,
   ElepayClient,
+  emptyPosOfflineState,
+  filterUnfiredOrderItems,
   formatMoney,
   HeldCart,
   isFeatureNotEnabled,
+  isOfflineNetworkError,
+  isTenderAllowedOffline,
   MerchantView,
   newKey,
   ORDER_TYPES,
+  OrderItemKdsMeta,
   OrderType,
   parseHeldCartPayload,
   parseMoney,
+  posCacheBootstrap,
   PosCartLine,
+  posEnqueueOfflineCashOrder,
+  posOfflineBackoff,
+  PosOfflineState,
+  posOfflineStorageKey,
+  PosOfflineSyncResult,
   PosOrder,
   PosOrderItem,
   PosReceipt,
   PosShift,
   PosTerminal,
   radius,
+  replayOfflineQueue,
   spacing,
+  TenderType,
 } from "@elepay/mobile-core";
 import { TerminalShiftModal } from "../components/TerminalShiftModal";
 import { TenderModal } from "../components/TenderModal";
+
+type ServerOrderItem = PosOrderItem & OrderItemKdsMeta;
+
+const ALL_TENDERS: { type: TenderType; label: string }[] = [
+  { type: "CASH", label: "Cash" },
+  { type: "MOMO", label: "MoMo" },
+  { type: "CARD", label: "Card" },
+  { type: "GHQR", label: "GhQR" },
+  { type: "BANK_TRANSFER", label: "Bank" },
+];
 
 interface Props {
   client: ElepayClient;
   merchant: MerchantView;
   preselectedTableId: string | null;
   onClearPreselectedTable: () => void;
+  preselectedOrderId?: string | null;
+  onClearPreselectedOrder?: () => void;
 }
 
-export function PosRegisterScreen({ client, merchant, preselectedTableId, onClearPreselectedTable }: Props) {
+export function PosRegisterScreen({
+  client,
+  merchant,
+  preselectedTableId,
+  onClearPreselectedTable,
+  preselectedOrderId,
+  onClearPreselectedOrder,
+}: Props) {
   const { width } = useWindowDimensions();
   const isTablet = width >= 820;
+  const storageKey = posOfflineStorageKey(merchant.id);
+
+  const [offlineState, setOfflineState] = useState<PosOfflineState>(emptyPosOfflineState);
+  const offlineStateRef = useRef<PosOfflineState>(offlineState);
+  const [hydratedKey, setHydratedKey] = useState<string | null>(null);
+  const [online, setOnline] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const kickSyncRef = useRef<(() => void) | null>(null);
 
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
   const [tables, setTables] = useState<DiningTable[]>([]);
@@ -61,24 +103,91 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("ALL");
   const [cart, setCart] = useState<PosCartLine[]>([]);
+  const [serverItems, setServerItems] = useState<ServerOrderItem[]>([]);
+  const [firedItemIds, setFiredItemIds] = useState<Set<string>>(() => new Set());
+  const [lastFiredRound, setLastFiredRound] = useState(0);
   const [orderType, setOrderType] = useState<OrderType>("DINE_IN");
   const [tableId, setTableId] = useState<string>("");
+  const [activeSeat, setActiveSeat] = useState<number | null>(null);
   const [discount, setDiscount] = useState("");
   const [taxPercent, setTaxPercent] = useState("0");
 
   const [order, setOrder] = useState<PosOrder | null>(null);
   const [orderKey, setOrderKey] = useState<string>(() => newKey());
-  const [kdsSent, setKdsSent] = useState(false);
+  const [addOnKey, setAddOnKey] = useState<string>(() => newKey());
   const [receipt, setReceipt] = useState<{ receipt: PosReceipt; order: PosOrder } | null>(null);
 
   const [showTerminalModal, setShowTerminalModal] = useState(false);
   const [showTenderModal, setShowTenderModal] = useState(false);
+  const [showVoidModal, setShowVoidModal] = useState(false);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidManagerBadge, setVoidManagerBadge] = useState("");
+  const [voidManagerPin, setVoidManagerPin] = useState("");
+  const [voidRefundPayments, setVoidRefundPayments] = useState(false);
+  const [voidError, setVoidError] = useState<string | null>(null);
+  const [voidSubmitting, setVoidSubmitting] = useState(false);
+  const [showOfflineCashModal, setShowOfflineCashModal] = useState(false);
+  const [offlineCashInput, setOfflineCashInput] = useState("");
+  const [offlineCashError, setOfflineCashError] = useState<string | null>(null);
+  const [offlineReceipt, setOfflineReceipt] = useState<{
+    offlineTxId: string;
+    totalPesewas: number;
+    cashReceivedPesewas: number;
+    changePesewas: number;
+    itemCount: number;
+  } | null>(null);
+
   const [refreshing, setRefreshing] = useState(false);
   const [moduleDisabled, setModuleDisabled] = useState(false);
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [existingSelection, setExistingSelection] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const updateOffline = useCallback(
+    (fn: (s: PosOfflineState) => PosOfflineState) => {
+      const next = fn(offlineStateRef.current);
+      offlineStateRef.current = next;
+      setOfflineState(next);
+      void AsyncStorage.setItem(storageKey, JSON.stringify(next)).catch(() => {});
+    },
+    [storageKey],
+  );
+
+  // Hydrate offline catalog cache & queued cash orders before live sync
+  useEffect(() => {
+    let cancelled = false;
+    const empty = emptyPosOfflineState();
+    offlineStateRef.current = empty;
+    setOfflineState(empty);
+    setHydratedKey(null);
+
+    AsyncStorage.getItem(storageKey)
+      .then((raw) => {
+        if (cancelled) return;
+        if (raw) {
+          const parsed = { ...emptyPosOfflineState(), ...(JSON.parse(raw) as PosOfflineState) };
+          offlineStateRef.current = parsed;
+          setOfflineState(parsed);
+          if (parsed.catalog.length > 0) setCatalog(parsed.catalog);
+          if (parsed.tables.length > 0) setTables(parsed.tables);
+          if (parsed.terminals.length > 0) {
+            setTerminals(parsed.terminals);
+            setSelectedTerminal((prev) =>
+              prev && parsed.terminals.some((t) => t.id === prev.id) ? prev : (parsed.terminals[0] ?? null),
+            );
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setHydratedKey(storageKey);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [storageKey]);
 
   useEffect(() => {
     if (preselectedTableId) {
@@ -100,27 +209,150 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
           return [] as PosTerminal[];
         }),
       ]);
+      setOnline(true);
       setCatalog(cat);
       setTables(tbls);
       setTerminals(terms);
       setSelectedTerminal((prev) => (prev && terms.some((t) => t.id === prev.id) ? prev : (terms[0] ?? null)));
+      updateOffline((s) => posCacheBootstrap(s, { catalog: cat, tables: tbls, terminals: terms }));
       setError(null);
     } catch (e) {
-      if (isFeatureNotEnabled(e)) setModuleDisabled(true);
-      else setError(e instanceof Error ? e.message : String(e));
+      if (isFeatureNotEnabled(e)) {
+        setModuleDisabled(true);
+      } else if (isOfflineNetworkError(e)) {
+        setOnline(false);
+        const cached = offlineStateRef.current;
+        if (cached.catalog.length > 0) {
+          setCatalog(cached.catalog);
+          if (cached.tables.length > 0) setTables(cached.tables);
+          if (cached.terminals.length > 0) {
+            setTerminals(cached.terminals);
+            setSelectedTerminal((prev) => prev ?? cached.terminals[0] ?? null);
+          }
+          setNotice("Offline mode — using cached catalog. Cash orders will sync on reconnect.");
+          setError(null);
+        } else {
+          setError("Offline and no cached catalog available. Connect once to load menu.");
+        }
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setRefreshing(false);
     }
-  }, [client, merchant.id]);
+  }, [client, merchant.id, updateOffline]);
 
   useEffect(() => {
+    if (hydratedKey !== storageKey) return;
     void loadAll();
-  }, [loadAll]);
+  }, [hydratedKey, storageKey, loadAll]);
+
+  // Background auto-replay loop for queued offline cash orders + reconnect probe
+  useEffect(() => {
+    if (hydratedKey !== storageKey) return;
+    let stopped = false;
+    let inFlight = false;
+    let failures = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const persist = (next: PosOfflineState) => {
+      offlineStateRef.current = next;
+      setOfflineState(next);
+      void AsyncStorage.setItem(storageKey, JSON.stringify(next)).catch(() => {});
+    };
+
+    const runSync = async () => {
+      if (stopped || inFlight) return;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      const hasQueued = offlineStateRef.current.queue.length > 0;
+      if (!hasQueued && online) {
+        return;
+      }
+      inFlight = true;
+      setSyncing(true);
+      try {
+        if (hasQueued) {
+          const res = await replayOfflineQueue(
+            offlineStateRef.current,
+            (payload) => client.call<PosOfflineSyncResult>("/v1/pos/sync", { body: payload }),
+            persist,
+          );
+          if (stopped) return;
+          if (res.stoppedByError) {
+            if (isOfflineNetworkError(res.stoppedByError)) {
+              setOnline(false);
+            }
+            failures += 1;
+          } else {
+            failures = 0;
+            setOnline(true);
+            if (res.synced > 0) {
+              setNotice(
+                res.failed > 0
+                  ? `Synced ${res.synced} offline order(s); ${res.failed} rejected by server.`
+                  : `Synced ${res.synced} offline order(s).`,
+              );
+              void loadAll();
+            } else if (res.failed > 0) {
+              setError(`${res.failed} offline order(s) rejected by server during sync.`);
+            }
+          }
+        } else {
+          // Offline with empty queue: probe connectivity
+          const cat = await client.call<CatalogRow[]>(`/v1/inventory/catalog/merchant/${merchant.id}`);
+          if (stopped) return;
+          failures = 0;
+          setOnline(true);
+          setCatalog(cat);
+          persist(posCacheBootstrap(offlineStateRef.current, { catalog: cat }));
+          setNotice("Back online — catalog refreshed.");
+        }
+      } catch (e) {
+        if (stopped) return;
+        if (isOfflineNetworkError(e)) {
+          setOnline(false);
+        }
+        failures += 1;
+      } finally {
+        inFlight = false;
+        setSyncing(false);
+      }
+
+      if (!stopped && (offlineStateRef.current.queue.length > 0 || failures > 0)) {
+        timer = setTimeout(() => void runSync(), posOfflineBackoff(failures));
+      }
+    };
+
+    kickSyncRef.current = () => {
+      if (stopped) return;
+      failures = 0;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      void runSync();
+    };
+
+    if (offlineStateRef.current.queue.length > 0 || !online) {
+      timer = setTimeout(() => void runSync(), 1500);
+    }
+
+    return () => {
+      stopped = true;
+      kickSyncRef.current = null;
+      if (timer) clearTimeout(timer);
+    };
+  }, [hydratedKey, storageKey, client, merchant.id, online, loadAll]);
 
   useEffect(() => {
-    if (!selectedTerminal) {
-      setShift(null);
-      setHeldCarts([]);
+    if (!selectedTerminal || !online) {
+      if (!selectedTerminal) {
+        setShift(null);
+        setHeldCarts([]);
+      }
       return;
     }
     client
@@ -131,30 +363,64 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
       .call<HeldCart[]>(`/v1/pos/carts/held/${selectedTerminal.id}`)
       .then(setHeldCarts)
       .catch(() => setHeldCarts([]));
-  }, [client, selectedTerminal]);
+  }, [client, selectedTerminal, online]);
 
   const categories = useMemo(
     () => Array.from(new Set(catalog.map((r) => r.categoryName).filter((c): c is string => Boolean(c)))).sort(),
     [catalog],
   );
-  const cartQtyMap = useMemo(() => new Map(cart.map((c) => [c.variantId, c.qty])), [cart]);
+  const cartQtyMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of cart) {
+      map.set(c.variantId, (map.get(c.variantId) ?? 0) + c.qty);
+    }
+    return map;
+  }, [cart]);
   const shown = catalog.filter((r) => {
     const matchCat = selectedCategory === "ALL" || r.categoryName === selectedCategory;
     const matchSearch = `${catalogItemLabel(r)} ${r.sku} ${r.barcode ?? ""}`.toLowerCase().includes(search.toLowerCase());
     return matchCat && matchSearch;
   });
 
+  const selectedTable = useMemo(() => tables.find((t) => t.id === tableId) ?? null, [tables, tableId]);
+  const seatCount = useMemo(() => {
+    const cap = selectedTable?.capacity ?? 6;
+    return Math.min(12, Math.max(4, cap));
+  }, [selectedTable]);
+
+  const canAddItems = !order || order.status === "PENDING" || order.status === "PARTIAL";
+  const unfiredServerItems = useMemo(
+    () => filterUnfiredOrderItems(serverItems, firedItemIds),
+    [serverItems, firedItemIds],
+  );
+
   const discountP = discount.trim() ? parseMoney(discount) : 0;
   const taxRate = Number(taxPercent);
-  const calculated = computeCartTotals(cart, discountP, taxRate);
+  const calculated = computeCartTotals(cart, order ? 0 : discountP, order ? 0 : taxRate);
   const { subtotal, effectiveDiscount, tax } = calculated;
-  const total = order ? Math.max(0, order.totalPesewas - order.paidPesewas) : calculated.total;
+  const serverRemaining = order ? Math.max(0, order.totalPesewas - order.paidPesewas) : 0;
+  const total = order ? serverRemaining + calculated.subtotal : calculated.total;
+
+  const resetRegister = useCallback(() => {
+    setCart([]);
+    setServerItems([]);
+    setFiredItemIds(new Set());
+    setLastFiredRound(0);
+    setDiscount("");
+    setOrder(null);
+    setOrderKey(newKey());
+    setAddOnKey(newKey());
+    setTableId("");
+    setActiveSeat(null);
+  }, []);
 
   const addItem = (row: CatalogRow) => {
-    if (order) return;
+    if (!canAddItems) return;
+    const seat = orderType === "DINE_IN" ? activeSeat : null;
+    const targetKey = cartLineKey(row.variantId, seat);
     setCart((prev) =>
-      prev.some((x) => x.variantId === row.variantId)
-        ? prev.map((x) => (x.variantId === row.variantId ? { ...x, qty: x.qty + 1 } : x))
+      prev.some((x) => cartLineKey(x.variantId, x.seatNumber) === targetKey)
+        ? prev.map((x) => (cartLineKey(x.variantId, x.seatNumber) === targetKey ? { ...x, qty: x.qty + 1 } : x))
         : [
             ...prev,
             {
@@ -162,40 +428,131 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
               label: catalogItemLabel(row),
               unitPricePesewas: row.retailPricePesewas,
               qty: 1,
-              seatNumber: null,
+              seatNumber: seat,
             },
           ],
     );
   };
 
-  const setQty = (variantId: string, qty: number) => {
-    if (order) return;
-    setCart((prev) => (qty <= 0 ? prev.filter((x) => x.variantId !== variantId) : prev.map((x) => (x.variantId === variantId ? { ...x, qty } : x))));
+  const setQty = (lineKey: string, qty: number) => {
+    if (!canAddItems) return;
+    setCart((prev) =>
+      qty <= 0
+        ? prev.filter((x) => cartLineKey(x.variantId, x.seatNumber) !== lineKey)
+        : prev.map((x) => (cartLineKey(x.variantId, x.seatNumber) === lineKey ? { ...x, qty } : x)),
+    );
   };
 
+  const cycleLineSeat = (lineKey: string) => {
+    if (!canAddItems || orderType !== "DINE_IN") return;
+    setCart((prev) => {
+      const idx = prev.findIndex((x) => cartLineKey(x.variantId, x.seatNumber) === lineKey);
+      if (idx < 0) return prev;
+      const line = prev[idx];
+      const nextSeat = line.seatNumber == null ? 1 : line.seatNumber >= seatCount ? null : line.seatNumber + 1;
+      const nextKey = cartLineKey(line.variantId, nextSeat);
+      const mergeIdx = prev.findIndex((x, i) => i !== idx && cartLineKey(x.variantId, x.seatNumber) === nextKey);
+      if (mergeIdx >= 0) {
+        return prev
+          .map((x, i) => (i === mergeIdx ? { ...x, qty: x.qty + line.qty } : x))
+          .filter((_, i) => i !== idx);
+      }
+      return prev.map((x, i) => (i === idx ? { ...x, seatNumber: nextSeat } : x));
+    });
+  };
+
+  const hydrateLoadedOrder = useCallback(
+    (loaded: PosOrder, items: ServerOrderItem[], resolvedTableId: string) => {
+      const normalizedType: OrderType =
+        loaded.orderType === "TAKEAWAY" ||
+        loaded.orderType === "DELIVERY" ||
+        loaded.orderType === "RETAIL"
+          ? loaded.orderType
+          : "DINE_IN";
+      setOrder(loaded);
+      setOrderType(normalizedType);
+      setTableId(resolvedTableId);
+      setServerItems(items);
+      setCart([]);
+      setAddOnKey(newKey());
+      setFiredItemIds(new Set(items.filter((i) => i.kdsRound != null || !!i.sentAt).map((i) => i.id)));
+      setLastFiredRound(Math.max(0, ...items.map((i) => i.kdsRound ?? 0)));
+    },
+    [],
+  );
+
   async function openTableOrder(t: DiningTable) {
-    if (order || cart.length || loadingExisting) { setError("Finish or clear your current cart first."); return; }
-    if (!t.currentOrderId) { setTableId(t.id); return; }
+    if (order || cart.length || loadingExisting) {
+      setError("Finish or clear your current cart first.");
+      return;
+    }
+    if (!t.currentOrderId) {
+      setTableId(t.id);
+      return;
+    }
     setLoadingExisting(true);
     try {
-      if (!selectedTerminal || !cashier || !shift || shift.cashierId !== cashier.id) throw new Error("Authenticate a cashier and open a shift first.");
-      const current = await client.call<PosOrder & {terminalId?:string|null;cashierId?:string|null}>(`/v1/pos/orders/${t.currentOrderId}`);
-      if (current.status !== "PENDING" || current.paidPesewas !== 0) throw new Error("Order is not an unpaid pending order.");
-      const existing = current.terminalId === selectedTerminal.id && current.cashierId === cashier.id
-        ? current
-        : await client.call<PosOrder>(`/v1/restaurant/waiter/${merchant.id}/orders/${t.currentOrderId}/cashier`, {body:{terminalId:selectedTerminal.id,cashierId:cashier.id}});
-      if (existing.status !== "PENDING" || existing.paidPesewas !== 0) throw new Error("Order is not an unpaid pending order.");
-      const items = await client.call<PosOrderItem[]>(`/v1/pos/orders/${existing.id}/items`);
-      setOrder(existing); setTableId(t.id); setOrderType("DINE_IN"); setKdsSent(true);
-      setCart(items.map(it => ({variantId: it.variantId, label: it.itemName, qty: it.quantity, unitPricePesewas: it.unitPricePesewas, seatNumber: it.seatNumber})));
-      setNotice("Existing table order loaded; collect payment without recreating it."); setError(null);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setLoadingExisting(false); }
+      if (!selectedTerminal || !cashier || !shift || shift.cashierId !== cashier.id) {
+        throw new Error("Authenticate a cashier and open a shift first.");
+      }
+      const current = await client.call<PosOrder & { terminalId?: string | null; cashierId?: string | null }>(
+        `/v1/pos/orders/${t.currentOrderId}`,
+      );
+      if (current.status !== "PENDING" && current.status !== "PARTIAL") {
+        throw new Error("Order is not an open pending or partial order.");
+      }
+      const existing =
+        current.terminalId === selectedTerminal.id && current.cashierId === cashier.id
+          ? current
+          : await client.call<PosOrder>(
+              `/v1/restaurant/waiter/${merchant.id}/orders/${t.currentOrderId}/cashier`,
+              { body: { terminalId: selectedTerminal.id, cashierId: cashier.id } },
+            );
+      if (existing.status !== "PENDING" && existing.status !== "PARTIAL") {
+        throw new Error("Order is not an open pending or partial order.");
+      }
+      const items = await client.call<ServerOrderItem[]>(`/v1/pos/orders/${existing.id}/items`);
+      hydrateLoadedOrder(existing, items, t.id);
+      setNotice("Table order loaded. Add more items, fire add-ons to kitchen, or collect payment.");
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingExisting(false);
+    }
   }
+
+  const openOrderById = useCallback(
+    async (orderId: string) => {
+      if (loadingExisting) return;
+      setLoadingExisting(true);
+      try {
+        const [loaded, items] = await Promise.all([
+          client.call<PosOrder>(`/v1/pos/orders/${orderId}`),
+          client.call<ServerOrderItem[]>(`/v1/pos/orders/${orderId}/items`),
+        ]);
+        const matchedTable = tables.find((t) => t.currentOrderId === orderId);
+        hydrateLoadedOrder(loaded, items, matchedTable?.id ?? "");
+        setNotice(`Loaded order ${loaded.orderNumber}.`);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoadingExisting(false);
+      }
+    },
+    [client, hydrateLoadedOrder, loadingExisting, tables],
+  );
+
+  useEffect(() => {
+    if (!preselectedOrderId) return;
+    void openOrderById(preselectedOrderId);
+    onClearPreselectedOrder?.();
+  }, [preselectedOrderId, onClearPreselectedOrder, openOrderById]);
 
   useEffect(() => {
     if (!existingSelection || !tables.length) return;
-    const selected = tables.find(t => t.id === existingSelection);
+    const selected = tables.find((t) => t.id === existingSelection);
     setExistingSelection(null);
     if (selected) void openTableOrder(selected);
     // The selection is consumed once after tables are loaded.
@@ -203,10 +560,34 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
 
   async function ensureOrder(): Promise<PosOrder> {
     if (loadingExisting) throw new Error("Wait for table order to load.");
-    if (order) return order;
+    if (order) {
+      if (cart.length === 0) return order;
+      const addPayload = buildPosOrderPayload({
+        merchantId: merchant.id,
+        branchId: selectedTerminal?.branchId ?? null,
+        terminalId: selectedTerminal?.id ?? null,
+        cashierId: cashier?.id ?? null,
+        orderType,
+        lines: cart,
+        discountPesewas: 0,
+        taxPesewas: 0,
+      });
+      const updated = await client.call<PosOrder>(`/v1/pos/orders/${order.id}/items`, {
+        idempotencyKey: addOnKey,
+        body: { items: addPayload.items },
+      });
+      const latestItems = await client.call<ServerOrderItem[]>(`/v1/pos/orders/${updated.id}/items`);
+      setOrder(updated);
+      setServerItems(latestItems);
+      setCart([]);
+      setAddOnKey(newKey());
+      return updated;
+    }
     if (tableId && orderType === "DINE_IN") {
       const current = await client.call<DiningTable[]>(`/v1/restaurant/tables/merchant/${merchant.id}`);
-      if (current.find(t=>t.id===tableId)?.currentOrderId) throw new Error("Table has an existing order. Open it instead of creating another.");
+      if (current.find((t) => t.id === tableId)?.currentOrderId) {
+        throw new Error("Table has an existing order. Open it instead of creating another.");
+      }
     }
     if (discountP === null) throw new Error("Enter discount like 5.00");
     const payload = buildPosOrderPayload({
@@ -224,6 +605,10 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
       body: payload,
     });
     setOrder(created);
+    const createdItems = await client.call<ServerOrderItem[]>(`/v1/pos/orders/${created.id}/items`).catch(() => []);
+    setServerItems(createdItems);
+    setCart([]);
+    setAddOnKey(newKey());
     if (orderType === "DINE_IN" && tableId) {
       await client
         .call(`/v1/restaurant/tables/${tableId}/seat?orderId=${encodeURIComponent(created.id)}`, { method: "POST" })
@@ -233,47 +618,89 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
   }
 
   async function sendToKitchen(targetOrder: PosOrder) {
-    if (kdsSent || orderType === "RETAIL") return;
-    const orderItems = await client.call<PosOrderItem[]>(`/v1/pos/orders/${targetOrder.id}/items`);
-    await client.call("/v1/restaurant/kds/tickets", {
-      body: {
-        merchantId: merchant.id,
-        orderId: targetOrder.id,
-        tableId: orderType === "DINE_IN" && tableId ? tableId : null,
-        diningMode: orderType === "TAKEAWAY" ? "TAKEOUT" : orderType,
-        serverName: cashier?.name ?? cashier?.badgeNumber ?? null,
-        course: "MAIN",
-        items: orderItems.map((it) => ({
-          orderItemId: it.id,
-          itemName: it.itemName,
-          quantity: it.quantity,
-          modifiers: it.modifiersJson && it.modifiersJson !== "[]" ? it.modifiersJson : null,
-          course: it.course ?? "MAIN",
-        })),
-        notes: null,
-        clientRef: `pos:${targetOrder.id}`,
+    if (orderType === "RETAIL") return;
+    const fired = await client.call<{ id?: string; round?: number; items?: unknown[] } | null>(
+      `/v1/pos/orders/${targetOrder.id}/fire-kds`,
+      {
+        method: "POST",
+        body: {
+          tableId: tableId || null,
+          serverName: cashier?.name ?? cashier?.badgeNumber ?? null,
+          notes: null,
+        },
       },
-    });
-    setKdsSent(true);
+    );
+    const refreshedItems = await client.call<ServerOrderItem[]>(`/v1/pos/orders/${targetOrder.id}/items`);
+    setServerItems(refreshedItems);
+    const nextFired = new Set<string>();
+    let maxRound = lastFiredRound;
+    for (const it of refreshedItems) {
+      if (it.kdsRound != null || it.sentAt) {
+        nextFired.add(it.id);
+        if (it.kdsRound != null && it.kdsRound > maxRound) {
+          maxRound = it.kdsRound;
+        }
+      }
+    }
+    setFiredItemIds(nextFired);
+    setLastFiredRound(maxRound);
     setError(null);
-    setNotice("Order sent to Kitchen Display (KDS).");
+    if (!fired) {
+      setNotice("All items have already been sent to the kitchen.");
+      return;
+    }
+    const round = fired.round ?? Math.max(1, maxRound);
+    const itemCount = Array.isArray(fired.items) ? fired.items.length : 0;
+    setNotice(
+      round > 1
+        ? `Add-on Round ${round}${itemCount > 0 ? ` (${itemCount} item${itemCount === 1 ? "" : "s"})` : ""} sent to Kitchen Display (KDS).`
+        : "Order sent to Kitchen Display (KDS).",
+    );
   }
 
-  async function voidOrder() {
+  function openVoidModal() {
     if (!order) return;
+    setVoidReason("");
+    setVoidManagerBadge("");
+    setVoidManagerPin("");
+    setVoidRefundPayments(order.status === "PARTIAL");
+    setVoidError(null);
+    setShowVoidModal(true);
+  }
+
+  async function submitVoidOrder() {
+    if (!order) return;
+    const trimmedReason = voidReason.trim();
+    const trimmedPin = voidManagerPin.trim();
+    if (!trimmedReason) {
+      setVoidError("Void reason is required.");
+      return;
+    }
+    if (!trimmedPin) {
+      setVoidError("Manager PIN is required.");
+      return;
+    }
+    setVoidSubmitting(true);
+    setVoidError(null);
     setError(null);
     try {
-      await client.call<PosOrder>(`/v1/pos/orders/${order.id}/void`, { method: "POST" });
-      setCart([]);
-      setDiscount("");
-      setOrder(null);
-      setOrderKey(newKey());
-      setKdsSent(false);
-      setTableId("");
+      await client.call<PosOrder>(`/v1/pos/orders/${order.id}/void`, {
+        method: "POST",
+        body: {
+          reason: trimmedReason,
+          managerBadgeNumber: voidManagerBadge.trim() || null,
+          managerPin: trimmedPin,
+          refundPayments: order.status === "PARTIAL" ? voidRefundPayments : false,
+        },
+      });
+      setShowVoidModal(false);
+      resetRegister();
       setNotice("Order voided. Ready for a new order.");
       void loadAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setVoidError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVoidSubmitting(false);
     }
   }
 
@@ -285,22 +712,18 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
     }
     if (cart.length === 0) return;
     try {
-      const selectedTable = tables.find((t) => t.id === tableId);
+      const selectedTbl = tables.find((t) => t.id === tableId);
       await client.call("/v1/pos/carts/hold", {
         body: {
           terminalId: selectedTerminal.id,
           cashierId: cashier.id,
           merchantId: merchant.id,
-          customerName: selectedTable ? `Table ${selectedTable.tableNumber}` : "Walk-in",
+          customerName: selectedTbl ? `Table ${selectedTbl.tableNumber}` : "Walk-in",
           cartPayloadJson: JSON.stringify({ items: cart, discount, taxPercent, orderType, tableId: tableId || null }),
           totalPesewas: total,
         },
       });
-      setCart([]);
-      setDiscount("");
-      setOrder(null);
-      setOrderKey(newKey());
-      setKdsSent(false);
+      resetRegister();
       setNotice("Cart held.");
       const list = await client.call<HeldCart[]>(`/v1/pos/carts/held/${selectedTerminal.id}`).catch(() => []);
       setHeldCarts(list);
@@ -314,14 +737,12 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
       const recalled = await client.call<HeldCart>(`/v1/pos/carts/held/${hc.id}/recall`, { method: "POST" });
       const parsed = parseHeldCartPayload(recalled.cartPayloadJson);
       if (parsed) {
+        resetRegister();
         setCart(parsed.items);
         setDiscount(parsed.discount);
         setTaxPercent(parsed.taxPercent);
         setOrderType(parsed.orderType);
         setTableId(parsed.tableId ?? "");
-        setOrder(null);
-        setOrderKey(newKey());
-        setKdsSent(false);
       }
       if (selectedTerminal) {
         const list = await client.call<HeldCart[]>(`/v1/pos/carts/held/${selectedTerminal.id}`).catch(() => []);
@@ -338,25 +759,78 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
       const latest = await client.call<PosOrder>(`/v1/pos/orders/${paidOrder.id}`);
       setShowTenderModal(false);
       setReceipt({ receipt: r, order: latest });
-      setCart([]);
-      setDiscount("");
-      setOrder(null);
-      setOrderKey(newKey());
-      setKdsSent(false);
-      setTableId("");
+      resetRegister();
       void loadAll();
     } catch (e) {
       setShowTenderModal(false);
       setError(`Payment recorded, but receipt failed: ${e instanceof Error ? e.message : String(e)}`);
       if (paidOrder.status === "PAID") {
-        setCart([]);
-        setDiscount("");
-        setOrder(null);
-        setOrderKey(newKey());
-        setKdsSent(false);
-        setTableId("");
+        resetRegister();
         void loadAll();
       }
+    }
+  }
+
+  function handleChargePress() {
+    setError(null);
+    if (!online) {
+      if (order) {
+        setError("Cannot settle an online server order while offline. Reconnect to collect payment.");
+        return;
+      }
+      if (!selectedTerminal) {
+        setError("No cached POS terminal available. Connect once to select a terminal before offline cash sales.");
+        return;
+      }
+      if (cart.length === 0) return;
+      setOfflineCashInput((total / 100).toFixed(2));
+      setOfflineCashError(null);
+      setShowOfflineCashModal(true);
+      return;
+    }
+    setShowTenderModal(true);
+  }
+
+  function confirmOfflineCashCheckout() {
+    if (!selectedTerminal) {
+      setOfflineCashError("No cached terminal selected.");
+      return;
+    }
+    const received = parseMoney(offlineCashInput);
+    if (received === null || received < total) {
+      setOfflineCashError(`Cash tendered must be at least ${formatMoney(total)}.`);
+      return;
+    }
+    try {
+      const txId = newKey();
+      const idemKey = newKey();
+      const result = posEnqueueOfflineCashOrder(offlineStateRef.current, {
+        offlineTxId: txId,
+        idempotencyKey: idemKey,
+        merchantId: merchant.id,
+        branchId: selectedTerminal.branchId ?? null,
+        terminalId: selectedTerminal.id,
+        cashierId: cashier?.id ?? null,
+        lines: cart,
+        discountPesewas: effectiveDiscount,
+        taxPesewas: tax,
+        cashReceivedPesewas: received,
+      });
+      updateOffline(() => result.state);
+      const itemCount = cart.reduce((sum, l) => sum + l.qty, 0);
+      setShowOfflineCashModal(false);
+      setOfflineReceipt({
+        offlineTxId: txId,
+        totalPesewas: result.queued.payload.totalPesewas,
+        cashReceivedPesewas: received,
+        changePesewas: result.changePesewas,
+        itemCount,
+      });
+      resetRegister();
+      setNotice("Offline cash order queued. It will sync automatically when back online.");
+      kickSyncRef.current?.();
+    } catch (e) {
+      setOfflineCashError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -370,6 +844,10 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
       </View>
     );
   }
+
+  const hasOrderItems = serverItems.length > 0 || cart.length > 0;
+  const canFireToKitchen = orderType !== "RETAIL" && (cart.length > 0 || unfiredServerItems.length > 0);
+  const queuedCount = offlineState.queue.length;
 
   const catalogPane = (
     <View style={isTablet ? { flex: 1.35 } : undefined}>
@@ -414,7 +892,7 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
               <Pressable
                 key={r.variantId}
                 style={[styles.productTile, inCart > 0 && styles.productTileActive]}
-                disabled={!!order}
+                disabled={!canAddItems}
                 onPress={() => addItem(r)}
               >
                 {inCart > 0 && (
@@ -459,10 +937,15 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
   const cartPane = (
     <View style={[styles.card, isTablet ? { flex: 1 } : { marginTop: spacing.md }]}>
       <View style={styles.rowBetween}>
-        <Text style={styles.sectionTitle}>Current Order</Text>
-        {kdsSent && (
+        <Text style={styles.sectionTitle}>
+          {order ? `Order ${order.orderNumber}` : "Current Order"}
+        </Text>
+        {order && (
           <View style={styles.kdsTag}>
-            <Text style={styles.kdsTagText}>SENT TO KDS</Text>
+            <Text style={styles.kdsTagText}>
+              {order.status}
+              {lastFiredRound > 0 ? ` · R${lastFiredRound}` : ""}
+            </Text>
           </View>
         )}
       </View>
@@ -498,54 +981,153 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
         </ScrollView>
       )}
 
-      {cart.length === 0 ? (
+      {/* Phase 5: Per-Item Seat Selector Bar (Active Seat for newly tapped items) */}
+      {orderType === "DINE_IN" && canAddItems && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ marginBottom: 10 }}
+          contentContainerStyle={{ gap: 6, alignItems: "center" }}
+        >
+          <Text style={styles.seatBarLabel}>Seat:</Text>
+          <Pressable
+            style={[styles.seatChip, activeSeat === null && styles.seatChipActive]}
+            onPress={() => setActiveSeat(null)}
+          >
+            <Text style={[styles.seatChipText, activeSeat === null && styles.seatChipTextActive]}>None</Text>
+          </Pressable>
+          {Array.from({ length: seatCount }, (_, idx) => idx + 1).map((seat) => (
+            <Pressable
+              key={seat}
+              style={[styles.seatChip, activeSeat === seat && styles.seatChipActive]}
+              onPress={() => setActiveSeat(seat)}
+            >
+              <Text style={[styles.seatChipText, activeSeat === seat && styles.seatChipTextActive]}>S{seat}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      )}
+
+      {!hasOrderItems ? (
         <View style={styles.emptyCart}>
           <Text style={styles.mutedText}>Tap menu items to add them to this order.</Text>
         </View>
       ) : (
         <View style={styles.cartList}>
-          {cart.map((c) => (
-            <View key={c.variantId} style={styles.cartRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cartItemName}>{c.label}</Text>
-                <Text style={styles.cartItemUnit}>{formatMoney(c.unitPricePesewas)} each</Text>
-              </View>
-              <View style={styles.stepper}>
-                <Pressable style={styles.stepBtn} disabled={!!order} onPress={() => setQty(c.variantId, c.qty - 1)}>
-                  <Text style={styles.stepBtnText}>−</Text>
-                </Pressable>
-                <Text style={styles.stepQty}>{c.qty}</Text>
-                <Pressable style={styles.stepBtn} disabled={!!order} onPress={() => setQty(c.variantId, c.qty + 1)}>
-                  <Text style={styles.stepBtnText}>+</Text>
-                </Pressable>
-              </View>
-              <Text style={styles.cartLineTotal}>{formatMoney(c.unitPricePesewas * c.qty)}</Text>
-            </View>
-          ))}
+          {serverItems.length > 0 && (
+            <>
+              <Text style={styles.groupLabel}>On Order</Text>
+              {serverItems.map((it) => {
+                const isFired = it.kdsRound != null || !!it.sentAt || firedItemIds.has(it.id);
+                return (
+                  <View key={it.id} style={[styles.cartRow, it.voided && { opacity: 0.45 }]}>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <Text style={styles.cartItemName}>
+                          {it.quantity}× {it.itemName}
+                        </Text>
+                        {it.seatNumber != null && (
+                          <View style={styles.seatBadge}>
+                            <Text style={styles.seatBadgeText}>S{it.seatNumber}</Text>
+                          </View>
+                        )}
+                        <View style={[styles.roundBadge, isFired ? styles.roundBadgeSent : styles.roundBadgePending]}>
+                          <Text style={[styles.roundBadgeText, isFired ? styles.roundBadgeSentText : styles.roundBadgePendingText]}>
+                            {it.voided ? "VOID" : isFired ? (it.kdsRound ? `R${it.kdsRound}` : "SENT") : "UNFIRED"}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.cartItemUnit}>{formatMoney(it.unitPricePesewas)} each</Text>
+                    </View>
+                    <Text style={styles.cartLineTotal}>{formatMoney(it.totalPesewas)}</Text>
+                  </View>
+                );
+              })}
+            </>
+          )}
+
+          {cart.length > 0 && (
+            <>
+              {order && <Text style={styles.groupLabel}>New Add-ons</Text>}
+              {cart.map((c) => {
+                const lineKey = cartLineKey(c.variantId, c.seatNumber);
+                return (
+                  <View key={lineKey} style={styles.cartRow}>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <Text style={styles.cartItemName}>{c.label}</Text>
+                        {orderType === "DINE_IN" && (
+                          <Pressable style={styles.seatBadge} onPress={() => cycleLineSeat(lineKey)}>
+                            <Text style={styles.seatBadgeText}>
+                              {c.seatNumber != null ? `S${c.seatNumber}` : "+Seat"}
+                            </Text>
+                          </Pressable>
+                        )}
+                      </View>
+                      <Text style={styles.cartItemUnit}>{formatMoney(c.unitPricePesewas)} each</Text>
+                    </View>
+                    <View style={styles.stepper}>
+                      <Pressable style={styles.stepBtn} disabled={!canAddItems} onPress={() => setQty(lineKey, c.qty - 1)}>
+                        <Text style={styles.stepBtnText}>−</Text>
+                      </Pressable>
+                      <Text style={styles.stepQty}>{c.qty}</Text>
+                      <Pressable style={styles.stepBtn} disabled={!canAddItems} onPress={() => setQty(lineKey, c.qty + 1)}>
+                        <Text style={styles.stepBtnText}>+</Text>
+                      </Pressable>
+                    </View>
+                    <Text style={styles.cartLineTotal}>{formatMoney(c.unitPricePesewas * c.qty)}</Text>
+                  </View>
+                );
+              })}
+            </>
+          )}
         </View>
       )}
 
       <View style={styles.totalsBox}>
-        <View style={styles.rowBetween}>
-          <Text style={styles.mutedText}>Subtotal</Text>
-          <Text style={styles.totalVal}>{formatMoney(subtotal)}</Text>
-        </View>
-        {tax > 0 && (
-          <View style={styles.rowBetween}>
-            <Text style={styles.mutedText}>Tax ({taxPercent}%)</Text>
-            <Text style={styles.totalVal}>{formatMoney(tax)}</Text>
-          </View>
+        {order ? (
+          <>
+            <View style={styles.rowBetween}>
+              <Text style={styles.mutedText}>Order Total</Text>
+              <Text style={styles.totalVal}>{formatMoney(order.totalPesewas)}</Text>
+            </View>
+            {order.paidPesewas > 0 && (
+              <View style={styles.rowBetween}>
+                <Text style={styles.mutedText}>Paid</Text>
+                <Text style={styles.totalVal}>−{formatMoney(order.paidPesewas)}</Text>
+              </View>
+            )}
+            {cart.length > 0 && (
+              <View style={styles.rowBetween}>
+                <Text style={styles.mutedText}>New Add-ons</Text>
+                <Text style={styles.totalVal}>+{formatMoney(subtotal)}</Text>
+              </View>
+            )}
+          </>
+        ) : (
+          <>
+            <View style={styles.rowBetween}>
+              <Text style={styles.mutedText}>Subtotal</Text>
+              <Text style={styles.totalVal}>{formatMoney(subtotal)}</Text>
+            </View>
+            {tax > 0 && (
+              <View style={styles.rowBetween}>
+                <Text style={styles.mutedText}>Tax ({taxPercent}%)</Text>
+                <Text style={styles.totalVal}>{formatMoney(tax)}</Text>
+              </View>
+            )}
+          </>
         )}
         <View style={[styles.rowBetween, { marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: colors.line }]}>
-          <Text style={styles.grandLabel}>Total</Text>
+          <Text style={styles.grandLabel}>{order ? "Balance Due" : "Total"}</Text>
           <Text style={styles.grandValue}>{formatMoney(total)}</Text>
         </View>
       </View>
 
-      {cart.length > 0 && (
+      {hasOrderItems && (
         <View style={{ gap: 8 }}>
           <View style={styles.actionRow}>
-            {orderType !== "RETAIL" && !kdsSent && (
+            {canFireToKitchen && online && (
               <Pressable
                 style={[styles.secondaryBtn, { flex: 1 }]}
                 onPress={() =>
@@ -554,21 +1136,27 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
                     .catch((e) => setError(e instanceof Error ? e.message : String(e)))
                 }
               >
-                <Text style={styles.secondaryBtnText}>Send to Kitchen</Text>
+                <Text style={styles.secondaryBtnText}>
+                  {order ? "Fire Add-ons to Kitchen" : "Send to Kitchen"}
+                </Text>
               </Pressable>
             )}
             {!order ? (
-              <Pressable style={[styles.secondaryBtn, { flex: 1 }]} onPress={() => void holdCart()}>
-                <Text style={styles.secondaryBtnText}>Hold Cart</Text>
-              </Pressable>
+              online && (
+                <Pressable style={[styles.secondaryBtn, { flex: 1 }]} onPress={() => void holdCart()}>
+                  <Text style={styles.secondaryBtnText}>Hold Cart</Text>
+                </Pressable>
+              )
             ) : (
-              <Pressable style={[styles.voidBtn, { flex: 1 }]} onPress={() => void voidOrder()}>
+              <Pressable style={[styles.voidBtn, { flex: 1 }]} onPress={openVoidModal}>
                 <Text style={styles.voidBtnText}>Void / New Order</Text>
               </Pressable>
             )}
           </View>
-          <Pressable style={styles.chargeBtn} onPress={() => setShowTenderModal(true)}>
-            <Text style={styles.chargeBtnText}>Charge {formatMoney(total)}</Text>
+          <Pressable style={styles.chargeBtn} onPress={handleChargePress}>
+            <Text style={styles.chargeBtnText}>
+              {online ? `Charge ${formatMoney(total)}` : `Charge Cash Offline · ${formatMoney(total)}`}
+            </Text>
           </Pressable>
         </View>
       )}
@@ -577,10 +1165,10 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
 
   return (
     <View style={styles.root}>
-      {/* Compact Hardware / Shift Bar */}
-      <Pressable style={styles.terminalBar} onPress={() => setShowTerminalModal(true)}>
-        <View style={styles.terminalBarLeft}>
-          <Text style={styles.terminalBarTitle}>
+      {/* Compact Hardware / Shift / Online-Offline Bar */}
+      <View style={styles.terminalBar}>
+        <Pressable style={styles.terminalBarLeft} onPress={() => setShowTerminalModal(true)}>
+          <Text style={styles.terminalBarTitle} numberOfLines={1}>
             {selectedTerminal ? selectedTerminal.serialNumber : "No Terminal"} ·{" "}
             {cashier ? cashier.name ?? cashier.badgeNumber : "Cashier PIN"}
           </Text>
@@ -589,9 +1177,46 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
               {shift ? "SHIFT OPEN" : "NO SHIFT"}
             </Text>
           </View>
+        </Pressable>
+
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Pressable
+            style={[
+              styles.connPill,
+              !online ? styles.connPillOffline : queuedCount > 0 || syncing ? styles.connPillSyncing : styles.connPillOnline,
+            ]}
+            onPress={() => {
+              if (!online || queuedCount > 0) {
+                kickSyncRef.current?.();
+              } else {
+                void loadAll();
+              }
+            }}
+          >
+            <Text
+              style={[
+                styles.connPillText,
+                !online
+                  ? styles.connPillOfflineText
+                  : queuedCount > 0 || syncing
+                    ? styles.connPillSyncingText
+                    : styles.connPillOnlineText,
+              ]}
+            >
+              {!online
+                ? queuedCount > 0
+                  ? `OFFLINE · ${queuedCount} QUEUED`
+                  : "OFFLINE"
+                : queuedCount > 0 || syncing
+                  ? `SYNCING (${queuedCount})`
+                  : "ONLINE"}
+            </Text>
+          </Pressable>
+          <Pressable onPress={() => setShowTerminalModal(true)}>
+            <Text style={styles.manageLink}>Manage</Text>
+          </Pressable>
         </View>
-        <Text style={styles.manageLink}>Manage</Text>
-      </Pressable>
+      </View>
 
       {error && (
         <View style={styles.errorBanner}>
@@ -633,8 +1258,217 @@ export function PosRegisterScreen({ client, merchant, preselectedTableId, onClea
         merchantId={merchant.id}
         totalPesewas={total}
         ensureOrder={ensureOrder}
+        initialOrder={order}
+        onOrderUpdated={setOrder}
         onOrderPaid={handleOrderPaid}
       />
+
+      {/* Phase 3: Manager-Controlled Order Void Modal */}
+      <Modal
+        visible={showVoidModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !voidSubmitting && setShowVoidModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.receiptModal}>
+            <Text style={styles.sectionTitle}>Void Order {order?.orderNumber ?? ""}</Text>
+            <Text style={[styles.receiptSub, { marginBottom: 10 }]}>
+              Enter a reason and manager PIN to authorize voiding this order.
+            </Text>
+
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+              {["Customer cancelled", "Wrong order", "Duplicate order"].map((preset) => (
+                <Pressable
+                  key={preset}
+                  style={styles.smallBtn}
+                  onPress={() => setVoidReason(preset)}
+                >
+                  <Text style={styles.smallBtnText}>{preset}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <TextInput
+              style={[styles.searchInput, { marginBottom: 8 }]}
+              value={voidReason}
+              onChangeText={setVoidReason}
+              placeholder="Void reason (required)"
+              placeholderTextColor={colors.subtle}
+            />
+            <TextInput
+              style={[styles.searchInput, { marginBottom: 8 }]}
+              value={voidManagerBadge}
+              onChangeText={setVoidManagerBadge}
+              placeholder="Manager badge number (optional)"
+              placeholderTextColor={colors.subtle}
+              autoCapitalize="characters"
+            />
+            <TextInput
+              style={[styles.searchInput, { marginBottom: 10 }]}
+              value={voidManagerPin}
+              onChangeText={setVoidManagerPin}
+              placeholder="Manager PIN (required)"
+              placeholderTextColor={colors.subtle}
+              secureTextEntry
+              keyboardType="number-pad"
+            />
+
+            {order?.status === "PARTIAL" && (
+              <Pressable
+                style={[styles.offlineNoticeBox, { marginBottom: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}
+                onPress={() => setVoidRefundPayments((v) => !v)}
+              >
+                <Text style={[styles.offlineNoticeText, { flex: 1 }]}>
+                  Refund existing payments ({formatMoney(order.paidPesewas)})
+                </Text>
+                <Text style={{ fontWeight: "700", color: voidRefundPayments ? colors.green : colors.subtle }}>
+                  {voidRefundPayments ? "YES" : "NO"}
+                </Text>
+              </Pressable>
+            )}
+
+            {voidError && (
+              <Text style={[styles.errorText, { marginBottom: 8 }]}>{voidError}</Text>
+            )}
+
+            <View style={styles.actionRow}>
+              <Pressable
+                style={[styles.secondaryBtn, { flex: 1 }]}
+                disabled={voidSubmitting}
+                onPress={() => setShowVoidModal(false)}
+              >
+                <Text style={styles.secondaryBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.voidBtn, { flex: 1.4 }]}
+                disabled={voidSubmitting}
+                onPress={() => void submitVoidOrder()}
+              >
+                <Text style={styles.voidBtnText}>{voidSubmitting ? "Voiding…" : "Confirm Void"}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Phase 8: Offline Cash-Only Checkout Modal (MoMo / Card / GhQR / Bank blocked offline) */}
+      <Modal
+        visible={showOfflineCashModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowOfflineCashModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.receiptModal}>
+            <Text style={styles.sectionTitle}>Offline Cash Checkout</Text>
+            <View style={styles.offlineNoticeBox}>
+              <Text style={styles.offlineNoticeText}>
+                Offline Mode — Cash Only. MoMo, Card, GhQR, and Bank Transfer are disabled until connectivity returns.
+              </Text>
+            </View>
+
+            <View style={styles.offlineTenderRow}>
+              {ALL_TENDERS.map((t) => {
+                const allowed = isTenderAllowedOffline(t.type);
+                return (
+                  <View
+                    key={t.type}
+                    style={[styles.offlineTenderChip, allowed ? styles.offlineTenderAllowed : styles.offlineTenderBlocked]}
+                  >
+                    <Text
+                      style={[
+                        styles.offlineTenderText,
+                        allowed ? styles.offlineTenderAllowedText : styles.offlineTenderBlockedText,
+                      ]}
+                    >
+                      {t.label}
+                      {allowed ? " ✓" : " ✕"}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+
+            <Text style={styles.mutedText}>Amount Due: {formatMoney(total)}</Text>
+            <TextInput
+              style={[styles.searchInput, { marginTop: 8, marginBottom: 8 }]}
+              value={offlineCashInput}
+              onChangeText={(v) => {
+                setOfflineCashInput(v);
+                setOfflineCashError(null);
+              }}
+              keyboardType="decimal-pad"
+              placeholder="Cash received (GHS)"
+              placeholderTextColor={colors.subtle}
+            />
+
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+              <Pressable style={styles.smallBtn} onPress={() => setOfflineCashInput((total / 100).toFixed(2))}>
+                <Text style={styles.smallBtnText}>Exact</Text>
+              </Pressable>
+              {[1000, 2000, 5000, 10000].map((addP) => (
+                <Pressable
+                  key={addP}
+                  style={styles.smallBtn}
+                  onPress={() => {
+                    const cur = parseMoney(offlineCashInput) ?? total;
+                    setOfflineCashInput(((cur + addP) / 100).toFixed(2));
+                  }}
+                >
+                  <Text style={styles.smallBtnText}>+{addP / 100}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {offlineCashError && (
+              <Text style={[styles.errorText, { marginBottom: 8 }]}>{offlineCashError}</Text>
+            )}
+
+            <View style={styles.actionRow}>
+              <Pressable
+                style={[styles.secondaryBtn, { flex: 1 }]}
+                onPress={() => setShowOfflineCashModal(false)}
+              >
+                <Text style={styles.secondaryBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={[styles.chargeBtn, { flex: 1.4 }]} onPress={confirmOfflineCashCheckout}>
+                <Text style={styles.chargeBtnText}>Queue Cash Sale</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Local Offline Receipt Confirmation */}
+      <Modal
+        visible={!!offlineReceipt}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setOfflineReceipt(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.receiptModal}>
+            {offlineReceipt && (
+              <>
+                <Text style={styles.receiptTitle}>Offline Cash Sale Queued</Text>
+                <Text style={styles.receiptSub}>
+                  Ref {offlineReceipt.offlineTxId.slice(0, 8).toUpperCase()} · {offlineReceipt.itemCount} item(s) ·{" "}
+                  {formatMoney(offlineReceipt.totalPesewas)}
+                </Text>
+                <View style={styles.receiptPaper}>
+                  <Text style={styles.receiptMono}>
+                    {`OFFLINE RECEIPT (PENDING SYNC)\nTotal:    ${formatMoney(offlineReceipt.totalPesewas)}\nCash:     ${formatMoney(offlineReceipt.cashReceivedPesewas)}\nChange:   ${formatMoney(offlineReceipt.changePesewas)}\nQueued:   Will sync via /v1/pos/sync`}
+                  </Text>
+                </View>
+                <Pressable style={styles.chargeBtn} onPress={() => setOfflineReceipt(null)}>
+                  <Text style={styles.chargeBtnText}>New Sale</Text>
+                </Pressable>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={!!receipt} transparent animationType="fade" onRequestClose={() => setReceipt(null)}>
         <View style={styles.modalBackdrop}>
@@ -878,4 +1712,61 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   receiptMono: { fontSize: 12, color: colors.ink, lineHeight: 18 },
+  connPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill, borderWidth: 1 },
+  connPillOnline: { backgroundColor: colors.okBg, borderColor: colors.ok },
+  connPillSyncing: { backgroundColor: colors.warnBg, borderColor: colors.warn },
+  connPillOffline: { backgroundColor: colors.dangerBg, borderColor: colors.dangerBorder },
+  connPillText: { fontSize: 10, fontWeight: "800" },
+  connPillOnlineText: { color: colors.ok },
+  connPillSyncingText: { color: colors.warn },
+  connPillOfflineText: { color: colors.danger },
+  seatBarLabel: { fontSize: 12, fontWeight: "700", color: colors.muted },
+  seatChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.lineStrong,
+    backgroundColor: colors.surfaceAlt,
+  },
+  seatChipActive: { backgroundColor: colors.greenDeep, borderColor: colors.greenDeep },
+  seatChipText: { fontSize: 11, fontWeight: "700", color: colors.ink },
+  seatChipTextActive: { color: "#fff" },
+  seatBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.xs,
+    backgroundColor: colors.greenSoft,
+    borderWidth: 1,
+    borderColor: colors.green,
+  },
+  seatBadgeText: { fontSize: 10, fontWeight: "800", color: colors.greenDeep },
+  groupLabel: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginTop: 4,
+  },
+  roundBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.xs },
+  roundBadgeSent: { backgroundColor: colors.okBg },
+  roundBadgePending: { backgroundColor: colors.warnBg },
+  roundBadgeText: { fontSize: 10, fontWeight: "800" },
+  roundBadgeSentText: { color: colors.ok },
+  roundBadgePendingText: { color: colors.warn },
+  offlineNoticeBox: {
+    backgroundColor: colors.warnBg,
+    borderRadius: radius.sm,
+    padding: 10,
+    marginBottom: 10,
+  },
+  offlineNoticeText: { fontSize: 12, fontWeight: "700", color: colors.warn },
+  offlineTenderRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 12 },
+  offlineTenderChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.pill, borderWidth: 1 },
+  offlineTenderAllowed: { backgroundColor: colors.okBg, borderColor: colors.ok },
+  offlineTenderBlocked: { backgroundColor: colors.surfaceAlt, borderColor: colors.line, opacity: 0.55 },
+  offlineTenderText: { fontSize: 11, fontWeight: "800" },
+  offlineTenderAllowedText: { color: colors.ok },
+  offlineTenderBlockedText: { color: colors.muted },
 });

@@ -59,19 +59,24 @@ public class RestaurantController {
         return tableService.listFloorPlans(merchantId);
     }
 
-    public record CreateTableRequest(UUID merchantId, UUID sectionId, String tableNumber, int capacity) {}
+    public record CreateTableRequest(UUID merchantId, UUID sectionId, String tableNumber, int capacity, UUID branchId) {
+        public CreateTableRequest(UUID merchantId, UUID sectionId, String tableNumber, int capacity) {
+            this(merchantId, sectionId, tableNumber, capacity, null);
+        }
+    }
 
     @PostMapping("/tables")
     public RestaurantTableService.RestaurantTable createTable(@RequestBody CreateTableRequest req) {
         access.manage(req.merchantId());
         access.belongs(req.merchantId(), FLOOR_PLAN, req.sectionId());
-        return tableService.createTable(req.merchantId(), req.sectionId(), req.tableNumber(), req.capacity());
+        if (req.branchId() != null) access.branch(req.merchantId(), req.branchId());
+        return tableService.createTable(req.merchantId(), req.sectionId(), req.tableNumber(), req.capacity(), req.branchId());
     }
 
     @GetMapping("/tables/merchant/{merchantId}")
     public List<RestaurantTableService.RestaurantTable> listTables(@PathVariable UUID merchantId) {
-        access.view(merchantId);
-        return tableService.listTables(merchantId);
+        var caller = access.viewAccess(merchantId);
+        return tableService.listTables(merchantId, caller.branchId());
     }
 
     @PostMapping("/tables/{tableId}/status")
@@ -127,12 +132,36 @@ public class RestaurantController {
         return modifierService.listModifierGroups(merchantId);
     }
 
+    // KDS Settings (urgency thresholds)
+    @GetMapping("/kds/settings/{merchantId}")
+    public KdsService.UrgencyThresholds getKdsSettings(@PathVariable UUID merchantId) {
+        access.view(merchantId);
+        return kdsService.getUrgencyThresholds(merchantId);
+    }
+
+    public record UpdateKdsSettingsRequest(int warningMinutes, int criticalMinutes) {}
+
+    @PutMapping("/kds/settings/{merchantId}")
+    public KdsService.UrgencyThresholds updateKdsSettings(@PathVariable UUID merchantId,
+                                                          @RequestBody UpdateKdsSettingsRequest req) {
+        access.manage(merchantId);
+        return kdsService.updateUrgencyThresholds(merchantId, req.warningMinutes(), req.criticalMinutes());
+    }
+
     // KDS Live Tickets & Bump Bar
     public record CreateTicketRequest(
             UUID merchantId, UUID orderId, UUID tableId, DiningMode diningMode,
             String serverName, String course, List<KdsService.KdsItemInput> items, String notes,
-            String clientRef
-    ) {}
+            String clientRef, Integer round
+    ) {
+        public CreateTicketRequest(
+                UUID merchantId, UUID orderId, UUID tableId, DiningMode diningMode,
+                String serverName, String course, List<KdsService.KdsItemInput> items, String notes,
+                String clientRef
+        ) {
+            this(merchantId, orderId, tableId, diningMode, serverName, course, items, notes, clientRef, null);
+        }
+    }
 
     @PostMapping("/kds/tickets")
     public KdsService.KdsTicket createTicket(@RequestBody CreateTicketRequest req) {
@@ -148,9 +177,10 @@ public class RestaurantController {
             }
             access.belongs(req.merchantId(), ORDER_ITEM, item.orderItemId());
         }
+        int round = req.round() == null ? 1 : req.round();
         return kdsService.createTicket(
                 req.merchantId(), req.orderId(), req.tableId(), req.diningMode(),
-                req.serverName(), req.course(), req.items(), req.notes(), req.clientRef()
+                req.serverName(), req.course(), req.items(), req.notes(), req.clientRef(), round
         );
     }
 
@@ -224,9 +254,12 @@ public class RestaurantController {
     }
 
     @GetMapping("/kds/stations/merchant/{merchantId}")
-    public List<KitchenStationService.Station> listStations(@PathVariable UUID merchantId) {
-        access.view(merchantId);
-        return stationService.list(merchantId);
+    public List<KitchenStationService.Station> listStations(@PathVariable UUID merchantId,
+                                                            @RequestParam(required = false) UUID branchId) {
+        var caller = access.viewAccess(merchantId);
+        UUID effectiveBranch = caller != null && caller.branchScoped() ? caller.branchId() : branchId;
+        if (effectiveBranch != null) access.branch(merchantId, effectiveBranch);
+        return stationService.list(merchantId, effectiveBranch);
     }
 
     @PostMapping("/kds/stations/{stationId}/deactivate")
@@ -236,24 +269,39 @@ public class RestaurantController {
         return ResponseEntity.ok().build();
     }
 
-    public record RouteRequest(UUID categoryId, UUID variantId) {}
+    public record RouteRequest(UUID categoryId, UUID variantId, Boolean autoReady) {
+        public RouteRequest(UUID categoryId, UUID variantId) {
+            this(categoryId, variantId, false);
+        }
+    }
 
     @PostMapping("/kds/stations/{stationId}/routes")
     public ResponseEntity<Void> routeToStation(@PathVariable UUID stationId, @RequestBody RouteRequest req) {
         UUID merchantId = access.manage(STATION, stationId);
         if (req.categoryId() != null) access.belongs(merchantId, CATEGORY, req.categoryId());
         if (req.variantId() != null) access.belongs(merchantId, VARIANT, req.variantId());
-        stationService.route(merchantId, stationId, req.categoryId(), req.variantId());
+        stationService.route(merchantId, stationId, req.categoryId(), req.variantId(), Boolean.TRUE.equals(req.autoReady()));
         return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/kds/orders/{orderId}/receipt/print")
+    public KdsPrintService.PrintJob printOrderReceipt(@PathVariable UUID orderId,
+                                                      @RequestParam(defaultValue = "false") boolean reprint,
+                                                      @RequestParam(required = false) Integer paperWidth) {
+        var caller = access.operateAccess(ORDER, orderId);
+        access.requireOrderBranch(caller, orderId);
+        return printService.enqueueReceipt(caller.merchantId(), orderId, reprint, paperWidth);
     }
 
     @PostMapping("/kds/print-jobs/claim")
     public ResponseEntity<KdsPrintService.PrintJob> claimPrintJob(@RequestParam UUID merchantId,
-                                                                  @RequestParam(required = false) String deviceId) {
+                                                                  @RequestParam(required = false) String deviceId,
+                                                                  @RequestParam(required = false) String kind) {
         var caller = access.operateAccess(merchantId);
-        String effectiveDeviceId = resolveKitchenDeviceId(deviceId);
+        String effectiveDeviceId = resolvePrintDeviceId(deviceId);
         UUID branchId = caller != null && caller.branchScoped() ? caller.branchId() : null;
-        return printService.claimNext(merchantId, effectiveDeviceId, branchId).map(ResponseEntity::ok)
+        String effectiveKind = resolvePrintKind(kind);
+        return printService.claimNext(merchantId, effectiveDeviceId, branchId, effectiveKind).map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
@@ -269,16 +317,30 @@ public class RestaurantController {
                 throw com.elepay.common.ApiException.forbidden("Print job does not belong to your branch");
             }
         }
-        String effectiveDeviceId = resolveKitchenDeviceId(req.deviceId());
+        String effectiveDeviceId = resolvePrintDeviceId(req.deviceId());
         return printService.report(jobId, effectiveDeviceId, Boolean.TRUE.equals(req.printed()), req.error(), branchId);
     }
 
-    private static String resolveKitchenDeviceId(String requestedDeviceId) {
+    private static String resolvePrintDeviceId(String requestedDeviceId) {
         var actor = com.elepay.identity.Actor.current();
-        if ("kitchen".equalsIgnoreCase(actor.keyType())) {
+        if ("kitchen".equalsIgnoreCase(actor.keyType()) || actor.isPosTerminalKey()) {
             return actor.subject();
         }
         return requestedDeviceId;
+    }
+
+    private static String resolvePrintKind(String requestedKind) {
+        if (requestedKind != null && !requestedKind.isBlank()) {
+            return requestedKind;
+        }
+        var actor = com.elepay.identity.Actor.current();
+        if (actor.isPosTerminalKey()) {
+            return "RECEIPT";
+        }
+        if ("kitchen".equalsIgnoreCase(actor.keyType())) {
+            return "KITCHEN";
+        }
+        return null;
     }
 
     // Kitchen devices: pair once with a code, list, revoke

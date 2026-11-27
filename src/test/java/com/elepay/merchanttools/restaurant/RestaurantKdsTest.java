@@ -6,6 +6,7 @@ import com.elepay.merchanttools.inventory.ProductCatalogService;
 import com.elepay.merchanttools.inventory.StockService;
 import com.elepay.merchanttools.inventory.WarehouseService;
 import com.elepay.merchanttools.pos.PosOrderService;
+import com.elepay.merchanttools.pos.TenderType;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -27,6 +28,12 @@ public class RestaurantKdsTest extends PostgresTestBase {
 
     @Autowired
     private KdsService kdsService;
+
+    @Autowired
+    private KitchenStationService stationService;
+
+    @Autowired
+    private KdsPrintService printService;
 
     @Autowired
     private RecipeCostingService recipeService;
@@ -278,5 +285,69 @@ public class RestaurantKdsTest extends PostgresTestBase {
 
         // Sum of seat bills equals total order
         assertThat(seat1.totalDuePesewas() + seat2.totalDuePesewas()).isEqualTo(12000L);
+    }
+
+    @Test
+    @DisplayName("Phase 0 Bug #1: Auto-created KDS ticket on PAID resolves tableId from seated table or waiter order fallback")
+    void autoKdsTicketOnPaidResolvesTableIdFromSeatedTableAndWaiterFallback() {
+        stationService.create(merchantId, new KitchenStationService.StationInput(
+                "Main Kitchen", null, true, KitchenStationService.Output.PRINTER, "tcp://192.168.1.60:9100", 42));
+        var plan = tableService.createFloorPlan(merchantId, "Dining Hall", "{}");
+        var table12 = tableService.createTable(merchantId, plan.id(), "T-12", 4);
+        var table14 = tableService.createTable(merchantId, plan.id(), "T-14", 2);
+
+        // 1. Seated DINE_IN order: auto-KDS ticket on PAID must resolve table12.id() and print TABLE T-12
+        var dineInOrder = posOrderService.createOrder(
+                merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Jollof Rice", BigDecimal.ONE, 4500L, 0L, 0L, "[]", 1, "MAIN", null)),
+                0L, 0L, 0L, "DINE_IN"
+        );
+        tableService.seatTable(table12.id(), dineInOrder.id());
+        posOrderService.addTenderPayment(dineInOrder.id(), TenderType.CASH, dineInOrder.totalPesewas(), "CASH-1");
+
+        var seatedTickets = kdsService.getActiveTickets(merchantId).stream()
+                .filter(t -> dineInOrder.id().equals(t.orderId())).toList();
+        assertThat(seatedTickets).hasSize(1);
+        assertThat(seatedTickets.get(0).tableId()).isEqualTo(table12.id());
+
+        var slip = printService.claimNext(merchantId, "pos-1").orElseThrow();
+        assertThat(slip.content()).contains("TABLE T-12");
+        printService.report(slip.id(), "pos-1", true, null);
+
+        // 2. Fallback to restaurant_waiter_order when restaurant_table.current_order_id is NULL
+        var waiterFallbackOrder = posOrderService.createOrder(
+                merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Waakye", BigDecimal.ONE, 3500L, 0L, 0L, "[]", 1, "MAIN", null)),
+                0L, 0L, 0L, "DINE_IN"
+        );
+        // Link a prior ticket FK row in restaurant_waiter_order while table14.current_order_id stays NULL
+        db.sql("""
+                INSERT INTO restaurant_waiter_order(order_id, merchant_id, table_id, waiter_subject, ticket_id)
+                VALUES (:o, :m, :t, 'waiter-fallback', :k)
+                """)
+                .param("o", waiterFallbackOrder.id())
+                .param("m", merchantId)
+                .param("t", table14.id())
+                .param("k", seatedTickets.get(0).id())
+                .update();
+        posOrderService.addTenderPayment(waiterFallbackOrder.id(), TenderType.CASH, waiterFallbackOrder.totalPesewas(), "CASH-2");
+
+        var fallbackTickets = kdsService.getActiveTickets(merchantId).stream()
+                .filter(t -> waiterFallbackOrder.id().equals(t.orderId())).toList();
+        assertThat(fallbackTickets).hasSize(1);
+        assertThat(fallbackTickets.get(0).tableId()).isEqualTo(table14.id());
+
+        // 3. Unseated TAKEAWAY order: tableId stays null cleanly
+        var takeawayOrder = posOrderService.createOrder(
+                merchantId, null, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Meat Pie", BigDecimal.ONE, 1500L, 0L, 0L, "[]", null, "MAIN", null)),
+                0L, 0L, 0L, "TAKEAWAY"
+        );
+        posOrderService.addTenderPayment(takeawayOrder.id(), TenderType.CASH, takeawayOrder.totalPesewas(), "CASH-3");
+
+        var takeawayTickets = kdsService.getActiveTickets(merchantId).stream()
+                .filter(t -> takeawayOrder.id().equals(t.orderId())).toList();
+        assertThat(takeawayTickets).hasSize(1);
+        assertThat(takeawayTickets.get(0).tableId()).isNull();
     }
 }

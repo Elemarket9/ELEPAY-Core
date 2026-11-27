@@ -5,7 +5,6 @@ import {
   buildPosOrderPayload,
   computeCartTotals,
   DiningTable as PosDiningTable,
-  EvenSplitResult,
   formatKdsStatusLabel,
   HeldCart,
   isFeatureNotEnabled,
@@ -18,10 +17,15 @@ import {
   PosOrderItem,
   PosReceipt,
   PosTerminal,
-  SeatSplitResult,
 } from "./pos/posHelpers";
 import { PosTerminalBar } from "./pos/PosTerminalBar";
-import { PosTenderPanel } from "./pos/PosTenderPanel";
+import {
+  buildItemSplitGroups,
+  normalizeSplitPlan,
+  PosTenderPanel,
+  type SplitPlan,
+  type SubBill,
+} from "./pos/PosTenderPanel";
 import { IconCheckCircle, IconChefHat, IconPrinter, IconSearch } from "./ui/Icons";
 
 /*
@@ -221,6 +225,9 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [orderType, setOrderType] = useState<OrderType>("RETAIL");
   const [tableId, setTableId] = useState<string>("");
   const [discount, setDiscount] = useState("");
+  const [discountReason, setDiscountReason] = useState("");
+  const [discountManagerBadge, setDiscountManagerBadge] = useState("");
+  const [discountManagerPin, setDiscountManagerPin] = useState("");
   const [taxPercent, setTaxPercent] = useState(() => { try { return localStorage.getItem(TAX_KEY(merchant.id)) ?? "0"; } catch { return "0"; } });
 
   const [order, setOrder] = useState<PosOrder | null>(null);
@@ -230,9 +237,19 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   const [heldCarts, setHeldCarts] = useState<HeldCart[]>([]);
   const [holdCustomer, setHoldCustomer] = useState("");
   const [splitCount, setSplitCount] = useState("2");
-  const [evenSplit, setEvenSplit] = useState<EvenSplitResult | null>(null);
-  const [seatSplit, setSeatSplit] = useState<SeatSplitResult | null>(null);
+  const [splitMode, setSplitMode] = useState<"EVEN" | "SEAT" | "ITEM">("EVEN");
+  const [splitPlan, setSplitPlan] = useState<SplitPlan | null>(null);
+  const [selectedSplitKey, setSelectedSplitKey] = useState<string | null>(null);
+  const [splitOrderItems, setSplitOrderItems] = useState<PosOrderItem[]>([]);
+  const [itemBillCount, setItemBillCount] = useState(2);
+  const [itemAssignments, setItemAssignments] = useState<Record<string, number>>({});
   const [kdsTicket, setKdsTicket] = useState<KdsTicketSummary | null>(null);
+
+  const [voidModalOpen, setVoidModalOpen] = useState(false);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidManagerBadge, setVoidManagerBadge] = useState("");
+  const [voidManagerPin, setVoidManagerPin] = useState("");
+  const [voidRefundPayments, setVoidRefundPayments] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -285,6 +302,9 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     if (order) return order;
     if (discountP === null) throw new Error("Enter the discount like 5.00");
     if (!taxValid) throw new Error("Tax must be between 0 and 100%");
+    if (effectiveDiscount > 0 && !discountReason.trim()) {
+      throw new Error("Enter a discount reason before creating the order");
+    }
     try {
       const payload = buildPosOrderPayload({
         merchantId: merchant.id,
@@ -295,6 +315,9 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
         lines: cart,
         discountPesewas: effectiveDiscount,
         taxPesewas: tax,
+        discountReason: effectiveDiscount > 0 ? discountReason.trim() : null,
+        managerBadgeNumber: effectiveDiscount > 0 ? (discountManagerBadge.trim() || null) : null,
+        managerPin: effectiveDiscount > 0 ? (discountManagerPin.trim() || null) : null,
       });
       const created = await api<PosOrder>("/v1/pos/orders", {
         body: payload,
@@ -317,32 +340,21 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   }
 
   async function sendToKitchen(targetOrder: PosOrder) {
-    if (kdsTicket || orderType === "RETAIL") return;
+    if (orderType === "RETAIL") return;
     setError(null);
     try {
-      const orderItems = await api<PosOrderItem[]>(`/v1/pos/orders/${targetOrder.id}/items`);
       const selectedTable = tables.find((t) => t.id === tableId);
-      const diningMode = orderType === "TAKEAWAY" ? "TAKEOUT" : orderType;
-      const created = await api<KdsTicketSummary>("/v1/restaurant/kds/tickets", {
+      const created = await api<KdsTicketSummary | null>(`/v1/pos/orders/${targetOrder.id}/fire-kds`, {
+        method: "POST",
         body: {
-          merchantId: merchant.id,
-          orderId: targetOrder.id,
           tableId: orderType === "DINE_IN" && tableId ? tableId : null,
-          diningMode,
           serverName: cashier?.name ?? cashier?.badgeNumber ?? null,
-          course: "MAIN",
-          items: orderItems.map((it) => ({
-            orderItemId: it.id,
-            itemName: it.itemName,
-            quantity: Number(it.quantity),
-            modifiers: it.modifiersJson && it.modifiersJson !== "[]" ? it.modifiersJson : null,
-            course: it.course ?? "MAIN",
-          })),
           notes: selectedTable ? `Table ${selectedTable.tableNumber}` : null,
-          clientRef: `pos:${targetOrder.id}`,
         },
       });
-      setKdsTicket(created);
+      if (created) {
+        setKdsTicket(created);
+      }
     } catch (e) {
       if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
       setError(`Could not send to kitchen: ${message(e)}`);
@@ -351,16 +363,42 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
 
   async function voidCurrentOrder() {
     if (!order || order.status === "PAID") return;
+    if (!voidReason.trim()) {
+      setError("Enter a reason to void this order.");
+      return;
+    }
+    if (!voidManagerPin.trim()) {
+      setError("Enter a manager PIN to void this order.");
+      return;
+    }
     setError(null);
     setBusy(true);
     try {
-      await api<PosOrder>(`/v1/pos/orders/${order.id}/void`, { method: "POST" });
+      await api<PosOrder>(`/v1/pos/orders/${order.id}/void`, {
+        method: "POST",
+        body: {
+          reason: voidReason.trim(),
+          managerBadgeNumber: voidManagerBadge.trim() || null,
+          managerPin: voidManagerPin.trim(),
+          refundPayments: order.status === "PARTIAL" ? voidRefundPayments : false,
+        },
+      });
       setOrder(null);
       setCart([]);
       setDiscount("");
+      setDiscountReason("");
+      setDiscountManagerBadge("");
+      setDiscountManagerPin("");
+      setVoidModalOpen(false);
+      setVoidReason("");
+      setVoidManagerBadge("");
+      setVoidManagerPin("");
+      setVoidRefundPayments(false);
       setOrderKey(newKey());
-      setEvenSplit(null);
-      setSeatSplit(null);
+      setSplitPlan(null);
+      setSelectedSplitKey(null);
+      setSplitOrderItems([]);
+      setItemAssignments({});
       setKdsTicket(null);
       setTableId("");
       void reloadTables();
@@ -375,17 +413,25 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
   async function finish(paidOrder: PosOrder) {
     const r = await api<PosReceipt>(`/v1/pos/orders/${paidOrder.id}/receipt`, { method: "POST" });
     const latest = await api<PosOrder>(`/v1/pos/orders/${paidOrder.id}`);
-    if (orderType !== "RETAIL" && !kdsTicket) {
-      await sendToKitchen(latest);
-    }
     setReceipt({ receipt: r, order: latest });
     setCart([]);
     setDiscount("");
+    setDiscountReason("");
+    setDiscountManagerBadge("");
+    setDiscountManagerPin("");
+    setVoidModalOpen(false);
+    setVoidReason("");
+    setVoidManagerBadge("");
+    setVoidManagerPin("");
+    setVoidRefundPayments(false);
+    setKdsTicket(null);
     setTableId("");
     setOrder(null);
     setOrderKey(newKey());
-    setEvenSplit(null);
-    setSeatSplit(null);
+    setSplitPlan(null);
+    setSelectedSplitKey(null);
+    setSplitOrderItems([]);
+    setItemAssignments({});
     void reloadCatalog();
   }
 
@@ -417,6 +463,9 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
       });
       setCart([]);
       setDiscount("");
+      setDiscountReason("");
+      setDiscountManagerBadge("");
+      setDiscountManagerPin("");
       setTableId("");
       setHoldCustomer("");
       await loadHeldCarts(terminal.id);
@@ -454,6 +503,33 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     }
   }
 
+  async function refreshSplitPlan(orderId: string, preferredKey?: string | null) {
+    try {
+      const raw = await api<SplitPlan & { splits?: SubBill[] }>(`/v1/pos/orders/${orderId}/splits`);
+      const norm = normalizeSplitPlan(raw);
+      setSplitPlan(norm);
+      if (norm.subBills.length > 0) {
+        const keepKey = preferredKey ?? selectedSplitKey;
+        const stillUnpaid = norm.subBills.find(
+          (s) => s.splitKey === keepKey && s.status !== "PAID" && s.remainingPesewas > 0,
+        );
+        if (stillUnpaid) {
+          setSelectedSplitKey(stillUnpaid.splitKey);
+        } else {
+          const nextUnpaid = norm.subBills.find((s) => s.status !== "PAID" && s.remainingPesewas > 0);
+          setSelectedSplitKey(nextUnpaid?.splitKey ?? null);
+        }
+      }
+    } catch {
+      // Ignore if order has no persisted split plan yet
+    }
+  }
+
+  async function handlePartialPaid(updatedOrder: PosOrder) {
+    setOrder(updatedOrder);
+    await refreshSplitPlan(updatedOrder.id);
+  }
+
   async function runEvenSplit() {
     setError(null);
     const count = Number(splitCount);
@@ -464,8 +540,14 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     setBusy(true);
     try {
       const ord = await ensureOrder();
-      setSeatSplit(null);
-      setEvenSplit(await api<EvenSplitResult>(`/v1/pos/orders/${ord.id}/split/even?count=${count}`, { method: "POST" }));
+      const raw = await api<SplitPlan & { splits?: SubBill[] }>(
+        `/v1/pos/orders/${ord.id}/splits/even?count=${count}`,
+        { method: "POST" },
+      );
+      const norm = normalizeSplitPlan(raw);
+      setSplitPlan(norm);
+      const firstUnpaid = norm.subBills.find((s) => s.status !== "PAID" && s.remainingPesewas > 0);
+      setSelectedSplitKey(firstUnpaid?.splitKey ?? null);
     } catch (e) {
       if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
       setError(`Split failed: ${message(e)}`);
@@ -479,8 +561,14 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
     setBusy(true);
     try {
       const ord = await ensureOrder();
-      setEvenSplit(null);
-      setSeatSplit(await api<SeatSplitResult>(`/v1/pos/orders/${ord.id}/split/seats`, { method: "POST" }));
+      const raw = await api<SplitPlan & { splits?: SubBill[] }>(
+        `/v1/pos/orders/${ord.id}/splits/seats`,
+        { method: "POST" },
+      );
+      const norm = normalizeSplitPlan(raw);
+      setSplitPlan(norm);
+      const firstUnpaid = norm.subBills.find((s) => s.status !== "PAID" && s.remainingPesewas > 0);
+      setSelectedSplitKey(firstUnpaid?.splitKey ?? null);
     } catch (e) {
       if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
       setError(`Seat split failed: ${message(e)}`);
@@ -488,6 +576,64 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
       setBusy(false);
     }
   }
+
+  async function loadItemsForSplit() {
+    setError(null);
+    setBusy(true);
+    try {
+      const ord = await ensureOrder();
+      const items = await api<PosOrderItem[]>(`/v1/pos/orders/${ord.id}/items`);
+      setSplitOrderItems(items);
+      setItemAssignments((prev) => {
+        const next: Record<string, number> = { ...prev };
+        for (const it of items) {
+          if (!next[it.id]) next[it.id] = 1;
+        }
+        return next;
+      });
+    } catch (e) {
+      if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
+      setError(`Could not load order items for split: ${message(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runItemSplit() {
+    setError(null);
+    if (splitOrderItems.length === 0) {
+      setError("Load order items first to assign them to sub-bills.");
+      return;
+    }
+    const groups = buildItemSplitGroups(
+      splitOrderItems.map((it) => it.id),
+      itemAssignments,
+    );
+    setBusy(true);
+    try {
+      const ord = await ensureOrder();
+      const raw = await api<SplitPlan & { splits?: SubBill[] }>(
+        `/v1/pos/orders/${ord.id}/splits/items`,
+        {
+          method: "POST",
+          body: { groups },
+        },
+      );
+      const norm = normalizeSplitPlan(raw);
+      setSplitPlan(norm);
+      const firstUnpaid = norm.subBills.find((s) => s.status !== "PAID" && s.remainingPesewas > 0);
+      setSelectedSplitKey(firstUnpaid?.splitKey ?? null);
+    } catch (e) {
+      if (isFeatureNotEnabled(e)) { setModuleDisabled(true); return; }
+      setError(`Item split failed: ${message(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selectedSubBill = splitPlan
+    ? splitPlan.subBills.find((s) => s.splitKey === selectedSplitKey) ?? null
+    : null;
 
   if (moduleDisabled) {
     return (
@@ -711,6 +857,42 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
             <label style={{ margin: 0 }}>Tax %<input className="mono" inputMode="decimal" value={taxPercent} disabled={!!order} onChange={(e) => setTaxPercent(e.target.value)} /></label>
           </div>
 
+          {effectiveDiscount > 0 && (
+            <div style={{ marginTop: "0.5rem", padding: "0.55rem", background: "var(--surface-alt)", borderRadius: "var(--radius-sm)", border: "1px solid var(--line)" }}>
+              <label style={{ margin: "0 0 0.4rem" }}>
+                Discount Reason *
+                <input
+                  value={discountReason}
+                  disabled={!!order}
+                  onChange={(e) => setDiscountReason(e.target.value)}
+                  placeholder="e.g. Loyalty promo, staff meal"
+                />
+              </label>
+              <div className="grid-2">
+                <label style={{ margin: 0 }}>
+                  Manager Badge (optional)
+                  <input
+                    value={discountManagerBadge}
+                    disabled={!!order}
+                    onChange={(e) => setDiscountManagerBadge(e.target.value)}
+                    placeholder="MGR-01"
+                  />
+                </label>
+                <label style={{ margin: 0 }}>
+                  Manager PIN (if above limit)
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    value={discountManagerPin}
+                    disabled={!!order}
+                    onChange={(e) => setDiscountManagerPin(e.target.value)}
+                    placeholder="PIN"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
           <div className="pos-totals-box">
             <dl className="confirm">
               <dt>Subtotal</dt><dd className="mono">{formatMoney(subtotal)}</dd>
@@ -724,32 +906,119 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           {error && <p className="notice error" role="alert">{error}</p>}
 
           {order && order.status !== "PAID" && (
-            <div className="flex-between" style={{ marginBottom: "0.65rem", gap: "0.5rem" }}>
-              <span className="small muted">
-                Order <strong className="mono">{order.orderNumber}</strong> ({order.status})
-              </span>
-              <div className="flex-row" style={{ gap: "0.4rem" }}>
-                {orderType !== "RETAIL" && !kdsTicket && (
+            <div style={{ marginBottom: "0.65rem" }}>
+              <div className="flex-between" style={{ gap: "0.5rem" }}>
+                <span className="small muted">
+                  Order <strong className="mono">{order.orderNumber}</strong> ({order.status})
+                </span>
+                <div className="flex-row" style={{ gap: "0.4rem" }}>
+                  {orderType !== "RETAIL" && !kdsTicket && (
+                    <button
+                      type="button"
+                      className="secondary small"
+                      style={{ margin: 0 }}
+                      disabled={busy}
+                      onClick={() => void sendToKitchen(order)}
+                    >
+                      <IconChefHat size={14} /> Send to Kitchen
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="secondary small"
                     style={{ margin: 0 }}
                     disabled={busy}
-                    onClick={() => void sendToKitchen(order)}
+                    onClick={() => {
+                      setError(null);
+                      setVoidRefundPayments(false);
+                      setVoidModalOpen((open) => !open);
+                    }}
                   >
-                    <IconChefHat size={14} /> Send to Kitchen
+                    Void / New Order
                   </button>
-                )}
-                <button
-                  type="button"
-                  className="secondary small"
-                  style={{ margin: 0 }}
-                  disabled={busy}
-                  onClick={() => void voidCurrentOrder()}
-                >
-                  Void / New Order
-                </button>
+                </div>
               </div>
+
+              {voidModalOpen && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void voidCurrentOrder();
+                  }}
+                  style={{
+                    marginTop: "0.55rem",
+                    padding: "0.65rem",
+                    background: "var(--surface-alt)",
+                    borderRadius: "var(--radius-sm)",
+                    border: "1px solid var(--line-strong)",
+                  }}
+                >
+                  <div className="small" style={{ fontWeight: 600, marginBottom: "0.4rem" }}>
+                    Void Order {order.orderNumber} (Manager Approval Required)
+                  </div>
+                  <label style={{ margin: "0 0 0.4rem" }}>
+                    Reason *
+                    <input
+                      value={voidReason}
+                      onChange={(e) => setVoidReason(e.target.value)}
+                      placeholder="e.g. Customer cancelled, wrong entry"
+                      required
+                    />
+                  </label>
+                  <div className="grid-2" style={{ marginBottom: "0.45rem" }}>
+                    <label style={{ margin: 0 }}>
+                      Manager Badge (optional)
+                      <input
+                        value={voidManagerBadge}
+                        onChange={(e) => setVoidManagerBadge(e.target.value)}
+                        placeholder="MGR-01"
+                      />
+                    </label>
+                    <label style={{ margin: 0 }}>
+                      Manager PIN *
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        value={voidManagerPin}
+                        onChange={(e) => setVoidManagerPin(e.target.value)}
+                        placeholder="Manager PIN"
+                        required
+                      />
+                    </label>
+                  </div>
+                  {order.status === "PARTIAL" && (
+                    <label className="flex-row small" style={{ gap: "0.4rem", margin: "0 0 0.45rem", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={voidRefundPayments}
+                        onChange={(e) => setVoidRefundPayments(e.target.checked)}
+                        style={{ width: "auto", margin: 0 }}
+                      />
+                      Refund partial payments ({formatMoney(order.paidPesewas)})
+                    </label>
+                  )}
+                  <div className="flex-row" style={{ gap: "0.4rem" }}>
+                    <button type="submit" className="small" style={{ margin: 0 }} disabled={busy}>
+                      Confirm Void
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary small"
+                      style={{ margin: 0 }}
+                      disabled={busy}
+                      onClick={() => {
+                        setVoidModalOpen(false);
+                        setVoidReason("");
+                        setVoidManagerBadge("");
+                        setVoidManagerPin("");
+                        setVoidRefundPayments(false);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
           )}
 
@@ -779,36 +1048,153 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
           )}
 
           {cart.length > 0 && (
-            <details style={{ marginBottom: "0.6rem" }}>
-              <summary className="small muted" style={{ cursor: "pointer", fontWeight: 600 }}>Split Bill</summary>
-              <div className="flex-row" style={{ marginTop: "0.5rem" }}>
-                <input
-                  type="number"
-                  min={2}
-                  value={splitCount}
-                  onChange={(e) => setSplitCount(e.target.value)}
-                  style={{ width: "4.5rem", margin: 0 }}
-                />
-                <button type="button" className="secondary small" style={{ margin: 0 }} disabled={busy} onClick={() => void runEvenSplit()}>
-                  Split Evenly
-                </button>
-                <button type="button" className="secondary small" style={{ margin: 0 }} disabled={busy} onClick={() => void runSeatSplit()}>
-                  Split by Seat
-                </button>
+            <details style={{ marginBottom: "0.6rem" }} open={!!splitPlan}>
+              <summary className="small muted" style={{ cursor: "pointer", fontWeight: 600 }}>
+                Split Bill {splitPlan ? `(${splitPlan.subBills.filter((s) => s.status === "PAID").length}/${splitPlan.subBills.length} paid)` : ""}
+              </summary>
+              <div className="flex-row" style={{ marginTop: "0.5rem", gap: "0.35rem" }}>
+                {(
+                  [
+                    ["EVEN", "Even"],
+                    ["SEAT", "By Seat"],
+                    ["ITEM", "By Item"],
+                  ] as const
+                ).map(([m, lbl]) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={splitMode === m ? "small" : "secondary small"}
+                    style={{ margin: 0 }}
+                    onClick={() => {
+                      setSplitMode(m);
+                      if (m === "ITEM" && splitOrderItems.length === 0) {
+                        void loadItemsForSplit();
+                      }
+                    }}
+                  >
+                    {lbl}
+                  </button>
+                ))}
               </div>
-              {evenSplit && (
-                <ul className="small" style={{ marginTop: "0.5rem", paddingLeft: "1.2rem" }}>
-                  {evenSplit.portions.map((p) => (
-                    <li key={p.portionIndex}>Portion {p.portionIndex}: <strong className="mono">{formatMoney(p.amountPesewas)}</strong></li>
-                  ))}
-                </ul>
+
+              {splitMode === "EVEN" && (
+                <div className="flex-row" style={{ marginTop: "0.5rem" }}>
+                  <input
+                    type="number"
+                    min={2}
+                    value={splitCount}
+                    onChange={(e) => setSplitCount(e.target.value)}
+                    style={{ width: "4.5rem", margin: 0 }}
+                    aria-label="Number of even splits"
+                  />
+                  <button type="button" className="secondary small" style={{ margin: 0 }} disabled={busy} onClick={() => void runEvenSplit()}>
+                    Create Even Split
+                  </button>
+                </div>
               )}
-              {seatSplit && (
-                <ul className="small" style={{ marginTop: "0.5rem", paddingLeft: "1.2rem" }}>
-                  {seatSplit.seatGroups.map((g) => (
-                    <li key={g.seatNumber}>Seat {g.seatNumber}: <strong className="mono">{formatMoney(g.subtotalPesewas)}</strong> ({g.items.length} items)</li>
-                  ))}
-                </ul>
+
+              {splitMode === "SEAT" && (
+                <div className="flex-row" style={{ marginTop: "0.5rem" }}>
+                  <button type="button" className="secondary small" style={{ margin: 0 }} disabled={busy} onClick={() => void runSeatSplit()}>
+                    Create Seat Split
+                  </button>
+                </div>
+              )}
+
+              {splitMode === "ITEM" && (
+                <div style={{ marginTop: "0.5rem" }}>
+                  <div className="flex-between" style={{ marginBottom: "0.4rem" }}>
+                    <span className="small muted">Sub-bills: <strong>{itemBillCount}</strong></span>
+                    <div className="flex-row" style={{ gap: "0.35rem" }}>
+                      <button type="button" className="secondary small" style={{ margin: 0 }} onClick={() => setItemBillCount((n) => Math.max(2, n - 1))}>−</button>
+                      <button type="button" className="secondary small" style={{ margin: 0 }} onClick={() => setItemBillCount((n) => Math.min(8, n + 1))}>+</button>
+                      <button type="button" className="secondary small" style={{ margin: 0 }} disabled={busy} onClick={() => void loadItemsForSplit()}>
+                        Refresh Items
+                      </button>
+                    </div>
+                  </div>
+                  {splitOrderItems.length === 0 ? (
+                    <p className="small muted">Click Refresh Items to assign items to sub-bills.</p>
+                  ) : (
+                    <>
+                      <table className="grid" style={{ marginBottom: "0.5rem" }}>
+                        <tbody>
+                          {splitOrderItems.map((it) => (
+                            <tr key={it.id}>
+                              <td className="small">
+                                <strong>{Number(it.quantity)}× {it.itemName}</strong>{" "}
+                                <span className="mono muted">({formatMoney(it.totalPesewas)})</span>
+                              </td>
+                              <td className="num">
+                                <select
+                                  value={itemAssignments[it.id] ?? 1}
+                                  onChange={(e) => setItemAssignments((prev) => ({ ...prev, [it.id]: Number(e.target.value) }))}
+                                  style={{ width: "auto", margin: 0, padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+                                  aria-label={`Assign ${it.itemName} to bill`}
+                                >
+                                  {Array.from({ length: itemBillCount }, (_, idx) => idx + 1).map((billNum) => (
+                                    <option key={billNum} value={billNum}>Bill {billNum}</option>
+                                  ))}
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <button type="button" className="secondary small" style={{ margin: 0 }} disabled={busy} onClick={() => void runItemSplit()}>
+                        Save Item Split
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {splitPlan && splitPlan.subBills.length > 0 && (
+                <div style={{ marginTop: "0.65rem" }}>
+                  <div className="flex-between" style={{ marginBottom: "0.35rem" }}>
+                    <span className="small muted">Select a sub-bill to pay below:</span>
+                    {selectedSplitKey && (
+                      <button type="button" className="secondary small" style={{ margin: 0 }} onClick={() => setSelectedSplitKey(null)}>
+                        Clear Selection
+                      </button>
+                    )}
+                  </div>
+                  <table className="grid" style={{ margin: 0 }}>
+                    <tbody>
+                      {splitPlan.subBills.map((sb) => {
+                        const isPaid = sb.status === "PAID" || sb.remainingPesewas <= 0;
+                        const isSelected = sb.splitKey === selectedSplitKey;
+                        return (
+                          <tr key={sb.splitKey}>
+                            <td className="small">
+                              <strong>{sb.label}</strong>
+                              <div className="muted">
+                                Total <span className="mono">{formatMoney(sb.amountPesewas)}</span> · Paid <span className="mono">{formatMoney(sb.paidPesewas)}</span>
+                              </div>
+                            </td>
+                            <td className="num">
+                              <span className={`tag ${isPaid ? "active" : sb.status === "PARTIAL" ? "pending" : "info"}`}>
+                                {sb.status}
+                              </span>
+                            </td>
+                            <td className="num">
+                              {!isPaid && (
+                                <button
+                                  type="button"
+                                  className={isSelected ? "small" : "secondary small"}
+                                  style={{ margin: 0 }}
+                                  onClick={() => setSelectedSplitKey(sb.splitKey)}
+                                >
+                                  {isSelected ? "Selected" : `Pay ${formatMoney(sb.remainingPesewas)}`}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </details>
           )}
@@ -821,8 +1207,21 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
               ensureOrder={ensureOrder}
               onOrderPaid={finish}
               onModuleDisabled={() => setModuleDisabled(true)}
-              onClearCart={() => { setCart([]); setOrder(null); setOrderKey(newKey()); }}
+              onClearCart={() => {
+                setCart([]);
+                setOrder(null);
+                setOrderKey(newKey());
+                setSplitPlan(null);
+                setSelectedSplitKey(null);
+                setSplitOrderItems([]);
+                setItemAssignments({});
+              }}
               hasOrder={!!order}
+              order={order}
+              splitKey={selectedSubBill?.splitKey ?? null}
+              splitLabel={selectedSubBill?.label ?? null}
+              splitAmountPesewas={selectedSubBill?.remainingPesewas ?? null}
+              onPartialPaid={handlePartialPaid}
             />
           )}
         </div>
@@ -833,113 +1232,7 @@ export function PosRegister({ merchant }: { merchant: MerchantRef }) {
 
 // =============================================================================================== Floor plan
 
-interface FloorPlan { id: string; name: string }
-interface DiningTable { id: string; sectionId: string; tableNumber: string; capacity: number; status: "AVAILABLE" | "OCCUPIED" | "RESERVED" | "DIRTY" }
-
-export function FloorPlanView({ merchantId }: { merchantId: string }) {
-  const [plans, reloadPlans, plansError] = useLoad<FloorPlan[]>(`/v1/restaurant/floor-plans/merchant/${merchantId}`, []);
-  const [tables, reloadTables, tablesError] = useLoad<DiningTable[]>(`/v1/restaurant/tables/merchant/${merchantId}`, []);
-  const [error, setError] = useState<string | null>(null);
-  const [section, setSection] = useState("");
-  const [table, setTable] = useState({ number: "", capacity: "4", sectionId: "" });
-
-  async function addSection(e: React.FormEvent) {
-    e.preventDefault(); setError(null);
-    try { await api("/v1/restaurant/floor-plans", { body: { merchantId, name: section.trim(), layoutJson: "{}" } }); setSection(""); await reloadPlans(); }
-    catch (err) { setError(message(err)); }
-  }
-  async function addTable(e: React.FormEvent) {
-    e.preventDefault(); setError(null);
-    const capacity = Number(table.capacity);
-    const sectionId = table.sectionId || plans[0]?.id;
-    if (!sectionId) { setError("Add a section (e.g. Terrace) first"); return; }
-    if (!Number.isInteger(capacity) || capacity < 1) { setError("Seats must be a whole number"); return; }
-    try { await api("/v1/restaurant/tables", { body: { merchantId, sectionId, tableNumber: table.number.trim(), capacity } }); setTable({ ...table, number: "" }); await reloadTables(); }
-    catch (err) { setError(message(err)); }
-  }
-  async function setStatus(t: DiningTable, status: DiningTable["status"]) {
-    setError(null);
-    try {
-      if (status === "AVAILABLE" && t.status !== "RESERVED") await api(`/v1/restaurant/tables/${t.id}/vacate?markDirty=false`, { method: "POST" });
-      else await api(`/v1/restaurant/tables/${t.id}/status?status=${status}`, { method: "POST" });
-      await reloadTables();
-    } catch (err) { setError(message(err)); }
-  }
-
-  const statusCounts = {
-    AVAILABLE: tables.filter((t) => t.status === "AVAILABLE").length,
-    OCCUPIED: tables.filter((t) => t.status === "OCCUPIED").length,
-    RESERVED: tables.filter((t) => t.status === "RESERVED").length,
-    DIRTY: tables.filter((t) => t.status === "DIRTY").length,
-  };
-
-  return (
-    <div>
-      {(plansError || tablesError || error) && <p className="notice error">{plansError ?? tablesError ?? error}</p>}
-      {tables.length > 0 && (
-        <div className="floor-summary">
-          <span className="floor-stat-pill"><span className="tag active">{statusCounts.AVAILABLE}</span> Available</span>
-          <span className="floor-stat-pill"><span className="tag pending">{statusCounts.OCCUPIED}</span> Occupied</span>
-          <span className="floor-stat-pill"><span className="tag info">{statusCounts.RESERVED}</span> Reserved</span>
-          <span className="floor-stat-pill"><span className="tag failed">{statusCounts.DIRTY}</span> Needs cleaning</span>
-        </div>
-      )}
-      {plans.length === 0 && (
-        <div className="panel" style={{ marginBottom: "1rem" }}>
-          <p className="muted" style={{ margin: 0 }}>No floor plan yet. Add your sections (e.g. Inside, Terrace) and then add your tables below.</p>
-        </div>
-      )}
-      {plans.map((p) => {
-        const mine = tables.filter((t) => t.sectionId === p.id);
-        return (
-          <div key={p.id} className="panel" style={{ marginBottom: "1rem" }}>
-            <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
-              <h4 style={{ margin: 0 }}>{p.name}</h4>
-              <span className="small muted">{mine.length} table{mine.length === 1 ? "" : "s"}</span>
-            </div>
-            {mine.length === 0 ? <p className="muted small" style={{ margin: 0 }}>No tables in this section yet.</p> : (
-              <div className="table-grid">
-                {mine.map((t) => (
-                  <div key={t.id} className={`dining-table ${t.status.toLowerCase()}`}>
-                    <div className="flex-between">
-                      <strong style={{ fontSize: "1rem" }}>{t.tableNumber}</strong>
-                      <span className={`tag ${t.status === "AVAILABLE" ? "active" : t.status === "OCCUPIED" ? "pending" : t.status === "RESERVED" ? "info" : "failed"}`}>
-                        {t.status === "DIRTY" ? "Clean" : t.status.toLowerCase()}
-                      </span>
-                    </div>
-                    <span className="small muted">{t.capacity} seats</span>
-                    <select value={t.status} onChange={(e) => void setStatus(t, e.target.value as DiningTable["status"])} aria-label={`Status of ${t.tableNumber}`}>
-                      <option value="AVAILABLE">Available</option><option value="OCCUPIED">Occupied</option>
-                      <option value="RESERVED">Reserved</option><option value="DIRTY">Needs cleaning</option>
-                    </select>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      <div className="grid-2">
-        <form className="panel" onSubmit={addSection}>
-          <h4>Add section</h4>
-          <label>Name<input value={section} onChange={(e) => setSection(e.target.value)} placeholder="Inside, Terrace…" required maxLength={64} /></label>
-          <button type="submit">Add section</button>
-        </form>
-        <form className="panel" onSubmit={addTable}>
-          <h4>Add table</h4>
-          <label>Table name<input value={table.number} onChange={(e) => setTable({ ...table, number: e.target.value })} placeholder="T1" required maxLength={32} /></label>
-          <label>Seats<input inputMode="numeric" value={table.capacity} onChange={(e) => setTable({ ...table, capacity: e.target.value })} required /></label>
-          {plans.length > 1 && (
-            <label>Section<select value={table.sectionId} onChange={(e) => setTable({ ...table, sectionId: e.target.value })}>
-              {plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select></label>
-          )}
-          <button type="submit" disabled={plans.length === 0}>Add table</button>
-        </form>
-      </div>
-    </div>
-  );
-}
+export { FloorPlanView } from "./pos/FloorPlanView";
 
 // =============================================================================================== Invoices & quotes
 

@@ -3,12 +3,27 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import * as SecureStore from "expo-secure-store";
 import { ApiError, ElepayClient, MerchantView, formatMoney, newKey } from "@elepay/mobile-core";
+import {
+  TERMINAL_WAITER_SUBMIT_ERROR_CODES,
+  WAITER_COURSES,
+  WaiterCourse,
+  WaiterDraft,
+  WaiterLine,
+  WaiterOrder,
+  WaiterTable,
+  buildWaiterSubmission,
+  canAddToTable,
+  canSelectTable,
+  formatTableButtonLabel,
+  isOrderModifiableStatus,
+  normalizeStoredDraft,
+} from "./src/waiterOrderHelpers";
 
-type Table = { id: string; tableNumber: string; capacity: number; status: string; currentOrderId: string | null };
+type Table = WaiterTable;
 type Menu = { variantId: string; name: string; category: string | null; pricePesewas: number };
-type Line = { variantId: string; quantity: number; notes: string };
-type Order = { orderId: string; ticketId: string; tableNumber: string; orderNumber: string; orderStatus: string; kitchenStatus: string; totalPesewas: number; billRequested: boolean };
-type Draft = { merchant: string; tableId: string; items: Line[]; notes: string; key: string };
+type Line = WaiterLine;
+type Order = WaiterOrder;
+type Draft = WaiterDraft;
 const SESSION = "elepay_waiter_session";
 const PENDING = "elepay_waiter_pending";
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -40,7 +55,7 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
     let alive = true;
     SecureStore.getItemAsync(PENDING).then(raw => {
       if (!alive || !raw) return;
-      const draft = JSON.parse(raw) as Draft;
+      const draft = normalizeStoredDraft(JSON.parse(raw) as Draft);
       if (draft.merchant !== merchant.id) throw new Error("Another restaurant has an unresolved order on this device.");
       setPending(draft); setTable(draft.tableId); setLines(draft.items); setNotes(draft.notes);
     }).catch(e => { if (alive) { setStorageBlocked(true); setError(message(e)); } }).finally(() => { if (alive) setBooted(true); });
@@ -66,27 +81,48 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
     return ()=>{alive=false;clearTimeout(timer);};
   },[client,prefix]);
 
+  const selectedTable = useMemo(() => tables.find(t => t.id === table) ?? null, [tables, table]);
+  const activeAddOnOrderId = pending
+    ? (pending.orderId ?? null)
+    : (selectedTable && canAddToTable(selectedTable, orders) ? selectedTable.currentOrderId : null);
+
   function change(id:string,delta:number) {
     if (pending || sending.current) return;
     setLines(old=>{
       const found=old.find(x=>x.variantId===id);
-      if (!found) return delta>0&&old.length<100?[...old,{variantId:id,quantity:1,notes:""}]:old;
+      if (!found) return delta>0&&old.length<100?[...old,{variantId:id,quantity:1,notes:"",course:"MAIN"}]:old;
       return old.map(x=>x.variantId===id?{...x,quantity:Math.min(99,x.quantity+delta)}:x).filter(x=>x.quantity>0);
     });
   }
+  function setLineCourse(id:string,course:WaiterCourse) {
+    if (pending || sending.current) return;
+    setLines(old=>old.map(x=>x.variantId===id?{...x,course}:x));
+  }
+  function startAddItems(order:Order) {
+    if (busy || pending) return;
+    const match = tables.find(t => t.currentOrderId === order.orderId);
+    if (!match) {
+      setError("Table for order " + order.orderNumber + " is not currently available.");
+      return;
+    }
+    setError("");
+    setTable(match.id);
+    setTab("order");
+  }
   async function submit() {
-    if (sending.current || !booted || storageBlocked || (!pending && (!table || !lines.length))) return;
+    if (sending.current || !booted || storageBlocked || (!pending && (!table || !lines.length || !selectedTable || !canSelectTable(selectedTable, orders)))) return;
     sending.current=true;setBusy(true);setError("");
-    const draft=pending??{merchant:merchant.id,tableId:table,items:lines,notes,key:newKey()};
+    const draft: Draft = pending ?? {merchant:merchant.id,tableId:table,orderId:activeAddOnOrderId,items:lines,notes,key:newKey()};
+    const submission = buildWaiterSubmission(prefix, draft);
     try {
       await SecureStore.setItemAsync(PENDING,JSON.stringify(draft));
       setPending(draft);
-      const result=await client.call<{orderNumber:string;totalPesewas:number}>(prefix+"/orders",{idempotencyKey:draft.key,body:{tableId:draft.tableId,items:draft.items,notes:draft.notes}});
+      const result=await client.call<{orderNumber:string;totalPesewas:number}>(submission.path,{idempotencyKey:submission.idempotencyKey,body:submission.body});
       await SecureStore.deleteItemAsync(PENDING);
       setPending(null);setLines([]);setTable("");setNotes("");setTab("track");
-      setNotice("Sent to kitchen: "+result.orderNumber+" · "+formatMoney(result.totalPesewas));
+      setNotice((submission.isAddOn?"Added to kitchen: ":"Sent to kitchen: ")+result.orderNumber+" · "+formatMoney(result.totalPesewas));
      } catch(e) {
-      if(e instanceof ApiError && (["invalid_order","invalid_item","table_in_use"].includes(e.code))) {
+      if(e instanceof ApiError && TERMINAL_WAITER_SUBMIT_ERROR_CODES.has(e.code)) {
         try {await SecureStore.deleteItemAsync(PENDING);setPending(null);} catch(storageError){setError(message(storageError));}
       }
       setError(message(e)+" — retry the same order if submission remains pending.");
@@ -112,7 +148,8 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
       {tab==="order"?<>
         <Text style={s.title}>Choose a table</Text>
         {!tables.length&&<Text>No tables assigned to your branch. Ask a manager.</Text>}
-        {tables.map(t=><Button key={t.id} label={(table===t.id?"✓ ":"")+"Table "+t.tableNumber+" · "+t.status+" · "+t.capacity+" seats"} disabled={busy||!!pending||t.status!=="AVAILABLE"||!!t.currentOrderId} onPress={()=>setTable(t.id)}/>)}
+        {tables.map(t=><Button key={t.id} label={formatTableButtonLabel(t, table, orders)} disabled={busy||!!pending||!canSelectTable(t, orders)} onPress={()=>setTable(t.id)}/>)}
+        {!!activeAddOnOrderId&&<Text style={s.notice}>Adding items to {selectedTable ? "Table " + selectedTable.tableNumber : "existing table order"} (new kitchen round)</Text>}
         <Text style={s.title}>Menu</Text>
         <TextInput accessibilityLabel="Search menu" style={s.input} value={search} onChangeText={setSearch} placeholder="Search items or category"/>
         {menu.filter(x=>(x.name+" "+(x.category??"")).toLowerCase().includes(search.toLowerCase())).map(x=><View key={x.variantId} style={s.card}>
@@ -120,14 +157,26 @@ function Waiter({client, merchant, logout}: {client: ElepayClient; merchant: Mer
           <View style={s.row}><Button label="−" disabled={busy||!!pending||!lines.some(l=>l.variantId===x.variantId)} onPress={()=>change(x.variantId,-1)}/><Text>{lines.find(l=>l.variantId===x.variantId)?.quantity??0}</Text><Button label="+" disabled={busy||!!pending} onPress={()=>change(x.variantId,1)}/></View>
         </View>)}
         <Text style={s.title}>Review order</Text>
-        {lines.map(l=><View key={l.variantId} style={s.card}><Text>{menu.find(x=>x.variantId===l.variantId)?.name??l.variantId} × {l.quantity}</Text><TextInput style={s.input} accessibilityLabel="Item instructions" placeholder="Item instructions" value={l.notes} maxLength={200} editable={!busy&&!pending} onChangeText={v=>setLines(old=>old.map(x=>x.variantId===l.variantId?{...x,notes:v}:x))}/></View>)}
+        {lines.map(l=><View key={l.variantId} style={s.card}>
+          <Text>{menu.find(x=>x.variantId===l.variantId)?.name??l.variantId} × {l.quantity}</Text>
+          <View style={s.courseRow}>
+            {WAITER_COURSES.map(c=>{
+              const active = l.course === c;
+              return <Pressable key={c} accessibilityRole="button" accessibilityLabel={"Course " + c} disabled={busy||!!pending} onPress={()=>setLineCourse(l.variantId,c)} style={[s.courseChip, active&&s.courseChipActive, (busy||!!pending)&&s.disabled]}>
+                <Text style={[s.courseChipText, active&&s.courseChipTextActive]}>{active?"✓ ":""}{c}</Text>
+              </Pressable>;
+            })}
+          </View>
+          <TextInput style={s.input} accessibilityLabel="Item instructions" placeholder="Item instructions" value={l.notes} maxLength={200} editable={!busy&&!pending} onChangeText={v=>setLines(old=>old.map(x=>x.variantId===l.variantId?{...x,notes:v}:x))}/>
+        </View>)}
         <TextInput style={s.input} accessibilityLabel="Order notes" placeholder="Order notes" maxLength={500} value={notes} editable={!busy&&!pending} onChangeText={setNotes}/>
         <Text style={s.title}>Estimated total: {formatMoney(total)}</Text>
-        <Button label={pending?"Retry same submission":busy?"Sending…":"Send to kitchen"} disabled={!booted||storageBlocked||busy||(!pending&&(!table||!lines.length))} onPress={()=>void submit()}/>
+        <Button label={pending?"Retry same submission":busy?"Sending…":activeAddOnOrderId?"Add to table":"Send to kitchen"} disabled={!booted||storageBlocked||busy||(!pending&&(!table||!lines.length||!selectedTable||!canSelectTable(selectedTable, orders)))} onPress={()=>void submit()}/>
       </>:<>
         <Text style={s.title}>My active tables and orders</Text>
         {!orders.length&&<Text>No active orders.</Text>}
         {orders.map(o=><View key={o.orderId} style={s.card}><Text style={s.title}>Table {o.tableNumber} · {o.kitchenStatus}</Text><Text>{o.orderNumber} · {formatMoney(o.totalPesewas)} · {o.orderStatus}</Text>
+          {isOrderModifiableStatus(o.orderStatus)&&<Button label="Add items" disabled={busy||!!pending||!tables.some(t=>t.currentOrderId===o.orderId)} onPress={()=>startAddItems(o)}/>}
           {o.kitchenStatus==="READY"&&<Button label="Mark food served" disabled={busy} onPress={()=>void action(o,"served")}/>}
           {o.kitchenStatus==="SERVED"&&o.orderStatus==="PAID"&&<Button label="Close paid table" disabled={busy} onPress={()=>void action(o,"close-table")}/>}
           <Button label={o.billRequested?"Bill requested":"Request bill"} disabled={busy||o.billRequested||o.orderStatus!=="PENDING"} onPress={()=>void action(o,"bill")}/>
@@ -215,4 +264,4 @@ function Root() {
   </ScrollView></SafeAreaView>;
 }
 export default function App(){return <SafeAreaProvider><Root/></SafeAreaProvider>;}
-const s=StyleSheet.create({root:{flex:1,backgroundColor:"#F4F7F5"},header:{padding:16,backgroundColor:"#073C2B",gap:8},heading:{fontSize:24,fontWeight:"800",color:"#fff"},white:{color:"#fff"},content:{padding:16,gap:12,paddingBottom:40},title:{fontWeight:"700",fontSize:18,color:"#14382A"},row:{flexDirection:"row",alignItems:"center",gap:12,padding:8,flexWrap:"wrap"},button:{backgroundColor:"#0A5838",padding:12,borderRadius:8,minHeight:44,justifyContent:"center"},buttonText:{color:"#fff",fontWeight:"700",textAlign:"center"},disabled:{opacity:0.45},input:{borderWidth:1,borderColor:"#B8C8BE",borderRadius:8,padding:12,backgroundColor:"#fff",color:"#14281D"},card:{padding:12,borderRadius:10,backgroundColor:"#fff",gap:8},error:{color:"#9E2020",padding:10},notice:{color:"#0A5838",padding:10,fontWeight:"700"}});
+const s=StyleSheet.create({root:{flex:1,backgroundColor:"#F4F7F5"},header:{padding:16,backgroundColor:"#073C2B",gap:8},heading:{fontSize:24,fontWeight:"800",color:"#fff"},white:{color:"#fff"},content:{padding:16,gap:12,paddingBottom:40},title:{fontWeight:"700",fontSize:18,color:"#14382A"},row:{flexDirection:"row",alignItems:"center",gap:12,padding:8,flexWrap:"wrap"},button:{backgroundColor:"#0A5838",padding:12,borderRadius:8,minHeight:44,justifyContent:"center"},buttonText:{color:"#fff",fontWeight:"700",textAlign:"center"},disabled:{opacity:0.45},input:{borderWidth:1,borderColor:"#B8C8BE",borderRadius:8,padding:12,backgroundColor:"#fff",color:"#14281D"},card:{padding:12,borderRadius:10,backgroundColor:"#fff",gap:8},error:{color:"#9E2020",padding:10},notice:{color:"#0A5838",padding:10,fontWeight:"700"},courseRow:{flexDirection:"row",flexWrap:"wrap",gap:6},courseChip:{paddingHorizontal:10,paddingVertical:6,borderRadius:16,borderWidth:1,borderColor:"#B8C8BE",backgroundColor:"#F4F7F5"},courseChipActive:{backgroundColor:"#0A5838",borderColor:"#0A5838"},courseChipText:{fontSize:12,fontWeight:"700",color:"#14382A"},courseChipTextActive:{color:"#fff"}});

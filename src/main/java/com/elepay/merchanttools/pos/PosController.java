@@ -5,6 +5,7 @@ import com.elepay.emtech.DeviceEvents;
 import com.elepay.common.Idempotency;
 import com.elepay.merchant.MerchantAccess;
 import com.elepay.merchanttools.MerchantToolAccess;
+import com.elepay.merchanttools.restaurant.RestaurantTableService;
 import static com.elepay.merchanttools.MerchantToolAccess.Resource.*;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
@@ -22,11 +23,13 @@ public class PosController {
     private final PosCashierService cashierService;
     private final PosCartService cartService;
     private final PosOrderService orderService;
+    private final PosVoidDiscountService voidDiscountService;
     private final PosSplitBillService splitBillService;
     private final PosReceiptService receiptService;
     private final PosOfflineSyncService syncService;
     private final DeviceEvents deviceEvents;
     private final MerchantAccess merchants;
+    private final RestaurantTableService tableService;
 
     public PosController(
             MerchantToolAccess access,
@@ -35,11 +38,13 @@ public class PosController {
             PosCashierService cashierService,
             PosCartService cartService,
             PosOrderService orderService,
+            PosVoidDiscountService voidDiscountService,
             PosSplitBillService splitBillService,
             PosReceiptService receiptService,
             PosOfflineSyncService syncService,
             DeviceEvents deviceEvents,
-            MerchantAccess merchants
+            MerchantAccess merchants,
+            RestaurantTableService tableService
     ) {
         this.access = access;
         this.idempotency = idempotency;
@@ -47,11 +52,13 @@ public class PosController {
         this.cashierService = cashierService;
         this.cartService = cartService;
         this.orderService = orderService;
+        this.voidDiscountService = voidDiscountService;
         this.splitBillService = splitBillService;
         this.receiptService = receiptService;
         this.syncService = syncService;
         this.deviceEvents = deviceEvents;
         this.merchants = merchants;
+        this.tableService = tableService;
     }
 
     // Terminal endpoints
@@ -148,12 +155,43 @@ public class PosController {
     }
 
     // Cashier & Shift endpoints
-    public record RegisterCashierRequest(UUID merchantId, String name, String pin, String badgeNumber) {}
+    public record RegisterCashierRequest(UUID merchantId, String name, String pin, String badgeNumber,
+                                         String role, Boolean isManager) {
+        public RegisterCashierRequest(UUID merchantId, String name, String pin, String badgeNumber) {
+            this(merchantId, name, pin, badgeNumber, null, null);
+        }
+    }
 
     @PostMapping("/cashiers/register")
     public PosCashierService.Cashier registerCashier(@RequestBody RegisterCashierRequest req) {
         access.manage(req.merchantId());
-        return cashierService.registerCashier(req.merchantId(), req.name(), req.pin(), req.badgeNumber()).withoutSecret();
+        return cashierService.registerCashier(req.merchantId(), req.name(), req.pin(), req.badgeNumber(),
+                req.role(), Boolean.TRUE.equals(req.isManager())).withoutSecret();
+    }
+
+    public record UpdateCashierRoleRequest(String role, Boolean isManager) {}
+
+    @PutMapping("/cashiers/{cashierId}/role")
+    public PosCashierService.Cashier updateCashierRole(@PathVariable UUID cashierId,
+                                                       @RequestBody UpdateCashierRoleRequest req) {
+        UUID merchantId = access.manage(CASHIER, cashierId);
+        return cashierService.updateCashierRole(merchantId, cashierId, req.role(), Boolean.TRUE.equals(req.isManager()));
+    }
+
+    public record UpdatePosSettingsRequest(long discountPinThresholdPesewas, Integer discountPinThresholdBps) {}
+
+    @GetMapping("/settings/{merchantId}")
+    public PosVoidDiscountService.MerchantPosSettings getPosSettings(@PathVariable UUID merchantId) {
+        access.view(merchantId);
+        return voidDiscountService.getSettings(merchantId);
+    }
+
+    @PutMapping("/settings/{merchantId}")
+    public PosVoidDiscountService.MerchantPosSettings updatePosSettings(@PathVariable UUID merchantId,
+                                                                        @RequestBody UpdatePosSettingsRequest req) {
+        access.manage(merchantId);
+        return voidDiscountService.updateSettings(merchantId, req.discountPinThresholdPesewas(),
+                req.discountPinThresholdBps());
     }
 
     public record AuthenticateCashierRequest(UUID merchantId, String badgeNumber, String pin) {}
@@ -252,8 +290,18 @@ public class PosController {
     public record CreateOrderRequest(
             UUID merchantId, UUID branchId, UUID terminalId, UUID cashierId, UUID customerId,
             List<PosOrderService.OrderItemInput> items, long discountPesewas, long taxPesewas,
-            long tipPesewas, String orderType
-    ) {}
+            long tipPesewas, String orderType,
+            String discountReason, String managerBadgeNumber, String managerPin
+    ) {
+        public CreateOrderRequest(
+                UUID merchantId, UUID branchId, UUID terminalId, UUID cashierId, UUID customerId,
+                List<PosOrderService.OrderItemInput> items, long discountPesewas, long taxPesewas,
+                long tipPesewas, String orderType
+        ) {
+            this(merchantId, branchId, terminalId, cashierId, customerId, items,
+                    discountPesewas, taxPesewas, tipPesewas, orderType, null, null, null);
+        }
+    }
 
     @PostMapping("/orders")
     @Transactional
@@ -264,12 +312,23 @@ public class PosController {
         access.requireBranch(caller, req.branchId());
         if (req.terminalId() != null) access.requireTerminal(caller, req.terminalId());
         verifyOrderInputs(req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(), req.items());
+        String actor = com.elepay.identity.Actor.current().subject();
         return idempotency.execute("pos-order:" + req.merchantId(), key, req,
                 PosOrderService.PosOrder.class,
-                () -> orderService.createOrder(
-                        req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(),
-                        req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType()
-                ));
+                () -> {
+                    PosOrderService.PosOrder order = orderService.createOrder(
+                            req.merchantId(), req.branchId(), req.terminalId(), req.cashierId(), req.customerId(),
+                            req.items(), req.discountPesewas(), req.taxPesewas(), req.tipPesewas(), req.orderType()
+                    );
+                    boolean hasDiscount = req.discountPesewas() > 0 || (req.items() != null
+                            && req.items().stream().anyMatch(i -> i.discountPesewas() > 0));
+                    if (hasDiscount) {
+                        voidDiscountService.validateAndLogInitialDiscounts(
+                                order, req.discountPesewas(), req.items(),
+                                req.discountReason(), req.managerBadgeNumber(), req.managerPin(), actor);
+                    }
+                    return order;
+                });
     }
 
     @GetMapping("/orders/{orderId}")
@@ -289,25 +348,154 @@ public class PosController {
         return orderService.listOrderItems(orderId);
     }
 
-    @PostMapping("/orders/{orderId}/void")
-    public PosOrderService.PosOrder voidOrder(@PathVariable UUID orderId) {
-        verifyOrder(orderId);
-        return orderService.voidOrder(orderId, com.elepay.identity.Actor.current().subject());
+    public record AddItemsRequest(List<PosOrderService.OrderItemInput> items) {}
+
+    @PostMapping("/orders/{orderId}/items")
+    @Transactional
+    public PosOrderService.PosOrder addItems(
+            @PathVariable UUID orderId,
+            @RequestHeader("Idempotency-Key") String key,
+            @RequestBody AddItemsRequest req) {
+        var order = verifyOrder(orderId);
+        if (req == null || req.items() == null || req.items().isEmpty()) {
+            throw ApiException.badRequest("items_required", "Order items required");
+        }
+        req.items().forEach(item -> {
+            if (item.discountPesewas() > 0) {
+                throw ApiException.badRequest(
+                        "use_discount_endpoint",
+                        "Item discounts must be applied via POST /v1/pos/orders/{orderId}/discount with a reason and manager approval");
+            }
+            if (item.variantId() != null) access.belongs(order.merchantId(), VARIANT, item.variantId());
+        });
+        return idempotency.execute("pos-order-items:" + order.merchantId() + ":" + orderId, key, req,
+                PosOrderService.PosOrder.class,
+                () -> orderService.addItemsToOrder(orderId, req.items()));
     }
 
-    public record TenderPaymentRequest(TenderType tenderType, long amountPesewas, String reference) {}
+    public record FireKdsRequest(UUID tableId, String serverName, String notes) {}
+
+    @PostMapping("/orders/{orderId}/fire-kds")
+    public ResponseEntity<com.elepay.merchanttools.restaurant.KdsService.KdsTicket> fireKds(
+            @PathVariable UUID orderId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @RequestBody(required = false) FireKdsRequest req) {
+        var caller = access.operateAccess(ORDER, orderId);
+        var order = verifyOrder(orderId);
+        UUID tableId = req == null ? null : req.tableId();
+        if (tableId != null) {
+            access.belongs(order.merchantId(), TABLE, tableId);
+            if (caller != null && caller.branchScoped()) {
+                UUID tableBranchId = tableService.tableBranchId(tableId);
+                access.requireBranch(caller, tableBranchId);
+            }
+        }
+        return orderService.fireUnfiredItemsToKds(
+                        orderId,
+                        tableId,
+                        req == null ? null : req.serverName(),
+                        req == null ? null : req.notes())
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
+    }
+
+    public record VoidItemRequest(String reason, String managerBadgeNumber, String managerPin) {}
+
+    @PostMapping("/orders/{orderId}/items/{itemId}/void")
+    public PosOrderService.PosOrder voidOrderItem(
+            @PathVariable UUID orderId,
+            @PathVariable UUID itemId,
+            @RequestBody(required = false) VoidItemRequest req) {
+        var order = verifyOrder(orderId);
+        access.belongs(order.merchantId(), ORDER_ITEM, itemId);
+        return voidDiscountService.voidOrderItem(
+                orderId,
+                itemId,
+                req == null ? null : req.reason(),
+                req == null ? null : req.managerBadgeNumber(),
+                req == null ? null : req.managerPin(),
+                com.elepay.identity.Actor.current().subject());
+    }
+
+    public record VoidOrderRequest(String reason, String managerBadgeNumber, String managerPin, Boolean refundPayments) {}
+
+    @PostMapping("/orders/{orderId}/void")
+    public PosOrderService.PosOrder voidOrder(
+            @PathVariable UUID orderId,
+            @RequestBody(required = false) VoidOrderRequest req) {
+        var caller = access.operateAccess(ORDER, orderId);
+        verifyOrder(orderId);
+        return voidDiscountService.voidOrderWithControl(
+                orderId,
+                req == null ? null : req.reason(),
+                req == null ? null : req.managerBadgeNumber(),
+                req == null ? null : req.managerPin(),
+                req != null && Boolean.TRUE.equals(req.refundPayments()),
+                caller,
+                com.elepay.identity.Actor.current().subject());
+    }
+
+    public record ApplyDiscountRequest(
+            UUID orderItemId,
+            long discountPesewas,
+            String reason,
+            String managerBadgeNumber,
+            String managerPin
+    ) {}
+
+    @PostMapping("/orders/{orderId}/discount")
+    public PosOrderService.PosOrder applyDiscount(
+            @PathVariable UUID orderId,
+            @RequestBody ApplyDiscountRequest req) {
+        var order = verifyOrder(orderId);
+        if (req == null) {
+            throw ApiException.badRequest("discount_required", "Discount details are required");
+        }
+        if (req.orderItemId() != null) {
+            access.belongs(order.merchantId(), ORDER_ITEM, req.orderItemId());
+        }
+        return voidDiscountService.applyDiscount(
+                orderId,
+                req.orderItemId(),
+                req.discountPesewas(),
+                req.reason(),
+                req.managerBadgeNumber(),
+                req.managerPin(),
+                com.elepay.identity.Actor.current().subject());
+    }
+
+    @GetMapping("/orders/{orderId}/voids")
+    public List<PosVoidDiscountService.VoidLogEntry> listOrderVoids(@PathVariable UUID orderId) {
+        var caller = access.viewAccess(ORDER, orderId);
+        access.requireOrderBranch(caller, orderId);
+        return voidDiscountService.listVoids(orderId);
+    }
+
+    @GetMapping("/orders/{orderId}/discounts")
+    public List<PosVoidDiscountService.DiscountLogEntry> listOrderDiscounts(@PathVariable UUID orderId) {
+        var caller = access.viewAccess(ORDER, orderId);
+        access.requireOrderBranch(caller, orderId);
+        return voidDiscountService.listDiscounts(orderId);
+    }
+
+    public record TenderPaymentRequest(TenderType tenderType, long amountPesewas, String reference, String splitKey) {
+        public TenderPaymentRequest(TenderType tenderType, long amountPesewas, String reference) {
+            this(tenderType, amountPesewas, reference, null);
+        }
+    }
 
     @PostMapping("/orders/{orderId}/payments")
     @Transactional
     public PosOrderService.PosOrder addPayment(@PathVariable UUID orderId,
             @RequestHeader("Idempotency-Key") String key, @RequestBody TenderPaymentRequest req) {
         var order = verifyOrder(orderId);
-        if (req.tenderType() != TenderType.CASH)
+        if (req.tenderType() != TenderType.CASH && req.tenderType() != TenderType.BANK_TRANSFER)
             throw ApiException.unprocessable("digital_payment_use_tenders",
                     "Use POST /v1/pos/orders/{orderId}/tenders (MoMo/GhQR/Card) or /nfc-tap for digital payments");
         return idempotency.execute("pos-cash:" + order.merchantId() + ":" + orderId, key, req,
                 PosOrderService.PosOrder.class,
-                () -> orderService.addTenderPayment(orderId, req.tenderType(), req.amountPesewas(), req.reference()));
+                () -> orderService.addTenderPayment(orderId, req.tenderType(), req.amountPesewas(),
+                        req.reference(), req.splitKey()));
     }
 
     @PostMapping("/orders/{orderId}/tenders")
@@ -330,15 +518,19 @@ public class PosController {
     }
 
     @PostMapping("/orders/{orderId}/digital-checkout/confirm")
-    public PosOrderService.PosOrder confirmDigital(@PathVariable UUID orderId) {
+    public PosOrderService.PosOrder confirmDigital(
+            @PathVariable UUID orderId,
+            @RequestParam(required = false) String splitKey) {
         verifyOrder(orderId);
-        return orderService.confirmDigital(orderId);
+        return orderService.confirmDigital(orderId, splitKey);
     }
 
     @PostMapping("/orders/{orderId}/digital-checkout/cancel")
-    public ResponseEntity<Void> cancelDigital(@PathVariable UUID orderId) {
+    public ResponseEntity<Void> cancelDigital(
+            @PathVariable UUID orderId,
+            @RequestParam(required = false) String splitKey) {
         verifyOrder(orderId);
-        orderService.cancelDigital(orderId, com.elepay.identity.Actor.current().subject());
+        orderService.cancelDigital(orderId, splitKey, com.elepay.identity.Actor.current().subject());
         return ResponseEntity.noContent().build();
     }
 

@@ -41,6 +41,14 @@ public class KdsService {
         this.printing = printing;
     }
 
+    static final int DEFAULT_WARNING_MINUTES = 10;
+    static final int DEFAULT_CRITICAL_MINUTES = 15;
+
+    public record UrgencyThresholds(int warningMinutes, int criticalMinutes) {
+        public static final UrgencyThresholds DEFAULT =
+                new UrgencyThresholds(DEFAULT_WARNING_MINUTES, DEFAULT_CRITICAL_MINUTES);
+    }
+
     public record KdsTicket(
             UUID id,
             UUID merchantId,
@@ -58,7 +66,9 @@ public class KdsService {
             Integer ticketNumber,
             String clientRef,
             OffsetDateTime cancelledAt,
-            long changeSeq
+            long changeSeq,
+            String tableNumber,
+            int round
     ) {
         public long elapsedSeconds() {
             OffsetDateTime end = servedAt != null ? servedAt : cancelledAt != null ? cancelledAt : OffsetDateTime.now();
@@ -66,12 +76,16 @@ public class KdsService {
         }
 
         public String urgencyLevel() {
+            return urgencyLevel(DEFAULT_WARNING_MINUTES, DEFAULT_CRITICAL_MINUTES);
+        }
+
+        public String urgencyLevel(int warningMinutes, int criticalMinutes) {
             if ("SERVED".equals(status) || "CANCELLED".equals(status)) {
                 return "COMPLETED";
             }
             long minutes = elapsedSeconds() / 60;
-            if (minutes >= 25) return "CRITICAL";
-            if (minutes >= 15) return "WARNING";
+            if (minutes >= criticalMinutes) return "CRITICAL";
+            if (minutes >= warningMinutes) return "WARNING";
             return "NORMAL";
         }
     }
@@ -85,7 +99,8 @@ public class KdsService {
             String modifiers,
             String course,
             String itemStatus,
-            UUID stationId
+            UUID stationId,
+            boolean autoReady
     ) {}
 
     public record KdsItemInput(
@@ -107,26 +122,68 @@ public class KdsService {
     public record BumpResult(TicketView view, boolean applied, String reason) {}
 
     public record SyncResult(long cursor, boolean hasMore, OffsetDateTime serverTime, List<TicketView> tickets,
-                             List<KdsPrintService.PrintJob> printerFailures) {}
-
-    private static final String TICKET_COLS = """
-            id, merchant_id, order_id, table_id, dining_mode, server_name, status, course, notes,
-            created_at, started_at, ready_at, served_at, ticket_number, client_ref, cancelled_at, change_seq""";
+                             List<KdsPrintService.PrintJob> printerFailures, UrgencyThresholds urgencyThresholds) {
+        public SyncResult(long cursor, boolean hasMore, OffsetDateTime serverTime, List<TicketView> tickets,
+                          List<KdsPrintService.PrintJob> printerFailures) {
+            this(cursor, hasMore, serverTime, tickets, printerFailures, UrgencyThresholds.DEFAULT);
+        }
+    }
 
     private static final String TICKET_COLS_T = """
             t.id, t.merchant_id, t.order_id, t.table_id, t.dining_mode, t.server_name, t.status, t.course, t.notes,
             t.created_at, t.started_at, t.ready_at, t.served_at, t.ticket_number, t.client_ref, t.cancelled_at,
-            t.change_seq""";
+            t.change_seq, rt.table_number, t.round""";
+
+    private static final String TICKET_FROM_T =
+            " FROM restaurant_kds_ticket t LEFT JOIN restaurant_table rt ON rt.id = t.table_id";
 
     private static final String ITEM_COLS = """
-            id, ticket_id, order_item_id, item_name, quantity, modifiers, course, item_status, station_id""";
+            id, ticket_id, order_item_id, item_name, quantity, modifiers, course, item_status, station_id, auto_ready""";
+
+    // ------------------------------------------------------------------ urgency settings
+
+    public UrgencyThresholds getUrgencyThresholds(UUID merchantId) {
+        return db.sql("SELECT warning_minutes, critical_minutes FROM restaurant_kds_settings WHERE merchant_id = :m")
+                .param("m", merchantId)
+                .query(UrgencyThresholds.class)
+                .optional()
+                .orElse(UrgencyThresholds.DEFAULT);
+    }
+
+    @Transactional
+    public UrgencyThresholds updateUrgencyThresholds(UUID merchantId, int warningMinutes, int criticalMinutes) {
+        if (warningMinutes < 1 || warningMinutes > 240) {
+            throw ApiException.badRequest("urgency_thresholds_invalid", "warningMinutes must be between 1 and 240");
+        }
+        if (criticalMinutes <= warningMinutes || criticalMinutes > 480) {
+            throw ApiException.badRequest("urgency_thresholds_invalid",
+                    "criticalMinutes must be greater than warningMinutes and at most 480");
+        }
+        db.sql("""
+            INSERT INTO restaurant_kds_settings (merchant_id, warning_minutes, critical_minutes, updated_at)
+            VALUES (:m, :w, :c, now())
+            ON CONFLICT (merchant_id) DO UPDATE
+            SET warning_minutes = EXCLUDED.warning_minutes,
+                critical_minutes = EXCLUDED.critical_minutes,
+                updated_at = now()
+            """).param("m", merchantId).param("w", warningMinutes).param("c", criticalMinutes).update();
+        return new UrgencyThresholds(warningMinutes, criticalMinutes);
+    }
 
     // ------------------------------------------------------------------ creating tickets
+
+    public int nextRoundForOrder(UUID orderId) {
+        if (orderId == null) return 1;
+        return db.sql("SELECT COALESCE(MAX(round), 0) + 1 FROM restaurant_kds_ticket WHERE order_id = :orderId")
+                .param("orderId", orderId)
+                .query(Integer.class)
+                .single();
+    }
 
     @Transactional
     public KdsTicket createTicket(UUID merchantId, UUID orderId, UUID tableId, DiningMode diningMode, String serverName,
                                   String course, List<KdsItemInput> items, String notes) {
-        return createTicket(merchantId, orderId, tableId, diningMode, serverName, course, items, notes, null);
+        return createTicket(merchantId, orderId, tableId, diningMode, serverName, course, items, notes, null, 1);
     }
 
     /**
@@ -136,6 +193,14 @@ public class KdsService {
     @Transactional
     public KdsTicket createTicket(UUID merchantId, UUID orderId, UUID tableId, DiningMode diningMode, String serverName,
                                   String course, List<KdsItemInput> items, String notes, String clientRef) {
+        return createTicket(merchantId, orderId, tableId, diningMode, serverName, course, items, notes, clientRef, 1);
+    }
+
+    @Transactional
+    public KdsTicket createTicket(UUID merchantId, UUID orderId, UUID tableId, DiningMode diningMode, String serverName,
+                                  String course, List<KdsItemInput> items, String notes, String clientRef, int round) {
+        if (round < 1)
+            throw ApiException.badRequest("round_invalid", "Ticket round must be at least 1");
         if (items == null || items.isEmpty())
             throw ApiException.badRequest("items_required", "A kitchen ticket needs at least one item");
         if (clientRef != null && (clientRef.isBlank() || clientRef.length() > 64))
@@ -164,10 +229,10 @@ public class KdsService {
         int inserted = db.sql("""
             INSERT INTO restaurant_kds_ticket (
                 id, merchant_id, order_id, table_id, dining_mode, server_name,
-                status, course, notes, created_at, client_ref
+                status, course, notes, created_at, client_ref, round
             ) VALUES (
                 :id, :merchantId, :orderId, :tableId, :diningMode, :serverName,
-                'NEW', :course, :notes, now(), :clientRef
+                'NEW', :course, :notes, now(), :clientRef, :round
             )
             ON CONFLICT (merchant_id, client_ref) WHERE client_ref IS NOT NULL DO NOTHING
             """)
@@ -180,6 +245,7 @@ public class KdsService {
             .param("course", course == null ? "ALL" : course)
             .param("notes", notes)
             .param("clientRef", clientRef)
+            .param("round", round)
             .update();
         if (inserted == 0) return findByClientRef(merchantId, clientRef).orElseThrow();
 
@@ -193,15 +259,22 @@ public class KdsService {
         db.sql("UPDATE restaurant_kds_ticket SET ticket_number = :n WHERE id = :id")
                 .param("n", number).param("id", ticketId).update();
 
+        UUID orderBranchId = orderId == null ? null : db.sql("SELECT branch_id FROM pos_order WHERE id = :id")
+                .param("id", orderId).query(UUID.class).optional().orElse(null);
+
+        boolean allAutoReady = true;
         for (KdsItemInput item : items) {
             UUID variant = item.orderItemId() == null ? null : db.sql(
                     "SELECT variant_id FROM pos_order_item WHERE id = :id")
                     .param("id", item.orderItemId()).query(UUID.class).optional().orElse(null);
+            KitchenStationService.ResolvedRoute route = stations.resolveRoute(merchantId, variant, orderBranchId);
+            boolean autoReady = route.autoReady();
+            if (!autoReady) allAutoReady = false;
             db.sql("""
                 INSERT INTO restaurant_kds_item (
-                    id, ticket_id, order_item_id, item_name, quantity, modifiers, course, item_status, station_id
+                    id, ticket_id, order_item_id, item_name, quantity, modifiers, course, item_status, station_id, auto_ready
                 ) VALUES (
-                    :id, :ticketId, :orderItemId, :itemName, :quantity, :modifiers, :course, 'NEW', :station
+                    :id, :ticketId, :orderItemId, :itemName, :quantity, :modifiers, :course, :itemStatus, :station, :autoReady
                 )
                 """)
                 .param("id", UUID.randomUUID())
@@ -211,22 +284,27 @@ public class KdsService {
                 .param("quantity", item.quantity() == null ? BigDecimal.ONE : item.quantity())
                 .param("modifiers", item.modifiers() == null ? "" : item.modifiers())
                 .param("course", item.course() == null ? "MAIN" : item.course())
-                .param("station", stations.resolve(merchantId, variant))
+                .param("itemStatus", autoReady ? "READY" : "NEW")
+                .param("station", route.stationId())
+                .param("autoReady", autoReady)
                 .update();
+        }
+        if (allAutoReady) {
+            deriveTicketStatus(ticketId);
         }
         printing.enqueueForNewTicket(ticketId);
         return getTicket(ticketId).orElseThrow();
     }
 
     private Optional<KdsTicket> findByClientRef(UUID merchantId, String clientRef) {
-        return db.sql("SELECT " + TICKET_COLS + " FROM restaurant_kds_ticket WHERE merchant_id = :m AND client_ref = :ref")
+        return db.sql("SELECT " + TICKET_COLS_T + TICKET_FROM_T + " WHERE t.merchant_id = :m AND t.client_ref = :ref")
                 .param("m", merchantId).param("ref", clientRef).query(KdsTicket.class).optional();
     }
 
     // ------------------------------------------------------------------ reading
 
     public Optional<KdsTicket> getTicket(UUID id) {
-        return db.sql("SELECT " + TICKET_COLS + " FROM restaurant_kds_ticket WHERE id = :id")
+        return db.sql("SELECT " + TICKET_COLS_T + TICKET_FROM_T + " WHERE t.id = :id")
             .param("id", id)
             .query(KdsTicket.class)
             .optional();
@@ -250,17 +328,15 @@ public class KdsService {
 
     public List<KdsTicket> getActiveTickets(UUID merchantId, UUID branchId) {
         if (branchId == null) {
-            return db.sql("SELECT " + TICKET_COLS + """
-                 FROM restaurant_kds_ticket
-                 WHERE merchant_id = :merchantId AND status IN ('NEW', 'PREPARING', 'READY')
-                 ORDER BY created_at ASC
+            return db.sql("SELECT " + TICKET_COLS_T + TICKET_FROM_T + """
+                 WHERE t.merchant_id = :merchantId AND t.status IN ('NEW', 'PREPARING', 'READY')
+                 ORDER BY t.created_at ASC
                 """)
                 .param("merchantId", merchantId)
                 .query(KdsTicket.class)
                 .list();
         }
-        return db.sql("SELECT " + TICKET_COLS_T + """
-             FROM restaurant_kds_ticket t
+        return db.sql("SELECT " + TICKET_COLS_T + TICKET_FROM_T + """
              JOIN pos_order o ON o.id = t.order_id
              WHERE t.merchant_id = :merchantId AND o.branch_id = :branchId
                AND t.status IN ('NEW', 'PREPARING', 'READY')
@@ -295,8 +371,7 @@ public class KdsService {
         String window = since == 0
                 ? " AND t.status IN ('NEW', 'PREPARING', 'READY')"
                 : " AND (t.change_seq > :since OR t.updated_at > now() - make_interval(secs => :overlap))";
-        var query = db.sql("SELECT " + TICKET_COLS_T
-                        + " FROM restaurant_kds_ticket t" + branchJoin
+        var query = db.sql("SELECT " + TICKET_COLS_T + TICKET_FROM_T + branchJoin
                         + " WHERE t.merchant_id = :m" + branchFilter + window + stationFilter
                         + " ORDER BY t.change_seq LIMIT " + (SYNC_PAGE + 1))
                 .param("m", merchantId);
@@ -323,7 +398,8 @@ public class KdsService {
                     .param("m", merchantId).query(Long.class).single();
         cursor = Math.max(cursor, since);
         List<TicketView> views = tickets.stream().map(t -> new TicketView(t, items.get(t.id()))).toList();
-        return new SyncResult(cursor, hasMore, OffsetDateTime.now(), views, printing.recentFailures(merchantId));
+        return new SyncResult(cursor, hasMore, OffsetDateTime.now(), views,
+                printing.recentFailures(merchantId), getUrgencyThresholds(merchantId));
     }
 
     // ------------------------------------------------------------------ bumping
@@ -421,6 +497,70 @@ public class KdsService {
                 .param("id", ticketId).update();
         printing.enqueueVoid(ticketId);
         return new BumpResult(view(ticketId), true, null);
+    }
+
+    /**
+     * Cancels all live KDS item(s) associated with a POS order item, prints a station-scoped VOID slip
+     * for each cancelled item's station, and cancels the parent ticket if no live items remain.
+     */
+    @Transactional
+    public void cancelOrderItem(UUID merchantId, UUID orderItemId, String actionId, String reason) {
+        if (merchantId == null || orderItemId == null) return;
+        record ItemMatch(UUID id, UUID ticketId, UUID stationId) {}
+        List<ItemMatch> matches = db.sql("""
+            SELECT i.id, i.ticket_id, i.station_id
+            FROM restaurant_kds_item i
+            JOIN restaurant_kds_ticket t ON t.id = i.ticket_id
+            WHERE t.merchant_id = :m AND i.order_item_id = :orderItemId
+              AND i.item_status NOT IN ('CANCELLED', 'SERVED')
+            ORDER BY i.ticket_id, i.id
+            """).param("m", merchantId).param("orderItemId", orderItemId)
+                .query(ItemMatch.class).list();
+        if (matches.isEmpty()) return;
+
+        if (!recordAction(merchantId, actionId, matches.get(0).ticketId(), "CANCEL_ITEM")) {
+            return;
+        }
+
+        Map<UUID, List<ItemMatch>> byTicket = new LinkedHashMap<>();
+        for (ItemMatch m : matches) {
+            byTicket.computeIfAbsent(m.ticketId(), k -> new ArrayList<>()).add(m);
+        }
+
+        String trimmedReason = reason == null ? null : reason.strip();
+        for (Map.Entry<UUID, List<ItemMatch>> entry : byTicket.entrySet()) {
+            UUID ticketId = entry.getKey();
+            lockStatus(ticketId);
+            boolean anyCancelled = false;
+            for (ItemMatch item : entry.getValue()) {
+                int updated = db.sql("""
+                    UPDATE restaurant_kds_item
+                    SET item_status = 'CANCELLED'
+                    WHERE id = :id AND item_status NOT IN ('CANCELLED', 'SERVED')
+                    """).param("id", item.id()).update();
+                if (updated == 1) {
+                    anyCancelled = true;
+                    printing.enqueueItemVoid(ticketId, item.id(), item.stationId(), trimmedReason);
+                }
+            }
+            if (!anyCancelled) continue;
+
+            long remaining = db.sql("""
+                SELECT count(*) FROM restaurant_kds_item
+                WHERE ticket_id = :t AND item_status <> 'CANCELLED'
+                """).param("t", ticketId).query(Long.class).single();
+            if (remaining == 0) {
+                db.sql("""
+                    UPDATE restaurant_kds_ticket
+                    SET status = 'CANCELLED', cancelled_at = COALESCE(cancelled_at, now()),
+                        notes = CASE WHEN CAST(:reason AS text) IS NULL OR CAST(:reason AS text) = '' THEN notes
+                                     ELSE concat_ws(' | ', NULLIF(notes, ''), 'CANCELLED: ' || CAST(:reason AS text)) END
+                    WHERE id = :id AND status IN ('NEW', 'PREPARING', 'READY')
+                    """).param("id", ticketId).param("reason", trimmedReason).update();
+            } else {
+                deriveTicketStatus(ticketId);
+            }
+        }
     }
 
     // Course firing: fire a specific course (e.g. fire APPETIZER or fire MAIN)

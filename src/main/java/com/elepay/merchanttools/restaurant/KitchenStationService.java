@@ -31,6 +31,8 @@ public class KitchenStationService {
     public record StationInput(String name, UUID branchId, boolean isDefault, Output output,
                                String printerAddress, Integer paperWidth) {}
 
+    public record ResolvedRoute(UUID stationId, boolean autoReady) {}
+
     private static final String COLS = """
             id, merchant_id, branch_id, name, is_default, output, printer_address, paper_width,
             active, last_seen_at, created_at""";
@@ -49,9 +51,14 @@ public class KitchenStationService {
         int width = in.paperWidth() == null ? 42 : in.paperWidth();
         if (width != 32 && width != 42 && width != 48)
             throw ApiException.badRequest("paper_width_invalid", "Paper width must be 32, 42 or 48 characters");
-        if (in.isDefault())
-            db.sql("UPDATE restaurant_kitchen_station SET is_default = false WHERE merchant_id = :m AND is_default")
-                    .param("m", merchantId).update();
+        if (in.isDefault()) {
+            db.sql("""
+                UPDATE restaurant_kitchen_station
+                SET is_default = false
+                WHERE merchant_id = :m AND is_default
+                  AND branch_id IS NOT DISTINCT FROM CAST(:branch AS uuid)
+                """).param("m", merchantId).param("branch", in.branchId()).update();
+        }
         UUID id = UUID.randomUUID();
         try {
             db.sql("""
@@ -75,8 +82,20 @@ public class KitchenStationService {
     }
 
     public List<Station> list(UUID merchantId) {
-        return db.sql("SELECT " + COLS + " FROM restaurant_kitchen_station WHERE merchant_id = :m AND active ORDER BY name")
-                .param("m", merchantId).query(Station.class).list();
+        return list(merchantId, null);
+    }
+
+    /** Active stations for a merchant; when {@code branchId} is set, returns that branch's stations plus global ones. */
+    public List<Station> list(UUID merchantId, UUID branchId) {
+        if (branchId == null) {
+            return db.sql("SELECT " + COLS + " FROM restaurant_kitchen_station WHERE merchant_id = :m AND active ORDER BY name")
+                    .param("m", merchantId).query(Station.class).list();
+        }
+        return db.sql("SELECT " + COLS + """
+             FROM restaurant_kitchen_station
+            WHERE merchant_id = :m AND active AND (branch_id = :branch OR branch_id IS NULL)
+            ORDER BY name
+            """).param("m", merchantId).param("branch", branchId).query(Station.class).list();
     }
 
     @Transactional
@@ -88,35 +107,69 @@ public class KitchenStationService {
     /** Route one product variant, or a whole category, to a station. Re-routing replaces the old route. */
     @Transactional
     public void route(UUID merchantId, UUID stationId, UUID categoryId, UUID variantId) {
+        route(merchantId, stationId, categoryId, variantId, false);
+    }
+
+    /** Route one product variant, or a whole category, to a station (scoped to the station's branch), with optional auto-ready flag. */
+    @Transactional
+    public void route(UUID merchantId, UUID stationId, UUID categoryId, UUID variantId, boolean autoReady) {
         if ((categoryId == null) == (variantId == null))
             throw ApiException.badRequest("route_target_invalid", "Route either a category or a product variant");
+        Station station = get(stationId)
+                .filter(s -> merchantId.equals(s.merchantId()))
+                .orElseThrow(() -> ApiException.notFound("Station not found"));
+        UUID branchId = station.branchId();
         String column = variantId != null ? "variant_id" : "category_id";
         UUID target = variantId != null ? variantId : categoryId;
-        db.sql("DELETE FROM restaurant_station_route WHERE merchant_id = :m AND " + column + " = :t")
-                .param("m", merchantId).param("t", target).update();
-        db.sql("INSERT INTO restaurant_station_route (id, merchant_id, station_id, " + column + ") VALUES (:id, :m, :s, :t)")
-                .param("id", UUID.randomUUID()).param("m", merchantId).param("s", stationId).param("t", target)
+        db.sql("DELETE FROM restaurant_station_route WHERE merchant_id = :m AND branch_id IS NOT DISTINCT FROM CAST(:branch AS uuid) AND " + column + " = :t")
+                .param("m", merchantId).param("branch", branchId).param("t", target).update();
+        db.sql("INSERT INTO restaurant_station_route (id, merchant_id, branch_id, station_id, " + column + ", auto_ready) VALUES (:id, :m, :branch, :s, :t, :autoReady)")
+                .param("id", UUID.randomUUID()).param("m", merchantId).param("branch", branchId)
+                .param("s", stationId).param("t", target).param("autoReady", autoReady)
                 .update();
     }
 
     /** Station for an ordered product: its own route, then its category's, then the default station. */
     public UUID resolve(UUID merchantId, UUID variantId) {
+        return resolveRoute(merchantId, variantId, null).stationId();
+    }
+
+    /** Branch-aware station resolution for an ordered product. */
+    public UUID resolve(UUID merchantId, UUID variantId, UUID branchId) {
+        return resolveRoute(merchantId, variantId, branchId).stationId();
+    }
+
+    /**
+     * Resolves station and {@code autoReady} flag for an ordered product in a branch.
+     * Priority: branch variant -> global variant -> branch category -> global category -> branch default -> global default.
+     */
+    public ResolvedRoute resolveRoute(UUID merchantId, UUID variantId, UUID branchId) {
         if (variantId != null) {
-            Optional<UUID> routed = db.sql("""
-                SELECT r.station_id
+            Optional<ResolvedRoute> routed = db.sql("""
+                SELECT r.station_id, r.auto_ready
                 FROM restaurant_station_route r
                 JOIN restaurant_kitchen_station s ON s.id = r.station_id AND s.active
                 WHERE r.merchant_id = :m
+                  AND (r.branch_id = CAST(:branch AS uuid) OR r.branch_id IS NULL)
                   AND (r.variant_id = :v OR r.category_id = (
                         SELECT p.category_id FROM inventory_variant v
                         JOIN inventory_product p ON p.id = v.product_id WHERE v.id = :v))
-                ORDER BY (r.variant_id IS NOT NULL) DESC
+                ORDER BY (r.variant_id IS NOT NULL) DESC, (r.branch_id IS NOT NULL) DESC
                 LIMIT 1
-                """).param("m", merchantId).param("v", variantId).query(UUID.class).optional();
+                """).param("m", merchantId).param("branch", branchId).param("v", variantId)
+                    .query(ResolvedRoute.class).optional();
             if (routed.isPresent()) return routed.get();
         }
-        return db.sql("SELECT id FROM restaurant_kitchen_station WHERE merchant_id = :m AND is_default AND active")
-                .param("m", merchantId).query(UUID.class).optional().orElse(null);
+        UUID defaultStation = db.sql("""
+            SELECT id
+            FROM restaurant_kitchen_station
+            WHERE merchant_id = :m AND is_default AND active
+              AND (branch_id = CAST(:branch AS uuid) OR branch_id IS NULL)
+            ORDER BY (branch_id IS NOT NULL) DESC
+            LIMIT 1
+            """).param("m", merchantId).param("branch", branchId)
+                .query(UUID.class).optional().orElse(null);
+        return new ResolvedRoute(defaultStation, false);
     }
 
     /** Called whenever a station's screen syncs, so the system knows the screen is alive. */

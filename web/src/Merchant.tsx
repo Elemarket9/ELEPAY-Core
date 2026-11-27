@@ -1,14 +1,33 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import QRCode from "qrcode";
 import { api, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
 import { BusinessAccounting, CustomersAndLoyalty, FloorPlanView, InventoryAndStock, InvoicesAndQuotes, PayrollAndEmployees, PosRegister } from "./MerchantTools";
 import {
+  buildDailyReportCsvFilename,
+  filterLiveOrdersLocally,
+  formatDailyReportCsv,
+  formatDurationSeconds,
+  formatOrderAge,
+  formatOrderTypeLabel,
+  formatQuantity,
+  formatTenderLabel,
+  kitchenStatusTone,
+  paymentStatusTone,
+  todayInAccra,
+  type BranchView,
+  type DailyReport,
+  type LiveOrderPage,
+  type LiveOrderSummary,
+} from "./pos/reportingHelpers";
+import {
   IconArrowLeftRight,
   IconBook,
   IconCheck,
   IconChefHat,
+  IconClock,
   IconCopy,
+  IconDownload,
   IconExternalLink,
   IconFileText,
   IconHeart,
@@ -19,6 +38,7 @@ import {
   IconPrinter,
   IconQrCode,
   IconReceipt,
+  IconRefresh,
   IconRotateCcw,
   IconSearch,
   IconSend,
@@ -234,66 +254,223 @@ export function MerchantDashboard() {
 }
 
 // -------------------------------------------------------------------------------------------------
-// 2. Orders & Receipts View
+// 2. Live Orders & Receipts View (Phase 6)
 // -------------------------------------------------------------------------------------------------
+interface PosOrderItemDetail {
+  id: string;
+  itemName: string;
+  quantity: number;
+  unitPricePesewas: number;
+  discountPesewas: number;
+  taxPesewas: number;
+  totalPesewas: number;
+  seatNumber?: number | null;
+  course?: string | null;
+  notes?: string | null;
+}
+
+interface PosReceiptDetail {
+  id: string;
+  receiptNumber: string;
+  orderId: string;
+  escposFormattedText: string;
+  createdAt: string;
+}
+
 function OrdersAndReceipts({ merchantId }: { merchantId: string }) {
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [searchRef, setSearchRef] = useState("");
-  const [selectedReceipt, setSelectedReceipt] = useState<Line | null>(null);
-  const [orders, setOrders] = useState<Line[]>([]);
+  const [branches, setBranches] = useState<BranchView[]>([]);
+  const [branchId, setBranchId] = useState("");
+  const [filterStatus, setFilterStatus] = useState("ALL");
+  const [filterType, setFilterType] = useState("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [autoRefresh, setAutoRefresh] = useState(true);
+
+  const [orders, setOrders] = useState<LiveOrderSummary[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [fetchedAtMs, setFetchedAtMs] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const [selectedOrder, setSelectedOrder] = useState<LiveOrderSummary | null>(null);
+  const [orderItems, setOrderItems] = useState<PosOrderItemDetail[]>([]);
+  const [orderReceipt, setOrderReceipt] = useState<PosReceiptDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [generatingReceipt, setGeneratingReceipt] = useState(false);
 
   useEffect(() => {
-    setLoadError(null);
-    api<Line[]>(`/v1/merchants/${merchantId}/transactions`)
-      .then((rows) => { setOrders(rows); setLoadError(null); })
-      .catch((e) => {
-        setOrders([]);
-        setLoadError(e instanceof Error ? e.message : String(e));
-      });
+    api<BranchView[]>(`/v1/merchants/${merchantId}/branches`)
+      .then((list) => setBranches(list.filter((b) => b.active)))
+      .catch(() => setBranches([]));
   }, [merchantId]);
 
-  const filtered = orders.filter((o) => {
-    const st = o.status.toLowerCase();
-    const matchStatus =
-      filterStatus === "all"
-      || (filterStatus === "pending"
-        ? st === "pending_settlement" || st === "processing" || st === "awaiting_delivery"
-        : filterStatus === "refunded"
-          ? st === "refunded" || st === "partially_refunded" || st === "partially_refunded_settled"
-          : st === filterStatus.toLowerCase());
-    const matchRef = o.reference.toLowerCase().includes(searchRef.toLowerCase()) ||
-                     (o.description && o.description.toLowerCase().includes(searchRef.toLowerCase()));
-    return matchStatus && matchRef;
-  });
+  const loadOrders = useCallback(
+    async (opts: { silent?: boolean; cursor?: string | null } = {}) => {
+      const { silent = false, cursor = null } = opts;
+      if (cursor) setLoadingMore(true);
+      else if (!silent) setLoading(true);
+
+      const params = new URLSearchParams({ merchantId, limit: "50" });
+      if (branchId) params.set("branchId", branchId);
+      if (filterStatus !== "ALL") params.set("status", filterStatus);
+      if (filterType !== "ALL") params.set("type", filterType);
+      if (cursor) params.set("cursor", cursor);
+
+      try {
+        const page = await api<LiveOrderPage>(`/v1/pos/orders?${params.toString()}`);
+        setOrders((prev) => {
+          if (!cursor) return page.orders;
+          const seen = new Set(prev.map((o) => o.id));
+          return [...prev, ...page.orders.filter((o) => !seen.has(o.id))];
+        });
+        setNextCursor(page.nextCursor);
+        setHasMore(page.hasMore);
+        setFetchedAtMs(Date.now());
+        setLoadError(null);
+      } catch (e) {
+        if (!cursor) setOrders([]);
+        setLoadError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    [merchantId, branchId, filterStatus, filterType],
+  );
+
+  useEffect(() => {
+    void loadOrders();
+  }, [loadOrders]);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const timer = window.setInterval(() => {
+      void loadOrders({ silent: true });
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, loadOrders]);
+
+  useEffect(() => {
+    const tick = window.setInterval(() => setNowMs(Date.now()), 15_000);
+    return () => window.clearInterval(tick);
+  }, []);
+
+  async function openOrderDetail(order: LiveOrderSummary) {
+    setSelectedOrder(order);
+    setOrderItems([]);
+    setOrderReceipt(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      const items = await api<PosOrderItemDetail[]>(`/v1/pos/orders/${order.id}/items`);
+      setOrderItems(items);
+      if (order.paymentStatus === "PAID") {
+        try {
+          const rec = await api<PosReceiptDetail>(`/v1/pos/orders/${order.id}/receipt`);
+          setOrderReceipt(rec);
+        } catch {
+          setOrderReceipt(null);
+        }
+      }
+    } catch (e) {
+      setDetailError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function generateReceipt(orderId: string) {
+    setGeneratingReceipt(true);
+    setDetailError(null);
+    try {
+      const rec = await api<PosReceiptDetail>(`/v1/pos/orders/${orderId}/receipt`, { method: "POST" });
+      setOrderReceipt(rec);
+    } catch (e) {
+      setDetailError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGeneratingReceipt(false);
+    }
+  }
+
+  const branchNameById = new Map(branches.map((b) => [b.id, b.name]));
+  const filtered = filterLiveOrdersLocally(orders, searchQuery);
+  const elapsedSec = Math.max(0, Math.floor((nowMs - fetchedAtMs) / 1000));
 
   return (
     <div>
-      {loadError && <p className="notice error" role="alert">Could not load orders: {loadError}</p>}
+      {loadError && <p className="notice error" role="alert">Could not load live orders: {loadError}</p>}
       <div className="panel" style={{ padding: "0.85rem 1rem", marginBottom: "0.85rem" }}>
-        <div className="flex-between">
-          <div className="flex-row" style={{ flex: 1 }}>
-            <div className="pos-search-wrap" style={{ margin: 0, flex: "1 1 240px", maxWidth: "340px" }}>
+        <div className="flex-between" style={{ flexWrap: "wrap", gap: "0.65rem" }}>
+          <div className="flex-row" style={{ flex: 1, flexWrap: "wrap", gap: "0.5rem" }}>
+            <div className="pos-search-wrap" style={{ margin: 0, flex: "1 1 200px", maxWidth: "280px" }}>
               <IconSearch size={15} />
               <input
-                placeholder="Search receipt ref or item…"
-                value={searchRef}
-                onChange={(e) => setSearchRef(e.target.value)}
+                placeholder="Search order #, table, server…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
+            {branches.length > 0 && (
+              <select
+                aria-label="Filter by branch"
+                value={branchId}
+                onChange={(e) => setBranchId(e.target.value)}
+                style={{ width: "auto", margin: 0 }}
+              >
+                <option value="">All branches</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            )}
             <select
-              aria-label="Filter by status"
+              aria-label="Filter by payment status"
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
               style={{ width: "auto", margin: 0 }}
             >
-              <option value="all">All Orders</option>
-              <option value="settled">Settled</option>
-              <option value="pending">Pending</option>
-              <option value="refunded">Refunded</option>
+              <option value="ALL">All statuses</option>
+              <option value="OPEN">Open (Pending + Partial)</option>
+              <option value="PENDING">Pending</option>
+              <option value="PARTIAL">Partial</option>
+              <option value="PAID">Paid</option>
+              <option value="VOIDED">Voided</option>
+            </select>
+            <select
+              aria-label="Filter by order type"
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value)}
+              style={{ width: "auto", margin: 0 }}
+            >
+              <option value="ALL">All types</option>
+              <option value="DINE_IN">Dine-in</option>
+              <option value="TAKEAWAY">Takeaway</option>
+              <option value="DELIVERY">Delivery</option>
+              <option value="STANDARD">Counter</option>
             </select>
           </div>
-          <span className="small muted">{filtered.length} receipt{filtered.length === 1 ? "" : "s"}</span>
+          <div className="flex-row" style={{ gap: "0.5rem", alignItems: "center" }}>
+            <button
+              type="button"
+              className={`small ${autoRefresh ? "" : "secondary"}`}
+              onClick={() => setAutoRefresh((v) => !v)}
+              title="Toggle 10-second live refresh"
+            >
+              <IconClock size={13} /> {autoRefresh ? "Live (10s)" : "Auto-refresh off"}
+            </button>
+            <button
+              type="button"
+              className="small secondary"
+              disabled={loading}
+              onClick={() => void loadOrders()}
+            >
+              <IconRefresh size={13} /> {loading ? "Loading…" : "Refresh"}
+            </button>
+            <span className="small muted">{filtered.length} order{filtered.length === 1 ? "" : "s"}</span>
+          </div>
         </div>
       </div>
 
@@ -301,63 +478,199 @@ function OrdersAndReceipts({ merchantId }: { merchantId: string }) {
         <table className="grid">
           <thead>
             <tr>
-              <th>Receipt Ref</th>
-              <th>Description</th>
-              <th>Payer</th>
-              <th className="num">Gross</th>
-              <th className="num">Fee</th>
-              <th className="num">Net</th>
-              <th>Status</th>
+              <th>Order #</th>
+              <th>Type</th>
+              <th>Table</th>
+              <th>Server</th>
+              <th className="num">Items</th>
+              <th className="num">Total</th>
+              <th className="num">Paid</th>
+              <th>Payment</th>
+              <th>Kitchen</th>
+              <th>Age</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((o) => (
-              <tr key={o.reference + o.line}>
-                <td className="mono small">{o.reference}</td>
-                <td><strong>{o.kind}</strong> <span className="muted">{o.description || "Order item"}</span></td>
-                <td>{o.collector}</td>
-                <td className="num mono">{formatMoney(o.amount)}</td>
-                <td className="num mono muted">{formatMoney(o.fee)}</td>
-                <td className="num mono" style={{ fontWeight: 600 }}>{formatMoney(o.net)}</td>
-                <td><span className={`tag ${o.status === "settled" ? "active" : "pending"}`}>{o.status}</span></td>
+              <tr
+                key={o.id}
+                onClick={() => void openOrderDetail(o)}
+                style={{ cursor: "pointer" }}
+              >
+                <td className="mono small" style={{ fontWeight: 700 }}>{o.orderNumber}</td>
+                <td>{formatOrderTypeLabel(o.orderType)}</td>
+                <td>{o.tableNumber ? <strong>Table {o.tableNumber}</strong> : <span className="muted">—</span>}</td>
+                <td>{o.serverName || <span className="muted">—</span>}</td>
+                <td className="num mono">{o.itemCount}</td>
+                <td className="num mono" style={{ fontWeight: 600 }}>{formatMoney(o.totalPesewas)}</td>
+                <td className="num mono muted">{formatMoney(o.paidPesewas)}</td>
                 <td>
-                  <button className="small secondary" onClick={() => setSelectedReceipt(o)}>View Receipt</button>
+                  <span className={`tag ${paymentStatusTone(o.paymentStatus)}`}>{o.paymentStatus}</span>
+                </td>
+                <td>
+                  <span className={`tag ${kitchenStatusTone(o.kitchenStatus)}`}>{o.kitchenStatus}</span>
+                </td>
+                <td className="mono small muted">{formatOrderAge(o.ageSeconds + elapsedSec)}</td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <button type="button" className="small secondary" onClick={() => void openOrderDetail(o)}>
+                    Open
+                  </button>
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 && (
-              <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No orders match the current filter.</td></tr>
+            {filtered.length === 0 && !loading && (
+              <tr>
+                <td colSpan={11} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>
+                  No live orders match the current filter.
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
       </div>
 
-      {selectedReceipt && (
+      {hasMore && nextCursor && (
+        <div style={{ display: "flex", justifyContent: "center", marginTop: "0.85rem" }}>
+          <button
+            type="button"
+            className="secondary"
+            disabled={loadingMore}
+            onClick={() => void loadOrders({ cursor: nextCursor })}
+          >
+            {loadingMore ? "Loading more…" : "Load more orders"}
+          </button>
+        </div>
+      )}
+
+      {selectedOrder && (
         <div className="modal-backdrop">
-          <div className="modal-content" style={{ maxWidth: "460px" }}>
+          <div className="modal-content" style={{ maxWidth: "560px" }}>
             <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
-              <h3 style={{ margin: 0 }}>Receipt Details</h3>
-              <button type="button" className="small ghost" aria-label="Close" onClick={() => setSelectedReceipt(null)}>
+              <div>
+                <h3 style={{ margin: 0 }}>Order {selectedOrder.orderNumber}</h3>
+                <p className="small muted" style={{ margin: "0.2rem 0 0" }}>
+                  {formatOrderTypeLabel(selectedOrder.orderType)}
+                  {selectedOrder.tableNumber ? ` · Table ${selectedOrder.tableNumber}` : ""}
+                  {selectedOrder.branchId && branchNameById.has(selectedOrder.branchId)
+                    ? ` · ${branchNameById.get(selectedOrder.branchId)}`
+                    : ""}
+                  {selectedOrder.serverName ? ` · ${selectedOrder.serverName}` : ""}
+                </p>
+              </div>
+              <button type="button" className="small ghost" aria-label="Close" onClick={() => setSelectedOrder(null)}>
                 <IconX size={16} />
               </button>
             </div>
-            <p className="mono small muted" style={{ marginBottom: "0.85rem" }}>Reference: {selectedReceipt.reference}</p>
+
+            <div className="flex-row" style={{ gap: "0.5rem", marginBottom: "0.85rem", flexWrap: "wrap" }}>
+              <span className={`tag ${paymentStatusTone(selectedOrder.paymentStatus)}`}>
+                Payment: {selectedOrder.paymentStatus}
+              </span>
+              <span className={`tag ${kitchenStatusTone(selectedOrder.kitchenStatus)}`}>
+                Kitchen: {selectedOrder.kitchenStatus} ({selectedOrder.kdsTicketCount} ticket{selectedOrder.kdsTicketCount === 1 ? "" : "s"})
+              </span>
+              <span className="small muted">Age: {formatOrderAge(selectedOrder.ageSeconds + elapsedSec)}</span>
+            </div>
+
+            {detailError && <p className="notice error" role="alert">{detailError}</p>}
+            {detailLoading && <p className="muted small">Loading order items…</p>}
+
+            {!detailLoading && orderItems.length > 0 && (
+              <div className="table-wrap" style={{ marginBottom: "0.85rem" }}>
+                <table className="grid">
+                  <thead>
+                    <tr>
+                      <th>Item</th>
+                      <th className="num">Qty</th>
+                      <th className="num">Price</th>
+                      <th className="num">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderItems.map((it) => (
+                      <tr key={it.id}>
+                        <td>
+                          <strong>{it.itemName}</strong>
+                          {(it.course || it.seatNumber) && (
+                            <div className="small muted">
+                              {it.course ? it.course : ""}
+                              {it.course && it.seatNumber ? " · " : ""}
+                              {it.seatNumber ? `Seat ${it.seatNumber}` : ""}
+                            </div>
+                          )}
+                        </td>
+                        <td className="num mono">{formatQuantity(it.quantity)}</td>
+                        <td className="num mono">{formatMoney(it.unitPricePesewas)}</td>
+                        <td className="num mono">{formatMoney(it.totalPesewas)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
             <div className="checkout-summary-box">
               <table className="lines">
                 <tbody>
-                  <tr><td>Item Description</td><td className="num">{selectedReceipt.description || "Sales Item"}</td></tr>
-                  <tr><td>Gross Amount</td><td className="num mono">{formatMoney(selectedReceipt.amount)}</td></tr>
-                  <tr><td>Platform &amp; Processing Fee</td><td className="num mono">{formatMoney(selectedReceipt.fee)}</td></tr>
-                  <tr className="total"><td>Merchant Net Receivable</td><td className="num mono">{formatMoney(selectedReceipt.net)}</td></tr>
+                  <tr><td>Subtotal</td><td className="num mono">{formatMoney(selectedOrder.subtotalPesewas)}</td></tr>
+                  {selectedOrder.discountPesewas > 0 && (
+                    <tr><td>Discount</td><td className="num mono">-{formatMoney(selectedOrder.discountPesewas)}</td></tr>
+                  )}
+                  {selectedOrder.taxPesewas > 0 && (
+                    <tr><td>Tax</td><td className="num mono">{formatMoney(selectedOrder.taxPesewas)}</td></tr>
+                  )}
+                  {selectedOrder.tipPesewas > 0 && (
+                    <tr><td>Tip</td><td className="num mono">{formatMoney(selectedOrder.tipPesewas)}</td></tr>
+                  )}
+                  <tr className="total"><td>Total</td><td className="num mono">{formatMoney(selectedOrder.totalPesewas)}</td></tr>
+                  <tr><td>Paid</td><td className="num mono">{formatMoney(selectedOrder.paidPesewas)}</td></tr>
+                  {selectedOrder.balancePesewas > 0 && (
+                    <tr><td>Balance Due</td><td className="num mono" style={{ fontWeight: 700 }}>{formatMoney(selectedOrder.balancePesewas)}</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
-            <div className="flex-row" style={{ justifyContent: "flex-end" }}>
-              <button type="button" className="secondary" onClick={() => setSelectedReceipt(null)}>Close</button>
-              <button type="button" onClick={() => window.print()}>
-                <IconPrinter size={15} /> Print Receipt
-              </button>
+
+            {orderReceipt && (
+              <div style={{ marginTop: "0.75rem" }}>
+                <div className="small muted" style={{ marginBottom: "0.35rem" }}>
+                  Receipt <span className="mono">{orderReceipt.receiptNumber}</span>
+                </div>
+                <pre
+                  className="mono small"
+                  style={{
+                    background: "#f8faf9",
+                    border: "1px solid var(--line, #dfe6e2)",
+                    borderRadius: "8px",
+                    padding: "0.65rem",
+                    maxHeight: "200px",
+                    overflow: "auto",
+                    margin: 0,
+                  }}
+                >
+                  {orderReceipt.escposFormattedText}
+                </pre>
+              </div>
+            )}
+
+            <div className="flex-row" style={{ justifyContent: "flex-end", marginTop: "0.9rem", gap: "0.5rem" }}>
+              <button type="button" className="secondary" onClick={() => setSelectedOrder(null)}>Close</button>
+              {selectedOrder.paymentStatus === "PAID" && !orderReceipt && (
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={generatingReceipt}
+                  onClick={() => void generateReceipt(selectedOrder.id)}
+                >
+                  <IconReceipt size={15} /> {generatingReceipt ? "Generating…" : "Generate Receipt"}
+                </button>
+              )}
+              {selectedOrder.paymentStatus === "PAID" && (
+                <button type="button" onClick={() => window.print()}>
+                  <IconPrinter size={15} /> Print Receipt
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -573,34 +886,47 @@ function KitchenSetup({ merchantId }: { merchantId: string }) {
 function Overview({ id, onNavigate }: { id: string; onNavigate: (tab: MerchantTab) => void }) {
   const [b, setB] = useState<Balances | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api<Balances>(`/v1/merchants/${id}/balances`).then(setB).catch((e) => setErr(e.message)); }, [id]);
-  if (err) return <p className="notice error">{err}</p>;
-  if (!b) return <p className="muted">Loading balances…</p>;
+  useEffect(() => {
+    setErr(null);
+    api<Balances>(`/v1/merchants/${id}/balances`)
+      .then(setB)
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+  }, [id]);
+
   return (
     <>
-      <div className="kpi-grid">
-        <div className="kpi-card primary">
-          <div className="kpi-label">Available Balance</div>
-          <div className="kpi-value">{formatMoney(b.available)}</div>
-          <div className="kpi-meta">Ready for instant withdrawal</div>
+      {err && <p className="notice error" role="alert">{err}</p>}
+      {!b && !err && <p className="muted">Loading balances…</p>}
+      {b && (
+        <div className="kpi-grid">
+          <div className="kpi-card primary">
+            <div className="kpi-label">Available Balance</div>
+            <div className="kpi-value">{formatMoney(b.available)}</div>
+            <div className="kpi-meta">Ready for instant withdrawal</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Pending Settlement</div>
+            <div className="kpi-value">{formatMoney(b.pending)}</div>
+            <div className="kpi-meta">Clearing into available balance</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Reserved</div>
+            <div className="kpi-value">{formatMoney(b.reserved)}</div>
+            <div className="kpi-meta">Payouts in progress &amp; active disputes</div>
+          </div>
         </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Pending Settlement</div>
-          <div className="kpi-value">{formatMoney(b.pending)}</div>
-          <div className="kpi-meta">Clearing into available balance</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Reserved</div>
-          <div className="kpi-value">{formatMoney(b.reserved)}</div>
-          <div className="kpi-meta">Payouts in progress &amp; active disputes</div>
-        </div>
-      </div>
+      )}
+
+      <TodayReportDashboard merchantId={id} />
 
       <div className="panel" style={{ marginTop: "1rem" }}>
         <h3>Quick Actions</h3>
         <div className="flex-row">
           <button type="button" onClick={() => onNavigate("POS Register")}>
             <IconMonitor size={15} /> Open POS Register
+          </button>
+          <button type="button" className="secondary" onClick={() => onNavigate("Orders & Receipts")}>
+            <IconReceipt size={15} /> Live Orders
           </button>
           <button type="button" className="secondary" onClick={() => onNavigate("Collect")}>
             <IconQrCode size={15} /> Create Payment Link
@@ -614,6 +940,387 @@ function Overview({ id, onNavigate }: { id: string; onNavigate: (tab: MerchantTa
         </div>
       </div>
     </>
+  );
+}
+
+function TodayReportDashboard({ merchantId }: { merchantId: string }) {
+  const [branches, setBranches] = useState<BranchView[]>([]);
+  const [branchId, setBranchId] = useState("");
+  const [date, setDate] = useState(() => todayInAccra());
+  const [report, setReport] = useState<DailyReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [topItemsTab, setTopItemsTab] = useState<"revenue" | "quantity">("revenue");
+
+  useEffect(() => {
+    api<BranchView[]>(`/v1/merchants/${merchantId}/branches`)
+      .then((list) => setBranches(list.filter((br) => br.active)))
+      .catch(() => setBranches([]));
+  }, [merchantId]);
+
+  const loadReport = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const params = new URLSearchParams({ merchantId, date });
+    if (branchId) params.set("branchId", branchId);
+    try {
+      const data = await api<DailyReport>(`/v1/pos/reports/daily?${params.toString()}`);
+      setReport(data);
+    } catch (e) {
+      setReport(null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [merchantId, branchId, date]);
+
+  useEffect(() => {
+    void loadReport();
+  }, [loadReport]);
+
+  const branchNameById = new Map(branches.map((br) => [br.id, br.name]));
+  const isBranchScopedByServer = Boolean(!branchId && report?.branchId);
+  const effectiveBranchId = branchId || report?.branchId || null;
+  const effectiveBranchName = effectiveBranchId ? (branchNameById.get(effectiveBranchId) ?? null) : null;
+
+  function exportCsv() {
+    if (!report) return;
+    const csv = formatDailyReportCsv(report, effectiveBranchName);
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = buildDailyReportCsvFilename(report.businessDate, effectiveBranchName);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  const totalTenderAmount = report
+    ? report.tenderMix.reduce((sum, t) => sum + t.amountPesewas, 0)
+    : 0;
+  const topItems = report
+    ? (topItemsTab === "revenue" ? report.topItemsByRevenue : report.topItemsByQuantity)
+    : [];
+
+  return (
+    <div style={{ marginTop: "1rem" }}>
+      <div className="panel" style={{ padding: "0.9rem 1rem", marginBottom: "0.85rem" }}>
+        <div className="flex-between" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
+          <div>
+            <h3 style={{ margin: 0 }}>
+              Today&apos;s Operations{" "}
+              <span className="small muted" style={{ fontWeight: 500 }}>
+                ({report?.businessDate ?? date} · {report?.timezone ?? "Africa/Accra"})
+              </span>
+            </h3>
+            {isBranchScopedByServer && (
+              <p className="small muted" style={{ margin: "0.2rem 0 0" }}>
+                Branch-scoped view: <strong>{effectiveBranchName ?? report?.branchId}</strong>
+              </p>
+            )}
+          </div>
+          <div className="flex-row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+            {branches.length > 0 && !isBranchScopedByServer && (
+              <select
+                aria-label="Report branch"
+                value={branchId}
+                onChange={(e) => setBranchId(e.target.value)}
+                style={{ width: "auto", margin: 0 }}
+              >
+                <option value="">All branches</option>
+                {branches.map((br) => (
+                  <option key={br.id} value={br.id}>{br.name}</option>
+                ))}
+              </select>
+            )}
+            <input
+              type="date"
+              aria-label="Report business date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              style={{ width: "auto", margin: 0 }}
+            />
+            <button
+              type="button"
+              className="small secondary"
+              disabled={loading}
+              onClick={() => void loadReport()}
+            >
+              <IconRefresh size={13} /> {loading ? "Loading…" : "Refresh"}
+            </button>
+            <button
+              type="button"
+              className="small"
+              disabled={!report || loading}
+              onClick={exportCsv}
+            >
+              <IconDownload size={13} /> Export CSV
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {error && <p className="notice error" role="alert">Could not load daily report: {error}</p>}
+      {loading && !report && <p className="muted small">Loading daily report…</p>}
+
+      {report && (
+        <>
+          <div className="kpi-grid">
+            <div className="kpi-card primary">
+              <div className="kpi-label">Net Sales</div>
+              <div className="kpi-value">{formatMoney(report.sales.netSalesPesewas)}</div>
+              <div className="kpi-meta">
+                Gross {formatMoney(report.sales.grossSalesPesewas)} · {report.sales.paidOrderCount} paid / {report.sales.openOrderCount} open
+              </div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Total Collected</div>
+              <div className="kpi-value">{formatMoney(report.sales.totalCollectedPesewas)}</div>
+              <div className="kpi-meta">
+                Tax {formatMoney(report.sales.taxPesewas)} · Tips {formatMoney(report.sales.tipsPesewas)}
+              </div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Discounts &amp; Voids</div>
+              <div className="kpi-value">{formatMoney(report.sales.discountsPesewas + report.sales.voidsPesewas)}</div>
+              <div className="kpi-meta">
+                Discounts {formatMoney(report.sales.discountsPesewas)} · Voids {formatMoney(report.sales.voidsPesewas)} ({report.sales.voidedOrderCount} voided)
+              </div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Avg Kitchen Time</div>
+              <div className="kpi-value">{formatDurationSeconds(report.kitchenTiming.avgFiredToReadySeconds)}</div>
+              <div className="kpi-meta">
+                Fired→Ready · Ready→Served {formatDurationSeconds(report.kitchenTiming.avgReadyToServedSeconds)} ({report.kitchenTiming.ticketCount} tickets)
+              </div>
+            </div>
+          </div>
+
+          <div className="grid-2" style={{ marginTop: "1rem", alignItems: "start" }}>
+            <div className="panel" style={{ margin: 0 }}>
+              <h3 style={{ marginTop: 0 }}>Tender Breakdown</h3>
+              <div className="table-wrap" style={{ margin: 0 }}>
+                <table className="grid">
+                  <thead>
+                    <tr>
+                      <th>Tender</th>
+                      <th className="num">Count</th>
+                      <th className="num">Amount</th>
+                      <th className="num">Share</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.tenderMix.map((t) => {
+                      const pct = totalTenderAmount > 0 ? Math.round((t.amountPesewas / totalTenderAmount) * 100) : 0;
+                      return (
+                        <tr key={t.tenderType}>
+                          <td><strong>{formatTenderLabel(t.tenderType)}</strong></td>
+                          <td className="num mono">{t.count}</td>
+                          <td className="num mono">{formatMoney(t.amountPesewas)}</td>
+                          <td className="num mono muted">{pct}%</td>
+                        </tr>
+                      );
+                    })}
+                    {report.tenderMix.length === 0 && (
+                      <tr><td colSpan={4} className="muted" style={{ textAlign: "center" }}>No tenders recorded.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="panel" style={{ margin: 0 }}>
+              <h3 style={{ marginTop: 0 }}>Orders by Type &amp; AOV</h3>
+              <div className="table-wrap" style={{ margin: 0 }}>
+                <table className="grid">
+                  <thead>
+                    <tr>
+                      <th>Order Type</th>
+                      <th className="num">Orders</th>
+                      <th className="num">Total</th>
+                      <th className="num">Avg Order</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.orderTypes.map((ot) => (
+                      <tr key={ot.orderType}>
+                        <td><strong>{formatOrderTypeLabel(ot.orderType)}</strong></td>
+                        <td className="num mono">{ot.orderCount}</td>
+                        <td className="num mono">{formatMoney(ot.totalPesewas)}</td>
+                        <td className="num mono">{formatMoney(ot.averageOrderValuePesewas)}</td>
+                      </tr>
+                    ))}
+                    {report.orderTypes.length === 0 && (
+                      <tr><td colSpan={4} className="muted" style={{ textAlign: "center" }}>No orders recorded.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div className="panel" style={{ marginTop: "1rem" }}>
+            <div className="flex-between" style={{ marginBottom: "0.65rem", flexWrap: "wrap", gap: "0.5rem" }}>
+              <h3 style={{ margin: 0 }}>Shift Cash Reconciliation</h3>
+              <span className="small muted">
+                {report.shiftCash.openShiftCount} open · {report.shiftCash.closedShiftCount} closed
+              </span>
+            </div>
+            <div className="kpi-grid" style={{ marginBottom: report.shiftCash.shifts.length > 0 ? "0.85rem" : 0 }}>
+              <div className="kpi-card">
+                <div className="kpi-label">Expected Cash</div>
+                <div className="kpi-value">{formatMoney(report.shiftCash.totalExpectedCashPesewas)}</div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-label">Counted Cash</div>
+                <div className="kpi-value">{formatMoney(report.shiftCash.totalCountedCashPesewas)}</div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-label">Cash Variance</div>
+                <div
+                  className="kpi-value"
+                  style={{
+                    color:
+                      report.shiftCash.totalVariancePesewas === 0
+                        ? "var(--ok, #0a6e46)"
+                        : "var(--danger, #b42318)",
+                  }}
+                >
+                  {formatMoney(report.shiftCash.totalVariancePesewas)}
+                </div>
+              </div>
+            </div>
+            {report.shiftCash.shifts.length > 0 && (
+              <div className="table-wrap" style={{ margin: 0 }}>
+                <table className="grid">
+                  <thead>
+                    <tr>
+                      <th>Cashier</th>
+                      <th>Branch</th>
+                      <th>Status</th>
+                      <th className="num">Opening</th>
+                      <th className="num">Expected</th>
+                      <th className="num">Counted</th>
+                      <th className="num">Variance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.shiftCash.shifts.map((s) => (
+                      <tr key={s.shiftId}>
+                        <td>{s.cashierName || <span className="muted">—</span>}</td>
+                        <td>{s.branchId ? (branchNameById.get(s.branchId) ?? s.branchId.slice(0, 8)) : "—"}</td>
+                        <td><span className={`tag ${s.status === "CLOSED" ? "active" : "info"}`}>{s.status}</span></td>
+                        <td className="num mono">{formatMoney(s.openingBalancePesewas)}</td>
+                        <td className="num mono">{formatMoney(s.expectedCashPesewas)}</td>
+                        <td className="num mono">
+                          {s.countedCashPesewas !== null ? formatMoney(s.countedCashPesewas) : "—"}
+                        </td>
+                        <td className="num mono">
+                          {s.variancePesewas !== null ? formatMoney(s.variancePesewas) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="grid-2" style={{ marginTop: "1rem", alignItems: "start" }}>
+            <div className="panel" style={{ margin: 0 }}>
+              <div className="flex-between" style={{ marginBottom: "0.65rem", flexWrap: "wrap", gap: "0.5rem" }}>
+                <h3 style={{ margin: 0 }}>Top 10 Items</h3>
+                <div className="segmented" role="tablist">
+                  <button
+                    type="button"
+                    className={topItemsTab === "revenue" ? "active" : ""}
+                    onClick={() => setTopItemsTab("revenue")}
+                  >
+                    By Revenue
+                  </button>
+                  <button
+                    type="button"
+                    className={topItemsTab === "quantity" ? "active" : ""}
+                    onClick={() => setTopItemsTab("quantity")}
+                  >
+                    By Quantity
+                  </button>
+                </div>
+              </div>
+              <div className="table-wrap" style={{ margin: 0 }}>
+                <table className="grid">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Item</th>
+                      <th className="num">Qty</th>
+                      <th className="num">Revenue</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topItems.map((it, idx) => (
+                      <tr key={`${topItemsTab}-${it.itemName}-${idx}`}>
+                        <td className="mono small muted">{idx + 1}</td>
+                        <td><strong>{it.itemName}</strong></td>
+                        <td className="num mono">{formatQuantity(it.quantity)}</td>
+                        <td className="num mono">{formatMoney(it.revenuePesewas)}</td>
+                      </tr>
+                    ))}
+                    {topItems.length === 0 && (
+                      <tr><td colSpan={4} className="muted" style={{ textAlign: "center" }}>No item sales recorded.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="panel" style={{ margin: 0 }}>
+              <div className="flex-between" style={{ marginBottom: "0.65rem" }}>
+                <h3 style={{ margin: 0 }}>Voids</h3>
+                <span className="small muted">{report.voids.length} entr{report.voids.length === 1 ? "y" : "ies"}</span>
+              </div>
+              <div className="table-wrap" style={{ margin: 0 }}>
+                <table className="grid">
+                  <thead>
+                    <tr>
+                      <th>Order #</th>
+                      <th>Item</th>
+                      <th className="num">Amount</th>
+                      <th>Reason</th>
+                      <th>By / Approved</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.voids.map((v, idx) => (
+                      <tr key={`${v.orderId}-${v.orderItemId ?? "order"}-${idx}`}>
+                        <td className="mono small">{v.orderNumber}</td>
+                        <td>
+                          {v.itemName ?? <span className="muted">Entire Order</span>}
+                          {v.quantity !== null && v.quantity !== undefined && (
+                            <span className="small muted"> ×{formatQuantity(v.quantity)}</span>
+                          )}
+                        </td>
+                        <td className="num mono">{formatMoney(v.amountPesewas)}</td>
+                        <td className="small">{v.reason}</td>
+                        <td className="small muted">
+                          {v.voidedBy || "—"}
+                          {v.approvedBy ? ` / ${v.approvedBy}` : ""}
+                        </td>
+                      </tr>
+                    ))}
+                    {report.voids.length === 0 && (
+                      <tr><td colSpan={5} className="muted" style={{ textAlign: "center" }}>No voids recorded for this date.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

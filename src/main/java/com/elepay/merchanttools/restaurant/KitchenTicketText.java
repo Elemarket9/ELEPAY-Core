@@ -18,7 +18,12 @@ final class KitchenTicketText {
     record Line(BigDecimal quantity, String name, String modifiers, String course) {}
 
     record Ticket(String kind, String stationName, Integer ticketNumber, String diningMode, String tableNumber,
-                  String serverName, OffsetDateTime createdAt, String notes, List<Line> lines) {}
+                  String serverName, OffsetDateTime createdAt, String notes, List<Line> lines, int round) {
+        Ticket(String kind, String stationName, Integer ticketNumber, String diningMode, String tableNumber,
+               String serverName, OffsetDateTime createdAt, String notes, List<Line> lines) {
+            this(kind, stationName, ticketNumber, diningMode, tableNumber, serverName, createdAt, notes, lines, 1);
+        }
+    }
 
     private KitchenTicketText() {}
 
@@ -31,6 +36,9 @@ final class KitchenTicketText {
             case "REPRINT" -> out.add(center("REPRINT", width));
             case "FALLBACK" -> out.add(center("SCREEN OFFLINE - PRINTED", width));
             default -> { }
+        }
+        if (t.round() >= 2) {
+            out.add(center("ADD-ON - ROUND " + t.round(), width));
         }
         out.add(center(t.stationName() == null ? "KITCHEN" : t.stationName().toUpperCase(), width));
         String number = t.ticketNumber() == null ? "" : String.format("#%03d", t.ticketNumber());

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  buildKdsTicketPayload,
   buildPosOrderPayload,
   canonicalV2,
   computeCartTotals,
@@ -16,8 +17,10 @@ import {
   kdsSettle,
   kdsVisible,
   normalizeBaseUrl,
+  normalizeCourse,
   normalizeGhanaPhone,
   parseMoney,
+  resolveTicketCourse,
   SeatSplitResult,
 } from "../index";
 
@@ -435,5 +438,104 @@ describe("@elepay/mobile-core", () => {
     expect(signingPathAndQuery("/v1/x?a=1&b=2")).toEqual({ pathname: "/v1/x", query: "a=1&b=2" });
     expect(signingPathAndQuery("v1/x")).toEqual({ pathname: "/v1/x", query: null });
     expect(signingPathAndQuery("/v1/x?")).toEqual({ pathname: "/v1/x", query: null });
+  });
+
+  it("Phase 0 Bug #3b: forwards real item courses and derives ticket course instead of hard-coding MAIN", async () => {
+    const posPayload = buildPosOrderPayload({
+      merchantId: "m1",
+      branchId: "b1",
+      terminalId: "t1",
+      cashierId: "c1",
+      orderType: "DINE_IN",
+      lines: [
+        { variantId: "v1", label: "Kelewele", unitPricePesewas: 2500, qty: 1, seatNumber: 1, course: "appetizer" },
+        { variantId: "v2", label: "Jollof", unitPricePesewas: 4500, qty: 1, seatNumber: 1 },
+      ],
+      discountPesewas: 0,
+      taxPesewas: 0,
+    });
+    expect(posPayload.items[0].course).toBe("APPETIZER");
+    expect(posPayload.items[1].course).toBeNull();
+
+    expect(normalizeCourse(null)).toBe("MAIN");
+    expect(normalizeCourse("   ")).toBe("MAIN");
+    expect(normalizeCourse("appetizer")).toBe("APPETIZER");
+    expect(resolveTicketCourse([])).toBe("MAIN");
+
+    const baseItem = {
+      id: "oi-1",
+      orderId: "ord-1",
+      variantId: "v1",
+      itemName: "Kelewele",
+      quantity: 1,
+      unitPricePesewas: 2500,
+      discountPesewas: 0,
+      taxPesewas: 0,
+      totalPesewas: 2500,
+      modifiersJson: "[]",
+      seatNumber: 1,
+      course: "APPETIZER",
+      notes: null,
+    };
+
+    // Single non-MAIN course -> ticket course is APPETIZER
+    const singleCourse = buildKdsTicketPayload({
+      merchantId: "m1",
+      orderId: "ord-1",
+      tableId: "tbl-1",
+      orderType: "DINE_IN",
+      serverName: "Ama",
+      orderItems: [baseItem],
+    });
+    expect(singleCourse.course).toBe("APPETIZER");
+    expect(singleCourse.items[0].course).toBe("APPETIZER");
+
+    // Mixed courses -> ticket course is ALL, each item preserves its own course
+    const mixedCourse = buildKdsTicketPayload({
+      merchantId: "m1",
+      orderId: "ord-1",
+      tableId: "tbl-1",
+      orderType: "DINE_IN",
+      serverName: "Ama",
+      orderItems: [
+        { ...baseItem, id: "oi-1", course: "APPETIZER" },
+        { ...baseItem, id: "oi-2", itemName: "Ice Cream", course: "DESSERT" },
+      ],
+    });
+    expect(mixedCourse.course).toBe("ALL");
+    expect(mixedCourse.items.map((i) => i.course)).toEqual(["APPETIZER", "DESSERT"]);
+
+    // Unset / null / blank -> defaults to MAIN on item and ticket
+    const unsetCourse = buildKdsTicketPayload({
+      merchantId: "m1",
+      orderId: "ord-1",
+      tableId: null,
+      orderType: "TAKEAWAY",
+      serverName: null,
+      orderItems: [
+        { ...baseItem, id: "oi-1", course: null },
+        { ...baseItem, id: "oi-2", course: "   " },
+      ],
+    });
+    expect(unsetCourse.diningMode).toBe("TAKEOUT");
+    expect(unsetCourse.tableId).toBeNull();
+    expect(unsetCourse.course).toBe("MAIN");
+    expect(unsetCourse.items.map((i) => i.course)).toEqual(["MAIN", "MAIN"]);
+
+    // Regression check: PosRegisterScreen.tsx sendToKitchen must use /fire-kds (not hard-coded course: "MAIN" or direct /kds/tickets bypass),
+    // voidOrder must send reason/managerPin/refundPayments, and TenderModal must receive initialOrder & onOrderUpdated.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const screenSrc = fs.readFileSync(
+      path.resolve(__dirname, "../../../restaurant-pos/src/screens/PosRegisterScreen.tsx"),
+      "utf8",
+    );
+    expect(screenSrc).toContain("/fire-kds");
+    expect(screenSrc).not.toContain("/v1/restaurant/kds/tickets");
+    expect(screenSrc).not.toMatch(/course:\s*"MAIN"/);
+    expect(screenSrc).toContain("managerPin");
+    expect(screenSrc).toContain("refundPayments");
+    expect(screenSrc).toContain("initialOrder={order}");
+    expect(screenSrc).toContain("onOrderUpdated={setOrder}");
   });
 });

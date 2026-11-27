@@ -5,5 +5,6 @@ public enum TenderType {
     MOMO,
     CARD,
     WALLET,
-    GHQR
+    GHQR,
+    BANK_TRANSFER
 }

@@ -72,13 +72,25 @@ export interface FloorPlan {
   name: string;
 }
 
+export type TableStatus = "AVAILABLE" | "OCCUPIED" | "BILL_PRINTED" | "RESERVED" | "DIRTY";
+
+export type TenderType = "CASH" | "MOMO" | "GHQR" | "CARD" | "BANK_TRANSFER";
+
+export interface OrderItemKdsMeta {
+  kdsRound?: number | null;
+  sentAt?: string | null;
+  voided?: boolean;
+  voidedAt?: string | null;
+}
+
 export interface DiningTable {
   id: string;
   sectionId: string;
   tableNumber: string;
   capacity: number;
-  status: "AVAILABLE" | "OCCUPIED" | "RESERVED" | "DIRTY";
+  status: TableStatus;
   currentOrderId?: string | null;
+  branchId?: string | null;
 }
 
 export interface DeviceCredential {

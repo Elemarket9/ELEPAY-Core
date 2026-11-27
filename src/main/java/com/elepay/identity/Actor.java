@@ -86,6 +86,19 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
         return java.util.Optional.empty();
     }
 
+    public static java.util.Optional<String> currentDisplayName() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth instanceof JwtAuthenticationToken jwt) {
+            for (String claim : new String[]{"name", "preferred_username"}) {
+                String value = jwt.getToken().getClaimAsString(claim);
+                if (value != null && !value.isBlank()) {
+                    return java.util.Optional.of(value.strip());
+                }
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
     public void requireOps() {
         if (!isOps()) throw ApiException.forbidden("Operations role required");
     }
