@@ -33,16 +33,16 @@ The default is disabled and no Firebase credentials are loaded while disabled. F
 - Merchant: committed checkout-paid event, only for eligible merchant roles, and only when financial push is enabled.
 - Android notifications contain generic text, an opaque delivery ID and event kind. They contain no payment amount, customer name, order details, credentials or PII. Opening the app uses its existing authenticated API and polling. No payment or order mutation can be triggered by a push.
 - Registrations are installation scoped, renewed on foreground and token rotation, removed on sign-out/unpair when connected, and expire after the lease. Offline sign-out cannot guarantee immediate server removal; generic notifications may still arrive until the lease expires or the token is invalidated.
-- Delivery is at least once, with bounded retries, expiry and invalid-token cleanup. A crash or ambiguous provider acknowledgement can duplicate a notification. Never interpret Firebase acceptance as delivery or as an order acknowledgement.
+- Delivery is at least once, with bounded retries, expiry and invalid-token cleanup. Claims commit before FCM network I/O and are fenced by attempt number. Token rotation invalidates old registration IDs without locking order transactions; pending alerts are revalidated before send. Android notification tags suppress repeated tray entries for the same delivery. A crash or ambiguous provider acknowledgement can duplicate a notification. Never interpret Firebase acceptance as delivery or as an order acknowledgement.
 
 ## Acceptance checklist
 
 - Install real native builds on Android devices with Google Play Services. Grant Android notification permission.
 - Pair kitchen devices for two stations; sign in a waiter, branch cashier and merchant. Create a ticket, bump it to READY and request its bill.
 - Verify only intended devices receive each notification in foreground, background and locked-screen conditions. Confirm normal operation with permission denied, absent Firebase configuration and an offline device.
-- Repeat an idempotent order request; verify no duplicate queue event for an existing subscription. Revoke a kitchen credential and remove staff membership; queued delivery must be cancelled. Exercise token rotation and online sign-out.
+- Repeat an idempotent order request; verify no duplicate queue event for an existing subscription. Revoke a kitchen credential and remove staff membership; queued delivery must be cancelled before sending. Exercise token rotation and online sign-out.
 - Test provider failure/invalid tokens, queue expiry and process restart. Check `push_delivery` state counts without exporting or logging device tokens.
 - Confirm restaurant polling and checkout behavior are unchanged when FCM is disabled.
 - With financial push disabled, ensure no checkout notification is queued. Only test financial notifications using authorized sandbox payments after explicitly enabling that channel.
 
-For installation verification run `cd apps && npm ci && npm run typecheck && npm test` and `mvn -B clean verify` from the repository root. Real FCM acceptance requires project credentials and physical Android devices; CI does not prove device delivery. iOS requires a separate APNs/FCM client integration and is not enabled by this change.
+For installation verification run `cd apps && npm ci && npm run typecheck && npm test` and `mvn -B clean verify` from the repository root. Real FCM acceptance requires project credentials and physical Android devices; CI does not prove device delivery. An already accepted FCM message cannot be recalled if staff sign out or a device is revoked while delivery is in flight. iOS requires a separate APNs/FCM client integration and is not enabled by this change.
