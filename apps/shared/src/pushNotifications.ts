@@ -54,29 +54,28 @@ export function useFcmRegistration(
     if (Platform.OS !== "android" || !client || !merchantId || (app === "KDS" && !device)) return;
     const scope: Scope = { client, merchantId, app, device: device ?? undefined, stationId };
     let active = true;
-    let registrationStarted = false;
     let lastToken: string | null = null;
     let lastRenewal = 0;
     let requested = false;
     let running = false;
     let pendingToken: string | null = null;
+    let permissionGranted = false;
 
     // Notification contents are generic; the existing authenticated screens remain authoritative.
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
         shouldShowAlert: active,
-        shouldPlaySound: active && app !== "KDS",
+        shouldPlaySound: active,
         shouldSetBadge: false,
       }),
     });
 
     async function register(token: string, force: boolean) {
       await enqueue(async () => {
-        if (!active) return;
+        if (!active || !permissionGranted) return;
         if (!force && lastToken === token && Date.now() - lastRenewal < 15 * 60_000) return;
         const id = await installationId();
-        if (!active) return;
-        registrationStarted = true;
+        if (!active || !permissionGranted) return;
         await send(scope, "register", {
           merchantId: scope.merchantId, installationId: id, app: scope.app,
           token, stationId: scope.app === "KDS" ? scope.stationId ?? null : null,
@@ -102,15 +101,16 @@ export function useFcmRegistration(
           permission = await Notifications.requestPermissionsAsync();
         }
         if (!active) return;
-        if (!permission.granted) {
-          if (registrationStarted || lastToken) {
+        permissionGranted = permission.granted;
+        if (!permissionGranted) {
+          {
             await enqueue(async () => {
               if (!active) return;
-              await send(scope, "unregister", {
-                merchantId: scope.merchantId, installationId: await installationId(), app: scope.app,
+              const id = await SecureStore.getItemAsync(INSTALLATION_KEY);
+              if (id) await send(scope, "unregister", {
+                merchantId: scope.merchantId, installationId: id, app: scope.app,
               });
               lastToken = null;
-              registrationStarted = false;
             });
           }
           return;
@@ -127,26 +127,29 @@ export function useFcmRegistration(
         running = false;
         const token = pendingToken;
         pendingToken = null;
-        if (active && token) void register(token, true).catch(() => {});
+        if (active && permissionGranted && token) void register(token, false).catch(() => {});
       }
     }
 
     const tokenSubscription = Notifications.addPushTokenListener((token) => {
       if (!active || token.type !== "android" || typeof token.data !== "string") return;
       if (running) { pendingToken = token.data; return; }
-      void register(token.data, true).catch(() => {});
+      if (!permissionGranted) return;
+      void register(token.data, false).catch(() => {});
     });
     const appStateSubscription = AppState.addEventListener("change", (state) => {
       if (state === "active") void refresh(false);
     });
     const timer = setInterval(() => {
       if (AppState.currentState === "active") void refresh(false);
-    }, 15 * 60_000);
+    }, 60_000);
 
     let stopping: Promise<void> | null = null;
     const deactivate = () => {
       if (stopping) return stopping;
       active = false;
+      permissionGranted = false;
+      pendingToken = null;
       clearInterval(timer);
       tokenSubscription.remove();
       appStateSubscription.remove();
@@ -156,7 +159,9 @@ export function useFcmRegistration(
         if (id) await send(scope, "unregister", {
           merchantId: scope.merchantId, installationId: id, app: scope.app,
         });
-      }).catch(() => {});
+      }).catch(() => {}).then(async () => {
+        await Notifications.dismissAllNotificationsAsync().catch(() => {});
+      });
       return stopping;
     };
     stop.current = deactivate;
