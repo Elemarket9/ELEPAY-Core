@@ -1,7 +1,7 @@
 package com.elepay.push;
 
 import com.elepay.identity.KillSwitchService;
-import com.elepay.merchanttools.restaurant.RestaurantPushState;
+import com.elepay.merchanttools.RestaurantNotificationAccess;
 import com.google.firebase.messaging.AndroidConfig;
 import com.google.firebase.messaging.AndroidNotification;
 import com.google.firebase.messaging.FirebaseMessaging;
@@ -32,7 +32,7 @@ class PushDispatcher {
     private final JdbcClient db;
     private final FirebaseMessaging firebase;
     private final KillSwitchService gates;
-    private final RestaurantPushState restaurant;
+    private final RestaurantNotificationAccess restaurant;
     private final boolean financialEnabled;
     private final AtomicBoolean running = new AtomicBoolean();
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
@@ -45,7 +45,7 @@ class PushDispatcher {
         @Override public String toString() { return "PushTarget[redacted]"; }
     }
 
-    PushDispatcher(JdbcClient db, FirebaseMessaging firebase, KillSwitchService gates, RestaurantPushState restaurant,
+    PushDispatcher(JdbcClient db, FirebaseMessaging firebase, KillSwitchService gates, RestaurantNotificationAccess restaurant,
             @Value("${elepay.push.financial-enabled:false}") boolean financialEnabled) {
         this.db = db;
         this.firebase = firebase;

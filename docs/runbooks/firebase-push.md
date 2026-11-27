@@ -46,3 +46,7 @@ The default is disabled and no Firebase credentials are loaded while disabled. F
 - With financial push disabled, ensure no checkout notification is queued. Only test financial notifications using authorized sandbox payments after explicitly enabling that channel.
 
 For installation verification run `cd apps && npm ci && npm run typecheck && npm test` and `mvn -B clean verify` from the repository root. Real FCM acceptance requires project credentials and physical Android devices; CI does not prove device delivery. An already accepted FCM message cannot be recalled if staff sign out or a device is revoked while delivery is in flight. iOS requires a separate APNs/FCM client integration and is not enabled by this change.
+
+### Dependency isolation
+
+The server uses only Firebase Admin messaging. Firestore and Cloud Storage are excluded from the Maven dependency graph; the classpath regression test checks messaging initialization without those optional services. No vulnerability suppression or security threshold changes are used.

@@ -3,7 +3,7 @@ package com.elepay.push;
 import com.elepay.common.ApiException;
 import com.elepay.identity.Actor;
 import com.elepay.merchant.MerchantAccess;
-import com.elepay.merchanttools.restaurant.KitchenDeviceService;
+import com.elepay.merchanttools.RestaurantNotificationAccess;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -20,11 +20,11 @@ public class PushRegistration {
     public record Removal(UUID merchantId, UUID installationId, String app) {}
     private final JdbcClient db;
     private final MerchantAccess merchants;
-    private final KitchenDeviceService kitchen;
+    private final RestaurantNotificationAccess kitchen;
     private final boolean enabled;
     private final int leaseHours;
 
-    public PushRegistration(JdbcClient db, MerchantAccess merchants, KitchenDeviceService kitchen,
+    public PushRegistration(JdbcClient db, MerchantAccess merchants, RestaurantNotificationAccess kitchen,
             @Value("${elepay.push.enabled:false}") boolean enabled,
             @Value("${elepay.push.registration-hours:168}") int leaseHours) {
         this.db = db;

@@ -24,6 +24,7 @@ class PushRegistrationIT extends PostgresTestBase {
     @Autowired JdbcClient db;
     @Autowired com.elepay.merchant.MerchantAccess merchants;
     @Autowired com.elepay.merchanttools.restaurant.KitchenDeviceService kitchen;
+    @Autowired com.elepay.merchanttools.RestaurantNotificationAccess restaurantAccess;
 
     @AfterEach void clearAuthentication() {
         SecurityContextHolder.clearContext();
@@ -122,13 +123,13 @@ class PushRegistrationIT extends PostgresTestBase {
 
     @Test void oversizedTokenRejectedBeforeDatabaseIndexWrite() {
         authenticate("owner-"+UUID.randomUUID());
-        assertThatThrownBy(() -> new PushRegistration(db,merchants,kitchen,true,168).register(
+        assertThatThrownBy(() -> new PushRegistration(db,merchants,restaurantAccess,true,168).register(
                 new PushRegistration.Request(UUID.randomUUID(),UUID.randomUUID(),"POS","a".repeat(1025),null),false))
                 .isInstanceOf(ApiException.class).hasMessageContaining("Invalid notification registration");
     }
 
     @Test void disabledRegistrationFailsClosed() {
-        assertThatThrownBy(() -> new PushRegistration(db,merchants,kitchen,false,168).register(null,false))
+        assertThatThrownBy(() -> new PushRegistration(db,merchants,restaurantAccess,false,168).register(null,false))
                 .isInstanceOf(ApiException.class).hasMessageContaining("disabled");
     }
 
@@ -138,7 +139,7 @@ class PushRegistrationIT extends PostgresTestBase {
         UUID unrelated = merchant("other-" + UUID.randomUUID());
         UUID installation = UUID.randomUUID();
         authenticate(owner);
-        PushRegistration registration = new PushRegistration(db,merchants,kitchen,true,168);
+        PushRegistration registration = new PushRegistration(db,merchants,restaurantAccess,true,168);
         String first = token();
         var request = new PushRegistration.Request(m,installation,"POS",first,null);
         registration.register(request,false);

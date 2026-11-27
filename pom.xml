@@ -27,7 +27,14 @@
   </dependencyManagement>
   <dependencies>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
-    <dependency><groupId>com.google.firebase</groupId><artifactId>firebase-admin</artifactId><version>9.12.0</version></dependency>
+    <dependency>
+      <groupId>com.google.firebase</groupId><artifactId>firebase-admin</artifactId><version>9.12.0</version>
+      <!-- FCM only: do not package unused Google Cloud data services or their vulnerable telemetry graph. -->
+      <exclusions>
+        <exclusion><groupId>com.google.cloud</groupId><artifactId>google-cloud-storage</artifactId></exclusion>
+        <exclusion><groupId>com.google.cloud</groupId><artifactId>google-cloud-firestore</artifactId></exclusion>
+      </exclusions>
+    </dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
