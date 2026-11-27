@@ -10,6 +10,8 @@ public final class KitchenDevicePaths {
             Pattern.compile("^/v1/restaurant/kds/sync$"),
             Pattern.compile("^/v1/restaurant/kds/stations/merchant/" + UUID + "$"));
     private static final List<Pattern> POST = List.of(
+            Pattern.compile("^/v1/restaurant/kds/push/register$"),
+            Pattern.compile("^/v1/restaurant/kds/push/unregister$"),
             Pattern.compile("^/v1/restaurant/kds/tickets/" + UUID + "/advance$"),
             Pattern.compile("^/v1/restaurant/kds/tickets/" + UUID + "/stations/" + UUID + "/advance$"),
             Pattern.compile("^/v1/restaurant/kds/tickets/" + UUID + "/cancel$"),

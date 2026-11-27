@@ -98,6 +98,22 @@ public class KitchenDeviceService {
                 merchant.tradingName(), stationId, stationName, hasPrinter);
     }
 
+    /** Verify a paired kitchen credential and its station through the owning modules. */
+    public boolean permitsNotificationStation(UUID merchantId, UUID credentialId, UUID stationId) {
+        if (merchants.find(merchantId).filter(m -> "active".equals(m.status())).isEmpty()) return false;
+        if (keys.kitchenDevices(merchantId).stream()
+                .noneMatch(k -> k.id().equals(credentialId) && k.revokedAt() == null)) return false;
+        return db.sql("""
+                SELECT EXISTS (SELECT 1 FROM restaurant_kitchen_pairing p
+                    WHERE p.credential_id = :id AND p.merchant_id = :m AND p.used_at IS NOT NULL
+                      AND (p.station_id IS NULL OR p.station_id = CAST(:station AS uuid))
+                      AND (CAST(:station AS uuid) IS NULL OR EXISTS (
+                          SELECT 1 FROM restaurant_kitchen_station s WHERE s.id = CAST(:station AS uuid)
+                            AND s.merchant_id = :m AND s.active)))
+                """).param("id",credentialId).param("m",merchantId).param("station",stationId)
+                .query(Boolean.class).single();
+    }
+
     public List<ApiKeys.KitchenDevice> list(UUID merchantId) {
         return keys.kitchenDevices(merchantId);
     }

@@ -13,3 +13,7 @@ __pycache__/
 
 # Teamwork agent metadata
 /.agents/
+
+# Local Firebase project and service-account configuration (never commit server credentials).
+**/google-services.json
+**/*firebase-service-account*.json
