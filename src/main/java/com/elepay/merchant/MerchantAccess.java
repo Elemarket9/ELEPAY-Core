@@ -100,6 +100,20 @@ public class MerchantAccess {
                 FROM merchant WHERE id = :id""").param("id", id).query(MerchantAccess::map).optional();
     }
 
+    /** Read-only authorization API for the notification module. */
+    public record NotificationMembership(String role, UUID branchId) {}
+
+    public Optional<NotificationMembership> activeNotificationMembership(UUID merchantId, String subject) {
+        return db.sql("""
+                SELECT mm.role, mm.branch_id
+                FROM merchant_member mm JOIN merchant m ON m.id = mm.merchant_id
+                WHERE mm.merchant_id = :m AND mm.subject = :s AND m.status = 'active'
+                  AND (mm.branch_id IS NULL OR EXISTS (SELECT 1 FROM merchant_branch b
+                      WHERE b.id = mm.branch_id AND b.merchant_id = :m AND b.active))
+                """).param("m", merchantId).param("s", subject)
+                .query((rs,n) -> new NotificationMembership(rs.getString(1), rs.getObject(2, UUID.class))).optional();
+    }
+
     /** The merchant's contact phone, for notifications. */
     public Optional<String> contactPhone(UUID merchant) {
         return db.sql("SELECT contact_phone FROM merchant WHERE id = :id").param("id", merchant)

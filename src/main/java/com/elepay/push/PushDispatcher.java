@@ -1,6 +1,7 @@
 package com.elepay.push;
 
 import com.elepay.identity.KillSwitchService;
+import com.elepay.merchanttools.restaurant.RestaurantPushState;
 import com.google.firebase.messaging.AndroidConfig;
 import com.google.firebase.messaging.AndroidNotification;
 import com.google.firebase.messaging.FirebaseMessaging;
@@ -31,6 +32,7 @@ class PushDispatcher {
     private final JdbcClient db;
     private final FirebaseMessaging firebase;
     private final KillSwitchService gates;
+    private final RestaurantPushState restaurant;
     private final boolean financialEnabled;
     private final AtomicBoolean running = new AtomicBoolean();
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
@@ -39,12 +41,16 @@ class PushDispatcher {
         return t;
     });
     private record Job(UUID id, UUID subscriptionId, String eventKey, String kind, int attempts, long ttlMs) {}
+    private record Target(String token, UUID merchant, String subject, UUID branch, UUID station) {
+        @Override public String toString() { return "PushTarget[redacted]"; }
+    }
 
-    PushDispatcher(JdbcClient db, FirebaseMessaging firebase, KillSwitchService gates,
+    PushDispatcher(JdbcClient db, FirebaseMessaging firebase, KillSwitchService gates, RestaurantPushState restaurant,
             @Value("${elepay.push.financial-enabled:false}") boolean financialEnabled) {
         this.db = db;
         this.firebase = firebase;
         this.gates = gates;
+        this.restaurant = restaurant;
         this.financialEnabled = financialEnabled;
     }
 
@@ -96,13 +102,14 @@ class PushDispatcher {
             finish(job, "CANCELLED", "MODULE_DISABLED");
             return true;
         }
-        var token = db.sql("""
-                SELECT s.token FROM push_eligible_subscription s
+        var target = db.sql("""
+                SELECT s.token, s.merchant_id, s.subject, s.branch_id, s.station_id FROM push_eligible_subscription s
                 JOIN push_delivery d ON d.subscription_id = s.id
                 WHERE d.id = :id AND d.attempts = :attempt AND d.state = 'PENDING'
                   AND d.expires_at > now()
-                """).param("id",job.id()).param("attempt",job.attempts()).query(String.class).optional();
-        if (token.isEmpty() || job.ttlMs() <= 0 || !stillRelevant(job)) {
+                """).param("id",job.id()).param("attempt",job.attempts()).query((rs,n) -> new Target(rs.getString(1),rs.getObject(2, UUID.class),
+                        rs.getString(3),rs.getObject(4, UUID.class),rs.getObject(5, UUID.class))).optional();
+        if (target.isEmpty() || job.ttlMs() <= 0 || !stillRelevant(job, target.get())) {
             finish(job, "CANCELLED", "REGISTRATION_OR_EVENT_UNAVAILABLE");
             return true;
         }
@@ -114,7 +121,7 @@ class PushDispatcher {
             default -> throw new IllegalStateException("Unknown push event kind");
         };
         try {
-            firebase.send(Message.builder().setToken(token.get())
+            firebase.send(Message.builder().setToken(target.get().token())
                     .setNotification(Notification.builder().setTitle("ELEPAY").setBody(body).build())
                     .putData("kind",job.kind()).putData("eventId",job.id().toString())
                     .setAndroidConfig(AndroidConfig.builder().setPriority(AndroidConfig.Priority.HIGH)
@@ -130,7 +137,7 @@ class PushDispatcher {
             if (code == MessagingErrorCode.UNREGISTERED) {
                 // No FK cascade: rotating a token never locks a claimed delivery.
                 db.sql("DELETE FROM push_subscription WHERE id = :id AND token = :token")
-                        .param("id",job.subscriptionId()).param("token",token.get()).update();
+                        .param("id",job.subscriptionId()).param("token",target.get().token()).update();
                 finish(job,"DEAD",safeCode);
             } else if (code == MessagingErrorCode.INVALID_ARGUMENT || code == MessagingErrorCode.SENDER_ID_MISMATCH
                     || job.attempts() >= MAX_ATTEMPTS) {
@@ -160,40 +167,17 @@ class PushDispatcher {
         };
     }
 
-    private boolean stillRelevant(Job job) {
+    private boolean stillRelevant(Job job, Target target) {
         if ("CHECKOUT_PAID".equals(job.kind())) return true;
         UUID resource;
         try { resource = UUID.fromString(job.eventKey().substring(job.eventKey().indexOf(':') + 1)); }
         catch (IllegalArgumentException e) { return false; }
-        String sql = switch (job.kind()) {
-            case "KITCHEN_ORDER" -> """
-                SELECT EXISTS (SELECT 1 FROM push_eligible_subscription s
-                    JOIN restaurant_kds_ticket t ON t.merchant_id = s.merchant_id
-                    JOIN restaurant_kds_item i ON i.ticket_id = t.id
-                    WHERE s.id = :s AND s.app = 'KDS' AND t.id = :r
-                      AND t.status IN ('NEW','PREPARING') AND i.item_status = 'NEW'
-                      AND (s.station_id IS NULL OR s.station_id = i.station_id))
-                """;
-            case "ORDER_READY" -> """
-                SELECT EXISTS (SELECT 1 FROM push_eligible_subscription s
-                    JOIN restaurant_kds_ticket t ON t.merchant_id = s.merchant_id
-                    JOIN restaurant_waiter_order w ON w.order_id = t.order_id AND w.merchant_id = t.merchant_id
-                    JOIN pos_order o ON o.id = w.order_id
-                    WHERE s.id = :s AND s.app = 'WAITER' AND t.id = :r AND t.status = 'READY'
-                      AND w.waiter_subject = s.subject AND o.branch_id = s.branch_id)
-                """;
-            case "BILL_REQUESTED" -> """
-                SELECT EXISTS (SELECT 1 FROM push_eligible_subscription s
-                    JOIN pos_order o ON o.merchant_id = s.merchant_id
-                    JOIN restaurant_waiter_order w ON w.order_id = o.id AND w.merchant_id = o.merchant_id
-                    WHERE s.id = :s AND s.app = 'POS' AND o.id = :r
-                      AND w.bill_requested_at IS NOT NULL AND o.paid_pesewas < o.total_pesewas
-                      AND o.status NOT IN ('PAID','CANCELLED','VOIDED')
-                      AND (s.branch_id IS NULL OR s.branch_id = o.branch_id))
-                """;
-            default -> throw new IllegalStateException("Unknown notification kind");
+        return switch (job.kind()) {
+            case "KITCHEN_ORDER" -> restaurant.kitchenOrderPending(target.merchant(), resource, target.station());
+            case "ORDER_READY" -> restaurant.readyForWaiter(target.merchant(), resource, target.subject(), target.branch());
+            case "BILL_REQUESTED" -> restaurant.billOutstanding(target.merchant(), resource, target.branch());
+            default -> false;
         };
-        return db.sql(sql).param("s",job.subscriptionId()).param("r",resource).query(Boolean.class).single();
     }
 
     private void finish(Job job, String state, String error) {

@@ -22,6 +22,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Transactional
 class PushRegistrationIT extends PostgresTestBase {
     @Autowired JdbcClient db;
+    @Autowired com.elepay.merchant.MerchantAccess merchants;
+    @Autowired com.elepay.merchanttools.restaurant.KitchenDeviceService kitchen;
 
     @AfterEach void clearAuthentication() {
         SecurityContextHolder.clearContext();
@@ -53,7 +55,7 @@ class PushRegistrationIT extends PostgresTestBase {
     private String token() { return "test:" + UUID.randomUUID(); }
 
     @Test void disabledRegistrationFailsClosed() {
-        assertThatThrownBy(() -> new PushRegistration(db,false,168).register(null,false))
+        assertThatThrownBy(() -> new PushRegistration(db,merchants,kitchen,false,168).register(null,false))
                 .isInstanceOf(ApiException.class).hasMessageContaining("disabled");
     }
 
@@ -63,7 +65,7 @@ class PushRegistrationIT extends PostgresTestBase {
         UUID unrelated = merchant("other-" + UUID.randomUUID());
         UUID installation = UUID.randomUUID();
         authenticate(owner);
-        PushRegistration registration = new PushRegistration(db,true,168);
+        PushRegistration registration = new PushRegistration(db,merchants,kitchen,true,168);
         String first = token();
         var request = new PushRegistration.Request(m,installation,"POS",first,null);
         registration.register(request,false);

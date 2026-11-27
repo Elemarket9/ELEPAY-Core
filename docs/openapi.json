@@ -6740,6 +6740,22 @@
         },
         "type" : "object"
       },
+      "Removal" : {
+        "properties" : {
+          "app" : {
+            "type" : "string"
+          },
+          "installationId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "ReorderPointRequest" : {
         "properties" : {
           "reorderPoint" : {
@@ -6799,6 +6815,29 @@
           },
           "valid" : {
             "type" : "boolean"
+          }
+        },
+        "type" : "object"
+      },
+      "Request" : {
+        "properties" : {
+          "app" : {
+            "type" : "string"
+          },
+          "installationId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "merchantId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "stationId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "token" : {
+            "type" : "string"
           }
         },
         "type" : "object"
@@ -13897,6 +13936,48 @@
         "tags" : [ "merchant-payouts" ]
       }
     },
+    "/v1/notifications/push/register" : {
+      "post" : {
+        "operationId" : "registerPushDevice",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Request"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "204" : {
+            "description" : "No Content"
+          }
+        },
+        "tags" : [ "push-registration-controller" ]
+      }
+    },
+    "/v1/notifications/push/unregister" : {
+      "post" : {
+        "operationId" : "unregisterPushDevice",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Removal"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "204" : {
+            "description" : "No Content"
+          }
+        },
+        "tags" : [ "push-registration-controller" ]
+      }
+    },
     "/v1/ops/audit" : {
       "get" : {
         "operationId" : "audit",
@@ -18626,6 +18707,48 @@
           }
         },
         "tags" : [ "restaurant-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/push/register" : {
+      "post" : {
+        "operationId" : "registerKitchenPushDevice",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Request"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "204" : {
+            "description" : "No Content"
+          }
+        },
+        "tags" : [ "push-registration-controller" ]
+      }
+    },
+    "/v1/restaurant/kds/push/unregister" : {
+      "post" : {
+        "operationId" : "unregisterKitchenPushDevice",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Removal"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "204" : {
+            "description" : "No Content"
+          }
+        },
+        "tags" : [ "push-registration-controller" ]
       }
     },
     "/v1/restaurant/kds/settings/{merchantId}" : {

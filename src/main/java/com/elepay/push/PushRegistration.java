@@ -2,6 +2,8 @@ package com.elepay.push;
 
 import com.elepay.common.ApiException;
 import com.elepay.identity.Actor;
+import com.elepay.merchant.MerchantAccess;
+import com.elepay.merchanttools.restaurant.KitchenDeviceService;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -16,15 +18,18 @@ public class PushRegistration {
         @Override public String toString() { return "PushRegistration.Request[redacted]"; }
     }
     public record Removal(UUID merchantId, UUID installationId, String app) {}
-    private record Membership(String role, UUID branchId) {}
     private final JdbcClient db;
+    private final MerchantAccess merchants;
+    private final KitchenDeviceService kitchen;
     private final boolean enabled;
     private final int leaseHours;
 
-    public PushRegistration(JdbcClient db,
+    public PushRegistration(JdbcClient db, MerchantAccess merchants, KitchenDeviceService kitchen,
             @Value("${elepay.push.enabled:false}") boolean enabled,
             @Value("${elepay.push.registration-hours:168}") int leaseHours) {
         this.db = db;
+        this.merchants = merchants;
+        this.kitchen = kitchen;
         this.enabled = enabled;
         this.leaseHours = Math.max(1, Math.min(168, leaseHours));
     }
@@ -44,32 +49,12 @@ public class PushRegistration {
             if (!"KDS".equals(req.app()) || !"kitchen".equals(actor.keyType()) || credential == null
                     || !req.merchantId().equals(actor.apiKeyMerchant()))
                 throw ApiException.forbidden("Paired kitchen credential required");
-            boolean valid = db.sql("""
-                    SELECT EXISTS (
-                        SELECT 1 FROM api_credential k
-                        JOIN merchant m ON m.id = k.merchant_id AND m.status = 'active'
-                        JOIN restaurant_kitchen_pairing p ON p.credential_id = k.id
-                        WHERE k.id = :id AND k.merchant_id = :m AND k.revoked_at IS NULL
-                          AND k.key_type = 'kitchen' AND p.merchant_id = :m AND p.used_at IS NOT NULL
-                          AND (p.station_id IS NULL OR p.station_id = CAST(:station AS uuid))
-                          AND (CAST(:station AS uuid) IS NULL OR EXISTS (
-                              SELECT 1 FROM restaurant_kitchen_station s
-                              WHERE s.id = CAST(:station AS uuid) AND s.merchant_id = :m AND s.active
-                          )))
-                    """).param("id", credential).param("m", req.merchantId())
-                    .param("station", station).query(Boolean.class).single();
+            boolean valid = kitchen.permitsNotificationStation(req.merchantId(), credential, station);
             if (!valid) throw ApiException.forbidden("Kitchen station is unavailable");
         } else {
             actor.requireUser();
             if (station != null) throw ApiException.badRequest("invalid_push_registration", "Station is only valid for kitchen devices");
-            Membership member = db.sql("""
-                    SELECT mm.role, mm.branch_id
-                    FROM merchant_member mm JOIN merchant m ON m.id = mm.merchant_id
-                    WHERE mm.merchant_id = :m AND mm.subject = :s AND m.status = 'active'
-                      AND (mm.branch_id IS NULL OR EXISTS (SELECT 1 FROM merchant_branch b
-                          WHERE b.id = mm.branch_id AND b.merchant_id = :m AND b.active))
-                    """).param("m", req.merchantId()).param("s", actor.subject())
-                    .query((rs,n) -> new Membership(rs.getString(1), rs.getObject(2, UUID.class))).optional()
+            var member = merchants.activeNotificationMembership(req.merchantId(), actor.subject())
                     .orElseThrow(() -> ApiException.forbidden("Active merchant membership required"));
             boolean allowed = switch (req.app()) {
                 case "WAITER" -> "waiter".equals(member.role()) && member.branchId() != null;
