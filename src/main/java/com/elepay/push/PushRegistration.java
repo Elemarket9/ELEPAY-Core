@@ -66,6 +66,8 @@ public class PushRegistration {
                     SELECT mm.role, mm.branch_id
                     FROM merchant_member mm JOIN merchant m ON m.id = mm.merchant_id
                     WHERE mm.merchant_id = :m AND mm.subject = :s AND m.status = 'active'
+                      AND (mm.branch_id IS NULL OR EXISTS (SELECT 1 FROM merchant_branch b
+                          WHERE b.id = mm.branch_id AND b.merchant_id = :m AND b.active))
                     """).param("m", req.merchantId()).param("s", actor.subject())
                     .query((rs,n) -> new Membership(rs.getString(1), rs.getObject(2, UUID.class))).optional()
                     .orElseThrow(() -> ApiException.forbidden("Active merchant membership required"));
@@ -86,6 +88,21 @@ public class PushRegistration {
         db.sql("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
                 .param("key", "push-token:" + com.elepay.common.Idempotency.sha256(req.token()))
                 .query((rs,n) -> 1).single();
+        db.sql("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
+                .param("key", "push-quota:" + req.merchantId() + ":" + actor.subject() + ":" + req.app())
+                .query((rs,n) -> 1).single();
+        boolean tokenConflict = db.sql("""
+                SELECT EXISTS (SELECT 1 FROM push_subscription WHERE token = :t
+                  AND expires_at > now() AND (app <> :app OR installation_id <> :i))
+                """).param("t", req.token()).param("app", req.app()).param("i", req.installationId())
+                .query(Boolean.class).single();
+        if (tokenConflict) throw ApiException.conflict("push_token_conflict", "Notification token belongs to another installation");
+        boolean installationConflict = db.sql("""
+                SELECT EXISTS (SELECT 1 FROM push_subscription WHERE app = :app AND installation_id = :i
+                  AND expires_at > now() AND subject <> :s AND token <> :t)
+                """).param("app", req.app()).param("i", req.installationId()).param("s", actor.subject())
+                .param("t", req.token()).query(Boolean.class).single();
+        if (installationConflict) throw ApiException.conflict("push_installation_conflict", "Notification installation belongs to another session");
         int renewed = db.sql("""
                 UPDATE push_subscription SET expires_at = now() + make_interval(hours => :hours)
                 WHERE app = :app AND installation_id = :i AND token = :t
@@ -98,7 +115,7 @@ public class PushRegistration {
                 .param("b", branch).param("st", station).param("k", credential).update();
         if (renewed != 0) return;
 
-        db.sql("DELETE FROM push_subscription WHERE (app = :app AND installation_id = :i) OR token = :t")
+        db.sql("DELETE FROM push_subscription WHERE (app = :app AND installation_id = :i) OR (token = :t AND expires_at <= now())")
                 .param("app", req.app()).param("i", req.installationId()).param("t", req.token()).update();
         long count = db.sql("""
                 SELECT count(*) FROM push_subscription
