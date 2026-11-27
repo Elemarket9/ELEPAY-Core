@@ -27,3 +27,7 @@ npm run start:merchant  # ELEPAY Merchant App
 ```
 
 The apps connect directly to live ELEPAY backend APIs (no client-side mock data). Point the Server URL on the sign-in/pairing screen to your local (`http://10.0.2.2:8080` on Android emulator, `http://localhost:8080` on iOS simulator) or staging/production ELEPAY API server.
+
+## Android push notifications
+
+Native FCM is optional. See [the Firebase setup and verification runbook](../docs/runbooks/firebase-push.md) for Firebase app IDs, secure server credentials, native builds and acceptance tests. Existing API polling remains available without Firebase.
