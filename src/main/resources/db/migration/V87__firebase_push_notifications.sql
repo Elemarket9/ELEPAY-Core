@@ -24,9 +24,10 @@ SELECT s.*
 FROM push_subscription s
 JOIN merchant m ON m.id = s.merchant_id AND m.status = 'active'
 LEFT JOIN merchant_member mm ON mm.merchant_id = s.merchant_id AND mm.subject = s.subject
+LEFT JOIN merchant_branch b ON b.id = s.branch_id AND b.merchant_id = s.merchant_id AND b.active
 LEFT JOIN api_credential k ON k.id = s.kitchen_credential_id AND k.merchant_id = s.merchant_id
 LEFT JOIN restaurant_kitchen_station st ON st.id = s.station_id AND st.merchant_id = s.merchant_id
-WHERE s.expires_at > now() AND (
+WHERE s.expires_at > now() AND (s.branch_id IS NULL OR b.id IS NOT NULL) AND (
     (s.app = 'WAITER' AND mm.role = 'waiter' AND mm.branch_id IS NOT NULL
          AND mm.branch_id = s.branch_id)
  OR (s.app = 'POS' AND mm.role IN ('owner','admin','cashier')
@@ -34,7 +35,8 @@ WHERE s.expires_at > now() AND (
  OR (s.app = 'MERCHANT' AND mm.role IN ('owner','admin','finance')
          AND mm.branch_id IS NOT DISTINCT FROM s.branch_id)
  OR (s.app = 'KDS' AND k.key_type = 'kitchen' AND k.revoked_at IS NULL
-         AND (s.station_id IS NULL OR st.active)
+         AND (s.station_id IS NULL OR (st.active AND (st.branch_id IS NULL OR EXISTS (
+             SELECT 1 FROM merchant_branch sb WHERE sb.id = st.branch_id AND sb.merchant_id = s.merchant_id AND sb.active))))
          AND EXISTS (
              SELECT 1 FROM restaurant_kitchen_pairing p
              WHERE p.credential_id = k.id AND p.merchant_id = s.merchant_id
@@ -44,7 +46,8 @@ WHERE s.expires_at > now() AND (
 
 CREATE TABLE push_delivery (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    subscription_id uuid NOT NULL REFERENCES push_subscription(id) ON DELETE CASCADE,
+    -- Immutable registration ID; no FK to avoid locking token rows in order transactions.
+    subscription_id uuid NOT NULL,
     event_key text NOT NULL,
     kind text NOT NULL CHECK (kind IN ('KITCHEN_ORDER','ORDER_READY','BILL_REQUESTED','CHECKOUT_PAID')),
     state text NOT NULL DEFAULT 'PENDING' CHECK (state IN ('PENDING','SENT','DEAD','CANCELLED')),
@@ -103,7 +106,7 @@ BEGIN
     PERFORM elepay_push_waiter_ready(NEW.ticket_id);
     RETURN NEW;
 END $$;
-CREATE TRIGGER push_waiter_insert AFTER INSERT ON restaurant_waiter_order
+CREATE TRIGGER push_waiter_insert AFTER INSERT OR UPDATE OF ticket_id ON restaurant_waiter_order
 FOR EACH ROW EXECUTE FUNCTION elepay_push_waiter_insert();
 
 CREATE FUNCTION elepay_push_bill_requested() RETURNS trigger LANGUAGE plpgsql AS $$
