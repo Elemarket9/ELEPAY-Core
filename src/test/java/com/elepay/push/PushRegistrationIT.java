@@ -54,6 +54,79 @@ class PushRegistrationIT extends PostgresTestBase {
 
     private String token() { return "test:" + UUID.randomUUID(); }
 
+    private UUID branch(UUID merchant, String name) {
+        UUID id = UUID.randomUUID();
+        db.sql("INSERT INTO merchant_branch(id,merchant_id,name) VALUES(:id,:m,:n)")
+                .param("id",id).param("m",merchant).param("n",name).update();
+        return id;
+    }
+
+    private UUID station(UUID merchant, UUID branch, String name) {
+        UUID id = UUID.randomUUID();
+        db.sql("INSERT INTO restaurant_kitchen_station(id,merchant_id,branch_id,name) VALUES(:id,:m,:b,:n)")
+                .param("id",id).param("m",merchant).param("b",branch).param("n",name).update();
+        return id;
+    }
+
+    private UUID kitchenSubscription(UUID merchant, UUID station) {
+        var code = kitchen.createCode(merchant,station,"system");
+        var paired = kitchen.pair(code.merchantCode(),code.code(),"Test kitchen");
+        UUID id = UUID.randomUUID();
+        db.sql("""
+                INSERT INTO push_subscription(id,merchant_id,subject,app,installation_id,token,station_id,kitchen_credential_id,expires_at)
+                VALUES(:id,:m,:s,'KDS',:i,:t,:st,:k,now()+interval '1 hour')
+                """).param("id",id).param("m",merchant).param("s","apikey:"+paired.deviceId())
+                .param("i",UUID.randomUUID()).param("t",token()).param("st",station)
+                .param("k",paired.deviceId()).update();
+        return id;
+    }
+
+    private long queued(UUID subscription, String eventKey) {
+        return db.sql("SELECT count(*) FROM push_delivery WHERE subscription_id=:s AND event_key=:k")
+                .param("s",subscription).param("k",eventKey).query(Long.class).single();
+    }
+
+    @Autowired com.elepay.merchanttools.restaurant.RestaurantPushState restaurant;
+
+    @Test void kitchenRoutingAndUnroutedFallbackAreBranchIsolated() {
+        UUID m = merchant("owner-"+UUID.randomUUID());
+        UUID other = merchant("owner-"+UUID.randomUUID());
+        UUID a = branch(m,"A"), b = branch(m,"B");
+        UUID stationA = station(m,a,"Kitchen A"), stationB = station(m,b,"Kitchen B");
+        UUID subA = kitchenSubscription(m,stationA), subB = kitchenSubscription(m,stationB);
+        UUID subOther = kitchenSubscription(other,station(other,branch(other,"Other"),"Kitchen"));
+        UUID order = UUID.randomUUID(), item = UUID.randomUUID(), ticket = UUID.randomUUID();
+        db.sql("""
+                INSERT INTO pos_order(id,order_number,merchant_id,branch_id,subtotal_pesewas,total_pesewas)
+                VALUES(:id,:n,:m,:b,1000,1000)
+                """).param("id",order).param("n","push-"+order).param("m",m).param("b",a).update();
+        db.sql("""
+                INSERT INTO pos_order_item(id,order_id,item_name,quantity,unit_price_pesewas,total_pesewas)
+                VALUES(:id,:o,'Test',1,1000,1000)
+                """).param("id",item).param("o",order).update();
+        db.sql("INSERT INTO restaurant_kds_ticket(id,merchant_id,order_id) VALUES(:id,:m,:o)")
+                .param("id",ticket).param("m",m).param("o",order).update();
+        db.sql("""
+                INSERT INTO restaurant_kds_item(id,ticket_id,order_item_id,item_name,quantity,station_id)
+                VALUES(:id,:t,:i,'Test',1,NULL)
+                """).param("id",UUID.randomUUID()).param("t",ticket).param("i",item).update();
+        String event = "kitchen:"+ticket;
+        assertThat(queued(subA,event)).isEqualTo(1);
+        assertThat(queued(subB,event)).isZero();
+        assertThat(queued(subOther,event)).isZero();
+        assertThat(restaurant.kitchenOrderPending(m,ticket,stationA)).isTrue();
+        assertThat(restaurant.kitchenOrderPending(m,ticket,stationB)).isFalse();
+        db.sql("UPDATE restaurant_kds_ticket SET status='CANCELLED' WHERE id=:id").param("id",ticket).update();
+        assertThat(restaurant.kitchenOrderPending(m,ticket,stationA)).isFalse();
+    }
+
+    @Test void oversizedTokenRejectedBeforeDatabaseIndexWrite() {
+        authenticate("owner-"+UUID.randomUUID());
+        assertThatThrownBy(() -> new PushRegistration(db,merchants,kitchen,true,168).register(
+                new PushRegistration.Request(UUID.randomUUID(),UUID.randomUUID(),"POS","a".repeat(1025),null),false))
+                .isInstanceOf(ApiException.class).hasMessageContaining("Invalid notification registration");
+    }
+
     @Test void disabledRegistrationFailsClosed() {
         assertThatThrownBy(() -> new PushRegistration(db,merchants,kitchen,false,168).register(null,false))
                 .isInstanceOf(ApiException.class).hasMessageContaining("disabled");

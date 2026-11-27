@@ -59,6 +59,7 @@ export function useFcmRegistration(
     let requested = false;
     let running = false;
     let pendingToken: string | null = null;
+    let channelReady = false;
     let permissionGranted = false;
 
     // Notification contents are generic; the existing authenticated screens remain authoritative.
@@ -70,10 +71,10 @@ export function useFcmRegistration(
       }),
     });
 
-    async function register(token: string, force: boolean) {
+    async function register(token: string) {
       await enqueue(async () => {
         if (!active || !permissionGranted) return;
-        if (!force && lastToken === token && Date.now() - lastRenewal < 15 * 60_000) return;
+        if (lastToken === token && Date.now() - lastRenewal < 15 * 60_000) return;
         const id = await installationId();
         if (!active || !permissionGranted) return;
         await send(scope, "register", {
@@ -89,12 +90,15 @@ export function useFcmRegistration(
       if (!active || running) return;
       running = true;
       try {
-        await Notifications.setNotificationChannelAsync(CHANNEL, {
+        if (!channelReady) {
+          await Notifications.setNotificationChannelAsync(CHANNEL, {
           name: "ELEPAY updates",
           importance: Notifications.AndroidImportance.HIGH,
           lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
           sound: "default",
-        });
+          });
+          channelReady = true;
+        }
         let permission = await Notifications.getPermissionsAsync();
         if (!permission.granted && prompt && !requested && permission.canAskAgain) {
           requested = true;
@@ -103,22 +107,22 @@ export function useFcmRegistration(
         if (!active) return;
         permissionGranted = permission.granted;
         if (!permissionGranted) {
-          {
-            await enqueue(async () => {
+          await enqueue(async () => {
               if (!active) return;
               const id = await SecureStore.getItemAsync(INSTALLATION_KEY);
               if (id) await send(scope, "unregister", {
                 merchantId: scope.merchantId, installationId: id, app: scope.app,
               });
               lastToken = null;
-            });
-          }
+          });
           return;
         }
         // Native Android FCM token, not an Expo Push Service token.
+        // Renew only when due; actual token rotation is handled by the native listener.
+        if (lastToken && Date.now() - lastRenewal < 15 * 60_000) return;
         const nativeToken = await Notifications.getDevicePushTokenAsync();
         if (nativeToken.type === "android" && typeof nativeToken.data === "string" && nativeToken.data) {
-          await register(nativeToken.data, false);
+          await register(nativeToken.data);
         }
       } catch {
         // An offline phone, missing Firebase build config or a disabled backend must not break POS.
@@ -127,7 +131,7 @@ export function useFcmRegistration(
         running = false;
         const token = pendingToken;
         pendingToken = null;
-        if (active && permissionGranted && token) void register(token, false).catch(() => {});
+        if (active && permissionGranted && token) void register(token).catch(() => {});
       }
     }
 
@@ -135,7 +139,7 @@ export function useFcmRegistration(
       if (!active || token.type !== "android" || typeof token.data !== "string") return;
       if (running) { pendingToken = token.data; return; }
       if (!permissionGranted) return;
-      void register(token.data, false).catch(() => {});
+      void register(token.data).catch(() => {});
     });
     const appStateSubscription = AppState.addEventListener("change", (state) => {
       if (state === "active") void refresh(false);

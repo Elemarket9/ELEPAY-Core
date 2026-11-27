@@ -25,6 +25,12 @@ class PushRetention {
                     AND next_attempt_at <= now() LIMIT 5000 FOR UPDATE SKIP LOCKED)
                 """).update();
         db.sql("""
+                UPDATE push_delivery SET state = 'CANCELLED', last_error = 'REGISTRATION_UNAVAILABLE'
+                WHERE id IN (SELECT d.id FROM push_delivery d WHERE d.state = 'PENDING'
+                    AND NOT EXISTS (SELECT 1 FROM push_eligible_subscription s WHERE s.id = d.subscription_id)
+                    LIMIT 5000 FOR UPDATE OF d SKIP LOCKED)
+                """).update();
+        db.sql("""
                 DELETE FROM push_delivery WHERE id IN (
                     SELECT id FROM push_delivery WHERE expires_at < now() - interval '7 days'
                     LIMIT 5000 FOR UPDATE SKIP LOCKED)

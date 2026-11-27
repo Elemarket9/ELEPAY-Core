@@ -38,7 +38,7 @@ public class PushRegistration {
     public void register(Request req, boolean kitchenRoute) {
         if (!enabled) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "push_disabled", "Push notifications are disabled");
         if (req == null || req.merchantId() == null || req.installationId() == null || req.app() == null
-                || req.token() == null || !req.token().matches("[A-Za-z0-9_:.-]{20,4096}"))
+                || req.token() == null || !req.token().matches("[A-Za-z0-9_:.-]{20,1024}"))
             throw ApiException.badRequest("invalid_push_registration", "Invalid notification registration");
         Actor actor = Actor.current();
         UUID credential = null;

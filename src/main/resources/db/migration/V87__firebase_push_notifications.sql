@@ -5,7 +5,7 @@ CREATE TABLE push_subscription (
     subject text NOT NULL,
     app text NOT NULL CHECK (app IN ('WAITER','POS','KDS','MERCHANT')),
     installation_id uuid NOT NULL,
-    token text NOT NULL UNIQUE CHECK (length(token) BETWEEN 20 AND 4096),
+    token text NOT NULL UNIQUE CHECK (length(token) BETWEEN 20 AND 1024),
     branch_id uuid REFERENCES merchant_branch(id),
     station_id uuid REFERENCES restaurant_kitchen_station(id) ON DELETE CASCADE,
     kitchen_credential_id uuid REFERENCES api_credential(id) ON DELETE CASCADE,
@@ -61,6 +61,7 @@ CREATE TABLE push_delivery (
 );
 CREATE INDEX push_delivery_pending ON push_delivery(next_attempt_at,id) WHERE state = 'PENDING';
 CREATE INDEX push_delivery_expiry ON push_delivery(expires_at);
+CREATE INDEX push_delivery_subscription_pending ON push_delivery(subscription_id) WHERE state = 'PENDING';
 
 -- Queue station-specific signals inside the same transaction as kitchen ticket creation.
 CREATE FUNCTION elepay_push_kitchen_item() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -69,9 +70,12 @@ BEGIN
         INSERT INTO push_delivery(subscription_id,event_key,kind)
         SELECT s.id,'kitchen:' || t.id::text,'KITCHEN_ORDER'
         FROM restaurant_kds_ticket t
+        JOIN pos_order o ON o.id = t.order_id AND o.merchant_id = t.merchant_id
         JOIN push_eligible_subscription s ON s.merchant_id = t.merchant_id AND s.app = 'KDS'
+        LEFT JOIN restaurant_kitchen_station st ON st.id = s.station_id AND st.merchant_id = t.merchant_id
         WHERE t.id = NEW.ticket_id
-          AND (s.station_id IS NULL OR s.station_id = NEW.station_id)
+          AND (s.station_id IS NULL OR s.station_id = NEW.station_id OR NEW.station_id IS NULL)
+          AND (st.branch_id IS NULL OR st.branch_id = o.branch_id)
         ON CONFLICT(subscription_id,event_key) DO NOTHING;
     END IF;
     RETURN NEW;

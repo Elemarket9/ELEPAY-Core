@@ -27,13 +27,13 @@ The default is disabled and no Firebase credentials are loaded while disabled. F
 
 ## Event and authorization model
 
-- KDS: new kitchen ticket, only for the corresponding merchant and station (or authorized all-stations device).
+- KDS: new kitchen ticket, only for the corresponding merchant and station (or authorized all-stations device). Unrouted items notify eligible stations in the order's branch, including global stations.
 - Waiter: a ticket becomes READY, only for its assigned waiter and branch.
 - POS: bill requested, only for the merchant's eligible cashier/manager installations.
-- Merchant: committed checkout-paid event, only for eligible merchant roles, and only when financial push is enabled.
+- Merchant: committed checkout-paid event, only for merchants with positive paid allocations and eligible merchant roles, and only when financial push is enabled.
 - Android notifications contain generic text, an opaque delivery ID and event kind. They contain no payment amount, customer name, order details, credentials or PII. Opening the app uses its existing authenticated API and polling. No payment or order mutation can be triggered by a push.
 - Registrations are installation scoped, renewed on foreground and token rotation, removed on sign-out/unpair when connected, and expire after the lease. Offline sign-out cannot guarantee immediate server removal; generic notifications may still arrive until the lease expires or the token is invalidated.
-- Delivery is at least once, with bounded retries, expiry and invalid-token cleanup. Claims commit before FCM network I/O and are fenced by attempt number. Token rotation invalidates old registration IDs without locking order transactions; pending alerts are revalidated before send. Android notification tags suppress repeated tray entries for the same delivery. A crash or ambiguous provider acknowledgement can duplicate a notification. Never interpret Firebase acceptance as delivery or as an order acknowledgement.
+- Delivery is at least once, with bounded retries, expiry and invalid-token cleanup. Claims commit before FCM network I/O and are fenced by attempt number. Token rotation invalidates old registration IDs without locking order transactions; pending alerts are revalidated before send. Android notification tags suppress repeated tray entries for the same delivery. Checkout events older than 15 minutes are not replayed into the push queue. FCM tokens are capped at 1024 ASCII characters to keep the PostgreSQL unique index safe. A crash or ambiguous provider acknowledgement can duplicate a notification. Never interpret Firebase acceptance as delivery or as an order acknowledgement.
 
 ## Acceptance checklist
 

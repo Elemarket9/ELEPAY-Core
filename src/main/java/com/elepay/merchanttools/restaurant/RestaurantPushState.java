@@ -14,9 +14,13 @@ public class RestaurantPushState {
         return db.sql("""
                 SELECT EXISTS (SELECT 1 FROM restaurant_kds_ticket t
                     JOIN restaurant_kds_item i ON i.ticket_id = t.id
+                    JOIN pos_order o ON o.id = t.order_id AND o.merchant_id = t.merchant_id
+                    LEFT JOIN restaurant_kitchen_station st ON st.id = CAST(:st AS uuid) AND st.merchant_id = t.merchant_id
                     WHERE t.merchant_id = :m AND t.id = :r
                       AND t.status IN ('NEW','PREPARING') AND i.item_status = 'NEW'
-                      AND (CAST(:st AS uuid) IS NULL OR i.station_id = CAST(:st AS uuid)))
+                      AND (CAST(:st AS uuid) IS NULL OR st.id IS NOT NULL)
+                      AND (CAST(:st AS uuid) IS NULL OR i.station_id = CAST(:st AS uuid) OR i.station_id IS NULL)
+                      AND (st.branch_id IS NULL OR st.branch_id = o.branch_id))
                 """).param("m",merchant).param("r",ticket).param("st",station).query(Boolean.class).single();
     }
 
