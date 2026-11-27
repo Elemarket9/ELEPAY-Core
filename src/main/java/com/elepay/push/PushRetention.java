@@ -20,6 +20,11 @@ class PushRetention {
                     LIMIT 5000 FOR UPDATE SKIP LOCKED)
                 """).update();
         db.sql("""
+                UPDATE push_delivery SET state = 'DEAD', last_error = 'ATTEMPTS_EXHAUSTED'
+                WHERE id IN (SELECT id FROM push_delivery WHERE state = 'PENDING' AND attempts >= 6
+                    AND next_attempt_at <= now() LIMIT 5000 FOR UPDATE SKIP LOCKED)
+                """).update();
+        db.sql("""
                 DELETE FROM push_delivery WHERE id IN (
                     SELECT id FROM push_delivery WHERE expires_at < now() - interval '7 days'
                     LIMIT 5000 FOR UPDATE SKIP LOCKED)
