@@ -1,3 +1,4 @@
+import { useFcmRegistration } from "@elepay/mobile-core/src/pushNotifications";
 import React, { useEffect, useMemo, useState } from "react";
 import { Platform, StyleSheet } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -52,6 +53,7 @@ export default function App() {
   }, []);
 
   const client = useMemo(() => new ElepayClient(baseUrl), [baseUrl]);
+  const stopPush = useFcmRegistration(client, "KDS", setup?.merchantId ?? null, device, setup?.stationId);
 
   async function handlePaired(url: string, d: DeviceCredential) {
     setBaseUrl(url);
@@ -80,6 +82,7 @@ export default function App() {
   }
 
   async function handleUnpair() {
+    await stopPush();
     setDevice(null);
     setSetup(null);
     await SecureStore.deleteItemAsync(KEY_DEVICE).catch(() => {});
