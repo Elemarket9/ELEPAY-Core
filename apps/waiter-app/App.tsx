@@ -1,3 +1,4 @@
+import { useFcmRegistration } from "@elepay/mobile-core/src/pushNotifications";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -204,6 +205,7 @@ function Root() {
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const client=useMemo(()=>session?new ElepayClient(session.url,session.token):null,[session]);
+  const stopPush=useFcmRegistration(client,"WAITER",merchant?.id??null);
   useEffect(()=>{let active=true;SecureStore.getItemAsync(SESSION).then(raw=>{if(active&&raw)setSession(JSON.parse(raw));}).catch(e=>setError(message(e)));return()=>{active=false;};},[]);
   useEffect(()=>{if(!client)return;let active=true;client.call<MerchantView[]>("/v1/merchants").then(rows=>{if(active){const allowed=rows.filter(x=>x.role==="waiter");setMerchants(allowed);setMerchant(allowed.length===1?allowed[0]:null);if(!allowed.length)setError("No waiter membership. Ask your manager to assign you.");}}).catch(e=>{if(active)setError(message(e));});return()=>{active=false;};},[client]);
   async function completeSession(endpoint:string,accessToken:string){
@@ -239,7 +241,7 @@ function Root() {
     try{const c=new ElepayClient(url.trim().replace(/\/+$/,""));await c.resendVerificationCodes(challengeId);setEmailCode("");setSmsCode("");setNotice("Fresh Email & SMS codes sent.");}
     catch(e){setError(message(e));}finally{setBusy(false);}
   }
-  async function logout(){try{await SecureStore.deleteItemAsync(SESSION);setSession(null);setMerchant(null);setMerchants([]);setError("");}catch(e){Alert.alert("Sign-out failed",message(e));}}
+  async function logout(){try{await stopPush();await SecureStore.deleteItemAsync(SESSION);setSession(null);setMerchant(null);setMerchants([]);setError("");}catch(e){Alert.alert("Sign-out failed",message(e));}}
   if(client&&merchant)return <Waiter key={merchant.id} client={client} merchant={merchant} logout={()=>void logout()}/>;
   return <SafeAreaView style={s.root}><ScrollView contentContainerStyle={s.content}><Text style={s.title}>ELEPAY Waiter</Text>{!!notice&&<Text style={s.notice}>{notice}</Text>}{!!error&&<Text style={s.error}>{error}</Text>}
     {client?<>{merchants.map(m=><Button key={m.id} label={m.tradingName} onPress={()=>setMerchant(m)}/>)}<Button label="Sign out" onPress={()=>void logout()}/></>:<>
