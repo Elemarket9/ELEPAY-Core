@@ -74,6 +74,7 @@ public class MtnProductionRail implements PaymentRail {
     }
 
     private final URI base;
+    private final String targetEnvironment;
     private final Credentials collection;
     private final Credentials disbursement;
     private final ObjectMapper json;
@@ -83,7 +84,9 @@ public class MtnProductionRail implements PaymentRail {
 
     @org.springframework.beans.factory.annotation.Autowired
     public MtnProductionRail(ObjectMapper json, NetworkHealthDetector health,
+            org.springframework.core.env.Environment env,
             @Value("${elepay.rails.mtn.base-url:}") String baseUrl,
+            @Value("${elepay.rails.mtn.sandbox-enabled:false}") boolean sandboxEnabled,
             @Value("${elepay.rails.mtn.collection-user:}") String collectionUser,
             @Value("${elepay.rails.mtn.collection-key:}") String collectionKey,
             @Value("${elepay.rails.mtn.collection-subscription:}") String collectionSubscription,
@@ -91,7 +94,8 @@ public class MtnProductionRail implements PaymentRail {
             @Value("${elepay.rails.mtn.disbursement-key:}") String disbursementKey,
             @Value("${elepay.rails.mtn.disbursement-subscription:}") String disbursementSubscription) {
         this(json, health,
-                (baseUrl == null || baseUrl.isBlank()) ? URI.create("https://proxy.momoapi.mtn.com") : productionBase(baseUrl),
+                resolveBase(baseUrl, sandboxEnabled, env),
+                sandboxEnabled ? "sandbox" : "mtnghana",
                 new Credentials(collectionUser, collectionKey, collectionSubscription),
                 new Credentials(disbursementUser, disbursementKey, disbursementSubscription),
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
@@ -99,14 +103,49 @@ public class MtnProductionRail implements PaymentRail {
     }
 
     public MtnProductionRail(ObjectMapper json, NetworkHealthDetector health,
+            String baseUrl, String collectionUser, String collectionKey, String collectionSubscription,
+            String disbursementUser, String disbursementKey, String disbursementSubscription) {
+        this(json, health, null, baseUrl, false, collectionUser, collectionKey, collectionSubscription,
+                disbursementUser, disbursementKey, disbursementSubscription);
+    }
+
+    public MtnProductionRail(ObjectMapper json, NetworkHealthDetector health,
             URI baseUri, Credentials collection, Credentials disbursement, HttpClient client) {
+        this(json, health, baseUri, "mtnghana", collection, disbursement, client);
+    }
+
+    public MtnProductionRail(ObjectMapper json, NetworkHealthDetector health,
+            URI baseUri, String targetEnvironment, Credentials collection, Credentials disbursement, HttpClient client) {
         this.base = baseUri;
+        this.targetEnvironment = (targetEnvironment == null || targetEnvironment.isBlank()) ? "mtnghana" : targetEnvironment;
         this.collection = collection;
         this.disbursement = disbursement;
         this.json = json;
         this.health = health;
         this.client = client != null ? client : HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
                 .followRedirects(HttpClient.Redirect.NEVER).build();
+    }
+
+    public static URI resolveBase(String url, boolean sandboxEnabled, org.springframework.core.env.Environment env) {
+        if (!sandboxEnabled) {
+            return (url == null || url.isBlank()) ? URI.create("https://proxy.momoapi.mtn.com") : productionBase(url);
+        }
+        boolean isProd = env == null || env.acceptsProfiles(org.springframework.core.env.Profiles.of("prod", "production"));
+        if (isProd) {
+            throw new IllegalStateException("MTN sandbox mode is forbidden under prod/production profiles");
+        }
+        if (url == null || url.isBlank()) {
+            return URI.create("https://sandbox.momodeveloper.mtn.com");
+        }
+        URI u = URI.create(url);
+        if (!"https".equalsIgnoreCase(u.getScheme()) || u.getHost() == null
+                || !"sandbox.momodeveloper.mtn.com".equalsIgnoreCase(u.getHost())
+                || u.getUserInfo() != null || u.getQuery() != null || u.getFragment() != null
+                || (u.getPort() != -1 && u.getPort() != 443)
+                || !(u.getPath().isEmpty() || u.getPath().equals("/"))) {
+            throw new IllegalStateException("Use https://sandbox.momodeveloper.mtn.com when MTN sandbox mode is enabled");
+        }
+        return u;
     }
 
     public static URI productionBase(String url) {
@@ -521,7 +560,7 @@ public class MtnProductionRail implements PaymentRail {
         return HttpRequest.newBuilder(base.resolve(path)).timeout(Duration.ofSeconds(15))
                 .header("User-Agent", "ELEPAY-Core/1.0")
                 .header("Accept", "application/json")
-                .header("X-Target-Environment", "mtnghana");
+                .header("X-Target-Environment", targetEnvironment);
     }
 
     private String getOrRefreshToken(String product, Credentials c, boolean forceRefresh) throws Exception {

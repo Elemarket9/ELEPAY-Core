@@ -1,0 +1,262 @@
+/* Track A KDS Restovax extensions (scoped to .kitchen-* so web/src/styles.css stays untouched). */
+
+.kitchen-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.kitchen-view-toggle button {
+  margin: 0;
+  padding: 0.28rem 0.72rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: #b7d7c8;
+  cursor: pointer;
+}
+
+.kitchen-view-toggle button.active {
+  background: var(--gold, #f5c542);
+  color: #161d1a;
+}
+
+.kitchen-addon-banner {
+  background: #7c2d12;
+  border: 1px solid #fb923c;
+  color: #ffedd5;
+  border-radius: 6px;
+  padding: 0.28rem 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.kitchen-table-header {
+  background: #0f241c;
+  border-left: 4px solid var(--gold, #f5c542);
+  border-radius: 6px;
+  padding: 0.35rem 0.65rem;
+  font-size: 1.65rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: var(--gold, #f5c542);
+  line-height: 1.15;
+}
+
+.kitchen-course-group {
+  margin-top: 0.25rem;
+}
+
+.kitchen-course-header {
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #93c5fd;
+  padding: 0.28rem 0 0.12rem;
+}
+
+.kitchen-item-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.kitchen-autoready-badge {
+  flex-shrink: 0;
+  background: #0c4a6e;
+  border: 1px solid #38bdf8;
+  color: #bae6fd;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 0.12rem 0.42rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+/* Optional 3-column Lanes view (NEW / COOKING / READY) */
+.kitchen-lanes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  align-items: start;
+  overflow-x: auto;
+}
+
+@media (max-width: 860px) {
+  .kitchen-lanes {
+    grid-template-columns: 1fr;
+  }
+}
+
+.kitchen-lane {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid #283530;
+  border-radius: var(--radius-md, 10px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.kitchen-lane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.9rem;
+  background: #171f1c;
+  border-top: 4px solid #22c55e;
+  border-bottom: 1px solid #283530;
+  font-size: 0.95rem;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  color: #fff;
+}
+
+.kitchen-lane.lane-cooking .kitchen-lane-header {
+  border-top-color: #f5c542;
+}
+
+.kitchen-lane.lane-ready .kitchen-lane-header {
+  border-top-color: #38bdf8;
+}
+
+.kitchen-lane-count {
+  background: #232f2a;
+  color: var(--gold, #f5c542);
+  font-size: 0.8rem;
+  font-weight: 800;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+}
+
+.kitchen-lane-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.75rem;
+}
+
+.kitchen-lane-empty {
+  margin: 0;
+  padding: 1.5rem 0.5rem;
+  text-align: center;
+  color: #6b7d75;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+/* Cancel Reason Modal */
+.kitchen-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 90;
+}
+
+.kitchen-modal {
+  width: 100%;
+  max-width: 460px;
+  background: #171f1c;
+  border: 1px solid #283530;
+  border-radius: var(--radius-md, 10px);
+  padding: 1.25rem;
+  color: #f3f7f5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.5);
+}
+
+.kitchen-modal h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #fff;
+}
+
+.kitchen-modal-sub {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #9cb0a7;
+}
+
+.kitchen-reason-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.kitchen-reason-chip {
+  margin: 0;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid #374841;
+  background: #232f2a;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kitchen-reason-chip.selected {
+  background: var(--gold, #f5c542);
+  border-color: var(--gold, #f5c542);
+  color: #161d1a;
+}
+
+.kitchen-reason-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #111916;
+  border: 1px solid #374841;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.95rem;
+  padding: 0.65rem 0.8rem;
+}
+
+.kitchen-reason-input::placeholder {
+  color: #6b7d75;
+}
+
+.kitchen-modal-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
+}
+
+.kitchen-modal-actions button {
+  flex: 1;
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.kitchen-modal-actions button.danger {
+  background: #b91c1c;
+  border: 1px solid #b91c1c;
+  color: #fff;
+}
+
+.kitchen-modal-actions button.danger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

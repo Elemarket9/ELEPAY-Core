@@ -94,6 +94,27 @@ export interface PosCartLine {
   unitPricePesewas: number;
   qty: number;
   seatNumber?: number | null;
+  course?: string | null;
+}
+
+export interface KdsTicketPayloadItem {
+  orderItemId: string;
+  itemName: string;
+  quantity: number;
+  modifiers: string | null;
+  course: string;
+}
+
+export interface KdsTicketPayload {
+  merchantId: string;
+  orderId: string;
+  tableId: string | null;
+  diningMode: string;
+  serverName: string | null;
+  course: string;
+  items: KdsTicketPayloadItem[];
+  notes: string | null;
+  clientRef: string;
 }
 
 export interface EvenSplitResult {
@@ -189,6 +210,47 @@ export function computeCartTotals(
   return { subtotal, effectiveDiscount, tax, total: taxableBase + tax };
 }
 
+export function normalizeCourse(course?: string | null): string {
+  const trimmed = course?.trim();
+  return trimmed ? trimmed.toUpperCase() : "MAIN";
+}
+
+export function resolveTicketCourse(items: { course?: string | null }[]): string {
+  if (items.length === 0) return "MAIN";
+  const unique = new Set(items.map((it) => normalizeCourse(it.course)));
+  return unique.size === 1 ? Array.from(unique)[0] : "ALL";
+}
+
+export function buildKdsTicketPayload(args: {
+  merchantId: string;
+  orderId: string;
+  tableId: string | null;
+  orderType: OrderType;
+  serverName: string | null;
+  orderItems: PosOrderItem[];
+  notes?: string | null;
+  clientRef?: string | null;
+}): KdsTicketPayload {
+  const items: KdsTicketPayloadItem[] = args.orderItems.map((it) => ({
+    orderItemId: it.id,
+    itemName: it.itemName,
+    quantity: it.quantity,
+    modifiers: it.modifiersJson && it.modifiersJson !== "[]" ? it.modifiersJson : null,
+    course: normalizeCourse(it.course),
+  }));
+  return {
+    merchantId: args.merchantId,
+    orderId: args.orderId,
+    tableId: args.orderType === "DINE_IN" && args.tableId ? args.tableId : null,
+    diningMode: args.orderType === "TAKEAWAY" ? "TAKEOUT" : args.orderType,
+    serverName: args.serverName,
+    course: resolveTicketCourse(items),
+    items,
+    notes: args.notes ?? null,
+    clientRef: args.clientRef ?? `pos:${args.orderId}`,
+  };
+}
+
 export function buildPosOrderPayload(args: {
   merchantId: string;
   branchId: string | null;
@@ -213,6 +275,7 @@ export function buildPosOrderPayload(args: {
       discountPesewas: 0,
       taxPesewas: 0,
       seatNumber: args.orderType === "DINE_IN" ? (c.seatNumber ?? null) : null,
+      course: c.course?.trim() ? c.course.trim().toUpperCase() : null,
     })),
     discountPesewas: args.discountPesewas,
     taxPesewas: args.taxPesewas,

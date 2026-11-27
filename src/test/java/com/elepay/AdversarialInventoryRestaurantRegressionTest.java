@@ -26,6 +26,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * Regression suite for Track 6 (Inventory & Restaurant) adversarial findings:
@@ -50,6 +51,7 @@ class AdversarialInventoryRestaurantRegressionTest extends PostgresTestBase {
     @Autowired KitchenStationService stationService;
     @Autowired KdsService kdsService;
     @Autowired KdsPrintService printService;
+    @Autowired JdbcClient db;
 
     private TestApi api;
     private String ownerToken;
@@ -434,5 +436,184 @@ class AdversarialInventoryRestaurantRegressionTest extends PostgresTestBase {
                 "isRequired", true
         ));
         assertThat(validRange.status()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("Phase 0 Bug #3a: Waiter orders preserve per-item courses, compute ticket course, default unset to MAIN, and reject invalid course")
+    void waiterOrderPreservesItemCoursesAndDefaultsUnsetToMain() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String waiterSubject = "waiter-course-" + suffix + "@buka.gh";
+        String waiterToken = api.token(waiterSubject);
+        assertThat(api.call("PUT", "/v1/merchants/" + merchantId + "/members/" + waiterSubject, ownerToken, null,
+                Map.of("role", "waiter", "branchId", branchAId.toString())).status()).isEqualTo(200);
+
+        var floor = tableService.createFloorPlan(merchantId, "Course Hall", "{}");
+        var table1 = tableService.createTable(merchantId, floor.id(), "T-C1", 4);
+        var table2 = tableService.createTable(merchantId, floor.id(), "T-C2", 4);
+        var table3 = tableService.createTable(merchantId, floor.id(), "T-C3", 4);
+        for (var t : List.of(table1, table2, table3)) {
+            assertThat(api.call("PUT", "/v1/restaurant/waiter/" + merchantId + "/tables/" + t.id() + "/branch",
+                    ownerToken, null, Map.of("branchId", branchAId.toString())).status()).isEqualTo(200);
+        }
+
+        var cat = catalogService.createCategory(merchantId, "Menu");
+        var p1 = catalogService.createProduct(merchantId, cat.id(), "Kelewele", null, null);
+        var v1 = catalogService.createVariant(merchantId, p1.id(), "KEL-" + suffix, null, "Standard", "{}", 1000L, 2500L, false);
+        var p2 = catalogService.createProduct(merchantId, cat.id(), "Jollof", null, null);
+        var v2 = catalogService.createVariant(merchantId, p2.id(), "JOL-" + suffix, null, "Standard", "{}", 2000L, 4500L, false);
+        var p3 = catalogService.createProduct(merchantId, cat.id(), "Sobolo", null, null);
+        var v3 = catalogService.createVariant(merchantId, p3.id(), "SOB-" + suffix, null, "Standard", "{}", 500L, 1500L, false);
+
+        // 1. Mixed courses: lowercase "appetizer", omitted course (defaults to MAIN), and "BEVERAGE"
+        var mixedResp = api.call("POST", "/v1/restaurant/waiter/" + merchantId + "/orders", waiterToken, "wk-mix-" + suffix, Map.of(
+                "tableId", table1.id().toString(),
+                "items", List.of(
+                        Map.of("variantId", v1.id().toString(), "quantity", 1, "notes", "Extra peanuts", "course", "appetizer"),
+                        Map.of("variantId", v2.id().toString(), "quantity", 1, "notes", "Spicy"),
+                        Map.of("variantId", v3.id().toString(), "quantity", 2, "notes", "Chilled", "course", "BEVERAGE")
+                ),
+                "notes", "Mixed course table"
+        ));
+        assertThat(mixedResp.status()).isEqualTo(200);
+        UUID mixedOrderId = UUID.fromString(mixedResp.body().get("orderId").asString());
+        UUID mixedTicketId = UUID.fromString(mixedResp.body().get("ticketId").asString());
+
+        var orderCourses = posOrderService.listOrderItems(mixedOrderId).stream()
+                .collect(java.util.stream.Collectors.toMap(PosOrderService.PosOrderItem::itemName, PosOrderService.PosOrderItem::course));
+        assertThat(orderCourses).containsEntry("Kelewele", "APPETIZER")
+                .containsEntry("Jollof", "MAIN")
+                .containsEntry("Sobolo", "BEVERAGE");
+
+        var kdsItems = kdsService.listTicketItems(mixedTicketId).stream()
+                .collect(java.util.stream.Collectors.toMap(KdsService.KdsItem::itemName, KdsService.KdsItem::course));
+        assertThat(kdsItems).containsEntry("Kelewele", "APPETIZER")
+                .containsEntry("Jollof", "MAIN")
+                .containsEntry("Sobolo", "BEVERAGE");
+
+        var mixedTicket = kdsService.getTicket(mixedTicketId).orElseThrow();
+        assertThat(mixedTicket.course()).isEqualTo("ALL");
+
+        // 2. Single non-MAIN course order -> ticket course equals APPETIZER
+        var singleResp = api.call("POST", "/v1/restaurant/waiter/" + merchantId + "/orders", waiterToken, "wk-single-" + suffix, Map.of(
+                "tableId", table2.id().toString(),
+                "items", List.of(Map.of("variantId", v1.id().toString(), "quantity", 1, "notes", "", "course", "APPETIZER")),
+                "notes", "Starters only"
+        ));
+        assertThat(singleResp.status()).isEqualTo(200);
+        UUID singleTicketId = UUID.fromString(singleResp.body().get("ticketId").asString());
+        assertThat(kdsService.getTicket(singleTicketId).orElseThrow().course()).isEqualTo("APPETIZER");
+
+        // 3. Invalid non-blank course -> 400 invalid_course
+        var badResp = api.call("POST", "/v1/restaurant/waiter/" + merchantId + "/orders", waiterToken, "wk-bad-" + suffix, Map.of(
+                "tableId", table3.id().toString(),
+                "items", List.of(Map.of("variantId", v1.id().toString(), "quantity", 1, "notes", "", "course", "BOGUS")),
+                "notes", ""
+        ));
+        assertThat(badResp.status()).isEqualTo(400);
+        assertThat(badResp.body().get("code").asString()).isEqualTo("invalid_course");
+    }
+
+    @Test
+    @DisplayName("Phase 0 Bug #4: Waiter orders populate KDS ticket serverName from display name with subject fallback")
+    void waiterOrderSetsServerNameFromWaiterDisplayNameAndFallsBackToSubject() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String namedWaiterEmail = "ama-" + suffix + "@buka.gh";
+        String unnamedWaiterSubject = "waiter-bare-" + suffix;
+
+        // Provision native auth_account with full_name = "Ama Mensah"
+        db.sql("""
+                INSERT INTO auth_account (id, email, phone, full_name, password_hash, roles, status)
+                VALUES (:id, :email, :phone, 'Ama Mensah', 'hash', 'user', 'active')
+                """)
+                .param("id", UUID.randomUUID())
+                .param("email", namedWaiterEmail)
+                .param("phone", "23324" + String.format("%07d", java.util.concurrent.ThreadLocalRandom.current().nextInt(1000000, 9999999)))
+                .update();
+
+        assertThat(api.call("PUT", "/v1/merchants/" + merchantId + "/members/" + namedWaiterEmail, ownerToken, null,
+                Map.of("role", "waiter", "branchId", branchAId.toString())).status()).isEqualTo(200);
+        assertThat(api.call("PUT", "/v1/merchants/" + merchantId + "/members/" + unnamedWaiterSubject, ownerToken, null,
+                Map.of("role", "waiter", "branchId", branchAId.toString())).status()).isEqualTo(200);
+
+        var floor = tableService.createFloorPlan(merchantId, "Server Hall", "{}");
+        var table1 = tableService.createTable(merchantId, floor.id(), "T-S1", 4);
+        var table2 = tableService.createTable(merchantId, floor.id(), "T-S2", 4);
+        assertThat(api.call("PUT", "/v1/restaurant/waiter/" + merchantId + "/tables/" + table1.id() + "/branch",
+                ownerToken, null, Map.of("branchId", branchAId.toString())).status()).isEqualTo(200);
+        assertThat(api.call("PUT", "/v1/restaurant/waiter/" + merchantId + "/tables/" + table2.id() + "/branch",
+                ownerToken, null, Map.of("branchId", branchAId.toString())).status()).isEqualTo(200);
+
+        var cat = catalogService.createCategory(merchantId, "Food");
+        var prod = catalogService.createProduct(merchantId, cat.id(), "Banku", null, null);
+        var variant = catalogService.createVariant(merchantId, prod.id(), "BNK-" + suffix, null, "Standard", "{}", 1500L, 4000L, false);
+
+        // 1. Waiter with auth_account profile -> serverName = "Ama Mensah"
+        var resp1 = api.call("POST", "/v1/restaurant/waiter/" + merchantId + "/orders", api.token(namedWaiterEmail), "ws-1-" + suffix, Map.of(
+                "tableId", table1.id().toString(),
+                "items", List.of(Map.of("variantId", variant.id().toString(), "quantity", 1, "notes", "")),
+                "notes", ""
+        ));
+        assertThat(resp1.status()).isEqualTo(200);
+        UUID ticket1Id = UUID.fromString(resp1.body().get("ticketId").asString());
+        assertThat(kdsService.getTicket(ticket1Id).orElseThrow().serverName()).isEqualTo("Ama Mensah");
+
+        // 2. Waiter without auth_account profile or JWT name claim -> falls back to subject
+        var resp2 = api.call("POST", "/v1/restaurant/waiter/" + merchantId + "/orders", api.token(unnamedWaiterSubject), "ws-2-" + suffix, Map.of(
+                "tableId", table2.id().toString(),
+                "items", List.of(Map.of("variantId", variant.id().toString(), "quantity", 1, "notes", "")),
+                "notes", ""
+        ));
+        assertThat(resp2.status()).isEqualTo(200);
+        UUID ticket2Id = UUID.fromString(resp2.body().get("ticketId").asString());
+        assertThat(kdsService.getTicket(ticket2Id).orElseThrow().serverName()).isEqualTo(unnamedWaiterSubject);
+    }
+
+    @Test
+    @DisplayName("Phase 0 Adversarial: Branch B cashier cannot void Branch A order or cancel its open KDS ticket")
+    void branchBCashierCannotVoidBranchAOrderOrCancelItsKdsTicket() {
+        var orderA = posOrderService.createOrder(merchantId, branchAId, null, null, null,
+                List.of(new PosOrderService.OrderItemInput(null, "Jollof", BigDecimal.ONE, 5000L, 0L, 0L, "[]", null, "MAIN", null)),
+                0L, 0L, 0L, "DINE_IN");
+        var orderAItem = posOrderService.listOrderItems(orderA.id()).get(0);
+        var ticketA = kdsService.createTicket(merchantId, orderA.id(), null, DiningMode.DINE_IN, "Ama", "MAIN",
+                List.of(new KdsService.KdsItemInput(orderAItem.id(), "Jollof", BigDecimal.ONE, null, "MAIN")),
+                null, "adv-void-" + orderA.id());
+
+        var voidResp = api.call("POST", "/v1/pos/orders/" + orderA.id() + "/void", branchBCashierToken, null, null);
+        assertThat(voidResp.status()).isEqualTo(404);
+        assertThat(posOrderService.getOrder(orderA.id()).orElseThrow().status()).isEqualTo("PENDING");
+        assertThat(kdsService.getTicket(ticketA.id()).orElseThrow().status()).isEqualTo("NEW");
+    }
+
+    @Test
+    @DisplayName("Phase 0 Adversarial: Branch B waiter cannot list or submit an order on a Branch A table")
+    void branchBWaiterCannotOrderOnBranchATableOrListIt() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String waiterBSubject = "waiter-b-" + suffix + "@buka.gh";
+        String waiterBToken = api.token(waiterBSubject);
+        assertThat(api.call("PUT", "/v1/merchants/" + merchantId + "/members/" + waiterBSubject, ownerToken, null,
+                Map.of("role", "waiter", "branchId", branchBId.toString())).status()).isEqualTo(200);
+
+        var floor = tableService.createFloorPlan(merchantId, "Branch A Only", "{}");
+        var tableA = tableService.createTable(merchantId, floor.id(), "T-BA1", 4);
+        assertThat(api.call("PUT", "/v1/restaurant/waiter/" + merchantId + "/tables/" + tableA.id() + "/branch",
+                ownerToken, null, Map.of("branchId", branchAId.toString())).status()).isEqualTo(200);
+
+        var cat = catalogService.createCategory(merchantId, "Food");
+        var prod = catalogService.createProduct(merchantId, cat.id(), "Waakye", null, null);
+        var variant = catalogService.createVariant(merchantId, prod.id(), "WAK-" + suffix, null, "Standard", "{}", 1500L, 3500L, false);
+
+        // GET /tables as Branch B waiter must exclude Branch A's table
+        var tablesResp = api.call("GET", "/v1/restaurant/waiter/" + merchantId + "/tables", waiterBToken, null, null);
+        assertThat(tablesResp.status()).isEqualTo(200);
+        assertThat(tablesResp.body().toString()).doesNotContain(tableA.id().toString());
+
+        // POST /orders on Branch A's table as Branch B waiter must return 404
+        var orderResp = api.call("POST", "/v1/restaurant/waiter/" + merchantId + "/orders", waiterBToken, "wb-" + suffix, Map.of(
+                "tableId", tableA.id().toString(),
+                "items", List.of(Map.of("variantId", variant.id().toString(), "quantity", 1, "notes", "")),
+                "notes", ""
+        ));
+        assertThat(orderResp.status()).isEqualTo(404);
     }
 }

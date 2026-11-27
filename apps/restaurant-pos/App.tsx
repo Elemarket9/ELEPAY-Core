@@ -7,6 +7,7 @@ import { colors, ElepayClient, MerchantView, radius, spacing } from "@elepay/mob
 import { SignInScreen } from "./src/screens/SignInScreen";
 import { PosRegisterScreen } from "./src/screens/PosRegisterScreen";
 import { FloorPlanScreen } from "./src/screens/FloorPlanScreen";
+import { OrdersScreen } from "./src/screens/OrdersScreen";
 
 const KEY_URL = "elepay_pos_base_url";
 const KEY_TOKEN = "elepay_pos_token";
@@ -18,8 +19,9 @@ export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [merchants, setMerchants] = useState<MerchantView[]>([]);
   const [merchantId, setMerchantId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"register" | "floor">("register");
+  const [tab, setTab] = useState<"register" | "floor" | "orders">("register");
   const [preselectedTableId, setPreselectedTableId] = useState<string | null>(null);
+  const [preselectedOrderId, setPreselectedOrderId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -119,6 +121,8 @@ export default function App() {
                 merchant={merchant}
                 preselectedTableId={preselectedTableId}
                 onClearPreselectedTable={() => setPreselectedTableId(null)}
+                preselectedOrderId={preselectedOrderId}
+                onClearPreselectedOrder={() => setPreselectedOrderId(null)}
               />
             </View>
           )}
@@ -133,6 +137,17 @@ export default function App() {
               }}
             />
           )}
+          {merchant && tab === "orders" && (
+            <OrdersScreen
+              key={merchant.id}
+              client={client}
+              merchant={merchant}
+              onOpenOrder={(orderId) => {
+                setPreselectedOrderId(orderId);
+                setTab("register");
+              }}
+            />
+          )}
         </View>
 
         <View style={styles.tabBar}>
@@ -141,6 +156,9 @@ export default function App() {
           </Pressable>
           <Pressable style={[styles.tabItem, tab === "floor" && styles.tabItemActive]} onPress={() => setTab("floor")}>
             <Text style={[styles.tabLabel, tab === "floor" && styles.tabLabelActive]}>Floor Plan</Text>
+          </Pressable>
+          <Pressable style={[styles.tabItem, tab === "orders" && styles.tabItemActive]} onPress={() => setTab("orders")}>
+            <Text style={[styles.tabLabel, tab === "orders" && styles.tabLabelActive]}>Orders</Text>
           </Pressable>
         </View>
       </SafeAreaView>

@@ -1,6 +1,8 @@
 package com.elepay.merchanttools.restaurant;
 
+import com.elepay.common.ApiException;
 import com.elepay.merchanttools.pos.PosOrderService;
+import com.elepay.merchanttools.pos.PosSplitBillService;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -8,14 +10,52 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class RestaurantSplitBillService {
     private final PosOrderService orderService;
+    private final PosSplitBillService posSplitBillService;
 
     public RestaurantSplitBillService(PosOrderService orderService) {
+        this(orderService, null);
+    }
+
+    @Autowired
+    public RestaurantSplitBillService(PosOrderService orderService, PosSplitBillService posSplitBillService) {
         this.orderService = orderService;
+        this.posSplitBillService = posSplitBillService;
+    }
+
+    @Transactional
+    public PosSplitBillService.SplitPlan createPayableSeatSplit(UUID orderId) {
+        return requireSplitService().createSeatSplit(orderId);
+    }
+
+    public PosSplitBillService.SplitPlan getSplitPlan(UUID orderId) {
+        return requireSplitService().listSplits(orderId);
+    }
+
+    @Transactional
+    public PosSplitBillService.SplitPaymentResult paySeatSplit(
+            UUID orderId,
+            int seatNumber,
+            PosOrderService.TenderRequest req,
+            String actor
+    ) {
+        if (seatNumber <= 0) {
+            throw ApiException.badRequest("invalid_seat_number", "Seat number must be positive");
+        }
+        return requireSplitService().paySplit(orderId, "seat:" + seatNumber, req, actor);
+    }
+
+    private PosSplitBillService requireSplitService() {
+        if (posSplitBillService == null) {
+            throw new IllegalStateException("PosSplitBillService is required for payable seat splits");
+        }
+        return posSplitBillService;
     }
 
     public record SeatBill(

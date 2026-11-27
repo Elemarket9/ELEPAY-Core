@@ -143,10 +143,10 @@ jobs:
           # Production keeps the 24h destination cooling-off default.
           ELEPAY_SECURITY_DESTINATION_COOLING_OFF_HOURS: '0'
         run: |
-          mvn -B -Dspring-boot.run.profiles=sandbox,dev -Dspring-boot.run.main-class=com.elepay.SandboxApplication spring-boot:test-run > sandbox.log 2>&1 &
+          mvn -B -Dcyclonedx.skip=true -Dspring-boot.run.profiles=sandbox,dev -Dspring-boot.run.main-class=com.elepay.SandboxApplication spring-boot:test-run > sandbox.log 2>&1 &
           pid=$!
           trap 'cat sandbox.log; kill "$pid" 2>/dev/null || true' EXIT
-          for attempt in {1..60}; do
+          for attempt in {1..120}; do
             if curl -fsS http://127.0.0.1:8080/sandbox/balances/customer:readiness >/dev/null 2>&1; then
               python3 scripts/smoke.py
               python3 scripts/acceptance.py

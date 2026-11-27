@@ -246,6 +246,72 @@ class KdsReliabilityTest extends PostgresTestBase {
         assertThat(text).contains("#007").contains("TABLE T-05").contains("2 x Assorted").contains("groundnuts");
     }
 
+    @Test
+    @DisplayName("Phase 0 Bug #2: Voiding an order cancels all open KDS tickets and enqueues VOID print slips")
+    void voidOrderCancelsAllOpenKdsTicketsAndEnqueuesVoidSlips() {
+        stations.create(merchantId, new KitchenStationService.StationInput(
+                "Grill", null, true, KitchenStationService.Output.PRINTER, "tcp://192.168.1.51:9100", 42));
+
+        Order o = order();
+        var tNew = ticket(o, "void-test-new:" + o.orderId());
+        var tPrep = ticket(o, "void-test-prep:" + o.orderId());
+        var tServed = ticket(o, "void-test-served:" + o.orderId());
+
+        kds.advanceTicket(tPrep.id(), "NEW", "prep-" + tPrep.id());
+        kds.advanceTicket(tServed.id(), "NEW", "s1-" + tServed.id());
+        kds.advanceTicket(tServed.id(), "PREPARING", "s2-" + tServed.id());
+        kds.advanceTicket(tServed.id(), "READY", "s3-" + tServed.id());
+
+        // Claim and mark all 3 initial NEW print jobs as printed
+        for (int i = 0; i < 3; i++) {
+            var job = printing.claimNext(merchantId, "pos-1").orElseThrow();
+            assertThat(job.kind()).isEqualTo("NEW");
+            printing.report(job.id(), "pos-1", true, null);
+        }
+        assertThat(printing.claimNext(merchantId, "pos-1")).isEmpty();
+
+        // Void the pending order
+        var voided = orders.voidOrder(o.orderId(), "cashier-1");
+        assertThat(voided.status()).isEqualTo("VOIDED");
+
+        // Open tickets (NEW and PREPARING) must be CANCELLED with "Order voided" and cancelled items
+        var afterNew = kds.getTicket(tNew.id()).orElseThrow();
+        var afterPrep = kds.getTicket(tPrep.id()).orElseThrow();
+        var afterServed = kds.getTicket(tServed.id()).orElseThrow();
+        assertThat(afterNew.status()).isEqualTo("CANCELLED");
+        assertThat(afterNew.notes()).contains("Order voided");
+        assertThat(kds.listTicketItems(tNew.id())).allSatisfy(it -> assertThat(it.itemStatus()).isEqualTo("CANCELLED"));
+
+        assertThat(afterPrep.status()).isEqualTo("CANCELLED");
+        assertThat(afterPrep.notes()).contains("Order voided");
+        assertThat(kds.listTicketItems(tPrep.id())).allSatisfy(it -> assertThat(it.itemStatus()).isEqualTo("CANCELLED"));
+
+        // Already-SERVED ticket stays SERVED
+        assertThat(afterServed.status()).isEqualTo("SERVED");
+
+        // Exactly two VOID slips must be enqueued for the two cancelled tickets
+        var voidSlip1 = printing.claimNext(merchantId, "pos-1").orElseThrow();
+        assertThat(voidSlip1.kind()).isEqualTo("VOID");
+        assertThat(voidSlip1.content()).contains("VOID");
+        printing.report(voidSlip1.id(), "pos-1", true, null);
+
+        var voidSlip2 = printing.claimNext(merchantId, "pos-1").orElseThrow();
+        assertThat(voidSlip2.kind()).isEqualTo("VOID");
+        assertThat(voidSlip2.content()).contains("VOID");
+        printing.report(voidSlip2.id(), "pos-1", true, null);
+
+        assertThat(printing.claimNext(merchantId, "pos-1")).isEmpty();
+
+        // Repeated voidOrder is idempotent and enqueues no extra VOID slips
+        var voidedAgain = orders.voidOrder(o.orderId(), "cashier-1");
+        assertThat(voidedAgain.status()).isEqualTo("VOIDED");
+        assertThat(printing.claimNext(merchantId, "pos-1")).isEmpty();
+
+        // Voiding an order with zero KDS tickets succeeds cleanly
+        Order noTicketOrder = order();
+        assertThat(orders.voidOrder(noTicketOrder.orderId(), "cashier-1").status()).isEqualTo("VOIDED");
+    }
+
     private <T> List<T> race(int n, java.util.function.IntFunction<T> action) throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(n);
         CountDownLatch go = new CountDownLatch(1);

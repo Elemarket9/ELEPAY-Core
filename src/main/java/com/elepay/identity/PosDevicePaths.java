@@ -25,7 +25,10 @@ public final class PosDevicePaths {
             Pattern.compile("^/v1/pos/terminals/" + SEG + "/events$"),
             Pattern.compile("^/v1/pos/orders/" + SEG + "/nfc-tap$"),
             Pattern.compile("^/v1/pos/terminals/" + SEG + "/nfc-tap$"),
-            Pattern.compile("^/v1/pos/sync$")
+            Pattern.compile("^/v1/pos/sync$"),
+            Pattern.compile("^/v1/restaurant/kds/orders/" + SEG + "/receipt/print$"),
+            Pattern.compile("^/v1/restaurant/kds/print-jobs/claim$"),
+            Pattern.compile("^/v1/restaurant/kds/print-jobs/" + SEG + "/result$")
     );
 
     private PosDevicePaths() {}

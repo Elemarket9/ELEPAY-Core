@@ -12,16 +12,40 @@
 export type Status = "NEW" | "PREPARING" | "READY" | "SERVED" | "CANCELLED";
 export const FLOW: Status[] = ["NEW", "PREPARING", "READY", "SERVED"];
 
+export interface UrgencyThresholds {
+  warningMinutes: number;
+  criticalMinutes: number;
+}
+
+export const DEFAULT_URGENCY: UrgencyThresholds = {
+  warningMinutes: 10,
+  criticalMinutes: 15,
+};
+
+export const KDS_CANCEL_REASONS = [
+  "Out of stock",
+  "Customer cancelled",
+  "Duplicate order",
+  "Wrong item",
+  "Kitchen error",
+  "Other",
+] as const;
+
+export type Lane = "NEW" | "COOKING" | "READY";
+export const LANES: Lane[] = ["NEW", "COOKING", "READY"];
+
 export interface Ticket {
-  id: string; merchantId: string; orderId: string; tableId: string | null; diningMode: string;
+  id: string; merchantId: string; orderId: string; tableId: string | null; tableNumber?: string | null; diningMode: string;
   serverName: string | null; status: Status; course: string; notes: string | null;
   createdAt: string; startedAt: string | null; readyAt: string | null; servedAt: string | null;
   ticketNumber: number | null; clientRef: string | null; cancelledAt: string | null; changeSeq: number;
+  round?: number;
 }
 
 export interface Item {
   id: string; ticketId: string; orderItemId: string | null; itemName: string; quantity: number;
   modifiers: string | null; course: string; itemStatus: Status; stationId: string | null;
+  autoReady?: boolean;
 }
 
 export interface TicketView { ticket: Ticket; items: Item[] }
@@ -30,6 +54,7 @@ export interface PrintFailure { id: string; stationName: string; ticketId: strin
 
 export interface SyncResult {
   cursor: number; hasMore: boolean; serverTime: string; tickets: TicketView[]; printerFailures: PrintFailure[];
+  urgencyThresholds?: UrgencyThresholds | null;
 }
 
 export interface BumpResult { view: TicketView; applied: boolean; reason: string | null }
@@ -47,9 +72,13 @@ export interface KdsState {
   queue: QueuedAction[];
   lastSyncAt: number | null;
   printerFailures: PrintFailure[];
+  urgencyThresholds?: UrgencyThresholds;
 }
 
-export const emptyState = (): KdsState => ({ cursor: 0, tickets: {}, queue: [], lastSyncAt: null, printerFailures: [] });
+export const emptyState = (): KdsState => ({
+  cursor: 0, tickets: {}, queue: [], lastSyncAt: null, printerFailures: [],
+  urgencyThresholds: { ...DEFAULT_URGENCY },
+});
 
 const LIVE = (s: Status) => s !== "SERVED" && s !== "CANCELLED";
 
@@ -132,9 +161,21 @@ export function applySync(state: KdsState, result: SyncResult, now = Date.now())
     if (!known && v.ticket.status === "NEW") arrived.push(v.ticket.id);
     tickets[v.ticket.id] = withPending(v, state.queue);
   }
+  const thresholds =
+    result.urgencyThresholds &&
+    result.urgencyThresholds.warningMinutes > 0 &&
+    result.urgencyThresholds.criticalMinutes > result.urgencyThresholds.warningMinutes
+      ? result.urgencyThresholds
+      : (state.urgencyThresholds ?? { ...DEFAULT_URGENCY });
   return {
-    state: { ...state, tickets: prune(tickets, now), cursor: Math.max(state.cursor, result.cursor), lastSyncAt: now,
-      printerFailures: result.printerFailures },
+    state: {
+      ...state,
+      tickets: prune(tickets, now),
+      cursor: Math.max(state.cursor, result.cursor),
+      lastSyncAt: now,
+      printerFailures: result.printerFailures,
+      urgencyThresholds: thresholds,
+    },
     arrived,
   };
 }
@@ -162,21 +203,99 @@ function prune(tickets: Record<string, TicketView>, now: number): Record<string,
   return out;
 }
 
-/** Tickets a screen should show, oldest first. Expo (no station) also shows READY tickets awaiting pickup. */
+/** True when a station has at least one auto-ready item sitting at READY awaiting pickup/serve. */
+export function hasAutoReadyAtStation(view: TicketView, stationId: string | null): boolean {
+  if (!stationId) return false;
+  return view.items.some(
+    (i) =>
+      (i.stationId === stationId || i.stationId === null) &&
+      i.itemStatus === "READY" &&
+      Boolean(i.autoReady),
+  );
+}
+
+/** Tickets a screen should show, oldest first. Expo (no station) also shows READY tickets awaiting pickup; station screens show auto-ready READY items. */
 export function visible(state: KdsState, stationId: string | null): TicketView[] {
   return Object.values(state.tickets)
     .filter((v) => {
       const s = stationStatus(v, stationId);
       if (!LIVE(s)) return false;
       if (stationId && !v.items.some((i) => i.stationId === stationId || i.stationId === null)) return false;
-      return stationId ? s !== "READY" : true;
+      if (stationId && s === "READY") {
+        return hasAutoReadyAtStation(v, stationId);
+      }
+      return true;
     })
     .sort((a, b) => Date.parse(a.ticket.createdAt) - Date.parse(b.ticket.createdAt));
 }
 
-export function urgency(view: TicketView, now = Date.now()): "normal" | "warning" | "critical" {
+export function urgency(
+  view: TicketView,
+  now = Date.now(),
+  thresholds?: UrgencyThresholds | null,
+): "normal" | "warning" | "critical" {
+  const warn = thresholds?.warningMinutes ?? DEFAULT_URGENCY.warningMinutes;
+  const crit = thresholds?.criticalMinutes ?? DEFAULT_URGENCY.criticalMinutes;
   const minutes = (now - Date.parse(view.ticket.createdAt)) / 60000;
-  return minutes >= 25 ? "critical" : minutes >= 15 ? "warning" : "normal";
+  return minutes >= crit ? "critical" : minutes >= warn ? "warning" : "normal";
+}
+
+export interface CourseGroup {
+  course: string | null;
+  items: Item[];
+}
+
+const COURSE_ORDER: Record<string, number> = {
+  APPETIZER: 1,
+  MAIN: 2,
+  DESSERT: 3,
+  BEVERAGE: 4,
+};
+
+function courseRank(course: string | null): number {
+  if (!course) return 6;
+  return COURSE_ORDER[course] ?? 5;
+}
+
+/**
+ * Group non-cancelled items by course in the same order as KitchenTicketText:
+ * APPETIZER -> MAIN -> DESSERT -> BEVERAGE -> other named courses -> ungrouped (ALL/blank).
+ */
+export function groupByCourse(items: Item[]): CourseGroup[] {
+  const buckets = new Map<string, CourseGroup>();
+  for (const item of items) {
+    if (item.itemStatus === "CANCELLED") continue;
+    const raw = (item.course ?? "").trim().toUpperCase();
+    const normalized = !raw || raw === "ALL" ? null : raw;
+    const key = normalized ?? "__ALL__";
+    let group = buckets.get(key);
+    if (!group) {
+      group = { course: normalized, items: [] };
+      buckets.set(key, group);
+    }
+    group.items.push(item);
+  }
+  return Array.from(buckets.values()).sort((a, b) => {
+    const diff = courseRank(a.course) - courseRank(b.course);
+    if (diff !== 0) return diff;
+    return (a.course ?? "").localeCompare(b.course ?? "");
+  });
+}
+
+export function statusToLane(status: Status): Lane | null {
+  if (status === "NEW") return "NEW";
+  if (status === "PREPARING") return "COOKING";
+  if (status === "READY") return "READY";
+  return null;
+}
+
+export function groupByLane(tickets: TicketView[], stationId: string | null): Record<Lane, TicketView[]> {
+  const lanes: Record<Lane, TicketView[]> = { NEW: [], COOKING: [], READY: [] };
+  for (const v of tickets) {
+    const lane = statusToLane(stationStatus(v, stationId));
+    if (lane) lanes[lane].push(v);
+  }
+  return lanes;
 }
 
 export function elapsed(view: TicketView, now = Date.now()): string {

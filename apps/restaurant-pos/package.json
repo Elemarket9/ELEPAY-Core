@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@elepay/mobile-core": "*",
+    "@react-native-async-storage/async-storage": "1.23.1",
     "expo": "~52.0.37",
     "expo-secure-store": "~14.0.1",
     "expo-status-bar": "~2.0.1",

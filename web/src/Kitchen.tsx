@@ -3,9 +3,11 @@ import { ApiError, newKey } from "./api";
 import { getToken } from "./auth";
 import { kitchenClient, learnServerTime, loadDevice, pairDevice, saveDevice, type DeviceCredential, type KitchenCall } from "./kds/device";
 import {
-  applySync, backoff, bump, cancel, elapsed, load, save, settle, stationStatus, storageKey, urgency, visible,
-  nextStatus, type BumpResult, type KdsState, type QueuedAction, type Status, type SyncResult, type TicketView,
+  applySync, backoff, bump, cancel, elapsed, groupByCourse, groupByLane, hasAutoReadyAtStation,
+  KDS_CANCEL_REASONS, LANES, load, nextStatus, save, settle, stationStatus, storageKey, urgency, visible,
+  type BumpResult, type KdsState, type QueuedAction, type Status, type SyncResult, type TicketView,
 } from "./kds/engine";
+import "./kds/kitchen.css";
 import { BrandMark, IconAlertTriangle, IconChefHat, IconPrinter, IconWifi, IconWifiOff } from "./ui/Icons";
 
 interface MerchantView { id: string; tradingName: string; role: string }
@@ -211,14 +213,26 @@ function SetupScreen({ client, device, onDone }: { client: KitchenCall; device: 
 
 function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; client: KitchenCall; paired: boolean; onUnpair: () => void }) {
   const key = storageKey(setup.merchantId, setup.stationId);
+  const viewModeKey = `${key}.viewMode`;
   const [state, setState] = useState<KdsState>(() => load(store(), key));
   const stateRef = useRef(state);
+  const kickRef = useRef<(() => void) | null>(null);
   const [online, setOnline] = useState(true);
   const [signedOut, setSignedOut] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [fresh, setFresh] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<"grid" | "lanes">(() => {
+    try {
+      const saved = store()?.getItem(viewModeKey);
+      return saved === "lanes" ? "lanes" : "grid";
+    } catch {
+      return "grid";
+    }
+  });
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<TicketView | null>(null);
+  const [cancelPreset, setCancelPreset] = useState<string | null>(null);
+  const [cancelNote, setCancelNote] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
 
   const update = useCallback((fn: (s: KdsState) => KdsState) => {
@@ -303,10 +317,12 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
       }
     };
     const kick = () => { window.clearTimeout(timer); void run(); };
+    kickRef.current = kick;
     void run();
     window.addEventListener("online", kick);
     return () => {
       stopped = true;
+      kickRef.current = null;
       window.clearTimeout(timer);
       for (const ft of freshTimers) window.clearTimeout(ft);
       freshTimers.clear();
@@ -322,7 +338,41 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
   }, []);
   useEffect(() => { if (!notice) return; const t = window.setTimeout(() => setNotice(null), 6000); return () => window.clearTimeout(t); }, [notice]);
 
+  const setAndPersistViewMode = (mode: "grid" | "lanes") => {
+    setViewMode(mode);
+    try { store()?.setItem(viewModeKey, mode); } catch { /* ignore */ }
+  };
+
+  const openCancelModal = (v: TicketView) => {
+    setCancelTarget(v);
+    setCancelPreset(null);
+    setCancelNote("");
+  };
+
+  const closeCancelModal = () => {
+    setCancelTarget(null);
+    setCancelPreset(null);
+    setCancelNote("");
+  };
+
+  const resolvedCancelReason = (() => {
+    const trimmed = cancelNote.trim();
+    if (cancelPreset === "Other") return trimmed;
+    if (cancelPreset && trimmed) return `${cancelPreset}: ${trimmed}`;
+    return (cancelPreset ?? trimmed).trim();
+  })();
+
+  const confirmCancelWithReason = () => {
+    if (!cancelTarget || !resolvedCancelReason) return;
+    const targetId = cancelTarget.ticket.id;
+    update((s) => cancel(s, targetId, resolvedCancelReason, newKey()));
+    setMenuFor(null);
+    closeCancelModal();
+    kickRef.current?.();
+  };
+
   const tickets = visible(state, setup.stationId);
+  const lanes = groupByLane(tickets, setup.stationId);
   const waiting = state.queue.length;
   const lastSync = state.lastSyncAt ? Math.round((now - state.lastSyncAt) / 1000) : null;
 
@@ -336,6 +386,70 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
     }
   };
 
+  const renderCard = (v: TicketView) => {
+    const status = stationStatus(v, setup.stationId);
+    const next = nextStatus(status);
+    const mine = setup.stationId ? v.items.filter((i) => i.stationId === setup.stationId || i.stationId === null) : v.items;
+    const courseGroups = groupByCourse(mine);
+    const isAddOn = (v.ticket.round ?? 1) >= 2;
+    const tableLabel = v.ticket.tableNumber?.trim() ? `TABLE ${v.ticket.tableNumber.trim()}` : null;
+    const canBump = Boolean(next) && (!(setup.stationId && next === "SERVED") || hasAutoReadyAtStation(v, setup.stationId));
+
+    return (
+      <article key={v.ticket.id} className={`kitchen-card ${urgency(v, now, state.urgencyThresholds)} ${status.toLowerCase()} ${fresh.has(v.ticket.id) ? "fresh" : ""}`}>
+        {isAddOn && (
+          <div className="kitchen-addon-banner">ADD-ON - ROUND {v.ticket.round}</div>
+        )}
+        {tableLabel && (
+          <div className="kitchen-table-header">{tableLabel}</div>
+        )}
+        <header>
+          <span className="kitchen-num">{num(v)}</span>
+          <span className="kitchen-mode">{v.ticket.diningMode.replace("_", " ")}</span>
+          <span className="kitchen-time">{elapsed(v, now)}</span>
+        </header>
+        {v.ticket.serverName && <p className="kitchen-server">Server: {v.ticket.serverName}</p>}
+        <div className="kitchen-courses">
+          {courseGroups.map((group) => (
+            <div key={group.course ?? "__ALL__"} className="kitchen-course-group">
+              {group.course && <div className="kitchen-course-header">[{group.course}]</div>}
+              <ul>
+                {group.items.map((i) => {
+                  const isAutoReadyWaiting = Boolean(i.autoReady) && i.itemStatus === "READY";
+                  const done = (i.itemStatus === "READY" && !isAutoReadyWaiting) || i.itemStatus === "SERVED";
+                  return (
+                    <li key={i.id} className={done ? "done" : ""}>
+                      <div className="kitchen-item-main">
+                        <span><b>{qty(i.quantity)}×</b> {i.itemName}</span>
+                        {isAutoReadyWaiting && <span className="kitchen-autoready-badge">AUTO-READY</span>}
+                      </div>
+                      {i.modifiers && i.modifiers !== "[]" && <span className="kitchen-mod">+ {i.modifiers}</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </div>
+        {v.ticket.notes && <p className="kitchen-note">{v.ticket.notes}</p>}
+        <footer>
+          {canBump && next && (
+            <button className={`kitchen-bump to-${next.toLowerCase()}`}
+              onClick={() => { update((s) => bump(s, v.ticket.id, setup.stationId, newKey())); kickRef.current?.(); }}>{LABEL[next]}</button>
+          )}
+          <button className="kitchen-more secondary" aria-label="More actions"
+            onClick={() => setMenuFor(menuFor === v.ticket.id ? null : v.ticket.id)}>⋯</button>
+        </footer>
+        {menuFor === v.ticket.id && (
+          <div className="kitchen-menu">
+            {setup.hasPrinter && <button className="secondary" onClick={() => void reprint(v.ticket.id)}><IconPrinter size={15} /> Reprint</button>}
+            <button className="danger" onClick={() => openCancelModal(v)}>Cancel order</button>
+          </div>
+        )}
+      </article>
+    );
+  };
+
   return (
     <div className="kitchen">
       <div className="kitchen-bar">
@@ -343,6 +457,10 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
         <strong>{setup.stationName}</strong>
         <span className="muted">{setup.merchantName}</span>
         <div className="kitchen-telemetry">
+          <div className="kitchen-view-toggle" role="group" aria-label="Board view">
+            <button type="button" className={viewMode === "grid" ? "active" : ""} onClick={() => setAndPersistViewMode("grid")}>Grid</button>
+            <button type="button" className={viewMode === "lanes" ? "active" : ""} onClick={() => setAndPersistViewMode("lanes")}>Lanes</button>
+          </div>
           <span className="kitchen-pill kitchen-count">{tickets.length} open</span>
           <span className={`kitchen-pill kitchen-net ${online ? "on" : "off"}`}>
             {online ? <IconWifi size={15} /> : <IconWifiOff size={15} />}
@@ -363,54 +481,73 @@ function KitchenScreen({ setup, client, paired, onUnpair }: { setup: Setup; clie
         </div>
       ))}
       {notice && <div className="kitchen-notice">{notice}</div>}
-      {tickets.length === 0 && (
+      {tickets.length === 0 ? (
         <div className="kitchen-empty">
           <IconChefHat size={48} strokeWidth={1.5} />
           <span>No open orders — kitchen is clear</span>
         </div>
-      )}
-      <div className="kitchen-grid">
-        {tickets.map((v) => {
-          const status = stationStatus(v, setup.stationId);
-          const next = nextStatus(status);
-          const mine = setup.stationId ? v.items.filter((i) => i.stationId === setup.stationId || i.stationId === null) : v.items;
-          return (
-            <article key={v.ticket.id} className={`kitchen-card ${urgency(v, now)} ${status.toLowerCase()} ${fresh.has(v.ticket.id) ? "fresh" : ""}`}>
-              <header>
-                <span className="kitchen-num">{num(v)}</span>
-                <span className="kitchen-mode">{v.ticket.diningMode.replace("_", " ")}</span>
-                <span className="kitchen-time">{elapsed(v, now)}</span>
-              </header>
-              {v.ticket.serverName && <p className="kitchen-server">Server: {v.ticket.serverName}</p>}
-              <ul>
-                {mine.filter((i) => i.itemStatus !== "CANCELLED").map((i) => (
-                  <li key={i.id} className={i.itemStatus === "READY" || i.itemStatus === "SERVED" ? "done" : ""}>
-                    <b>{qty(i.quantity)}×</b> {i.itemName}
-                    {i.modifiers && i.modifiers !== "[]" && <span className="kitchen-mod">+ {i.modifiers}</span>}
-                  </li>
-                ))}
-              </ul>
-              {v.ticket.notes && <p className="kitchen-note">{v.ticket.notes}</p>}
-              <footer>
-                {next && !(setup.stationId && next === "SERVED") && (
-                  <button className={`kitchen-bump to-${next.toLowerCase()}`}
-                    onClick={() => update((s) => bump(s, v.ticket.id, setup.stationId, newKey()))}>{LABEL[next]}</button>
-                )}
-                <button className="kitchen-more secondary" aria-label="More actions"
-                  onClick={() => { setMenuFor(menuFor === v.ticket.id ? null : v.ticket.id); setConfirmCancel(null); }}>⋯</button>
-              </footer>
-              {menuFor === v.ticket.id && (
-                <div className="kitchen-menu">
-                  {setup.hasPrinter && <button className="secondary" onClick={() => void reprint(v.ticket.id)}><IconPrinter size={15} /> Reprint</button>}
-                  {confirmCancel === v.ticket.id
-                    ? <button className="danger" onClick={() => { update((s) => cancel(s, v.ticket.id, null, newKey())); setMenuFor(null); }}>Tap again to cancel order</button>
-                    : <button className="secondary" onClick={() => setConfirmCancel(v.ticket.id)}>Cancel order</button>}
+      ) : viewMode === "lanes" ? (
+        <div className="kitchen-lanes">
+          {LANES.map((lane) => {
+            const laneTickets = lanes[lane];
+            return (
+              <section key={lane} className={`kitchen-lane lane-${lane.toLowerCase()}`}>
+                <div className="kitchen-lane-header">
+                  <span>{lane}</span>
+                  <span className="kitchen-lane-count">{laneTickets.length}</span>
                 </div>
-              )}
-            </article>
-          );
-        })}
-      </div>
+                <div className="kitchen-lane-list">
+                  {laneTickets.length === 0
+                    ? <p className="kitchen-lane-empty">No {lane.toLowerCase()} orders</p>
+                    : laneTickets.map(renderCard)}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="kitchen-grid">
+          {tickets.map(renderCard)}
+        </div>
+      )}
+
+      {cancelTarget && (
+        <div className="kitchen-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="kds-cancel-title">
+          <div className="kitchen-modal">
+            <h2 id="kds-cancel-title">
+              Cancel {num(cancelTarget)}
+              {cancelTarget.ticket.tableNumber?.trim() ? ` · TABLE ${cancelTarget.ticket.tableNumber.trim()}` : ""}
+            </h2>
+            <p className="kitchen-modal-sub">Select a reason or enter details before cancelling.</p>
+            <div className="kitchen-reason-chips">
+              {KDS_CANCEL_REASONS.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  className={`kitchen-reason-chip ${cancelPreset === r ? "selected" : ""}`}
+                  onClick={() => setCancelPreset(cancelPreset === r ? null : r)}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              className="kitchen-reason-input"
+              placeholder={cancelPreset === "Other" ? "Enter cancel reason (required)" : "Optional extra details..."}
+              value={cancelNote}
+              onChange={(e) => setCancelNote(e.target.value)}
+              maxLength={200}
+            />
+            <div className="kitchen-modal-actions">
+              <button type="button" className="secondary" onClick={closeCancelModal}>Keep order</button>
+              <button type="button" className="danger" disabled={!resolvedCancelReason} onClick={confirmCancelWithReason}>
+                Confirm cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

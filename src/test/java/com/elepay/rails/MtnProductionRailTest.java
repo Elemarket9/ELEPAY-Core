@@ -89,6 +89,23 @@ class MtnProductionRailTest {
     }
 
     @Test
+    void sandboxHostRequiresNonProdOptInAndRejectsProdProfile() {
+        var prodEnv = new org.springframework.mock.env.MockEnvironment().withProperty("dummy", "1");
+        prodEnv.setActiveProfiles("prod");
+        assertThatThrownBy(() -> MtnProductionRail.resolveBase("https://sandbox.momodeveloper.mtn.com", true, prodEnv))
+                .isInstanceOf(IllegalStateException.class);
+
+        var devEnv = new org.springframework.mock.env.MockEnvironment();
+        devEnv.setActiveProfiles("dev");
+        assertThat(MtnProductionRail.resolveBase("", true, devEnv).getHost())
+                .isEqualTo("sandbox.momodeveloper.mtn.com");
+        assertThat(MtnProductionRail.resolveBase("https://sandbox.momodeveloper.mtn.com", true, devEnv).getHost())
+                .isEqualTo("sandbox.momodeveloper.mtn.com");
+        assertThatThrownBy(() -> MtnProductionRail.resolveBase("https://example.org", true, devEnv))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
     void providerIdIsStableAndDirectionSpecific() {
         var id = MtnProductionRail.providerId("charge", "EP-123");
         assertThat(id.version()).isEqualTo(4);

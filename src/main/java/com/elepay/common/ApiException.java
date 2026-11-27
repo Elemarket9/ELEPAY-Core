@@ -40,6 +40,10 @@ public class ApiException extends RuntimeException {
         return new ApiException(HttpStatus.FORBIDDEN, "forbidden", message);
     }
 
+    public static ApiException forbidden(String code, String message) {
+        return new ApiException(HttpStatus.FORBIDDEN, code, message);
+    }
+
     public static ApiException unprocessable(String code, String message) {
         return new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, code, message);
     }

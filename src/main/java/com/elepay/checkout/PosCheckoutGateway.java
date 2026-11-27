@@ -132,5 +132,11 @@ public class PosCheckoutGateway {
         checkouts.cancel(merchant, branch, ref, actor);
     }
 
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void refund(com.elepay.merchant.MerchantAccess.Access access, String checkoutRef, long amountPesewas,
+                       String reason, String idempotencyKey) {
+        checkouts.refund(access, checkoutRef, 1, amountPesewas, reason, idempotencyKey);
+    }
+
     public String payUrl(String reference) { return publicBaseUrl + "/pay/" + reference; }
 }

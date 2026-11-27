@@ -3,7 +3,7 @@ import QRCode from "qrcode";
 import { api, ApiError, newKey } from "../api";
 import { safeRedirectUrl } from "../Checkout";
 import { formatMoney, normalizeGhanaPhone, parseMoney } from "../money";
-import { IconBanknote, IconCreditCard, IconExternalLink, IconQrCode, IconSmartphone } from "../ui/Icons";
+import { IconBanknote, IconCreditCard, IconExternalLink, IconLandmark, IconQrCode, IconSmartphone } from "../ui/Icons";
 import {
   isFeatureNotEnabled,
   isPollStatusFailed,
@@ -20,6 +20,111 @@ import {
   TenderMode,
 } from "./posHelpers";
 
+export type PanelTenderMode = TenderMode | "BANK_TRANSFER";
+
+export interface SubBill {
+  id?: string;
+  splitKey: string;
+  label: string;
+  seatNumber?: number | null;
+  amountPesewas: number;
+  paidPesewas: number;
+  remainingPesewas: number;
+  status: string;
+  itemIds?: string[];
+  openCheckoutRef?: string | null;
+}
+
+export interface SplitPlan {
+  orderId: string;
+  orderStatus: string;
+  totalPesewas: number;
+  paidPesewas: number;
+  splitType: string | null;
+  subBills: SubBill[];
+}
+
+export function normalizeSplitPlan(raw: {
+  orderId: string;
+  orderStatus: string;
+  totalPesewas: number;
+  paidPesewas: number;
+  splitType?: string | null;
+  subBills?: SubBill[];
+  splits?: SubBill[];
+}): SplitPlan {
+  const list = raw.subBills ?? raw.splits ?? [];
+  return {
+    orderId: raw.orderId,
+    orderStatus: raw.orderStatus,
+    totalPesewas: raw.totalPesewas,
+    paidPesewas: raw.paidPesewas,
+    splitType: raw.splitType ?? null,
+    subBills: list.map((s) => ({
+      ...s,
+      remainingPesewas:
+        typeof s.remainingPesewas === "number"
+          ? Math.max(0, s.remainingPesewas)
+          : Math.max(0, s.amountPesewas - (s.paidPesewas ?? 0)),
+    })),
+  };
+}
+
+export function computeTargetTenderAmount(params: {
+  order: Pick<PosOrder, "totalPesewas" | "paidPesewas"> | null;
+  totalPesewas: number;
+  splitAmountPesewas?: number | null;
+}): number {
+  if (params.splitAmountPesewas != null) {
+    return Math.max(0, params.splitAmountPesewas);
+  }
+  if (params.order) {
+    return Math.max(0, params.order.totalPesewas - params.order.paidPesewas);
+  }
+  return Math.max(0, params.totalPesewas);
+}
+
+export function validateBankTransferInput(params: {
+  amountInput: string;
+  reference: string;
+  maxAmountPesewas: number;
+}): { ok: true; amountPesewas: number; reference: string } | { ok: false; error: string } {
+  const ref = params.reference.trim();
+  if (!ref) {
+    return { ok: false, error: "Bank transfer reference is required (e.g. GIP/NIP ref)." };
+  }
+  if (ref.length > 128) {
+    return { ok: false, error: "Bank transfer reference must be 128 characters or fewer." };
+  }
+  const amount = params.amountInput.trim() ? parseMoney(params.amountInput) : params.maxAmountPesewas;
+  if (amount === null || amount <= 0) {
+    return { ok: false, error: "Enter a valid bank transfer amount, e.g. 50.00" };
+  }
+  if (amount > params.maxAmountPesewas) {
+    return {
+      ok: false,
+      error: `Bank transfer amount cannot exceed balance due (${formatMoney(params.maxAmountPesewas)}).`,
+    };
+  }
+  return { ok: true, amountPesewas: amount, reference: ref };
+}
+
+export function buildItemSplitGroups(
+  itemIds: string[],
+  assignments: Record<string, number>,
+): { label: string; itemIds: string[] }[] {
+  const map = new Map<number, string[]>();
+  for (const id of itemIds) {
+    const billNum = assignments[id] ?? 1;
+    const list = map.get(billNum) ?? [];
+    list.push(id);
+    map.set(billNum, list);
+  }
+  return Array.from(map.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([billNum, ids]) => ({ label: `Bill ${billNum}`, itemIds: ids }));
+}
+
 interface PosTenderPanelProps {
   merchantId: string;
   terminalId: string | null;
@@ -29,6 +134,11 @@ interface PosTenderPanelProps {
   onModuleDisabled: () => void;
   onClearCart?: () => void;
   hasOrder: boolean;
+  order?: PosOrder | null;
+  splitKey?: string | null;
+  splitLabel?: string | null;
+  splitAmountPesewas?: number | null;
+  onPartialPaid?: (order: PosOrder) => Promise<void> | void;
 }
 
 interface DigitalCheckoutFallback {
@@ -49,15 +159,22 @@ export function PosTenderPanel({
   onModuleDisabled,
   onClearCart,
   hasOrder,
+  order: externalOrder = null,
+  splitKey = null,
+  splitLabel = null,
+  splitAmountPesewas = null,
+  onPartialPaid,
 }: PosTenderPanelProps) {
-  const [mode, setMode] = useState<TenderMode>("CASH");
+  const [mode, setMode] = useState<PanelTenderMode>("CASH");
   const [cashInput, setCashInput] = useState("");
+  const [bankAmountInput, setBankAmountInput] = useState("");
+  const [bankReference, setBankReference] = useState("");
   const [momoPhone, setMomoPhone] = useState("");
   const [momoNetwork, setMomoNetwork] = useState<MomoNetwork>("mtn");
   const [nfcKsn, setNfcKsn] = useState("");
   const [nfcEmvTlvHex, setNfcEmvTlvHex] = useState("");
   const [nfcMaskedPan, setNfcMaskedPan] = useState("");
-  const [activeOrder, setActiveOrder] = useState<PosOrder | null>(null);
+  const [activeOrder, setActiveOrder] = useState<PosOrder | null>(externalOrder);
   const [pendingRef, setPendingRef] = useState<string | null>(null);
   const [checkoutRef, setCheckoutRef] = useState<string | null>(null);
   const [pollStatus, setPollStatus] = useState<string | null>(null);
@@ -67,12 +184,22 @@ export function PosTenderPanel({
   const [cardPayUrl, setCardPayUrl] = useState<string | null>(null);
   const [nfcResult, setNfcResult] = useState<NormalizedNfcTapResult | null>(null);
   const [verifyNotice, setVerifyNotice] = useState<string | null>(null);
+  const [partialNotice, setPartialNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollGenRef = useRef(0);
   const completingRef = useRef(false);
   const usedFallbackRef = useRef(false);
+
+  useEffect(() => {
+    setActiveOrder(externalOrder);
+  }, [externalOrder]);
+
+  useEffect(() => {
+    setCashInput("");
+    setBankAmountInput("");
+  }, [splitKey, splitAmountPesewas]);
 
   const stopPolling = useCallback(() => {
     pollGenRef.current += 1;
@@ -94,37 +221,63 @@ export function PosTenderPanel({
       .catch(() => setQrImage(null));
   }, [qrPayload]);
 
+  const remainingPesewas = computeTargetTenderAmount({
+    order: activeOrder,
+    totalPesewas,
+    splitAmountPesewas,
+  });
+
+  const handleSettledOrder = useCallback(async (settledOrder: PosOrder, successMsg?: string) => {
+    stopPolling();
+    setPendingRef(null);
+    setCheckoutRef(null);
+    setPollStatus(null);
+    setQrPayload(null);
+    setQrReference(null);
+    setCardPayUrl(null);
+    setVerifyNotice(null);
+    setCashInput("");
+    setBankAmountInput("");
+    setBankReference("");
+    setActiveOrder(settledOrder);
+
+    if (settledOrder.status === "PAID") {
+      setPartialNotice(null);
+      await onOrderPaid(settledOrder);
+      return;
+    }
+
+    const left = Math.max(0, settledOrder.totalPesewas - settledOrder.paidPesewas);
+    setPartialNotice(successMsg ?? `Payment recorded. Remaining order balance: ${formatMoney(left)}.`);
+    await onPartialPaid?.(settledOrder);
+  }, [onOrderPaid, onPartialPaid, stopPolling]);
+
   const completeDigitalOrder = useCallback(async (orderObj: PosOrder, usedFallbackCheckout: boolean) => {
     if (completingRef.current) return;
     completingRef.current = true;
     setVerifyNotice(null);
     setError(null);
+    const confirmPath = splitKey
+      ? `/v1/pos/orders/${orderObj.id}/digital-checkout/confirm?splitKey=${encodeURIComponent(splitKey)}`
+      : `/v1/pos/orders/${orderObj.id}/digital-checkout/confirm`;
     try {
       let paidOrder: PosOrder;
       if (usedFallbackCheckout) {
-        paidOrder = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}/digital-checkout/confirm`, { method: "POST" });
+        paidOrder = await api<PosOrder>(confirmPath, { method: "POST" });
       } else {
         const refreshed = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}`);
-        if (refreshed.status === "PAID") {
+        if (refreshed.status === "PAID" || refreshed.paidPesewas > orderObj.paidPesewas) {
           paidOrder = refreshed;
         } else {
-          paidOrder = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}/digital-checkout/confirm`, { method: "POST" });
+          paidOrder = await api<PosOrder>(confirmPath, { method: "POST" });
         }
       }
-      if (paidOrder.status !== "PAID") {
+      if (paidOrder.status !== "PAID" && !(paidOrder.status === "PARTIAL" && paidOrder.paidPesewas > orderObj.paidPesewas)) {
         setActiveOrder(paidOrder);
         setVerifyNotice("Payment not confirmed yet — still waiting for rail confirmation.");
         return;
       }
-      stopPolling();
-      setPendingRef(null);
-      setCheckoutRef(null);
-      setPollStatus(null);
-      setQrPayload(null);
-      setQrReference(null);
-      setCardPayUrl(null);
-      setVerifyNotice(null);
-      await onOrderPaid(paidOrder);
+      await handleSettledOrder(paidOrder);
     } catch (err) {
       if (isFeatureNotEnabled(err)) {
         stopPolling();
@@ -139,7 +292,7 @@ export function PosTenderPanel({
     } finally {
       completingRef.current = false;
     }
-  }, [onModuleDisabled, onOrderPaid, stopPolling]);
+  }, [handleSettledOrder, onModuleDisabled, splitKey, stopPolling]);
 
   const startPolling = useCallback((orderObj: PosOrder, refToPoll: string, usedFallbackCheckout: boolean) => {
     stopPolling();
@@ -169,7 +322,7 @@ export function PosTenderPanel({
           try {
             const ord = await api<PosOrder>(`/v1/pos/orders/${orderObj.id}`);
             if (pollGenRef.current !== gen) return;
-            if (isTerminalStatusPaid(ord.status)) {
+            if (isTerminalStatusPaid(ord.status) || ord.paidPesewas > orderObj.paidPesewas) {
               await completeDigitalOrder(orderObj, false);
             }
           } catch {
@@ -180,14 +333,12 @@ export function PosTenderPanel({
     }, 3000);
   }, [completeDigitalOrder, stopPolling]);
 
-  const remainingPesewas = activeOrder
-    ? Math.max(0, activeOrder.totalPesewas - activeOrder.paidPesewas)
-    : totalPesewas;
-
   const cashKeyRef = useRef<{ sig: string; key: string } | null>(null);
+  const bankKeyRef = useRef<{ sig: string; key: string } | null>(null);
 
   async function payCash() {
     setError(null);
+    setPartialNotice(null);
     const cash = parseMoney(cashInput);
     if (cash === null || cash <= 0) {
       setError("Enter the cash received, like 50.00");
@@ -203,27 +354,30 @@ export function PosTenderPanel({
       const ord = await ensureOrder();
       currentOrderId = ord.id;
       setActiveOrder(ord);
-      const duePesewas = Math.max(0, ord.totalPesewas - ord.paidPesewas);
+      const duePesewas = computeTargetTenderAmount({
+        order: ord,
+        totalPesewas,
+        splitAmountPesewas,
+      });
       if (cash < duePesewas) {
         setError(`Cash received is less than remaining balance ${formatMoney(duePesewas)}`);
         return;
       }
-      const sig = `${ord.id}:${ord.paidPesewas}:${cash}`;
+      const sig = `${ord.id}:${splitKey ?? "full"}:${ord.paidPesewas}:${cash}`;
       if (cashKeyRef.current?.sig !== sig) {
         cashKeyRef.current = { sig, key: newKey() };
       }
       const paid = await api<PosOrder>(`/v1/pos/orders/${ord.id}/payments`, {
-        body: { tenderType: "CASH", amountPesewas: cash, reference: null },
+        body: {
+          tenderType: "CASH",
+          amountPesewas: cash,
+          reference: null,
+          ...(splitKey ? { splitKey } : {}),
+        },
         idempotencyKey: cashKeyRef.current.key,
       });
       cashKeyRef.current = null;
-      setActiveOrder(paid);
-      if (paid.status !== "PAID") {
-        const left = Math.max(0, paid.totalPesewas - paid.paidPesewas);
-        setError(`The sale is not fully paid yet. Remaining balance: ${formatMoney(left)}.`);
-        return;
-      }
-      await onOrderPaid(paid);
+      await handleSettledOrder(paid);
     } catch (err) {
       if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
       if (err instanceof ApiError && err.status === 409 && err.code === "order_paid" && currentOrderId) {
@@ -245,8 +399,68 @@ export function PosTenderPanel({
     }
   }
 
+  async function payBankTransfer() {
+    setError(null);
+    setPartialNotice(null);
+    const check = validateBankTransferInput({
+      amountInput: bankAmountInput,
+      reference: bankReference,
+      maxAmountPesewas: remainingPesewas,
+    });
+    if (!check.ok) {
+      setError(check.error);
+      return;
+    }
+    setBusy(true);
+    try {
+      const ord = await ensureOrder();
+      setActiveOrder(ord);
+      const duePesewas = computeTargetTenderAmount({
+        order: ord,
+        totalPesewas,
+        splitAmountPesewas,
+      });
+      const finalCheck = validateBankTransferInput({
+        amountInput: bankAmountInput,
+        reference: bankReference,
+        maxAmountPesewas: duePesewas,
+      });
+      if (!finalCheck.ok) {
+        setError(finalCheck.error);
+        return;
+      }
+      const sig = `bank:${ord.id}:${splitKey ?? "full"}:${ord.paidPesewas}:${finalCheck.amountPesewas}:${finalCheck.reference}`;
+      if (bankKeyRef.current?.sig !== sig) {
+        bankKeyRef.current = { sig, key: newKey() };
+      }
+      const res = await api<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
+        body: {
+          tenderType: "BANK_TRANSFER",
+          amountPesewas: finalCheck.amountPesewas,
+          reference: finalCheck.reference,
+          ...(splitKey ? { splitKey } : {}),
+        },
+        idempotencyKey: bankKeyRef.current.key,
+      });
+      bankKeyRef.current = null;
+      const normalized = normalizeTenderResult(res);
+      const settled = normalized.order ?? (await api<PosOrder>(`/v1/pos/orders/${ord.id}`));
+      const left = Math.max(0, settled.totalPesewas - settled.paidPesewas);
+      await handleSettledOrder(
+        settled,
+        `Bank transfer (${finalCheck.reference}) recorded. Remaining balance: ${formatMoney(left)}.`,
+      );
+    } catch (err) {
+      if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
+      setError(`Bank transfer not recorded: ${err instanceof ApiError ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function startMomoPush() {
     setError(null);
+    setPartialNotice(null);
     const msisdn = normalizeGhanaPhone(momoPhone);
     if (!msisdn) {
       setError("Enter a valid Ghana MoMo number, e.g. 024 123 4567");
@@ -256,6 +470,11 @@ export function PosTenderPanel({
     try {
       const ord = await ensureOrder();
       setActiveOrder(ord);
+      const duePesewas = computeTargetTenderAmount({
+        order: ord,
+        totalPesewas,
+        splitAmountPesewas,
+      });
       let usedFallback = false;
       let ref: string | null = null;
       try {
@@ -264,7 +483,8 @@ export function PosTenderPanel({
             tenderType: "MOMO",
             network: momoNetwork,
             phone: msisdn,
-            amountPesewas: ord.totalPesewas,
+            amountPesewas: duePesewas,
+            ...(splitKey ? { splitKey } : {}),
           },
           idempotencyKey: newKey(),
         });
@@ -307,10 +527,16 @@ export function PosTenderPanel({
 
   async function startGhQr() {
     setError(null);
+    setPartialNotice(null);
     setBusy(true);
     try {
       const ord = await ensureOrder();
       setActiveOrder(ord);
+      const duePesewas = computeTargetTenderAmount({
+        order: ord,
+        totalPesewas,
+        splitAmountPesewas,
+      });
       let usedFallback = false;
       let ref: string | null = null;
       let emvPayload: string | null = null;
@@ -319,7 +545,8 @@ export function PosTenderPanel({
         const res = await api<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
           body: {
             tenderType: "GHQR",
-            amountPesewas: ord.totalPesewas,
+            amountPesewas: duePesewas,
+            ...(splitKey ? { splitKey } : {}),
           },
           idempotencyKey: newKey(),
         });
@@ -358,15 +585,22 @@ export function PosTenderPanel({
 
   async function startCardCheckout() {
     setError(null);
+    setPartialNotice(null);
     setNfcResult(null);
     setBusy(true);
     try {
       const ord = await ensureOrder();
       setActiveOrder(ord);
+      const duePesewas = computeTargetTenderAmount({
+        order: ord,
+        totalPesewas,
+        splitAmountPesewas,
+      });
       const res = await api<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
         body: {
           tenderType: "CARD",
-          amountPesewas: ord.totalPesewas,
+          amountPesewas: duePesewas,
+          ...(splitKey ? { splitKey } : {}),
         },
         idempotencyKey: newKey(),
       });
@@ -395,6 +629,7 @@ export function PosTenderPanel({
 
   async function initiateNfcTap() {
     setError(null);
+    setPartialNotice(null);
     setNfcResult(null);
     if (!terminalId) {
       setError("Select or pair an active POS terminal before initiating an NFC tap.");
@@ -410,6 +645,11 @@ export function PosTenderPanel({
     try {
       const ord = await ensureOrder();
       setActiveOrder(ord);
+      const duePesewas = computeTargetTenderAmount({
+        order: ord,
+        totalPesewas,
+        splitAmountPesewas,
+      });
 
       const res = await api<NfcTapResult>(`/v1/pos/orders/${ord.id}/nfc-tap`, {
         body: {
@@ -417,15 +657,16 @@ export function PosTenderPanel({
           ksn,
           emvTlvHex,
           maskedPan: nfcMaskedPan.trim() || null,
-          amountPesewas: ord.totalPesewas,
+          amountPesewas: duePesewas,
           currency: "GHS",
+          ...(splitKey ? { splitKey } : {}),
         },
         idempotencyKey: newKey(),
       });
       const normalized = normalizeNfcTapResult(res);
       setNfcResult(normalized);
       if (isTerminalStatusPaid(normalized.status) || isTerminalStatusPaid(normalized.order?.status)) {
-        await onOrderPaid(normalized.order ?? (await api<PosOrder>(`/v1/pos/orders/${ord.id}`)));
+        await handleSettledOrder(normalized.order ?? (await api<PosOrder>(`/v1/pos/orders/${ord.id}`)));
       } else if (normalized.checkoutRef && !isTerminalStatusFailed(normalized.status)) {
         setPendingRef(normalized.checkoutRef);
         setCheckoutRef(normalized.checkoutRef);
@@ -445,7 +686,10 @@ export function PosTenderPanel({
   async function cancelPending() {
     stopPolling();
     if (activeOrder) {
-      await api(`/v1/pos/orders/${activeOrder.id}/digital-checkout/cancel`, { method: "POST" }).catch(() => {});
+      const cancelPath = splitKey
+        ? `/v1/pos/orders/${activeOrder.id}/digital-checkout/cancel?splitKey=${encodeURIComponent(splitKey)}`
+        : `/v1/pos/orders/${activeOrder.id}/digital-checkout/cancel`;
+      await api(cancelPath, { method: "POST" }).catch(() => {});
     }
     setPendingRef(null);
     setCheckoutRef(null);
@@ -459,13 +703,24 @@ export function PosTenderPanel({
 
   const parsedCash = parseMoney(cashInput);
   const cashChange = parsedCash !== null && parsedCash >= remainingPesewas ? parsedCash - remainingPesewas : null;
+  const parsedBankAmt = bankAmountInput.trim() ? parseMoney(bankAmountInput) : remainingPesewas;
 
   return (
     <div style={{ marginTop: "0.9rem", paddingTop: "0.9rem", borderTop: "1px solid var(--line)" }}>
+      {splitKey && (
+        <p className="notice" style={{ margin: "0 0 0.65rem" }}>
+          Paying split <strong>{splitLabel ?? splitKey}</strong> · Amount due:{" "}
+          <strong className="mono">{formatMoney(remainingPesewas)}</strong>
+        </p>
+      )}
       <div className="tender-tabs" role="tablist" aria-label="Payment tender">
         <button type="button" className={mode === "CASH" ? "active" : ""} onClick={() => { setMode("CASH"); setError(null); }}>
           <IconBanknote size={17} />
           Cash
+        </button>
+        <button type="button" className={mode === "BANK_TRANSFER" ? "active" : ""} onClick={() => { setMode("BANK_TRANSFER"); setError(null); }}>
+          <IconLandmark size={17} />
+          Bank
         </button>
         <button type="button" className={mode === "MOMO" ? "active" : ""} onClick={() => { setMode("MOMO"); setError(null); }}>
           <IconSmartphone size={17} />
@@ -482,6 +737,7 @@ export function PosTenderPanel({
       </div>
 
       {error && <p className="notice error" role="alert">{error}</p>}
+      {partialNotice && <p className="notice ok" role="status">{partialNotice}</p>}
 
       {pendingRef ? (
         <div className="checkout-status-card processing" style={{ textAlign: "left" }}>
@@ -580,6 +836,48 @@ export function PosTenderPanel({
             </div>
           )}
 
+          {mode === "BANK_TRANSFER" && (
+            <div>
+              <p className="small muted" style={{ marginTop: 0 }}>
+                Record a confirmed bank transfer (excluded from shift cash drawer). A transfer reference is required.
+              </p>
+              <div className="grid-2">
+                <label style={{ marginTop: 0 }}>
+                  Transfer Amount (GH₵)
+                  <input
+                    className="mono"
+                    inputMode="decimal"
+                    value={bankAmountInput}
+                    onChange={(e) => setBankAmountInput(e.target.value)}
+                    placeholder={(remainingPesewas / 100).toFixed(2)}
+                  />
+                </label>
+                <label style={{ marginTop: 0 }}>
+                  Bank Transfer Reference (required)
+                  <input
+                    className="mono"
+                    value={bankReference}
+                    onChange={(e) => setBankReference(e.target.value)}
+                    maxLength={128}
+                    placeholder="e.g. GIP-20261127-99412"
+                    required
+                  />
+                </label>
+              </div>
+              <div className="flex-row" style={{ marginBottom: "0.65rem", gap: "0.35rem" }}>
+                <button type="button" className="secondary small" style={{ margin: 0 }} onClick={() => setBankAmountInput((remainingPesewas / 100).toFixed(2))}>
+                  Exact ({formatMoney(remainingPesewas)})
+                </button>
+              </div>
+              <button type="button" className="large full-width" onClick={() => void payBankTransfer()} disabled={busy}>
+                <IconLandmark size={17} />
+                {busy
+                  ? "Recording…"
+                  : `Record Bank Transfer (${formatMoney(parsedBankAmt ?? remainingPesewas)})`}
+              </button>
+            </div>
+          )}
+
           {mode === "MOMO" && (
             <div>
               <div className="grid-2">
@@ -603,7 +901,7 @@ export function PosTenderPanel({
                 </label>
               </div>
               <button type="button" className="large full-width" onClick={() => void startMomoPush()} disabled={busy} style={{ marginTop: "0.5rem" }}>
-                {busy ? "Sending Prompt…" : `Send MoMo Push (${formatMoney(totalPesewas)})`}
+                {busy ? "Sending Prompt…" : `Send MoMo Push (${formatMoney(remainingPesewas)})`}
               </button>
             </div>
           )}
@@ -613,7 +911,7 @@ export function PosTenderPanel({
               <p className="small muted">Generate a dynamic EMVCo GhQR code for the customer to scan with any Ghana bank or MoMo app.</p>
               <button type="button" className="large full-width" onClick={() => void startGhQr()} disabled={busy}>
                 <IconQrCode size={17} />
-                {busy ? "Generating GhQR…" : `Display GhQR (${formatMoney(totalPesewas)})`}
+                {busy ? "Generating GhQR…" : `Display GhQR (${formatMoney(remainingPesewas)})`}
               </button>
             </div>
           )}
@@ -625,7 +923,7 @@ export function PosTenderPanel({
               </p>
               <button type="button" className="large full-width" onClick={() => void startCardCheckout()} disabled={busy} style={{ marginBottom: "0.85rem" }}>
                 <IconCreditCard size={17} />
-                {busy ? "Creating Card Checkout…" : `Charge Card via Checkout (${formatMoney(totalPesewas)})`}
+                {busy ? "Creating Card Checkout…" : `Charge Card via Checkout (${formatMoney(remainingPesewas)})`}
               </button>
               <details>
                 <summary className="small muted" style={{ cursor: "pointer", fontWeight: 600 }}>Hardware NFC Tap-to-Pay (DUKPT / EMV TLV)</summary>
@@ -660,7 +958,7 @@ export function PosTenderPanel({
                     />
                   </label>
                   <button type="button" className="secondary" onClick={() => void initiateNfcTap()} disabled={busy}>
-                    {busy ? "Authorizing Tap…" : `Initiate NFC Tap-to-Pay (${formatMoney(totalPesewas)})`}
+                    {busy ? "Authorizing Tap…" : `Initiate NFC Tap-to-Pay (${formatMoney(remainingPesewas)})`}
                   </button>
                 </div>
               </details>

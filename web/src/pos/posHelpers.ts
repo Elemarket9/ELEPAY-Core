@@ -277,6 +277,9 @@ export function buildPosOrderPayload(params: {
   lines: PosCartLine[];
   discountPesewas: number;
   taxPesewas: number;
+  discountReason?: string | null;
+  managerBadgeNumber?: string | null;
+  managerPin?: string | null;
 }) {
   return {
     merchantId: params.merchantId,
@@ -300,6 +303,13 @@ export function buildPosOrderPayload(params: {
     taxPesewas: params.taxPesewas,
     tipPesewas: 0,
     orderType: params.orderType,
+    ...(params.discountPesewas > 0
+      ? {
+          discountReason: params.discountReason?.trim() || null,
+          managerBadgeNumber: params.managerBadgeNumber?.trim() || null,
+          managerPin: params.managerPin?.trim() || null,
+        }
+      : {}),
   };
 }
 
