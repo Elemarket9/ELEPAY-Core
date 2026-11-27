@@ -1,3 +1,4 @@
+import { useFcmRegistration } from "@elepay/mobile-core/src/pushNotifications";
 import React, { useEffect, useMemo, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -37,6 +38,7 @@ export default function App() {
   }, []);
 
   const client = useMemo(() => new ElepayClient(baseUrl, token), [baseUrl, token]);
+  const stopPush = useFcmRegistration(token ? client : null, "MERCHANT", merchantId);
 
   useEffect(() => {
     if (!token) {
@@ -75,6 +77,7 @@ export default function App() {
   }
 
   async function handleSignOut() {
+    await stopPush();
     setToken(null);
     await SecureStore.deleteItemAsync(KEY_TOKEN).catch(() => {});
   }
