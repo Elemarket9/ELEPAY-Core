@@ -86,8 +86,11 @@ class PushRegistrationIT extends PostgresTestBase {
         registration.register(new PushRegistration.Request(m,installation,"POS",replacement,null),false);
         assertThat(db.sql("SELECT count(*) FROM push_subscription WHERE id=:id")
                 .param("id",initial).query(Long.class).single()).isZero();
-        assertThat(db.sql("SELECT count(*) FROM push_delivery WHERE subscription_id=:id")
+        assertThat(db.sql("SELECT count(*) FROM push_delivery d JOIN push_eligible_subscription s ON s.id=d.subscription_id WHERE d.subscription_id=:id")
                 .param("id",initial).query(Long.class).single()).isZero();
+        // A different installation cannot steal a currently registered token.
+        assertThatThrownBy(() -> registration.register(new PushRegistration.Request(m,UUID.randomUUID(),"POS",replacement,null),false))
+                .isInstanceOf(ApiException.class).hasMessageContaining("another installation");
         db.sql("DELETE FROM merchant_member WHERE merchant_id=:m AND subject=:s")
                 .param("m",m).param("s",owner).update();
         assertThat(db.sql("SELECT count(*) FROM push_eligible_subscription WHERE token=:t")
