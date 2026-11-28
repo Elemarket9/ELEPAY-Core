@@ -1338,6 +1338,7 @@ interface CustodianSafeguardReport {
   todayTotalOutflowPesewas: number;
   todayRejectedOutflowCount: number;
   outflowFrozen: boolean;
+  custodianConfigured: boolean;
   safeguardingSatisfied: boolean;
 }
 
@@ -1390,15 +1391,15 @@ function CustodianTrust({ canManageFinance }: { canManageFinance: boolean }) {
           <div className={report.safeguardingSatisfied ? "notice ok" : "notice warn"}>
             <strong>
               Trust Safeguarding ({report.trustAccountCode} / {report.currency}):{" "}
-              {report.safeguardingSatisfied ? "SATISFIED" : "DEFICIT / REVIEW REQUIRED"}
+              {!report.custodianConfigured ? "NO CUSTODIAN CONFIGURED" : report.safeguardingSatisfied ? "SATISFIED" : "DEFICIT / REVIEW REQUIRED"}
               {report.outflowFrozen && " — OUTFLOW FROZEN"}
             </strong>
           </div>
           <div className="kpi-grid">
             <div className="kpi-card primary">
               <div className="kpi-label">Total Trust Assets</div>
-              <div className="kpi-value">{formatMoney(report.totalTrustAssetsPesewas)}</div>
-              <div className="kpi-meta">Reconciled bank &amp; clearing</div>
+              <div className="kpi-value">{report.custodianConfigured ? formatMoney(report.totalTrustAssetsPesewas) : "—"}</div>
+              <div className="kpi-meta">{report.custodianConfigured ? "Reconciled bank & clearing" : "No custodian account"}</div>
             </div>
             <div className="kpi-card">
               <div className="kpi-label">Safeguarded Liabilities</div>

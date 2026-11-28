@@ -97,6 +97,7 @@ public class CustodianBankBackstopService {
             long todayTotalOutflowPesewas,
             int todayRejectedOutflowCount,
             boolean outflowFrozen,
+            boolean custodianConfigured,
             boolean safeguardingSatisfied
     ) {}
 
@@ -401,7 +402,9 @@ public class CustodianBankBackstopService {
                 ? trust.lastReconciledBankBalancePesewas()
                 : clearingReceivables;
 
-        boolean satisfied = !trust.outflowFrozen()
+        boolean configured = trust.bankCode() != null && !trust.bankCode().isBlank()
+                && trust.bankAccountNumber() != null && !trust.bankAccountNumber().isBlank();
+        boolean satisfied = configured && !trust.outflowFrozen()
                 && trust.lastReconciledBankBalancePesewas() != null
                 && totalTrustAssets >= totalLiabilities
                 && ledger.integrity().ok();
@@ -424,6 +427,7 @@ public class CustodianBankBackstopService {
                 acc.reservedOutflowPesewas() + acc.settledOutflowPesewas(),
                 acc.rejectedCount(),
                 trust.outflowFrozen(),
+                configured,
                 satisfied
         );
     }
