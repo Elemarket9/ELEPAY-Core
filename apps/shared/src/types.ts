@@ -82,7 +82,7 @@ export type TenderType =
   | "BANK_TRANSFER"
   | "EXTERNAL_MOMO"
   | "EXTERNAL_CARD"
-  | "EXTERNAL_HUBTEL";
+  | "EXTERNAL_POS";
 
 export interface OrderItemKdsMeta {
   kdsRound?: number | null;

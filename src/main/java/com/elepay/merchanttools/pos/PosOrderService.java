@@ -968,7 +968,7 @@ public class PosOrderService {
                     linkRecord.id(), linkRecord.checkoutRef(), null, "open",
                     checkout.payUrl(linkRecord.checkoutRef()), null, null,
                     "Confirm wallet payment", order);
-            case CASH, BANK_TRANSFER, EXTERNAL_MOMO, EXTERNAL_CARD, EXTERNAL_HUBTEL ->
+            case CASH, BANK_TRANSFER, EXTERNAL_MOMO, EXTERNAL_CARD, EXTERNAL_POS ->
                     throw new IllegalStateException("Handled above");
         };
     }

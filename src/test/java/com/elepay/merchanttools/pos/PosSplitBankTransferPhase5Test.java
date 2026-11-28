@@ -420,7 +420,7 @@ class PosSplitBankTransferPhase5Test extends PostgresTestBase {
     }
 
     @Test
-    @DisplayName("External processor tenders (Own MoMo, Hubtel, External Card) settle POS orders without touching ELEPAY ledger or cash drawer")
+    @DisplayName("External processor tenders (Own MoMo, External POS, External Card) settle POS orders without touching ELEPAY ledger or cash drawer")
     void externalProcessorTendersNeverTouchElepayLedgerOrCashDrawer() {
         var order = orderService.createOrder(
                 merchantId, branchA, null, null, null,
@@ -433,12 +433,12 @@ class PosSplitBankTransferPhase5Test extends PostgresTestBase {
         // Missing reference is rejected for external processors
         assertThatThrownBy(() -> orderService.initiateTender(
                 order.id(),
-                new PosOrderService.TenderRequest(TenderType.EXTERNAL_HUBTEL, 5_000L, null, null, null, null, "   "),
+                new PosOrderService.TenderRequest(TenderType.EXTERNAL_POS, 5_000L, null, null, null, null, "   "),
                 "cashier-1"))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("reference is required");
 
-        // Split payment across Own MoMo + Hubtel + External Card
+        // Split payment across Own MoMo + External POS + External Card
         var t1 = orderService.initiateTender(
                 order.id(),
                 new PosOrderService.TenderRequest(TenderType.EXTERNAL_MOMO, 5_000L, null, null, null, null, "MTN-SIM-1001"),
@@ -448,7 +448,7 @@ class PosSplitBankTransferPhase5Test extends PostgresTestBase {
 
         var t2 = orderService.initiateTender(
                 order.id(),
-                new PosOrderService.TenderRequest(TenderType.EXTERNAL_HUBTEL, 5_000L, null, null, null, null, "HUBTEL-2002"),
+                new PosOrderService.TenderRequest(TenderType.EXTERNAL_POS, 5_000L, null, null, null, null, "EXT-POS-2002"),
                 "cashier-1");
         assertThat(t2.orderStatus()).isEqualTo("PARTIAL");
         assertThat(t2.checkoutRef()).isNull();

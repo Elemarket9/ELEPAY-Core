@@ -35,7 +35,7 @@ import {
 const POLL_INTERVAL_MS = 3000;
 const POLL_MAX_MS = 5 * 60 * 1000;
 
-type ExternalTenderMode = "BANK_TRANSFER" | "EXTERNAL_MOMO" | "EXTERNAL_HUBTEL" | "EXTERNAL_CARD";
+type ExternalTenderMode = "BANK_TRANSFER" | "EXTERNAL_MOMO" | "EXTERNAL_POS" | "EXTERNAL_CARD";
 type ModalTenderMode = TenderMode | ExternalTenderMode;
 
 const EXTERNAL_META: Record<ExternalTenderMode, { label: string; placeholder: string; hint: string }> = {
@@ -49,10 +49,10 @@ const EXTERNAL_META: Record<ExternalTenderMode, { label: string; placeholder: st
     placeholder: "e.g. MTN-TXN-8841209",
     hint: "Record payment received on your own MoMo SIM (outside cash drawer; ELEPAY never touches funds).",
   },
-  EXTERNAL_HUBTEL: {
-    label: "Hubtel",
-    placeholder: "e.g. HUBTEL-POS-441092",
-    hint: "Record payment settled on your own Hubtel terminal (outside cash drawer; ELEPAY never touches funds).",
+  EXTERNAL_POS: {
+    label: "External POS",
+    placeholder: "e.g. EXT-POS-441092",
+    hint: "Record payment settled on your own third-party POS terminal (outside cash drawer; ELEPAY never touches funds).",
   },
   EXTERNAL_CARD: {
     label: "External card",
@@ -62,7 +62,7 @@ const EXTERNAL_META: Record<ExternalTenderMode, { label: string; placeholder: st
 };
 
 function isExternalMode(m: ModalTenderMode): m is ExternalTenderMode {
-  return m === "BANK_TRANSFER" || m === "EXTERNAL_MOMO" || m === "EXTERNAL_HUBTEL" || m === "EXTERNAL_CARD";
+  return m === "BANK_TRANSFER" || m === "EXTERNAL_MOMO" || m === "EXTERNAL_POS" || m === "EXTERNAL_CARD";
 }
 
 export interface ModalSubBill {
@@ -946,7 +946,7 @@ export function TenderModal({
                 [
                   ["CASH", "Cash"],
                   ["EXTERNAL_MOMO", "Own MoMo"],
-                  ["EXTERNAL_HUBTEL", "Hubtel"],
+                  ["EXTERNAL_POS", "Ext POS"],
                   ["EXTERNAL_CARD", "Ext Card"],
                   ["BANK_TRANSFER", "Bank"],
                   ["MOMO", "ELEPAY MoMo"],

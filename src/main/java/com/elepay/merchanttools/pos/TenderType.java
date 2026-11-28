@@ -11,15 +11,15 @@ public enum TenderType {
     EXTERNAL_MOMO,
     /** Restaurant's own external bank card terminal — recorded on POS only; ELEPAY never touches funds. */
     EXTERNAL_CARD,
-    /** Restaurant's own Hubtel POS/payment account — recorded on POS only; ELEPAY never touches funds. */
-    EXTERNAL_HUBTEL;
+    /** Restaurant's own third-party POS/payment terminal — recorded on POS only; ELEPAY never touches funds. */
+    EXTERNAL_POS;
 
     /** True for externally settled non-cash tenders recorded for POS/Z-report tracking without ELEPAY rails. */
     public boolean isExternalRecorded() {
         return this == BANK_TRANSFER
                 || this == EXTERNAL_MOMO
                 || this == EXTERNAL_CARD
-                || this == EXTERNAL_HUBTEL;
+                || this == EXTERNAL_POS;
     }
 
     /** True for tenders recorded directly on POS without creating an ELEPAY Core checkout. */
@@ -37,7 +37,7 @@ public enum TenderType {
             case BANK_TRANSFER -> "Bank transfer";
             case EXTERNAL_MOMO -> "Own MoMo";
             case EXTERNAL_CARD -> "External card";
-            case EXTERNAL_HUBTEL -> "Hubtel";
+            case EXTERNAL_POS -> "External POS";
         };
     }
 }

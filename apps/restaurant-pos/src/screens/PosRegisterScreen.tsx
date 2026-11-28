@@ -59,7 +59,7 @@ type ServerOrderItem = PosOrderItem & OrderItemKdsMeta;
 const ALL_TENDERS: { type: TenderType; label: string }[] = [
   { type: "CASH", label: "Cash" },
   { type: "EXTERNAL_MOMO", label: "Own MoMo" },
-  { type: "EXTERNAL_HUBTEL", label: "Hubtel" },
+  { type: "EXTERNAL_POS", label: "Ext POS" },
   { type: "EXTERNAL_CARD", label: "Ext Card" },
   { type: "BANK_TRANSFER", label: "Bank" },
   { type: "MOMO", label: "ELEPAY MoMo" },

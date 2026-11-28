@@ -20,7 +20,7 @@ import {
   TenderMode,
 } from "./posHelpers";
 
-export type ExternalTenderMode = "BANK_TRANSFER" | "EXTERNAL_MOMO" | "EXTERNAL_HUBTEL" | "EXTERNAL_CARD";
+export type ExternalTenderMode = "BANK_TRANSFER" | "EXTERNAL_MOMO" | "EXTERNAL_POS" | "EXTERNAL_CARD";
 export type PanelTenderMode = TenderMode | ExternalTenderMode;
 
 const EXTERNAL_TENDER_META: Record<ExternalTenderMode, { label: string; placeholder: string; hint: string }> = {
@@ -34,10 +34,10 @@ const EXTERNAL_TENDER_META: Record<ExternalTenderMode, { label: string; placehol
     placeholder: "e.g. MTN-TXN-8841209",
     hint: "Record payment received on your own MoMo merchant SIM (excluded from cash drawer; ELEPAY never touches funds).",
   },
-  EXTERNAL_HUBTEL: {
-    label: "Hubtel",
-    placeholder: "e.g. HUBTEL-POS-441092",
-    hint: "Record payment settled on your own Hubtel terminal/account (excluded from cash drawer; ELEPAY never touches funds).",
+  EXTERNAL_POS: {
+    label: "External POS",
+    placeholder: "e.g. EXT-POS-441092",
+    hint: "Record payment settled on your own third-party POS terminal (excluded from cash drawer; ELEPAY never touches funds).",
   },
   EXTERNAL_CARD: {
     label: "External card",
@@ -47,7 +47,7 @@ const EXTERNAL_TENDER_META: Record<ExternalTenderMode, { label: string; placehol
 };
 
 function isExternalMode(m: PanelTenderMode): m is ExternalTenderMode {
-  return m === "BANK_TRANSFER" || m === "EXTERNAL_MOMO" || m === "EXTERNAL_HUBTEL" || m === "EXTERNAL_CARD";
+  return m === "BANK_TRANSFER" || m === "EXTERNAL_MOMO" || m === "EXTERNAL_POS" || m === "EXTERNAL_CARD";
 }
 
 export interface SubBill {
@@ -752,9 +752,9 @@ export function PosTenderPanel({
           <IconSmartphone size={17} />
           Own MoMo
         </button>
-        <button type="button" className={mode === "EXTERNAL_HUBTEL" ? "active" : ""} onClick={() => { setMode("EXTERNAL_HUBTEL"); setError(null); }}>
+        <button type="button" className={mode === "EXTERNAL_POS" ? "active" : ""} onClick={() => { setMode("EXTERNAL_POS"); setError(null); }}>
           <IconCreditCard size={17} />
-          Hubtel
+          Ext POS
         </button>
         <button type="button" className={mode === "EXTERNAL_CARD" ? "active" : ""} onClick={() => { setMode("EXTERNAL_CARD"); setError(null); }}>
           <IconCreditCard size={17} />
