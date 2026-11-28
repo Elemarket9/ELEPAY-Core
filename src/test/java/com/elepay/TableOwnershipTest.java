@@ -57,6 +57,29 @@ class TableOwnershipTest {
         assertThat(violations).as("Use the owning module's API or events instead").isEmpty();
     }
 
+    @Test
+    void coreNeverImportsMerchantTools() throws IOException {
+        List<String> violations = new ArrayList<>();
+        try (Stream<Path> files = Files.walk(SOURCES)) {
+            for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
+                Path rel = SOURCES.relativize(file);
+                if (rel.getNameCount() > 1 && "merchanttools".equals(rel.getName(0).toString())) {
+                    continue;
+                }
+                if ("SandboxApplication.java".equals(rel.toString())) {
+                    continue; // Conditional module bootstrap wiring only
+                }
+                String code = Files.readString(file);
+                if (code.contains("com.elepay.merchanttools")) {
+                    violations.add(rel + " must not depend on com.elepay.merchanttools");
+                }
+            }
+        }
+        assertThat(violations)
+                .as("ELEPAY Core must remain decoupled from com.elepay.merchanttools")
+                .isEmpty();
+    }
+
     private static Set<String> tables() throws IOException {
         Set<String> tables = new HashSet<>();
         Pattern create = Pattern.compile("CREATE TABLE (?:IF NOT EXISTS )?(\\w+)", Pattern.CASE_INSENSITIVE);
