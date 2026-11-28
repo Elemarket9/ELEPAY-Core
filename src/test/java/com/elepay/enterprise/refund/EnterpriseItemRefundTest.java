@@ -330,7 +330,7 @@ class EnterpriseItemRefundTest {
                 null,
                 "cust_bank_1",
                 RefundDestination.BANK_ACCOUNT,
-                Map.of("bankCode", "GCB", "accountNumber", "1234567890"),
+                Map.of("bankCode", "TST", "accountNumber", "1234567890"),
                 "GHS",
                 "Refund to Bank Account",
                 List.of(EnterpriseRefundItemSpecification.of("ITEM-2", merchantIds.get(1), 10_000L, 1000, "Bank refund")),

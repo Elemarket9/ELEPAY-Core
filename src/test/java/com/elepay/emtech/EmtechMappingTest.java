@@ -25,7 +25,7 @@ class EmtechMappingTest {
     @Test
     void accountTypesMapOntoTheEmtechEnum() {
         assertThat(EmtechAccountTypeMapper.map("momo", "MTN", null, null).emtechType()).isEqualTo("MOBILE_MONEY");
-        assertThat(EmtechAccountTypeMapper.map("bank", "GCB", null, null).emtechType()).isEqualTo("BANK");
+        assertThat(EmtechAccountTypeMapper.map("bank", "TST", null, null).emtechType()).isEqualTo("BANK");
         assertThat(EmtechAccountTypeMapper.map("card", null, null, null).emtechType()).isEqualTo("CREDIT");
         assertThat(EmtechAccountTypeMapper.map("debit", "VISA", null, null).provider()).isEqualTo("VISA");
         assertThat(EmtechAccountTypeMapper.map("cash", null, null, null).emtechType()).isEqualTo("CASH");

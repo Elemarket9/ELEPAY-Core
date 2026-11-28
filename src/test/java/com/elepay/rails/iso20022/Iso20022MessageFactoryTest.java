@@ -28,10 +28,10 @@ class Iso20022MessageFactoryTest extends PostgresTestBase {
                         250_000L, // 2,500.00 GHS
                         "GHS",
                         "CORP PAYROLL LTD",
-                        "GH29GCBB00010001234567",
+                        "GH29TSTB00010001234567",
                         "KWAME MENSAH",
                         "GH29ECOB00010007654321",
-                        "ECOBGHAC",
+                        "TSTBGHAC",
                         "November 2026 Executive Salary"
                 ),
                 new Iso20022MessageFactory.Pain001CreditTransfer(
@@ -39,15 +39,15 @@ class Iso20022MessageFactoryTest extends PostgresTestBase {
                         180_000L, // 1,800.00 GHS
                         "GHS",
                         "CORP PAYROLL LTD",
-                        "GH29GCBB00010001234567",
+                        "GH29TSTB00010001234567",
                         "AMA AGYEMAN",
                         "GH29SCBL00010009876543",
-                        "SCBLGHAC",
+                        "TSTCGHAC",
                         "November 2026 Engineering Salary"
                 )
         );
 
-        var message = isoFactory.buildPain001("GCBBGHAC", transfers);
+        var message = isoFactory.buildPain001("TSTAGHAC", transfers);
 
         assertThat(message).isNotNull();
         assertThat(message.messageId()).startsWith("PAIN001-");
@@ -85,15 +85,15 @@ class Iso20022MessageFactoryTest extends PostgresTestBase {
                         "INSTR-1001",
                         50_000L, // 500.00 GHS
                         "GHS",
-                        "GCBBGHAC",
-                        "STANCHAC",
-                        "GCB-ACC-01",
+                        "TSTAGHAC",
+                        "TSTDCHAC",
+                        "TST-ACC-01",
                         "STAN-ACC-02",
                         "SLEV"
                 )
         );
 
-        var message = isoFactory.buildPacs008("GCBBGHAC", "STANCHAC", transfers);
+        var message = isoFactory.buildPacs008("TSTAGHAC", "TSTDCHAC", transfers);
 
         assertThat(message).isNotNull();
         assertThat(message.messageId()).startsWith("PACS008-");
@@ -124,14 +124,14 @@ class Iso20022MessageFactoryTest extends PostgresTestBase {
 
         var statement = new Iso20022MessageFactory.Camt053Statement(
                 "STMT-2026-11-23-01",
-                "GH29GCBB00010001234567",
+                "GH29TSTB00010001234567",
                 "GHS",
                 50_000L,  // 500.00 GHS opening
                 60_000L,  // 600.00 GHS closing
                 entries
         );
 
-        var message = isoFactory.buildCamt053("GCBBGHAC", statement);
+        var message = isoFactory.buildCamt053("TSTAGHAC", statement);
 
         assertThat(message).isNotNull();
         assertThat(message.messageId()).startsWith("CAMT053-");
@@ -143,7 +143,7 @@ class Iso20022MessageFactoryTest extends PostgresTestBase {
         assertThat(message.payloadXml()).contains("<Id>STMT-2026-11-23-01</Id>");
         assertThat(message.payloadXml()).contains("<Amt Ccy=\"GHS\">500.00</Amt>");
         assertThat(message.payloadXml()).contains("<Amt Ccy=\"GHS\">600.00</Amt>");
-        assertThat(message.payloadXml()).contains("<BICFI>GCBBGHAC</BICFI>");
+        assertThat(message.payloadXml()).contains("<BICFI>TSTAGHAC</BICFI>");
         assertThat(message.payloadXml()).contains("<EndToEndId>ENTRY-REF-001</EndToEndId>");
         assertThat(message.payloadSha256()).isNotBlank();
 
@@ -165,7 +165,7 @@ class Iso20022MessageFactoryTest extends PostgresTestBase {
                 <pain:CdtTrfTxInf>
                   <pain:PmtId><pain:EndToEndId>E2E-NS-001</pain:EndToEndId></pain:PmtId>
                   <pain:Amt><pain:InstdAmt Ccy="GHS">350.00</pain:InstdAmt></pain:Amt>
-                  <pain:CdtrAgt><pain:FinInstnId><pain:BICFI>GCBBGHAC</pain:BICFI></pain:FinInstnId></pain:CdtrAgt>
+                  <pain:CdtrAgt><pain:FinInstnId><pain:BICFI>TSTAGHAC</pain:BICFI></pain:FinInstnId></pain:CdtrAgt>
                   <pain:Cdtr><pain:Nm>KOFI MENSAH</pain:Nm></pain:Cdtr>
                   <pain:CdtrAcct><pain:Id><pain:Othr><pain:Id>ACC-123456</pain:Id></pain:Othr></pain:Id></pain:CdtrAcct>
                   <pain:RmtInf><pain:Ustrd>Vendor Payment</pain:Ustrd></pain:RmtInf>
@@ -191,7 +191,7 @@ class Iso20022MessageFactoryTest extends PostgresTestBase {
                         "E2E-INV-001", 0L, "GHS", "Debtor", "ACC1", "Creditor", "ACC2", "BIC1", "Remit"
                 )
         );
-        assertThatThrownBy(() -> isoFactory.buildPain001("GCBBGHAC", invalidTransfers))
+        assertThatThrownBy(() -> isoFactory.buildPain001("TSTAGHAC", invalidTransfers))
                 .hasMessageContaining("positive");
 
         // XML characters are properly escaped
@@ -201,7 +201,7 @@ class Iso20022MessageFactoryTest extends PostgresTestBase {
                         "Creditor \"A\" & 'B'", "ACC2", "BIC1", "Goods & Services"
                 )
         );
-        var msg = isoFactory.buildPain001("GCBBGHAC", validWithSpecialChars);
+        var msg = isoFactory.buildPain001("TSTAGHAC", validWithSpecialChars);
         assertThat(msg.payloadXml()).contains("Debtor &amp; Co &lt;Ltd&gt;");
         assertThat(msg.payloadXml()).contains("Creditor &quot;A&quot; &amp; &apos;B&apos;");
         assertThat(msg.payloadXml()).contains("Goods &amp; Services");

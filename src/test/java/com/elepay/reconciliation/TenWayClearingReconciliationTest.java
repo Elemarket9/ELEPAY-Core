@@ -61,7 +61,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
         String missingRef = "ORPHAN-LINE-" + UUID.randomUUID().toString().substring(0, 8);
         String accRand = UUID.randomUUID().toString().substring(0, 8);
         String mt940 = """
-                :20:GCB-STAT-%s
+                :20:TST-STAT-%s
                 :25:1010%s
                 :28C:00001/001
                 :60F:C260301GHS50000,00
@@ -73,7 +73,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
                 -
                 """.formatted(accRand, accRand, matchRef, missingRef);
 
-        var ingestion = parser.ingestStatement("GCB", mt940);
+        var ingestion = parser.ingestStatement("TST", mt940);
         assertThat(ingestion.batchId()).isNotNull();
 
         // 4. Run 10-way reconciliation
@@ -120,7 +120,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
         // 2. Ingest MT940 line with NONREF and empty customer reference
         String s = UUID.randomUUID().toString().substring(0, 8);
         String mt940 = """
-                :20:GCB-BLANK-REF-%s
+                :20:TST-BLANK-REF-%s
                 :25:1010%s
                 :28C:00003/001
                 :60F:C260301GHS10000,00
@@ -130,7 +130,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
                 -
                 """.formatted(s, s);
 
-        var ingestion = parser.ingestStatement("GCB", mt940);
+        var ingestion = parser.ingestStatement("TST", mt940);
         var report = reconEngine.reconcileBatch(ingestion.batchId());
 
         assertThat(report.totalProcessedLines()).isEqualTo(1);
@@ -173,7 +173,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
         // Create bank statement line for total clearing amount (3,000.00 GHS)
         String splitRand = UUID.randomUUID().toString().substring(0, 8);
         String mt940 = """
-                :20:GCB-SPLIT-%s
+                :20:TST-SPLIT-%s
                 :25:1010%s
                 :28C:00004/001
                 :60F:C260301GHS20000,00
@@ -183,7 +183,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
                 -
                 """.formatted(splitRand, splitRand, splitTxRef);
 
-        var ingestion = parser.ingestStatement("GCB", mt940);
+        var ingestion = parser.ingestStatement("TST", mt940);
         var report = reconEngine.reconcileBatch(ingestion.batchId());
 
         assertThat(report.totalProcessedLines()).isEqualTo(1);
@@ -204,7 +204,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
         String s = UUID.randomUUID().toString().substring(0, 8);
         String missingRef = "DUP-RECON-" + s;
         String mt940 = """
-                :20:GCB-DUP-%s
+                :20:TST-DUP-%s
                 :25:1010%s
                 :28C:00009/001
                 :60F:C260301GHS10000,00
@@ -214,7 +214,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
                 -
                 """.formatted(s, s, missingRef);
 
-        var ingestion = parser.ingestStatement("GCB", mt940);
+        var ingestion = parser.ingestStatement("TST", mt940);
         var first = reconEngine.reconcileBatch(ingestion.batchId());
         assertThat(first.batchStatus()).isEqualTo("VARIANCE_SUSPENSE");
 
@@ -246,7 +246,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
 
         // Statement is GHS, line 1 is DR (debit) against a PAYMENT (credit inflow), line 2 is CR against a USD posting
         String mt940 = """
-                :20:GCB-DC-%s
+                :20:TST-DC-%s
                 :25:1010%s
                 :28C:00010/001
                 :60F:C260301GHS50000,00
@@ -258,7 +258,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
                 -
                 """.formatted(s, s, debitMismatchRef, usdRef);
 
-        var ingestion = parser.ingestStatement("GCB", mt940);
+        var ingestion = parser.ingestStatement("TST", mt940);
         var report = reconEngine.reconcileBatch(ingestion.batchId());
         assertThat(report.exactMatches()).isZero();
         assertThat(report.amountMismatches()).isEqualTo(1);
@@ -282,7 +282,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
                 .format(java.time.format.DateTimeFormatter.ofPattern("yyMMdd"));
         String mmdd = yyMMdd.substring(2);
         String mt940 = """
-                :20:GCB-MIB-%s
+                :20:TST-MIB-%s
                 :25:1010%s
                 :28C:00011/001
                 :60F:C%sGHS10000,00
@@ -292,7 +292,7 @@ class TenWayClearingReconciliationTest extends PostgresTestBase {
                 -
                 """.formatted(s, s, yyMMdd, yyMMdd, mmdd, s, yyMMdd);
 
-        var ingestion = parser.ingestStatement("GCB", mt940);
+        var ingestion = parser.ingestStatement("TST", mt940);
         var report = reconEngine.reconcileBatch(ingestion.batchId());
         assertThat(report.outcomes())
                 .anyMatch(o -> o.matchType() == TenWayClearingReconciliationEngine.MatchType.MISSING_IN_BANK

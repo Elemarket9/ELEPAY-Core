@@ -124,7 +124,7 @@ class AdversarialPayrollRegressionTest extends PostgresTestBase {
         UUID batchId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
         var slipAma = slip("Ama", "MOMO", "MTN:0245550005", 4725L);
-        var slipKwame = slip("Kwame", "BANK", "GCB:101100223344", 8200L);
+        var slipKwame = slip("Kwame", "BANK", "TST:101100223344", 8200L);
 
         // Wrong recipient MoMo number (0245550006 instead of 0245550005), same amount, succeeded
         var wrongDestItem = payoutItem(batchId, merchantId, 4725L, "succeeded", "momo", "mtn", "233245550006", "Other");
@@ -140,7 +140,7 @@ class AdversarialPayrollRegressionTest extends PostgresTestBase {
 
         // Swapped amounts across 2 employees (same total 12,925, same destinations, wrong per-employee amounts)
         var swappedAma = payoutItem(batchId, merchantId, 8200L, "succeeded", "momo", "mtn", "233245550005", "Ama");
-        var swappedKwame = payoutItem(batchId, merchantId, 4725L, "succeeded", "bank", "GCB", "101100223344", "Kwame");
+        var swappedKwame = payoutItem(batchId, merchantId, 4725L, "succeeded", "bank", "TST", "101100223344", "Kwame");
         var swappedBatch = new Payouts.Batch(batchId, "PB-SWAPPED001", 2, 12925L,
                 Map.of("succeeded", 2L), List.of(swappedAma, swappedKwame));
 
@@ -154,7 +154,7 @@ class AdversarialPayrollRegressionTest extends PostgresTestBase {
 
         // Exact 1-to-1 match (normalizing 0245550005 <-> 233245550005 and MTN <-> mtn, plus bank account)
         var okAma = payoutItem(batchId, merchantId, 4725L, "succeeded", "momo", "mtn", "233245550005", "Ama");
-        var okKwame = payoutItem(batchId, merchantId, 8200L, "succeeded", "bank", "GCB", "101100223344", "Kwame");
+        var okKwame = payoutItem(batchId, merchantId, 8200L, "succeeded", "bank", "TST", "101100223344", "Kwame");
         var validBatch = new Payouts.Batch(batchId, "PB-VALID00001", 2, 12925L,
                 Map.of("succeeded", 2L), List.of(okKwame, okAma));
 
@@ -174,7 +174,7 @@ class AdversarialPayrollRegressionTest extends PostgresTestBase {
                 null, null, "MTN", "0245550005", "FULL_TIME", 50_000L, 0L, 0, 0L));
         payrollService.registerEmployee(new PayrollManagementService.CreateEmployeeCommand(
                 merchantId, "EMP-R2", "Kwame Race", null, null, null, "+233245550006", "kwame@race.gh",
-                "GCB", "101100223344", null, null, "FULL_TIME", 60_000L, 0L, 0, 0L));
+                "TST", "101100223344", null, null, "FULL_TIME", 60_000L, 0L, 0, 0L));
 
         var run1 = payrollService.createPayrollRun(merchantId, 1, 2026, "maker@race.gh");
         var run2 = payrollService.createPayrollRun(merchantId, 2, 2026, "maker@race.gh");

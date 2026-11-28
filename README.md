@@ -48,7 +48,7 @@ The initial payment suite recorded 46/47 passing scenarios. An upstream response
 
 ### Banking and card acquiring
 
-ELEPAY has no default custodian bank. When configuring a bank integration, include its approved hostname in `ELEPAY_PARTNER_EGRESS_HOSTS` alongside the other partner hosts used by the deployment. This setting controls outbound access. Production bank connectivity and card acquiring require separate integration and validation.
+ELEPAY has no commercial bank partnership or default custodian bank. When configuring a bank integration, include its approved hostname in `ELEPAY_PARTNER_EGRESS_HOSTS` alongside the other partner hosts used by the deployment. This setting controls outbound access. Production bank connectivity and card acquiring require separate integration and validation.
 
 ## Deployment and integration environments
 

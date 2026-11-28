@@ -109,9 +109,9 @@ class CardVaultSecurityTest {
                 .hasMessageContaining("Test BIN prohibited in production: 400000");
 
         // Ghanaian Production BINs pass without exception
-        CardPanVault.assertProductionBin("402234"); // Ecobank Ghana Visa
-        CardPanVault.assertProductionBin("524128"); // Stanbic Bank Ghana Mastercard
-        CardPanVault.assertProductionBin("428421"); // Stanbic Bank Ghana Visa
+        CardPanVault.assertProductionBin("402234");
+        CardPanVault.assertProductionBin("524128");
+        CardPanVault.assertProductionBin("428421");
     }
 
     @Test

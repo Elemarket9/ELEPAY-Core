@@ -27,7 +27,7 @@ class CardTokenVaultTest {
 
         binLookup = mock(CardBinLookupService.class);
         when(binLookup.lookup(anyString())).thenReturn(Optional.of(new CardBinLookupService.CardBin(
-                "411111", "visa", "debit", "GCB Bank PLC", "GH", "GHS", "2026.1"
+                "411111", "visa", "debit", "Test Issuer A", "GH", "GHS", "2026.1"
         )));
 
         JdbcClient db = mock(JdbcClient.class, RETURNS_DEEP_STUBS);

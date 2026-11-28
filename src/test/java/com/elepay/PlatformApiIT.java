@@ -113,10 +113,10 @@ class PlatformApiIT extends PostgresTestBase {
                 Map.of("type", "momo", "network", "mtn", "accountNumber", "0245550005", "accountName", "Seller")).body();
         assertThat(destination.get("verification").asString()).isEqualTo("verified");
         JsonNode unverified = api.call("POST", "/v1/merchants/" + seller + "/settlement-destinations", sellerOwner, null,
-                Map.of("type", "bank", "network", "GCB", "accountNumber", "1234567899", "accountName", "Seller")).body();
+                Map.of("type", "bank", "network", "TST", "accountNumber", "1234567899", "accountName", "Seller")).body();
         assertThat(unverified.get("verification").asString()).isEqualTo("unverified");
         assertThat(api.call("POST", "/v1/merchants/" + seller + "/settlement-destinations", sellerOwner, null,
-                Map.of("type", "bank", "network", "GCB", "accountNumber", "1234567890", "accountName", "Seller"))
+                Map.of("type", "bank", "network", "TST", "accountNumber", "1234567890", "accountName", "Seller"))
                 .body().get("code").asString()).isEqualTo("account_not_found");
 
         String withdrawKey = key(seller, sellerOwner, "view", "withdraw");

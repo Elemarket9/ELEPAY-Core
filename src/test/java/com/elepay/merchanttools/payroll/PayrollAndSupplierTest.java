@@ -101,7 +101,7 @@ public class PayrollAndSupplierTest extends PostgresTestBase {
                 "S9876543210",
                 "+233201999888",
                 "kwame@company.gh",
-                "GCB",
+                "TST",
                 "101100223344",
                 null,
                 null,
@@ -173,7 +173,7 @@ public class PayrollAndSupplierTest extends PostgresTestBase {
                 "C0008889999",
                 30,
                 "BANK",
-                "ECOBANK",
+                "TSTB",
                 "144100998877",
                 null,
                 null

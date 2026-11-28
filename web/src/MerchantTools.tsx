@@ -1547,7 +1547,7 @@ export function PayrollAndEmployees({ merchantId }: { merchantId: string }) {
                 <option value="MTN">MTN</option><option value="TELECEL">Telecel</option><option value="AIRTELTIGO">AirtelTigo</option></select></label>
               <label>MoMo number<input value={form.momo} onChange={(e) => setForm({ ...form, momo: e.target.value })} required /></label>
             </> : <>
-              <label>Bank code<input value={form.bankCode} onChange={(e) => setForm({ ...form, bankCode: e.target.value.toUpperCase() })} required placeholder="e.g. GCB" /></label>
+              <label>Bank code<input value={form.bankCode} onChange={(e) => setForm({ ...form, bankCode: e.target.value.toUpperCase() })} required /></label>
               <label>Account number<input value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })} required /></label>
             </>}
           </div>

@@ -27,7 +27,7 @@ class ReconSuspenseServiceTest extends PostgresTestBase {
         String s1 = UUID.randomUUID().toString().substring(0, 8);
         String unreconRef = "DISCREPANT-" + s1;
         String mt940 = """
-                :20:GCB-SUSP-%s
+                :20:TST-SUSP-%s
                 :25:1010%s
                 :28C:00002/001
                 :60F:C260301GHS1000,00
@@ -37,7 +37,7 @@ class ReconSuspenseServiceTest extends PostgresTestBase {
                 -
                 """.formatted(s1, s1, unreconRef);
 
-        var batch = parser.ingestStatement("GCB", mt940);
+        var batch = parser.ingestStatement("TST", mt940);
         var report = reconEngine.reconcileBatch(batch.batchId());
         UUID matchRecordId = report.outcomes().get(0).matchRecordId();
 
@@ -45,7 +45,7 @@ class ReconSuspenseServiceTest extends PostgresTestBase {
         long variancePesewas = 35_000L; // 350.00 GHS
         var suspense = suspenseService.postSuspenseVariance(
                 matchRecordId,
-                "GCB",
+                "TST",
                 variancePesewas,
                 "GHS"
         );
@@ -54,7 +54,7 @@ class ReconSuspenseServiceTest extends PostgresTestBase {
         assertThat(suspense.status()).isEqualTo(ReconSuspenseService.SuspenseStatus.OPEN);
         assertThat(suspense.agingBucket()).isEqualTo(ReconSuspenseService.AgingBucket.BUCKET_0_24H);
         assertThat(suspense.variancePesewas()).isEqualTo(35_000L);
-        assertThat(suspense.suspenseAccountCode()).isEqualTo("system:suspense:recon:GCB:GHS");
+        assertThat(suspense.suspenseAccountCode()).isEqualTo("system:suspense:recon:TST:GHS");
 
         // 2. Query open items
         var openItems = suspenseService.listOpenSuspenseItems(ReconSuspenseService.AgingBucket.BUCKET_0_24H);
@@ -90,7 +90,7 @@ class ReconSuspenseServiceTest extends PostgresTestBase {
         String s2 = UUID.randomUUID().toString().substring(0, 8);
         String unreconRef = "DISCREPANT-VAL-" + s2;
         String mt940 = """
-                :20:GCB-VAL-%s
+                :20:TST-VAL-%s
                 :25:1010%s
                 :28C:00003/001
                 :60F:C260301GHS1000,00
@@ -100,11 +100,11 @@ class ReconSuspenseServiceTest extends PostgresTestBase {
                 -
                 """.formatted(s2, s2, unreconRef);
 
-        var batch = parser.ingestStatement("GCB", mt940);
+        var batch = parser.ingestStatement("TST", mt940);
         var report = reconEngine.reconcileBatch(batch.batchId());
         UUID matchRecordId = report.outcomes().get(0).matchRecordId();
 
-        var record = suspenseService.postSuspenseVariance(matchRecordId, "GCB", 10_000L, "GHS");
+        var record = suspenseService.postSuspenseVariance(matchRecordId, "TST", 10_000L, "GHS");
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
                 suspenseService.resolveVariance(record.id(), "Invalid resolve without adjustment account", "ops_user", null)
