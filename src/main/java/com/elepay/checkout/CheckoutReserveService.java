@@ -103,7 +103,7 @@ class CheckoutReserveService {
                        c.currency
                 FROM checkout_allocation a JOIN checkout c ON c.id = a.checkout_id
                 WHERE c.status = 'paid' AND (a.pending_amount > 0 OR a.platform_pending > 0 OR a.fee_deferred > 0)
-                  AND (EXISTS (SELECT 1 FROM settlement_funded_checkout f WHERE f.checkout_id=c.id)
+                  AND (c.currency <> 'GHS' OR EXISTS (SELECT 1 FROM settlement_funded_checkout f WHERE f.checkout_id=c.id)
                        OR c.payment_method='wallet' OR EXISTS (SELECT 1 FROM payment_attempt pa
                            JOIN rail_transaction rt ON rt.id=pa.rail_tx WHERE pa.checkout_id=c.id
                            AND pa.status='succeeded' AND rt.rail='sandbox'))
