@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { api } from "./api";
+import { api, newKey } from "./api";
 import { formatMoney, parseMoney } from "./money";
 import {
   IconActivity,
@@ -936,6 +936,7 @@ export const ACTION_LABELS: Record<string, string> = {
   DESTINATION_OPS_VERIFY: "Destination Ops Verification",
   VELOCITY_CEILING_CHANGE: "Velocity Ceiling Change",
   PHONE_CHANGE: "Phone Number Change",
+  REVENUE_SWEEP: "Platform Earned-Revenue Sweep",
 };
 
 function MakerChecker({ canApprove }: { canApprove: boolean }) {
@@ -1446,8 +1447,179 @@ function CustodianTrust({ canManageFinance }: { canManageFinance: boolean }) {
         </section>
       )}
 
+      <PlatformRevenueSweepPanel canManageFinance={canManageFinance} onSwept={load} />
+
       <MtnCompliancePanel />
     </div>
+  );
+}
+
+interface RevenueSweepPreview {
+  currency: string;
+  earnedRevenuePesewas: number;
+  clawbackBufferPesewas: number;
+  trustHeadroomPesewas: number;
+  maxSweepablePesewas: number;
+  safeguardingSatisfied: boolean;
+  outflowFrozen: boolean;
+}
+
+interface OperatingAccountRow {
+  id: string;
+  bankCode: string;
+  accountNumber: string;
+  accountName: string;
+  currency: string;
+  status: string;
+}
+
+interface RevenueSweepRow {
+  id: string;
+  reference: string;
+  amountPesewas: number;
+  currency: string;
+  status: string;
+  requestedBy: string;
+  approvedBy: string | null;
+}
+
+function PlatformRevenueSweepPanel({ canManageFinance, onSwept }: { canManageFinance: boolean; onSwept: () => Promise<void> }) {
+  const [preview, setPreview] = useState<RevenueSweepPreview | null>(null);
+  const [accounts, setAccounts] = useState<OperatingAccountRow[]>([]);
+  const [sweeps, setSweeps] = useState<RevenueSweepRow[]>([]);
+  const [accountId, setAccountId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("ELEPAY earned revenue sweep");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const [p, a, s] = await Promise.all([
+        api<RevenueSweepPreview>("/v1/ops/revenue-sweeps/preview?currency=GHS"),
+        api<OperatingAccountRow[]>("/v1/ops/revenue-sweeps/operating-accounts?currency=GHS"),
+        api<RevenueSweepRow[]>("/v1/ops/revenue-sweeps?limit=20"),
+      ]);
+      setPreview(p);
+      setAccounts(a);
+      setSweeps(s);
+      if (!accountId && a.length > 0) setAccountId(a[0].id);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  async function submitSweep(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+    setErr(null);
+    const pesewas = parseMoney(amount);
+    if (!accountId) {
+      setErr("Select a verified ELEPAY operating bank account.");
+      return;
+    }
+    if (!pesewas || pesewas <= 0) {
+      setErr("Enter a positive sweep amount in GH₵.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api<Record<string, unknown>>("/v1/ops/revenue-sweeps", {
+        idempotencyKey: newKey(),
+        body: {
+          operatingAccountId: accountId,
+          amountPesewas: pesewas,
+          currency: "GHS",
+          reason: reason.trim() || "ELEPAY earned revenue sweep",
+        },
+      });
+      setMsg(formatDualControlOutcome(res, "Platform earned-revenue sweep submitted."));
+      setAmount("");
+      await Promise.all([load(), onSwept()]);
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel" style={{ marginTop: "1rem" }}>
+      <h3>Platform Earned-Revenue Sweep (Custodian &rarr; Operating Bank)</h3>
+      {msg && <p className="notice ok">{msg}</p>}
+      {err && <p className="notice error" role="alert">{err}</p>}
+      {preview && (
+        <dl className="ops-dl-grid">
+          <div className="ops-dl-item">
+            <dt>Earned Revenue</dt>
+            <dd className="mono">{formatMoney(preview.earnedRevenuePesewas)}</dd>
+          </div>
+          <div className="ops-dl-item">
+            <dt>Clawback Buffer</dt>
+            <dd className="mono">{formatMoney(preview.clawbackBufferPesewas)}</dd>
+          </div>
+          <div className="ops-dl-item">
+            <dt>Trust Headroom</dt>
+            <dd className="mono">{formatMoney(preview.trustHeadroomPesewas)}</dd>
+          </div>
+          <div className="ops-dl-item">
+            <dt>Max Sweepable</dt>
+            <dd className="mono"><strong>{formatMoney(preview.maxSweepablePesewas)}</strong></dd>
+          </div>
+        </dl>
+      )}
+      {canManageFinance && (
+        <form onSubmit={(e) => void submitSweep(e)} style={{ marginTop: "0.75rem" }}>
+          <div className="grid-2">
+            <label>
+              Operating Account
+              <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                <option value="">-- Select operating account --</option>
+                {accounts.filter((a) => a.status === "active").map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.bankCode} — {a.accountNumber} ({a.accountName})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Sweep Amount (GH₵)
+              <input className="mono" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
+            </label>
+          </div>
+          <label>
+            Reason
+            <input value={reason} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <button type="submit" className="small" disabled={busy || !preview || preview.maxSweepablePesewas <= 0}>
+            {busy ? "Submitting…" : "Propose Revenue Sweep"}
+          </button>
+        </form>
+      )}
+      {sweeps.length > 0 && (
+        <div className="table-wrap" style={{ marginTop: "0.75rem" }}>
+          <table className="grid">
+            <thead>
+              <tr><th>Reference</th><th className="num">Amount</th><th>Status</th><th>Requested By</th><th>Approved By</th></tr>
+            </thead>
+            <tbody>
+              {sweeps.map((s) => (
+                <tr key={s.id}>
+                  <td className="mono small">{s.reference}</td>
+                  <td className="num mono">{formatMoney(s.amountPesewas)}</td>
+                  <td><span className={`tag ${s.status.toLowerCase()}`}>{s.status}</span></td>
+                  <td className="small">{s.requestedBy}</td>
+                  <td className="small">{s.approvedBy ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 

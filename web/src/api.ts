@@ -10,11 +10,14 @@ export function newKey(): string {
   return crypto.randomUUID();
 }
 
+const DEFAULT_TIMEOUT_MS = 20_000;
+
 export interface CallOptions {
   method?: string;
   body?: unknown;
   idempotencyKey?: string;
   anonymous?: boolean;
+  timeoutMs?: number;
 }
 
 export async function api<T>(path: string, options: CallOptions = {}): Promise<T> {
@@ -25,11 +28,25 @@ export async function api<T>(path: string, options: CallOptions = {}): Promise<T
     const token = await getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
   }
-  const response = await fetch(path, {
-    method: options.method ?? (options.body === undefined ? "GET" : "POST"),
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const controller = typeof AbortController !== "undefined" && timeoutMs > 0 ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: options.method ?? (options.body === undefined ? "GET" : "POST"),
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+  } catch (e) {
+    if (controller?.signal.aborted) {
+      throw new ApiError(408, "request_timeout", "Request timed out. Please check status before retrying.");
+    }
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   const text = await response.text();
   let data: { code?: string; detail?: string; message?: string } | null = null;
   if (text) {

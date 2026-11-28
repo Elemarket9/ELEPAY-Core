@@ -60,6 +60,7 @@ const MAKER_CHECKER_ACTION_TYPES = [
   "DESTINATION_OPS_VERIFY",
   "VELOCITY_CEILING_CHANGE",
   "PHONE_CHANGE",
+  "REVENUE_SWEEP",
 ] as const;
 
 describe("Ops.tsx permissions and labels", () => {

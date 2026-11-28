@@ -344,7 +344,7 @@ class Checkouts {
     public List<Map<String, Object>> refunds(@PathVariable UUID merchantId) {
         access.require(merchantId, FINANCE_VIEW);
         return db.sql("""
-                SELECT r.reference, c.reference AS checkout, r.line, r.amount, r.fee_returned,
+                SELECT r.id, r.reference, c.reference AS checkout, r.line, r.amount, r.fee_returned,
                        r.platform_fee_returned, r.destination, r.status, r.reason, r.created_at
                 FROM refund r JOIN checkout c ON c.id = r.checkout_id
                 JOIN checkout_allocation a ON a.checkout_id = r.checkout_id AND a.line = r.line

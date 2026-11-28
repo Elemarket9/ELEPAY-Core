@@ -242,7 +242,7 @@ export function MerchantDashboard() {
             {tab === "Business Accounting" && <BusinessAccounting merchantId={merchant.id} />}
             {tab === "Transactions" && <Transactions id={merchant.id} />}
             {tab === "Settlements" && <Rows id={merchant.id} path="settlements" columns={["reference", "amount", "lines", "createdAt"]} />}
-            {tab === "Refunds" && <Rows id={merchant.id} path="refunds" columns={["reference", "checkout", "line", "amount", "status", "reason"]} />}
+            {tab === "Refunds" && <MerchantRefunds id={merchant.id} />}
             {tab === "Disputes" && <Rows id={merchant.id} path="disputes" columns={["checkout", "line", "amount", "reason", "status"]} />}
             {tab === "Payouts" && <Payouts id={merchant.id} />}
             {tab === "Collect" && <Collect merchant={merchant} />}
@@ -1503,6 +1503,112 @@ function Rows({ id, path, columns }: { id: string; path: string; columns: string
           ))}</tr>)}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+interface MerchantRefundRow {
+  id: string;
+  reference: string;
+  checkout: string;
+  line: number;
+  amount: number;
+  status: string;
+  reason: string | null;
+}
+
+function MerchantRefunds({ id }: { id: string }) {
+  const [rows, setRows] = useState<MerchantRefundRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      setRows(await api<MerchantRefundRow[]>(`/v1/merchants/${id}/refunds`));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, [id]);
+
+  async function retryRefund(r: MerchantRefundRow) {
+    if (busyId) return;
+    setBusyId(r.id);
+    setMsg(null);
+    setErr(null);
+    try {
+      await api(`/v1/merchants/${id}/refunds/${r.id}/retry`, {
+        method: "POST",
+        idempotencyKey: newKey(),
+      });
+      setMsg(`Refund ${r.reference} resubmitted from Custodian Trust Account.`);
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div>
+      {msg && <p className="notice ok">{msg}</p>}
+      {err && <p className="notice error" role="alert">{err}</p>}
+      <div className="table-wrap">
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>Reference</th>
+              <th>Checkout</th>
+              <th>Line</th>
+              <th className="num">Amount</th>
+              <th>Status</th>
+              <th>Reason</th>
+              <th className="num">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>Loading refunds…</td></tr>
+            )}
+            {!loading && rows.length === 0 && (
+              <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "1.5rem" }}>No refunds found.</td></tr>
+            )}
+            {!loading && rows.map((r) => {
+              const retryable = r.status === "failed" || r.status === "returned";
+              return (
+                <tr key={r.id ?? r.reference}>
+                  <td className="mono small">{r.reference}</td>
+                  <td className="mono small">{r.checkout}</td>
+                  <td>{r.line}</td>
+                  <td className="num mono">{formatMoney(Number(r.amount))}</td>
+                  <td><span className={`tag ${String(r.status).toLowerCase()}`}>{r.status}</span></td>
+                  <td>{r.reason ?? "—"}</td>
+                  <td className="num">
+                    {retryable && r.id ? (
+                      <button
+                        type="button"
+                        className="small secondary"
+                        disabled={busyId === r.id}
+                        onClick={() => void retryRefund(r)}
+                      >
+                        {busyId === r.id ? "Retrying…" : "Retry from Custodian"}
+                      </button>
+                    ) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
