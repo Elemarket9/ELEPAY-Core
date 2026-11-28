@@ -253,6 +253,79 @@ class EnterpriseSettlementTest extends PostgresTestBase {
         assertThat(ledger.balance(Ledger.code("merchant", m2, "pending", "GHS"))).isZero();
     }
 
+    @Autowired
+    private org.springframework.jdbc.core.simple.JdbcClient db;
+
+    @Autowired
+    private com.elepay.rails.RailTransactions railTransactions;
+
+    @Test
+    @DisplayName("Verified settlement destination dispatches real Payouts batch and settles through rail")
+    void executeMerchantPayoutBatchDispatchesRealPayoutWhenDestinationVerified() {
+        UUID verifiedMerchant = UUID.randomUUID();
+        UUID destId = UUID.randomUUID();
+        db.sql("""
+                INSERT INTO settlement_destination
+                    (id, owner_type, owner_id, type, network, account_number, account_name,
+                     verification, verified_name, status, created_by, cooling_off_until)
+                VALUES (:id, 'merchant', :m, 'momo', 'mtn', '233245550005', 'Verified Seller',
+                        'verified', 'Verified Seller', 'active', 'test', now() - interval '1 hour')""")
+                .param("id", destId)
+                .param("m", verifiedMerchant)
+                .update();
+
+        String orderRef = "ORD-PAYOUT-" + UUID.randomUUID().toString().substring(0, 8);
+        var alloc = List.of(new CalculatedMerchantAllocation(
+                0, verifiedMerchant, "Verified Seller", "GENERAL", "item-p1",
+                25_000L, 2_500L, 0L, 0L, 22_500L, true));
+        escrowService.registerOrderItems(enterpriseId, orderRef, alloc, "GHS", null);
+        escrowService.confirmDelivery(enterpriseId, orderRef, "item-p1", "Courier Verified");
+        seedPending(verifiedMerchant, 22_500L);
+
+        SettlementReleaseResult release = settlementEngine.releaseEligibleSettlements(enterpriseId, "GHS");
+        assertThat(release.status()).isEqualTo("RELEASED");
+        assertThat(ledger.balance(Ledger.code("merchant", verifiedMerchant, "available", "GHS"))).isEqualTo(22_500L);
+
+        UUID payoutBatchRef = settlementEngine.executeMerchantPayoutBatch(
+                enterpriseId, List.of(verifiedMerchant), "GHS");
+        assertThat(payoutBatchRef).isNotNull();
+
+        // Real payout_batch, payout, and rail_transaction were created and submitted to the rail
+        String initialStatus = db.sql("""
+                SELECT p.status
+                FROM payout p
+                JOIN payout_batch b ON b.id = p.batch_id
+                WHERE b.owner_type = 'merchant' AND b.owner_id = :m
+                ORDER BY p.created_at DESC
+                LIMIT 1""")
+                .param("m", verifiedMerchant)
+                .query(String.class)
+                .single();
+        assertThat(initialStatus).isEqualTo("submitted");
+        assertThat(ledger.balance(Ledger.code("merchant", verifiedMerchant, "available", "GHS"))).isZero();
+        assertThat(ledger.balance(Ledger.code("merchant", verifiedMerchant, "reserved", "GHS"))).isEqualTo(22_500L);
+
+        // SimulatedRail account ending in '5' settles on rail recovery/polling
+        railTransactions.recover(100, true);
+
+        String finalStatus = db.sql("""
+                SELECT p.status
+                FROM payout p
+                JOIN payout_batch b ON b.id = p.batch_id
+                WHERE b.owner_type = 'merchant' AND b.owner_id = :m
+                ORDER BY p.created_at DESC
+                LIMIT 1""")
+                .param("m", verifiedMerchant)
+                .query(String.class)
+                .single();
+        assertThat(finalStatus).isEqualTo("succeeded");
+
+        // Available and reserved are both 0 after settlement; ledger remains balanced
+        assertThat(ledger.balance(Ledger.code("merchant", verifiedMerchant, "available", "GHS"))).isZero();
+        assertThat(ledger.balance(Ledger.code("merchant", verifiedMerchant, "reserved", "GHS"))).isZero();
+        assertThat(ledger.integrity().ok()).isTrue();
+    }
+
     private void seedPending(UUID merchant, long amount) {
         ledger.open("merchant", merchant, "pending", "GHS");
         ledger.openSystem("system:clearing:test:GHS", "clearing", "GHS", true);

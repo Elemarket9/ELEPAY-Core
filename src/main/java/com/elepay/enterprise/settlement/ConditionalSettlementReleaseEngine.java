@@ -36,6 +36,12 @@ public class ConditionalSettlementReleaseEngine {
     private final DeliveryEscrowService escrowService;
     private final EnterpriseTreasuryService treasuryService;
     private final Payouts payouts;
+    private com.elepay.merchant.MerchantAccess merchantAccess;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setMerchantAccess(com.elepay.merchant.MerchantAccess merchantAccess) {
+        this.merchantAccess = merchantAccess;
+    }
 
     public ConditionalSettlementReleaseEngine(
             JdbcClient db,
@@ -403,7 +409,11 @@ public class ConditionalSettlementReleaseEngine {
             }
         }
 
-        // Lock each merchant's available account FOR UPDATE and reserve only its own committed balance
+        // Lock each merchant's available account FOR UPDATE and dispatch a real Payouts batch
+        // when the merchant has a single verified, non-cooling-off settlement destination;
+        // otherwise reserve available -> reserved pending destination onboarding.
+        OffsetDateTime now = OffsetDateTime.now();
+        List<UUID> batchesToSubmit = new ArrayList<>();
         for (UUID mId : sortedMerchants) {
             String availAcc = Ledger.code("merchant", mId, "available", cur);
             long avail = db.sql("SELECT balance FROM ledger_account WHERE code = :code FOR UPDATE")
@@ -411,10 +421,35 @@ public class ConditionalSettlementReleaseEngine {
                     .query(Long.class)
                     .optional()
                     .orElse(0L);
-            if (avail > 0) {
-                String reservedAcc = Ledger.code("merchant", mId, "reserved", cur);
-                ledger.open("merchant", mId, "reserved", cur);
+            if (avail <= 0) {
+                continue;
+            }
+            ledger.open("merchant", mId, "reserved", cur);
 
+            var readyDestinations = (GHS.equals(cur) && merchantAccess != null)
+                    ? merchantAccess.verifiedDestinations(mId).stream()
+                            .filter(d -> !d.isCoolingOff(now))
+                            .toList()
+                    : List.<com.elepay.merchant.MerchantAccess.SettlementDestination>of();
+
+            if (readyDestinations.size() == 1) {
+                var dest = readyDestinations.get(0);
+                var createdBatch = payouts.create(
+                        "merchant",
+                        mId,
+                        List.of(new Payouts.Item(
+                                "ent-settle-" + batchId + "-" + mId,
+                                avail,
+                                new Payouts.Destination(dest.type(), dest.network(), dest.accountNumber(), dest.accountName()),
+                                null,
+                                dest.verifiedName()
+                        )),
+                        "Enterprise settlement payout batch " + batchId,
+                        "enterprise:" + enterpriseId
+                );
+                batchesToSubmit.add(createdBatch.id());
+            } else {
+                String reservedAcc = Ledger.code("merchant", mId, "reserved", cur);
                 ledger.post(Posting.of(
                         "merchant:payout",
                         "PAYOUT-" + batchId + "-" + mId,
@@ -424,6 +459,25 @@ public class ConditionalSettlementReleaseEngine {
                                 Leg.credit(reservedAcc, avail)
                         )
                 ).describedAs("Payout reserve for merchant " + mId));
+            }
+        }
+
+        if (!batchesToSubmit.isEmpty()) {
+            Runnable submitAll = () -> {
+                for (UUID bId : batchesToSubmit) {
+                    payouts.submit(bId);
+                }
+            };
+            if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+                org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                        new org.springframework.transaction.support.TransactionSynchronization() {
+                            @Override
+                            public void afterCommit() {
+                                submitAll.run();
+                            }
+                        });
+            } else {
+                submitAll.run();
             }
         }
 

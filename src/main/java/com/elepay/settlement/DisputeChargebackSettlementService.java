@@ -122,30 +122,35 @@ public class DisputeChargebackSettlementService {
 
         UUID holdJournalTxId = ledger.post(posting).transactionId();
 
-        jdbc.sql("""
-            INSERT INTO settlement_dispute_chargeback (
-                id, dispute_reference, transaction_reference, merchant_id, customer_id,
-                currency, disputed_amount, fee_amount, status, reason_code,
-                evidence_hash, initiated_at, hold_journal_tx_id
-            ) VALUES (
-                :id, :disputeReference, :txReference, :merchantId, :customerId,
-                :currency, :disputedAmount, :feeAmount, 'INITIATED', :reasonCode,
-                :evidenceHash, :initiatedAt, :holdJournalTxId
-            )
-        """)
-        .param("id", disputeId)
-        .param("disputeReference", disputeReference)
-        .param("txReference", transactionReference)
-        .param("merchantId", merchantId)
-        .param("customerId", customerId)
-        .param("currency", currency)
-        .param("disputedAmount", disputedAmount)
-        .param("feeAmount", feeAmount)
-        .param("reasonCode", reasonCode)
-        .param("evidenceHash", evidenceHash)
-        .param("initiatedAt", now)
-        .param("holdJournalTxId", holdJournalTxId)
-        .update();
+        try {
+            jdbc.sql("""
+                INSERT INTO settlement_dispute_chargeback (
+                    id, dispute_reference, transaction_reference, merchant_id, customer_id,
+                    currency, disputed_amount, fee_amount, status, reason_code,
+                    evidence_hash, initiated_at, hold_journal_tx_id
+                ) VALUES (
+                    :id, :disputeReference, :txReference, :merchantId, :customerId,
+                    :currency, :disputedAmount, :feeAmount, 'INITIATED', :reasonCode,
+                    :evidenceHash, :initiatedAt, :holdJournalTxId
+                )
+            """)
+            .param("id", disputeId)
+            .param("disputeReference", disputeReference)
+            .param("txReference", transactionReference)
+            .param("merchantId", merchantId)
+            .param("customerId", customerId)
+            .param("currency", currency)
+            .param("disputedAmount", disputedAmount)
+            .param("feeAmount", feeAmount)
+            .param("reasonCode", reasonCode)
+            .param("evidenceHash", evidenceHash)
+            .param("initiatedAt", now)
+            .param("holdJournalTxId", holdJournalTxId)
+            .update();
+        } catch (org.springframework.dao.DuplicateKeyException dup) {
+            throw ApiException.conflict("dispute_already_exists",
+                    "Dispute already exists for reference: " + disputeReference);
+        }
 
         return new DisputeRecord(
                 disputeId, disputeReference, transactionReference, merchantId, customerId,
@@ -186,7 +191,7 @@ public class DisputeChargebackSettlementService {
      */
     @Transactional
     public DisputeRecord resolveDispute(String disputeReference, boolean merchantWon, String resolutionNotes) {
-        Map<String, Object> row = jdbc.sql("""
+        List<Map<String, Object>> rows = jdbc.sql("""
             SELECT id, dispute_reference, transaction_reference, merchant_id, customer_id,
                    currency, disputed_amount, fee_amount, status, reason_code,
                    evidence_hash, initiated_at, hold_journal_tx_id, resolution_journal_tx_id
@@ -196,7 +201,11 @@ public class DisputeChargebackSettlementService {
         """)
         .param("disputeReference", disputeReference)
         .query()
-        .singleRow();
+        .listOfRows();
+        if (rows.isEmpty()) {
+            throw ApiException.notFound("dispute_not_found", "Dispute not found: " + disputeReference);
+        }
+        Map<String, Object> row = rows.get(0);
 
         String currentStatus = (String) row.get("status");
         if ("MERCHANT_WON".equals(currentStatus) || "MERCHANT_LOST".equals(currentStatus)) {
@@ -305,7 +314,8 @@ public class DisputeChargebackSettlementService {
                 rs.getObject("hold_journal_tx_id", UUID.class),
                 rs.getObject("resolution_journal_tx_id", UUID.class)
         ))
-        .single();
+        .optional()
+        .orElseThrow(() -> ApiException.notFound("dispute_not_found", "Dispute not found: " + disputeReference));
     }
 
     private static OffsetDateTime toOffsetDateTime(Object val) {
