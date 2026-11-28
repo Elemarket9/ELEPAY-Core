@@ -112,6 +112,8 @@ class CheckoutDisputeService {
                 .param("tx", hold.transactionId()).param("case", providerCase).param("by", actor)
                 .param("seller", t.seller()).param("sellerReserved", t.sellerFromReserved())
                 .param("fee", t.fee()).param("platform", t.platform()).update();
+        store.adjustBankFunding(c.id(), a.merchantId(), -t.sellerFromAvailable());
+        store.adjustBankFunding(c.id(), c.collectorId(), -t.platformFromAvailable());
         audit.record(actor, "dispute.opened", "checkout:" + reference, Map.of("line", line, "amount", amount));
         outbox.publish("dispute", id, "dispute.opened", Map.of("dispute", id.toString(), "checkout", reference,
                 "line", line, "amount", amount), CheckoutStore.setOf(a.merchantId(), c.collectorId()));
@@ -152,6 +154,10 @@ class CheckoutDisputeService {
             boolean pending = !settled && !legacy;
             long sellerReserved = legacy ? 0L : Math.min(seller, Math.max(0L, d.sellerReserved()));
             long sellerNonReserved = seller - sellerReserved;
+            if (!pending) {
+                store.adjustBankFunding(c.id(), a.merchantId(), sellerNonReserved);
+                store.adjustBankFunding(c.id(), c.collectorId(), platform);
+            }
             if (sellerReserved > 0) legs.add(Leg.credit(reserved, sellerReserved));
             if (sellerNonReserved > 0) legs.add(Leg.credit(Ledger.code("merchant", a.merchantId(), pending ? "pending" : "available", Ledger.GHS), sellerNonReserved));
             if (fee > 0) {

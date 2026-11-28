@@ -25,21 +25,21 @@ class GhipssClearingServiceTest extends PostgresTestBase {
         ghipssService.registerProxy(
                 GhipssClearingService.ProxyType.PHONE,
                 phone,
-                "GCB_040",
+                "TST_040",
                 "1010001234567",
                 "Kofi Mensah"
         );
 
         var proxyOpt = ghipssService.resolveProxy(GhipssClearingService.ProxyType.PHONE, phone);
         assertThat(proxyOpt).isPresent();
-        assertThat(proxyOpt.get().institutionCode()).isEqualTo("GCB_040");
+        assertThat(proxyOpt.get().institutionCode()).isEqualTo("TST_040");
         assertThat(proxyOpt.get().accountNumber()).isEqualTo("1010001234567");
 
         // 2. Initiate Interbank Transfer
         long amountPesewas = 100_000L; // 1,000.00 GHS
         var session = ghipssService.initiateTransfer(
                 "ELEPAY_030",
-                "GCB_040",
+                "TST_040",
                 proxyOpt.get().accountNumber(),
                 proxyOpt.get().accountName(),
                 GhipssClearingService.ProxyType.PHONE,
@@ -78,7 +78,7 @@ class GhipssClearingServiceTest extends PostgresTestBase {
     void testUniqueRrnStanConstraint() {
         var session = ghipssService.initiateTransfer(
                 "ELEPAY_030",
-                "GCB_040",
+                "TST_040",
                 "1010009999999",
                 "Aba Mansa",
                 GhipssClearingService.ProxyType.PHONE,
@@ -97,7 +97,7 @@ class GhipssClearingServiceTest extends PostgresTestBase {
                     amount_pesewas, currency, iso_message_type, stan, rrn, status, created_at, updated_at
                 ) VALUES (
                     :id, :sessionId, 'CYCLE_1', 'ELEPAY_030',
-                    'GCB_040', '1010009999999', 'Duplicate Test',
+                    'TST_040', '1010009999999', 'Duplicate Test',
                     50000, 'GHS', 'pacs.008', :stan, :rrn, 'PENDING', now(), now()
                 )
             """)

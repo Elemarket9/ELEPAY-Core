@@ -1338,13 +1338,14 @@ interface CustodianSafeguardReport {
   todayTotalOutflowPesewas: number;
   todayRejectedOutflowCount: number;
   outflowFrozen: boolean;
+  custodianConfigured: boolean;
   safeguardingSatisfied: boolean;
 }
 
 interface TrustAccountConfig {
   accountCode: string;
-  bankCode: string;
-  bankAccountNumber: string;
+  bankCode: string | null;
+  bankAccountNumber: string | null;
   currency: string;
   dailyOutflowCapPesewas: number;
   perPayoutCapPesewas: number;
@@ -1390,15 +1391,15 @@ function CustodianTrust({ canManageFinance }: { canManageFinance: boolean }) {
           <div className={report.safeguardingSatisfied ? "notice ok" : "notice warn"}>
             <strong>
               Trust Safeguarding ({report.trustAccountCode} / {report.currency}):{" "}
-              {report.safeguardingSatisfied ? "SATISFIED" : "DEFICIT / REVIEW REQUIRED"}
+              {!report.custodianConfigured ? "NO CUSTODIAN CONFIGURED" : report.safeguardingSatisfied ? "SATISFIED" : "DEFICIT / REVIEW REQUIRED"}
               {report.outflowFrozen && " — OUTFLOW FROZEN"}
             </strong>
           </div>
           <div className="kpi-grid">
             <div className="kpi-card primary">
               <div className="kpi-label">Total Trust Assets</div>
-              <div className="kpi-value">{formatMoney(report.totalTrustAssetsPesewas)}</div>
-              <div className="kpi-meta">Reconciled bank &amp; clearing</div>
+              <div className="kpi-value">{report.custodianConfigured ? formatMoney(report.totalTrustAssetsPesewas) : "—"}</div>
+              <div className="kpi-meta">{report.custodianConfigured ? "Reconciled bank & clearing" : "No custodian account"}</div>
             </div>
             <div className="kpi-card">
               <div className="kpi-label">Safeguarded Liabilities</div>
@@ -1431,7 +1432,7 @@ function CustodianTrust({ canManageFinance }: { canManageFinance: boolean }) {
             </div>
             <div className="ops-dl-item">
               <dt>Bank / Account</dt>
-              <dd className="mono">{config.bankCode} — {config.bankAccountNumber}</dd>
+              <dd className="mono">{config.bankCode && config.bankAccountNumber ? `${config.bankCode} — ${config.bankAccountNumber}` : "Custodian bank not configured"}</dd>
             </div>
             <div className="ops-dl-item">
               <dt>Per-Payout Cap</dt>
@@ -1468,6 +1469,21 @@ function CustodianConfigEditor({ config, onUpdated }: { config: TrustAccountConf
     setMinReserve((config.minReserveFloorPesewas / 100).toFixed(2));
     setOutflowFrozen(config.outflowFrozen);
   }, [config]);
+
+  async function connectCustodian() {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const result = await api<Record<string, unknown>>("/v1/ops/custodian/connect", { method: "POST" });
+      setMsg(formatDualControlOutcome(result, "Custodian account connected."));
+      await onUpdated();
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -1514,6 +1530,11 @@ function CustodianConfigEditor({ config, onUpdated }: { config: TrustAccountConf
 
   return (
     <div style={{ marginTop: "0.9rem" }}>
+      {!config.bankCode && (
+        <button type="button" className="secondary small" disabled={busy} onClick={() => void connectCustodian()}>
+          Connect custodian via API
+        </button>
+      )}
       <button type="button" className="secondary small" onClick={() => setOpen(!open)}>
         {open ? "Hide Config Editor" : "Edit Caps / Reconciled Bank Balance"}
       </button>

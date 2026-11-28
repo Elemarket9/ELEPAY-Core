@@ -97,6 +97,7 @@ public class CustodianBankBackstopService {
             long todayTotalOutflowPesewas,
             int todayRejectedOutflowCount,
             boolean outflowFrozen,
+            boolean custodianConfigured,
             boolean safeguardingSatisfied
     ) {}
 
@@ -401,7 +402,9 @@ public class CustodianBankBackstopService {
                 ? trust.lastReconciledBankBalancePesewas()
                 : clearingReceivables;
 
-        boolean satisfied = !trust.outflowFrozen()
+        boolean configured = trust.bankCode() != null && !trust.bankCode().isBlank()
+                && trust.bankAccountNumber() != null && !trust.bankAccountNumber().isBlank();
+        boolean satisfied = configured && !trust.outflowFrozen()
                 && trust.lastReconciledBankBalancePesewas() != null
                 && totalTrustAssets >= totalLiabilities
                 && ledger.integrity().ok();
@@ -424,6 +427,7 @@ public class CustodianBankBackstopService {
                 acc.reservedOutflowPesewas() + acc.settledOutflowPesewas(),
                 acc.rejectedCount(),
                 trust.outflowFrozen(),
+                configured,
                 satisfied
         );
     }
@@ -453,7 +457,7 @@ public class CustodianBankBackstopService {
                     last_reconciled_bank_balance_pesewas, outflow_frozen, updated_by
                 ) VALUES (
                     '00000000-0000-0000-0000-000000000049',
-                    :code, 'GCB', '10102030405060', 'GHS',
+                    :code, NULL, NULL, 'GHS',
                     50000000000, 10000000000, 0, NULL, false, 'system'
                 ) ON CONFLICT (account_code) DO NOTHING""")
                 .param("code", PRIMARY_TRUST_CODE).update();

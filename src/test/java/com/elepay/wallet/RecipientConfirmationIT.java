@@ -89,11 +89,11 @@ class RecipientConfirmationIT extends PostgresTestBase {
                 Map.of("rail", "momo", "phone", "0241234560", "network", "mtn"));
         assertThat(notFound.body().get("status").asString()).isEqualTo("not_found");
         var unavailable = api.call("POST", "/v1/wallet/recipients/lookup", senderToken, null,
-                Map.of("rail", "bank", "bankCode", "GCB", "accountNumber", "1234567899"));
+                Map.of("rail", "bank", "bankCode", "TST", "accountNumber", "1234567899"));
         assertThat(unavailable.body().get("status").asString()).isEqualTo("verification_unavailable");
         assertThat(unavailable.body().get("message").asString()).contains("could not verify");
         var verified = api.call("POST", "/v1/wallet/recipients/lookup", senderToken, null,
-                Map.of("rail", "bank", "bankCode", "GCB", "accountNumber", "1234567812"));
+                Map.of("rail", "bank", "bankCode", "TST", "accountNumber", "1234567812"));
         assertThat(verified.body().get("status").asString()).isEqualTo("verified");
         assertThat(verified.body().get("verifiedName").asString()).startsWith("SIMULATED");
         assertThat(verified.body().get("destination").asString()).doesNotContain("1234567812");

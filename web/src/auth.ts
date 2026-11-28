@@ -111,9 +111,6 @@ export async function verifyEmailAndSms(
   });
   if (result.verified && result.accessToken) {
     sessionStorage.setItem(NATIVE_KEY, result.accessToken);
-    if (result.user) {
-      sessionStorage.setItem(USER_KEY, JSON.stringify(result.user));
-    }
   }
   return result;
 }
@@ -133,15 +130,6 @@ export async function resetPassword(input: {
   newPassword: string;
 }): Promise<{ reset: boolean }> {
   return authPost<{ reset: boolean }>("/v1/auth/reset-password", input);
-}
-
-export function getStoredUser(): AuthUser | null {
-  try {
-    const raw = sessionStorage.getItem(USER_KEY);
-    return raw ? (JSON.parse(raw) as AuthUser) : null;
-  } catch {
-    return null;
-  }
 }
 
 function isJwtExpired(token: string): boolean {

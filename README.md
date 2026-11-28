@@ -48,7 +48,11 @@ The initial payment suite recorded 46/47 passing scenarios. An upstream response
 
 ### Banking and card acquiring
 
-Ecobank and card acquiring are part of the integration scope. Ecobank sandbox validation results are not documented in the MTN test report. Production connectivity is pending confirmation.
+ELEPAY has no commercial bank partnership or default custodian bank. When configuring a bank integration, include its approved hostname in `ELEPAY_PARTNER_EGRESS_HOSTS` alongside the other partner hosts used by the deployment. This setting controls outbound access. Production bank connectivity and card acquiring require separate integration and validation.
+
+For live merchant settlement, an installed `SettlementBank` adapter must confirm the approved account and its collection or payout entitlement. The statement worker retrieves booked credits and their collection references. ELEPAY applies its own checkout allocations and reserves the requesting merchant’s bank-backed funds before submitting an instruction. Recovery queries the bank using the same instruction reference, and statement matching verifies the booked debit against the source account, beneficiary, amount, and currency.
+
+Finance operators can retry statement matching through `POST /v1/ops/custodian/credits/{reference}/sync` (bank credit reference) or `POST /v1/ops/custodian/payouts/{reference}/reconcile` (ELEPAY rail reference). The server fetches the evidence from the provider. Unmatched credits and balances predating the bank connection do not automatically qualify for a live settlement withdrawal.
 
 ## Deployment and integration environments
 

@@ -51,7 +51,7 @@ class PayoutHardeningTest {
         assertThat(momo.contains("vodafone")).isFalse(); // re-branded to telecel
 
         // Bank validation regex
-        String validNetwork = "GCB";
+        String validNetwork = "TST";
         String validAccount = "123456789012";
         assertThat(validNetwork.matches("[A-Z0-9]{2,20}")).isTrue();
         assertThat(validAccount.matches("[0-9]{6,34}")).isTrue();

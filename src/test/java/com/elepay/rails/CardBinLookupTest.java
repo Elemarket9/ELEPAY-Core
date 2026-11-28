@@ -22,24 +22,24 @@ class CardBinLookupTest {
 
         // Pre-populate standard BINs for offline lookup tests
         binService.registerBin(new CardBinLookupService.CardBin(
-                "411111", "visa", "debit", "GCB Bank PLC", "GH", "GHS", "2026.1"
+                "411111", "visa", "debit", "Test Issuer A", "GH", "GHS", "2026.1"
         ));
         binService.registerBin(new CardBinLookupService.CardBin(
-                "512345", "mastercard", "debit", "GCB Bank PLC", "GH", "GHS", "2026.1"
+                "512345", "mastercard", "debit", "Test Issuer A", "GH", "GHS", "2026.1"
         ));
         binService.registerBin(new CardBinLookupService.CardBin(
-                "402234", "visa", "debit", "Ecobank Ghana PLC", "GH", "GHS", "2026.1"
+                "402234", "visa", "debit", "Test Issuer B", "GH", "GHS", "2026.1"
         ));
         binService.registerBin(new CardBinLookupService.CardBin(
                 "900101", "gh-link", "debit", "GhIPSS Gh-Link", "GH", "GHS", "2026.1"
         ));
         binService.registerBin(new CardBinLookupService.CardBin(
-                "40000012", "visa", "credit", "Chase Bank USA", "US", "USD", "2026.1"
+                "40000012", "visa", "credit", "Test Issuer C", "US", "USD", "2026.1"
         ));
     }
 
     @Test
-    @DisplayName("Successfully resolves Ghanaian Visa debit BIN (GCB Bank)")
+    @DisplayName("Successfully resolves Ghanaian Visa debit BIN")
     void resolvesGhanaianVisaBin() {
         Optional<CardBinLookupService.CardBin> result = binService.lookup("4111110022334455");
         assertThat(result).isPresent();
@@ -47,7 +47,7 @@ class CardBinLookupTest {
         assertThat(bin.bin()).isEqualTo("411111");
         assertThat(bin.scheme()).isEqualTo("visa");
         assertThat(bin.cardType()).isEqualTo("debit");
-        assertThat(bin.issuerBank()).isEqualTo("GCB Bank PLC");
+        assertThat(bin.issuerBank()).isEqualTo("Test Issuer A");
         assertThat(bin.countryCode()).isEqualTo("GH");
         assertThat(bin.currency()).isEqualTo("GHS");
     }
@@ -67,7 +67,7 @@ class CardBinLookupTest {
         Optional<CardBinLookupService.CardBin> result = binService.lookup("4000001299998888");
         assertThat(result).isPresent();
         assertThat(result.get().bin()).isEqualTo("40000012");
-        assertThat(result.get().issuerBank()).isEqualTo("Chase Bank USA");
+        assertThat(result.get().issuerBank()).isEqualTo("Test Issuer C");
         assertThat(result.get().countryCode()).isEqualTo("US");
     }
 

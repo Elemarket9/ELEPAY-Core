@@ -14,7 +14,7 @@ class Mt940StatementParserTest extends PostgresTestBase {
     private Mt940StatementParser parser;
 
     private static final String SAMPLE_MT940 = """
-            :20:GCB-STAT-20260301
+            :20:TST-STAT-20260301
             :25:1010001234567
             :28C:00045/001
             :60F:C260301GHS10000,00
@@ -53,7 +53,7 @@ class Mt940StatementParserTest extends PostgresTestBase {
         // Ingest into database (unique statement number per run for persistent test DB)
         String uniqueMt940 = SAMPLE_MT940.replace("00045/001",
                 String.format("%05d/001", Math.abs(java.util.UUID.randomUUID().hashCode()) % 90000 + 10000));
-        var ingestion = parser.ingestStatement("GCB", uniqueMt940);
+        var ingestion = parser.ingestStatement("TST", uniqueMt940);
         assertThat(ingestion.batchId()).isNotNull();
         assertThat(ingestion.totalLines()).isEqualTo(2);
         assertThat(ingestion.status()).isEqualTo("INGESTED");
@@ -63,7 +63,7 @@ class Mt940StatementParserTest extends PostgresTestBase {
     @DisplayName("Fractional pesewas are rejected and lineCounter maintains strict sequence with malformed lines")
     void testFractionalPesewasAndSequentialLineCounterWithMalformedLines() {
         String mt940WithFractional = """
-                :20:GCB-FRACTIONAL
+                :20:TST-FRACTIONAL
                 :25:1010005555555
                 :28C:00005/001
                 :60F:C260301GHS5000,00
@@ -75,7 +75,7 @@ class Mt940StatementParserTest extends PostgresTestBase {
                 .isInstanceOf(ArithmeticException.class);
 
         String mt940WithMalformed = """
-                :20:GCB-MALFORMED-SEQ
+                :20:TST-MALFORMED-SEQ
                 :25:1010005555555
                 :28C:00005/001
                 :60F:C260301GHS5000,00
@@ -107,7 +107,7 @@ class Mt940StatementParserTest extends PostgresTestBase {
     void testDuplicateMt940IngestionRejected() {
         String s = java.util.UUID.randomUUID().toString().substring(0, 8);
         String uniqueMt940 = """
-                :20:GCB-DUP-%s
+                :20:TST-DUP-%s
                 :25:1010%s
                 :28C:00099/001
                 :60F:C260301GHS1000,00
@@ -115,10 +115,10 @@ class Mt940StatementParserTest extends PostgresTestBase {
                 :62F:C260301GHS1100,00
                 -
                 """.formatted(s, s, s);
-        var first = parser.ingestStatement("GCB", uniqueMt940);
+        var first = parser.ingestStatement("TST", uniqueMt940);
         assertThat(first.batchId()).isNotNull();
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> parser.ingestStatement("GCB", uniqueMt940))
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> parser.ingestStatement("TST", uniqueMt940))
                 .isInstanceOf(com.elepay.common.ApiException.class)
                 .hasMessageContaining("already been ingested");
     }
@@ -127,7 +127,7 @@ class Mt940StatementParserTest extends PostgresTestBase {
     @DisplayName("Regression: Malformed :61: line is flagged ERR and rejected on ingestStatement")
     void testMalformedLineFlaggedAndRejectedOnIngest() {
         String malformed = """
-                :20:GCB-MALFORMED
+                :20:TST-MALFORMED
                 :25:1010001111111
                 :28C:00088/001
                 :60F:C260301GHS1000,00
@@ -139,7 +139,7 @@ class Mt940StatementParserTest extends PostgresTestBase {
         assertThat(parsed.lines().get(0).transactionTypeCode()).isEqualTo("ERR");
         assertThat(parsed.lines().get(0).supplementaryDetails()).startsWith("PARSE_ERROR:");
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> parser.ingestStatement("GCB", malformed))
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> parser.ingestStatement("TST", malformed))
                 .isInstanceOf(com.elepay.common.ApiException.class)
                 .hasMessageContaining("Malformed :61:");
     }
@@ -148,7 +148,7 @@ class Mt940StatementParserTest extends PostgresTestBase {
     @DisplayName("Regression: Dec->Jan year rollover in parseDate4 assigns previous year to December entryDate")
     void testDecemberToJanuaryYearRollover() {
         String rollover = """
-                :20:GCB-ROLLOVER
+                :20:TST-ROLLOVER
                 :25:1010001230000
                 :28C:00001/001
                 :60F:C260102GHS1000,00

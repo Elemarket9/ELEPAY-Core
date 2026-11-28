@@ -34,6 +34,8 @@ public class Payouts {
     private static final Set<String> MOMO = Set.of("mtn", "telecel", "airteltigo");
     public static final int MAX_BATCH = 500;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.elepay.merchant.MerchantAccess merchants;
     private final JdbcClient db;
     private final Ledger ledger;
     private final RailTransactions rails;
@@ -91,6 +93,10 @@ public class Payouts {
 
     public record Batch(UUID id, String reference, int itemCount, long total, Map<String, Long> statusCounts,
                         List<Payout> items) {}
+
+    long automaticSettlementAmount(UUID merchant, long available) {
+        return rails.bankBackedAvailable(merchant, available);
+    }
 
     static String bucket(String ownerType, UUID owner, String bucket) {
         return Ledger.code(ownerType, owner, bucket, Ledger.GHS);
@@ -178,6 +184,14 @@ public class Payouts {
 
     private UUID createItem(String ownerType, UUID owner, UUID batchId, Item item, UUID retryOf, String actor) {
         Destination d = normalize(item.destination());
+        boolean bankSettlement = "merchant".equals(ownerType) && !"sandbox".equals(rails.defaultRail());
+        if (bankSettlement) {
+            var destination = merchants.activeDestinationByAccount(owner, d.type(), d.network(), d.accountNumber())
+                    .filter(com.elepay.merchant.MerchantAccess.SettlementDestination::verified)
+                    .filter(v -> !v.isCoolingOff(OffsetDateTime.now()))
+                    .orElseThrow(() -> ApiException.conflict("destination_unverified", "Verified merchant destination required"));
+            d = new Destination(destination.type(), destination.network(), destination.accountNumber(), destination.accountName());
+        }
         if (sanctionsScreening != null && sanctionsScreening.isSanctionedName(d.accountName())) {
             throw ApiException.conflict("sanctions_match",
                     "Payout destination failed sanctions screening: " + d.accountName());
@@ -215,9 +229,11 @@ public class Payouts {
         var reserved = ledger.post(Ledger.Posting.of("payout-reserve", id.toString(), "payout_reservation", List.of(
                 Leg.debit(bucket(ownerType, owner, "available"), item.amount()),
                 Leg.credit(bucket(ownerType, owner, "reserved"), item.amount()))).describedAs(reference));
-        var railTx = rails.create(rail, "payout", "payout", id, item.amount(), new RailTransactions.Request(
+        var request = new RailTransactions.Request(
                 d.type(), d.type().equals("momo") ? d.accountNumber() : null, d.network(), null, null,
-                "ELEPAY payout " + reference, null, d.accountName(), d.accountNumber(), d.type(), null, null));
+                "ELEPAY payout " + reference, null, d.accountName(), d.accountNumber(), d.type(), null, null);
+        var railTx = bankSettlement ? rails.createMerchantSettlement(owner, id, item.amount(), request)
+                : rails.create(rail, "payout", "payout", id, item.amount(), request);
         db.sql("""
                 INSERT INTO payout (id, reference, owner_type, owner_id, destination, amount, rail, status, reservation_tx,
                     rail_tx, requested_by, batch_id, client_reference, platform, verification, verified_name, retry_of)
@@ -354,6 +370,7 @@ public class Payouts {
                 Leg.credit(bucket(p.ownerType(), p.owner(), "available"), p.amount()))).describedAs(p.reference()));
         db.sql("UPDATE payout SET status = 'failed', completion_tx = :tx, completed_at = now(), failure_reason = :r WHERE id = :id")
                 .param("tx", posted.transactionId()).param("r", event.reason()).param("id", p.id()).update();
+        releaseBankFunding(p.id());
         publish(p, "payout.failed", event.reason());
         regulatory.payout(p.id());
     }
@@ -375,8 +392,17 @@ public class Payouts {
                 .param("tx", posted.transactionId()).param("r", event.reason()).param("id", p.id()).update();
         ops.raise("payout_returned", "medium", "payout:" + p.reference(), Map.of("amount", p.amount(),
                 "reason", String.valueOf(event.reason()), "note", "Funds are back in the owner's available balance"));
+        releaseBankFunding(p.id());
         publish(p, "payout.returned", event.reason());
         regulatory.payout(p.id());
+    }
+
+    private void releaseBankFunding(UUID payout) {
+        db.sql("""
+                UPDATE settlement_merchant_funding f SET remaining=f.remaining+i.amount
+                FROM settlement_bank_instruction i JOIN payout p ON p.rail_tx=i.rail_tx
+                WHERE p.id=:id AND f.merchant_id=i.merchant_id AND f.source_key=i.source_key""")
+                .param("id", payout).update();
     }
 
     private void publish(Locked p, String type, String reason) {

@@ -252,7 +252,7 @@ public class PayoutPolicies {
             Payouts.Batch batch;
             try {
                 batch = tx.execute(s -> {
-                    long available = ledger.balance(Ledger.code("merchant", merchant, "available", Ledger.GHS));
+                    long available = payouts.automaticSettlementAmount(merchant, ledger.balance(Ledger.code("merchant", merchant, "available", Ledger.GHS)));
                     if (available <= 0 || available < policy.minAmount()) return null;
                     return payouts.create("merchant", merchant, List.of(new Payouts.Item(
                             "auto-withdrawal-" + UUID.randomUUID(), available, destination.get().destination(), null,

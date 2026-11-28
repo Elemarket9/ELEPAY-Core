@@ -43,7 +43,7 @@ class PayoutBatchIT extends PostgresTestBase {
                 new String[]{"momo", "mtn", "233245550005", "Driver drv-1"},
                 new String[]{"momo", "telecel", "233205550001", "Driver drv-2"},
                 new String[]{"momo", "mtn", "233245550006", "Driver drv-3"},
-                new String[]{"bank", "GCB", "1234567890", "Driver drv-4"},
+                new String[]{"bank", "TST", "1234567890", "Driver drv-4"},
                 new String[]{"momo", "mtn", "233245550002", "Driver drv-5"})) {
             db.sql("""
                     INSERT INTO settlement_destination
@@ -86,7 +86,7 @@ class PayoutBatchIT extends PostgresTestBase {
                 item("drv-1", 10_000, "momo", "mtn", "0245550005", "bolt"),      // succeeds
                 item("drv-2", 20_000, "momo", "telecel", "0205550001", "bolt"),  // declined
                 item("drv-3", 15_000, "momo", "mtn", "0245550006", "yango"),     // succeeds, later returned
-                item("drv-4", 5_000, "bank", "GCB", "1234567890", "x"),          // account not found: rejected
+                item("drv-4", 5_000, "bank", "TST", "1234567890", "x"),          // account not found: rejected
                 item("drv-5", 7_000, "momo", "mtn", "0245550002", "tiktok")));   // response times out
         var created = api.call("POST", "/v1/merchants/" + platform + "/payout-batches", owner, key, body);
         assertThat(created.status()).isEqualTo(200);

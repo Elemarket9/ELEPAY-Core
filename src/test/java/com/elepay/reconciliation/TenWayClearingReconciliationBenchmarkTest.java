@@ -58,7 +58,7 @@ class TenWayClearingReconciliationBenchmarkTest extends PostgresTestBase {
                     id, batch_reference, bank_code, account_number, statement_number,
                     currency, opening_balance_pesewas, closing_balance_pesewas,
                     statement_date, total_lines, status, raw_content_sha256
-                ) VALUES (?, ?, 'GCB', '10100001', '00001/001', 'GHS', 0, 0, ?, ?, 'INGESTED', ?)
+                ) VALUES (?, ?, 'TST', '10100001', '00001/001', 'GHS', 0, 0, ?, ?, 'INGESTED', ?)
                 """, batchId, prefix + "BATCH", statementDate, count, sha);
 
         List<UUID> txIds = new ArrayList<>(count);

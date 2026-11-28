@@ -98,6 +98,8 @@ class CheckoutRefundService {
                 .param("pending", t.sellerFromPending()).param("reserved", t.sellerFromReserved())
                 .param("pp", t.platformFromPending())
                 .param("fd", t.feeFromDeferred()).param("c", c.id()).param("l", line).update();
+        store.adjustBankFunding(c.id(), a.merchantId(), -t.sellerFromAvailable());
+        store.adjustBankFunding(c.id(), c.collectorId(), -t.platformFromAvailable());
         UUID railTx = toWallet ? null : store.railRefund(c, id, amount);
         db.sql("""
                 INSERT INTO refund (id, reference, checkout_id, line, amount, fee_returned, platform_fee_returned,

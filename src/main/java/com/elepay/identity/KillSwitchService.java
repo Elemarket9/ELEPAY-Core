@@ -578,16 +578,6 @@ public class KillSwitchService {
         }
     }
 
-    private String readRedis(String key) {
-        if (redis == null || !redisBreaker.allow()) return null;
-        try {
-            return redis.opsForValue().get(key);
-        } catch (Exception e) {
-            redisBreaker.failure();
-            return null;
-        }
-    }
-
     private void addSetRedis(String key, String member) {
         if (redis == null || !redisBreaker.allow()) return;
         try {
@@ -603,17 +593,6 @@ public class KillSwitchService {
             redis.opsForSet().remove(key, member);
         } catch (Exception e) {
             redisBreaker.failure();
-        }
-    }
-
-    private boolean isMemberRedis(String key, String member) {
-        if (redis == null || !redisBreaker.allow()) return false;
-        try {
-            Boolean res = redis.opsForSet().isMember(key, member);
-            return Boolean.TRUE.equals(res);
-        } catch (Exception e) {
-            redisBreaker.failure();
-            return false;
         }
     }
 
