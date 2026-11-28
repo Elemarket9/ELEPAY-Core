@@ -440,11 +440,8 @@ public class ExternalWalletWithdrawalEngine {
     }
 
     private String resolvePayoutReference(EnterpriseWithdrawalResult original) {
-        if (db != null && original.payoutId() != null) {
-            return db.sql("SELECT reference FROM payout WHERE id = :id")
-                    .param("id", original.payoutId())
-                    .query(String.class)
-                    .optional()
+        if (payouts != null && original.payoutId() != null) {
+            return payouts.findPayoutReference(original.payoutId())
                     .orElse(original.withdrawalReference());
         }
         return original.withdrawalReference();

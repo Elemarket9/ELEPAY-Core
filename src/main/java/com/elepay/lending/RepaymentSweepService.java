@@ -50,7 +50,9 @@ public class RepaymentSweepService {
 
     @Transactional
     public SweepResult executeSweep(UUID contractId, long salesBatchAmountPesewas, String externalReference) {
-        db.sql("SELECT id FROM loan_contract WHERE id = ? FOR UPDATE").param(contractId).query(UUID.class).single();
+        db.sql("SELECT id FROM loan_contract WHERE id = ? FOR UPDATE").param(contractId).query(UUID.class)
+                .optional()
+                .orElseThrow(() -> new IllegalArgumentException("Contract not found: " + contractId));
         var contract = contractService.getContract(contractId)
                 .orElseThrow(() -> new IllegalArgumentException("Contract not found: " + contractId));
 

@@ -323,7 +323,9 @@ public class EnterpriseRefundService {
                 destinationAccount = ledger.openStripedSystem("system:clearing:" + channel + ":" + currency, "clearing", currency, true, checkoutId);
             }
             case DOMESTIC_MOMO -> {
-                String network = request.destinationDetails().getOrDefault("network", "mtn");
+                String network = request.destinationDetails() == null
+                        ? "mtn"
+                        : request.destinationDetails().getOrDefault("network", "mtn");
                 destinationAccount = ledger.openStripedSystem("system:clearing:" + network.toLowerCase() + ":" + currency, "clearing", currency, true, checkoutId);
             }
             case BANK_ACCOUNT -> {
@@ -363,7 +365,7 @@ public class EnterpriseRefundService {
 
         // 6. External wallet connector call (Mode A refundToWallet through the enterprise's registered connector)
         String connectorRefundId = null;
-        if (request.destination() == RefundDestination.EXTERNAL_WALLET && walletEngine != null && request.externalCaptureId() != null) {
+        if (!posted.replay() && request.destination() == RefundDestination.EXTERNAL_WALLET && walletEngine != null && request.externalCaptureId() != null) {
             // The enterprise must name its wallet connector explicitly; no partner is assumed by default.
             String connectorId = request.destinationDetails() == null ? null : request.destinationDetails().get("connectorId");
             if (connectorId == null || connectorId.isBlank()) {
@@ -417,22 +419,24 @@ public class EnterpriseRefundService {
             }
         }
 
-        // 7. Record Refund Liabilities for Sub-Merchants
+        // 7. Record Refund Liabilities for Sub-Merchants (skip on ledger replay to prevent double-recording)
         UUID refundId = UUID.randomUUID();
-        for (CalculatedItemRefund cItem : calculatedItems) {
-            if (cItem.merchantReversalPesewas() > 0) {
-                liabilityTracker.recordLiability(
-                        request.enterpriseId(),
-                        cItem.merchantId(),
-                        refundId,
-                        cItem.merchantReversalPesewas()
-                );
+        if (!posted.replay()) {
+            for (CalculatedItemRefund cItem : calculatedItems) {
+                if (cItem.merchantReversalPesewas() > 0) {
+                    liabilityTracker.recordLiability(
+                            request.enterpriseId(),
+                            cItem.merchantId(),
+                            refundId,
+                            cItem.merchantReversalPesewas()
+                    );
+                }
             }
-        }
 
-        // 8. Update Order Cumulative Refund State
-        long newCumulative = Math.addExact(currentCumulative, totalRefundRequested);
-        updateCumulativeRefund(request.enterpriseId(), request.orderReference(), originalGross, newCumulative);
+            // 8. Update Order Cumulative Refund State
+            long newCumulative = Math.addExact(currentCumulative, totalRefundRequested);
+            updateCumulativeRefund(request.enterpriseId(), request.orderReference(), originalGross, newCumulative);
+        }
 
         // 9. Persist to Database if available
         String refundRef = "ERF-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();

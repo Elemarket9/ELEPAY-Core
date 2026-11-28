@@ -359,19 +359,8 @@ public class PlatformRevenueSweepService {
                     "Custodian Bank safeguarding invariants are not satisfied; revenue sweep blocked");
         }
 
-        // Lock all system:revenue:GHS base + stripe rows in id order (matches Ledger.lock to prevent deadlocks)
-        List<Long> lockedRevenueBalances = db.sql("""
-                SELECT balance FROM ledger_account
-                WHERE code = :base OR starts_with(code, :prefix)
-                ORDER BY id FOR UPDATE""")
-                .param("base", Ledger.REVENUE)
-                .param("prefix", Ledger.REVENUE + ":s")
-                .query(Long.class)
-                .list();
-        long lockedEarnedRevenue = 0L;
-        for (long b : lockedRevenueBalances) {
-            if (b > 0) lockedEarnedRevenue = Math.addExact(lockedEarnedRevenue, b);
-        }
+        // Lock all system:revenue:GHS base + stripe rows in id order via Ledger (prevents deadlocks)
+        long lockedEarnedRevenue = Math.max(0L, ledger.lockStripedBalance(Ledger.REVENUE));
 
         long buffer = this.clawbackBufferPesewas;
         long maxByRevenue = Math.max(0L, lockedEarnedRevenue - buffer);
@@ -597,6 +586,22 @@ public class PlatformRevenueSweepService {
                 .param("l", Math.max(1, Math.min(limit, 200)))
                 .query(PlatformRevenueSweepService::mapSweep)
                 .list();
+    }
+
+    /**
+     * Sum of in-flight platform revenue sweeps ({@code reserved} or {@code submitted}) in minor units.
+     * Should equal the ledger balance of {@link Ledger#REVENUE_SWEEP_RESERVED}.
+     */
+    public long inFlightSweepAmountPesewas(String currency) {
+        String cur = normalizeCurrency(currency);
+        Long sum = db.sql("""
+                SELECT COALESCE(SUM(amount_pesewas), 0)
+                FROM platform_revenue_sweep
+                WHERE currency = :cur AND status IN ('reserved', 'submitted')""")
+                .param("cur", cur)
+                .query(Long.class)
+                .single();
+        return sum == null ? 0L : sum;
     }
 
     private Optional<RevenueSweep> lockSweep(UUID id) {

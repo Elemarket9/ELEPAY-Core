@@ -39,6 +39,7 @@ class RailTransactionsRemediationIT extends PostgresTestBase {
     @Autowired CustodianBankBackstopService custodianBackstop;
     @Autowired KillSwitchService killSwitch;
     @Autowired CardTokenVault cardTokenVault;
+    @Autowired com.elepay.payout.Payouts payouts;
 
     private TransactionTemplate tx;
 
@@ -64,7 +65,9 @@ class RailTransactionsRemediationIT extends PostgresTestBase {
         when(registry.get(railName)).thenReturn(mockRail);
         when(registry.select(anyString(), any(), any())).thenReturn(railName);
         ApplicationEventPublisher publisher = publishedEvents::add;
-        return new RailTransactions(db, json, registry, publisher, ops, ledger, tm, false, custodianBackstop, killSwitch);
+        RailTransactions rt = new RailTransactions(db, json, registry, publisher, ops, ledger, tm, false, custodianBackstop, killSwitch);
+        rt.setPayouts(payouts);
+        return rt;
     }
 
     private PaymentRail baseMockRail(String name) {

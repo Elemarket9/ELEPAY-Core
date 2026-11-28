@@ -511,15 +511,7 @@ public class CustodianBankBackstopService {
     }
 
     private long sumOwnerBucket(String ownerType, String bucket, String currency) {
-        return db.sql("""
-                SELECT COALESCE(SUM(balance), 0)::bigint
-                FROM ledger_account
-                WHERE owner_type = :t AND bucket = :b AND currency = :c AND balance > 0""")
-                .param("t", ownerType)
-                .param("b", bucket)
-                .param("c", currency)
-                .query(Long.class)
-                .single();
+        return ledger.sumPositiveOwnerBucket(ownerType, bucket, currency);
     }
 
     private void incrementRejected(LocalDate today) {

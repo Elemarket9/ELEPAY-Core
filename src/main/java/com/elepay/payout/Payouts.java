@@ -440,6 +440,18 @@ public class Payouts {
         return db.sql(SELECT + " WHERE reference = :r").param("r", reference).query(this::map).optional();
     }
 
+    public Optional<String> findPayoutReference(UUID payoutId) {
+        if (payoutId == null) return Optional.empty();
+        return db.sql("SELECT reference FROM payout WHERE id = :id")
+                .param("id", payoutId).query(String.class).optional();
+    }
+
+    public Optional<UUID> findMerchantOwner(UUID payoutId) {
+        if (payoutId == null) return Optional.empty();
+        return db.sql("SELECT owner_id FROM payout WHERE id = :id AND owner_type = 'merchant'")
+                .param("id", payoutId).query(UUID.class).optional();
+    }
+
     public boolean isRetryEligible(String reference) {
         var p = payout(reference);
         if (p.isEmpty()) return false;

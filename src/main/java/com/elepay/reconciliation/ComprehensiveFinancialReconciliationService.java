@@ -107,9 +107,15 @@ public class ComprehensiveFinancialReconciliationService {
     private final Ledger ledger;
     private final Audit audit;
     private final AlertDispatcher alerts;
+    private com.elepay.rails.PlatformRevenueSweepService revenueSweepService;
     private final Map<UUID, AdjustmentProposal> proposalsById = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, UUID> proposalIdByIdempotencyKey = new java.util.concurrent.ConcurrentHashMap<>();
     private final Object proposalLock = new Object();
+
+    @Autowired(required = false)
+    void setRevenueSweepService(com.elepay.rails.PlatformRevenueSweepService revenueSweepService) {
+        this.revenueSweepService = revenueSweepService;
+    }
 
     @Autowired
     public ComprehensiveFinancialReconciliationService(
@@ -188,6 +194,27 @@ public class ComprehensiveFinancialReconciliationService {
                     "HIGH",
                     "Run RailTransactions.recover() or query partner rail status before releasing funds"
             ));
+        }
+
+        // 12. Platform revenue sweep in-flight conservation:
+        // sum(platform_revenue_sweep.amount_pesewas WHERE status IN ('reserved', 'submitted'))
+        // == ledger balance of system:revenue_sweep_reserved:GHS
+        if (revenueSweepService != null) {
+            long expectedSweepReserved = revenueSweepService.inFlightSweepAmountPesewas(Ledger.GHS);
+            long actualSweepReserved = ledger.rawBalance(Ledger.REVENUE_SWEEP_RESERVED);
+            long sweepVariance = actualSweepReserved - expectedSweepReserved;
+            if (sweepVariance != 0L) {
+                exceptions.add(new DiscrepancyException(
+                        "PLATFORM_FEES",
+                        "REVENUE_SWEEP_RESERVED_VARIANCE",
+                        Ledger.REVENUE_SWEEP_RESERVED,
+                        expectedSweepReserved,
+                        actualSweepReserved,
+                        sweepVariance,
+                        "CRITICAL",
+                        "Reconcile in-flight platform_revenue_sweep records against system:revenue_sweep_reserved:GHS"
+                ));
+            }
         }
 
         // 13. Cross-cell transfers in-transit conservation:

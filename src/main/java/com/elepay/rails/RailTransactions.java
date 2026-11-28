@@ -60,10 +60,16 @@ public class RailTransactions {
     private final CustodianBankBackstopService custodianBackstop;
     private final KillSwitchService killSwitch;
     private com.elepay.common.ScheduledJobLock jobLock;
+    private com.elepay.payout.Payouts payouts;
 
     @Autowired(required = false)
     void setJobLock(com.elepay.common.ScheduledJobLock jobLock) {
         this.jobLock = jobLock;
+    }
+
+    @Autowired(required = false)
+    void setPayouts(@org.springframework.context.annotation.Lazy com.elepay.payout.Payouts payouts) {
+        this.payouts = payouts;
     }
 
     RailTransactions(JdbcClient db, ObjectMapper json, RailRegistry rails, ApplicationEventPublisher events,
@@ -575,12 +581,8 @@ public class RailTransactions {
                             }
                             if ("payout".equals(t.direction()) && killSwitch != null) {
                                 try {
-                                    UUID merchantId = ("payout".equals(t.purpose()) && t.purposeId() != null)
-                                            ? db.sql("SELECT owner_id FROM payout WHERE id = :id AND owner_type = 'merchant'")
-                                                    .param("id", t.purposeId())
-                                                    .query(UUID.class)
-                                                    .optional()
-                                                    .orElse(null)
+                                    UUID merchantId = ("payout".equals(t.purpose()) && t.purposeId() != null && payouts != null)
+                                            ? payouts.findMerchantOwner(t.purposeId()).orElse(null)
                                             : null;
                                     killSwitch.requirePayoutsAllowed(merchantId);
                                 } catch (ApiException blocked) {

@@ -468,6 +468,16 @@ public class Ledger {
                 .param("t", ownerType).param("b", bucket).param("c", currency).query(UUID.class).list();
     }
 
+    /** Sum of positive balances for all accounts of {@code ownerType} in {@code bucket} and {@code currency}. */
+    public long sumPositiveOwnerBucket(String ownerType, String bucket, String currency) {
+        return db.sql("""
+                SELECT COALESCE(SUM(balance), 0)::bigint
+                FROM ledger_account
+                WHERE owner_type = :t AND bucket = :b AND currency = :c AND balance > 0""")
+                .param("t", ownerType).param("b", bucket).param("c", currency)
+                .query(Long.class).single();
+    }
+
     /** Creates the account if needed and returns its code. */
     @Transactional
     public String open(String ownerType, UUID ownerId, String bucket, String currency) {
@@ -484,6 +494,32 @@ public class Ledger {
     public long rawBalance(String exactCode) {
         return db.sql("SELECT balance FROM ledger_account WHERE code = :code")
                 .param("code", exactCode).query(Long.class).optional().orElse(0L);
+    }
+
+    /** Locks {@code exactCode} row {@code FOR UPDATE} and returns its current balance (or 0 if absent). */
+    public long lockBalance(String exactCode) {
+        return db.sql("SELECT balance FROM ledger_account WHERE code = :code FOR UPDATE")
+                .param("code", exactCode).query(Long.class).optional().orElse(0L);
+    }
+
+    /**
+     * Locks a system base account and all its {@code :sNN} stripes in deterministic {@code id} order
+     * ({@code FOR UPDATE}) and returns the checked sum of their balances.
+     */
+    public long lockStripedBalance(String baseCode) {
+        List<Long> balances = db.sql("""
+                SELECT balance FROM ledger_account
+                WHERE code = :base OR starts_with(code, :prefix)
+                ORDER BY id FOR UPDATE""")
+                .param("base", baseCode)
+                .param("prefix", baseCode + ":s")
+                .query(Long.class)
+                .list();
+        long sum = 0L;
+        for (Long b : balances) {
+            sum = Math.addExact(sum, b == null ? 0L : b);
+        }
+        return sum;
     }
 
     /**

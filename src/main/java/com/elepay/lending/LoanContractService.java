@@ -173,7 +173,9 @@ public class LoanContractService {
     public LoanContract disburse(UUID contractId, boolean isSimulation) {
         configService.assertPermitted(isSimulation);
         Actor.current().requireOps();
-        db.sql("SELECT id FROM loan_contract WHERE id = ? FOR UPDATE").param(contractId).query(UUID.class).single();
+        db.sql("SELECT id FROM loan_contract WHERE id = ? FOR UPDATE").param(contractId).query(UUID.class)
+                .optional()
+                .orElseThrow(() -> new IllegalArgumentException("Contract not found: " + contractId));
         LoanContract contract = getContract(contractId)
                 .orElseThrow(() -> new IllegalArgumentException("Contract not found: " + contractId));
 

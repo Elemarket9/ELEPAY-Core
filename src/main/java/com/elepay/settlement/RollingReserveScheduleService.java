@@ -148,7 +148,8 @@ public class RollingReserveScheduleService {
                    held_at, matures_at, hold_journal_tx_id
             FROM settlement_rolling_reserve_tranche
             WHERE status = 'HELD' AND matures_at <= :cutoff
-            FOR UPDATE
+            ORDER BY id ASC
+            FOR UPDATE SKIP LOCKED
         """)
         .param("cutoff", cutoff)
         .query()
@@ -169,7 +170,7 @@ public class RollingReserveScheduleService {
             OffsetDateTime maturesAt = toOffsetDateTime(row.get("matures_at"));
             UUID holdJournalTxId = (UUID) row.get("hold_journal_tx_id");
 
-            long payableRelease = reserveAmount - impairedAmount - previouslyReleased;
+            long payableRelease = Math.subtractExact(Math.subtractExact(reserveAmount, impairedAmount), previouslyReleased);
             UUID releaseJournalTxId = null;
 
             if (payableRelease > 0) {
@@ -192,7 +193,7 @@ public class RollingReserveScheduleService {
             }
 
             OffsetDateTime releasedAt = OffsetDateTime.now();
-            long totalReleased = previouslyReleased + payableRelease;
+            long totalReleased = Math.addExact(previouslyReleased, Math.max(0L, payableRelease));
             String newStatus = (impairedAmount > 0 && totalReleased < reserveAmount) ? "IMPAIRED" : "RELEASED";
 
             jdbc.sql("""
@@ -225,11 +226,14 @@ public class RollingReserveScheduleService {
      */
     @Transactional
     public ReserveTranche impairReserve(UUID trancheId, long amountToImpair, String reason) {
+        if (trancheId == null) {
+            throw ApiException.badRequest("invalid_tranche", "Tranche ID is required");
+        }
         if (amountToImpair <= 0) {
             throw ApiException.badRequest("invalid_amount", "Impairment amount must be positive");
         }
 
-        Map<String, Object> row = jdbc.sql("""
+        List<Map<String, Object>> rows = jdbc.sql("""
             SELECT id, merchant_id, currency, gross_amount, reserve_rate_bps,
                    reserve_amount, impaired_amount, released_amount, status,
                    held_at, matures_at, hold_journal_tx_id, release_journal_tx_id
@@ -239,7 +243,11 @@ public class RollingReserveScheduleService {
         """)
         .param("id", trancheId)
         .query()
-        .singleRow();
+        .listOfRows();
+        if (rows.isEmpty()) {
+            throw ApiException.notFound("reserve_tranche_not_found", "Rolling reserve tranche not found: " + trancheId);
+        }
+        Map<String, Object> row = rows.getFirst();
 
         UUID merchantId = (UUID) row.get("merchant_id");
         String currency = (String) row.get("currency");
@@ -253,7 +261,7 @@ public class RollingReserveScheduleService {
         UUID holdJournalTxId = (UUID) row.get("hold_journal_tx_id");
         UUID releaseJournalTxId = (UUID) row.get("release_journal_tx_id");
 
-        long availableInReserve = reserveAmount - existingImpaired - released;
+        long availableInReserve = Math.subtractExact(Math.subtractExact(reserveAmount, existingImpaired), released);
         if (amountToImpair > availableInReserve) {
             throw ApiException.conflict("insufficient_reserve",
                     "Cannot impair " + amountToImpair + "; available in tranche is " + availableInReserve);
@@ -277,8 +285,8 @@ public class RollingReserveScheduleService {
 
         ledger.post(posting);
 
-        long newImpaired = existingImpaired + amountToImpair;
-        String status = (newImpaired + released >= reserveAmount) ? "IMPAIRED" : "HELD";
+        long newImpaired = Math.addExact(existingImpaired, amountToImpair);
+        String status = (Math.addExact(newImpaired, released) >= reserveAmount) ? "IMPAIRED" : "HELD";
 
         jdbc.sql("""
             UPDATE settlement_rolling_reserve_tranche

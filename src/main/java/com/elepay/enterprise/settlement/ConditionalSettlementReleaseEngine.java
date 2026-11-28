@@ -416,11 +416,7 @@ public class ConditionalSettlementReleaseEngine {
         List<UUID> batchesToSubmit = new ArrayList<>();
         for (UUID mId : sortedMerchants) {
             String availAcc = Ledger.code("merchant", mId, "available", cur);
-            long avail = db.sql("SELECT balance FROM ledger_account WHERE code = :code FOR UPDATE")
-                    .param("code", availAcc)
-                    .query(Long.class)
-                    .optional()
-                    .orElse(0L);
+            long avail = ledger.lockBalance(availAcc);
             if (avail <= 0) {
                 continue;
             }
