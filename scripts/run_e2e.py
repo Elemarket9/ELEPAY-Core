@@ -161,7 +161,8 @@ def main() -> int:
     server_online = client.check_health()
     if not server_online:
         print(f"[!] Server is not online at {config.base_url}.")
-        print("[!] Tests will be discovered, loaded, and safely skipped or dry-run.")
+        print("[!] E2E execution requires a running isolated test server.", file=sys.stderr)
+        return 1
     else:
         print(f"[+] Connected successfully to ELEPAY Core at {config.base_url}")
 
@@ -208,7 +209,7 @@ def main() -> int:
         export_junit_xml(result, elapsed, config.junit_xml_path)
         print(f"[+] JUnit XML report exported to: {config.junit_xml_path}")
 
-    success = result.wasSuccessful()
+    success = result.wasSuccessful() and passed_count > 0 and skipped_count == 0
     return 0 if success else 1
 
 
