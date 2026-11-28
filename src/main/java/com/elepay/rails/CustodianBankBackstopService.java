@@ -453,7 +453,7 @@ public class CustodianBankBackstopService {
                     last_reconciled_bank_balance_pesewas, outflow_frozen, updated_by
                 ) VALUES (
                     '00000000-0000-0000-0000-000000000049',
-                    :code, 'GCB', '10102030405060', 'GHS',
+                    :code, NULL, NULL, 'GHS',
                     50000000000, 10000000000, 0, NULL, false, 'system'
                 ) ON CONFLICT (account_code) DO NOTHING""")
                 .param("code", PRIMARY_TRUST_CODE).update();

@@ -1343,8 +1343,8 @@ interface CustodianSafeguardReport {
 
 interface TrustAccountConfig {
   accountCode: string;
-  bankCode: string;
-  bankAccountNumber: string;
+  bankCode: string | null;
+  bankAccountNumber: string | null;
   currency: string;
   dailyOutflowCapPesewas: number;
   perPayoutCapPesewas: number;
@@ -1431,7 +1431,7 @@ function CustodianTrust({ canManageFinance }: { canManageFinance: boolean }) {
             </div>
             <div className="ops-dl-item">
               <dt>Bank / Account</dt>
-              <dd className="mono">{config.bankCode} — {config.bankAccountNumber}</dd>
+              <dd className="mono">{config.bankCode && config.bankAccountNumber ? `${config.bankCode} — ${config.bankAccountNumber}` : "Custodian bank not configured"}</dd>
             </div>
             <div className="ops-dl-item">
               <dt>Per-Payout Cap</dt>
