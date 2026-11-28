@@ -94,6 +94,32 @@ public class MerchantAccess {
         return access;
     }
 
+    /**
+     * Verifies the caller belongs to the merchant in any role (owner, admin, finance, cashier, waiter)
+     * or holds an API key for that merchant. Non-members receive 404 to prevent merchant ID enumeration.
+     */
+    public Access requireMember(UUID merchantId) {
+        Actor actor = Actor.current();
+        find(merchantId).orElseThrow(() -> ApiException.notFound("Merchant not found"));
+        if (actor.isApiKey()) {
+            if (!merchantId.equals(actor.apiKeyMerchant())) {
+                throw ApiException.notFound("Merchant not found");
+            }
+            return new Access(merchantId, "api_key", null, actor);
+        }
+        var membership = db.sql("SELECT role, branch_id FROM merchant_member WHERE merchant_id = :m AND subject = :s")
+                .param("m", merchantId).param("s", actor.subject())
+                .query((rs, i) -> new Access(merchantId, rs.getString(1), rs.getObject(2, UUID.class), actor))
+                .optional();
+        if (membership.isPresent()) {
+            return membership.get();
+        }
+        if (actor.isOps()) {
+            return new Access(merchantId, "ops", null, actor);
+        }
+        throw ApiException.notFound("Merchant not found");
+    }
+
     public Optional<Merchant> find(UUID id) {
         return db.sql("""
                 SELECT id, trading_name, kind, status, merchant_code, fee_bps, fee_fixed, settlement_delay_hours

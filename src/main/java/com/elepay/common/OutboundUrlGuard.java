@@ -56,7 +56,9 @@ public class OutboundUrlGuard {
             "gip.ghipss.com",
             "api.ghipss.com",
             "switch.ghipss.com",
-            "api.emtech.com"
+            "api.emtech.com",
+            "fcm.googleapis.com",
+            "oauth2.googleapis.com"
     );
 
     private final boolean allowHttp;
@@ -93,7 +95,7 @@ public class OutboundUrlGuard {
             @Value("${elepay.outbound.allow-http:false}") boolean allowHttp,
             @Value("${elepay.outbound.allow-private-hosts:false}") boolean allowPrivateHosts,
             @Value("${elepay.outbound.strict-allowlist-enabled:false}") boolean strictAllowlistEnabled,
-            @Value("${elepay.outbound.allowed-hosts:custodian.gcb.com.gh,custodian.ecobank.com.gh,custodian.stanbic.com.gh,proxy.momoapi.mtn.com,momoapi.momo.africa,api.telecelcash.com.gh,openapi.telecel.com.gh,api.airteltigomoney.com.gh,openapi.at.com.gh,gip.ghipss.com,api.ghipss.com,switch.ghipss.com,api.emtech.com}") Set<String> allowedHosts,
+            @Value("${elepay.outbound.allowed-hosts:custodian.gcb.com.gh,custodian.ecobank.com.gh,custodian.stanbic.com.gh,proxy.momoapi.mtn.com,momoapi.momo.africa,api.telecelcash.com.gh,openapi.telecel.com.gh,api.airteltigomoney.com.gh,openapi.at.com.gh,gip.ghipss.com,api.ghipss.com,switch.ghipss.com,api.emtech.com,fcm.googleapis.com,oauth2.googleapis.com}") Set<String> allowedHosts,
             @Value("${elepay.outbound.allowed-cidrs:}") Set<String> allowedCidrs,
             @Value("${elepay.outbound.partner-egress.allowed-hosts:}") Set<String> partnerEgressHosts
     ) {

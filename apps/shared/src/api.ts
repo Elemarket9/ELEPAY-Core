@@ -1,5 +1,10 @@
 import { canonicalV2, hmacSha256Hex } from "./hmac";
-import type { DeviceCredential } from "./types";
+import type {
+  DeviceCredential,
+  PushDeviceListResponse,
+  PushDeviceRegistration,
+  RegisteredPushDevice,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -317,6 +322,34 @@ export class ElepayClient {
     });
     this.token = res.accessToken;
     return res.accessToken;
+  }
+
+  /** Register or refresh a Firebase Cloud Messaging (FCM) device token for push notifications. */
+  async registerPushDevice(input: PushDeviceRegistration): Promise<RegisteredPushDevice> {
+    return this.call<RegisteredPushDevice>("/v1/notifications/devices", {
+      method: "POST",
+      body: {
+        token: input.token.trim(),
+        platform: input.platform,
+        appId: input.appId,
+        merchantId: input.merchantId ?? null,
+      },
+    });
+  }
+
+  /** List the authenticated user's active registered FCM push devices (tokens are masked). */
+  async listPushDevices(): Promise<PushDeviceListResponse> {
+    return this.call<PushDeviceListResponse>("/v1/notifications/devices", {
+      method: "GET",
+    });
+  }
+
+  /** Unregister an FCM device token on sign-out so this device stops receiving push alerts. */
+  async unregisterPushDevice(token: string): Promise<{ unregistered: boolean }> {
+    return this.call<{ unregistered: boolean }>("/v1/notifications/devices", {
+      method: "DELETE",
+      body: { token: token.trim() },
+    });
   }
 
   /** Pair a dedicated KDS tablet using the manager's 6-digit merchant code + 6-digit pairing code. */

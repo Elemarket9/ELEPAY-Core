@@ -118,3 +118,29 @@ export interface KitchenStation {
   output: "SCREEN" | "PRINTER" | "BOTH";
   printerAddress: string | null;
 }
+
+export type PushPlatform = "android" | "ios" | "web";
+
+export interface PushDeviceRegistration {
+  token: string;
+  platform: PushPlatform;
+  appId?: string;
+  merchantId?: string | null;
+}
+
+export interface RegisteredPushDevice {
+  id: string;
+  subject: string;
+  merchantId: string | null;
+  platform: PushPlatform;
+  maskedToken: string;
+  appId: string;
+  active: boolean;
+  lastSeenAt: string;
+}
+
+export interface PushDeviceListResponse {
+  fcmEnabled: boolean;
+  devices: RegisteredPushDevice[];
+}
+

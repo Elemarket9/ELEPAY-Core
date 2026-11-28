@@ -1,9 +1,15 @@
 package com.elepay.growth;
 
+import com.elepay.common.FirebasePushService;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,11 +21,19 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class NotificationTimingService {
+    private static final Logger log = LoggerFactory.getLogger(NotificationTimingService.class);
 
     private final JdbcClient db;
+    private final FirebasePushService pushService;
 
     public NotificationTimingService(JdbcClient db) {
+        this(db, null);
+    }
+
+    @Autowired
+    public NotificationTimingService(JdbcClient db, @Autowired(required = false) FirebasePushService pushService) {
         this.db = db;
+        this.pushService = pushService;
     }
 
     public enum Urgency {
@@ -38,6 +52,8 @@ public class NotificationTimingService {
             OffsetDateTime scheduledDeliveryTime,
             String status
     ) {}
+
+    private record DueNotificationRow(UUID id, UUID customerId, String title, String message, String urgency) {}
 
     private static final LocalTime QUIET_HOURS_START = LocalTime.of(21, 0); // 9:00 PM
     private static final LocalTime QUIET_HOURS_END = LocalTime.of(7, 0);   // 7:00 AM
@@ -84,6 +100,10 @@ public class NotificationTimingService {
                 status, immediate ? currentTime : null)
         .update();
 
+        if (immediate) {
+            dispatchPushSafely(id, customerId, title, message, urgency.name());
+        }
+
         return new QueuedNotification(id, customerId, title, message, urgency, immediate, deliveryTime, status);
     }
 
@@ -102,20 +122,56 @@ public class NotificationTimingService {
      */
     @Transactional
     public int dispatchDueNotifications(OffsetDateTime asOfTime) {
-        java.util.List<UUID> dueIds = db.sql("""
-            SELECT id FROM notification_delivery_queue
+        List<DueNotificationRow> dueRows = db.sql("""
+            SELECT id, customer_id, title, message, urgency
+            FROM notification_delivery_queue
             WHERE status = 'QUEUED' AND scheduled_delivery_time <= :asOf
             FOR UPDATE SKIP LOCKED
-        """).param("asOf", asOfTime).query(UUID.class).list();
+        """).param("asOf", asOfTime)
+                .query((rs, rowNum) -> new DueNotificationRow(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("customer_id", UUID.class),
+                        rs.getString("title"),
+                        rs.getString("message"),
+                        rs.getString("urgency")
+                ))
+                .list();
 
-        if (dueIds.isEmpty()) {
+        if (dueRows.isEmpty()) {
             return 0;
         }
 
-        return db.sql("""
+        List<UUID> dueIds = dueRows.stream().map(DueNotificationRow::id).toList();
+        int updated = db.sql("""
             UPDATE notification_delivery_queue
             SET status = 'SENT', sent_at = :now
             WHERE id IN (:ids)
         """).param("now", asOfTime).param("ids", dueIds).update();
+
+        for (DueNotificationRow row : dueRows) {
+            dispatchPushSafely(row.id(), row.customerId(), row.title(), row.message(), row.urgency());
+        }
+        return updated;
+    }
+
+    private void dispatchPushSafely(UUID notificationId, UUID customerId, String title, String message, String urgency) {
+        if (pushService == null || customerId == null) {
+            return;
+        }
+        try {
+            pushService.sendToSubject(
+                    customerId.toString(),
+                    title,
+                    message,
+                    Map.of(
+                            "type", "customer.notification",
+                            "notificationId", notificationId.toString(),
+                            "urgency", urgency == null ? "ROUTINE" : urgency
+                    )
+            );
+        } catch (Exception e) {
+            log.warn("FCM push dispatch failed for notification {} customer {}: {}",
+                    notificationId, customerId, e.getMessage());
+        }
     }
 }
