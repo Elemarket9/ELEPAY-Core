@@ -1,7 +1,11 @@
 # ELEPAY wallet sandbox
 
-Use Java 25, Maven and a dedicated local PostgreSQL 18 database named `elepay_sandbox` owned by the `elepay` database role. Set `ELEPAY_DB_PASSWORD` to the role password. Override the connection with `ELEPAY_DB_URL` and `ELEPAY_DB_USER` if needed.
+Use Java 25, Maven, Redis and a dedicated local PostgreSQL 18 test database. Configure `ELEPAY_DB_URL`, `ELEPAY_DB_USER` and `ELEPAY_DB_PASSWORD` for the test database. Do not point the sandbox at a production database or use live payment credentials.
 
-Run `mvn spring-boot:run -Dspring-boot.run.profiles=sandbox`. The server binds to loopback. The sandbox API uses simulated funds and assumes a trusted local caller.
+```sh
+mvn -B -Dspring-boot.run.profiles=sandbox,dev -Dspring-boot.run.main-class=com.elepay.SandboxApplication spring-boot:test-run
+```
 
-Run `python3 scripts/smoke.py` with the service running. It uses fresh account names each time. Operation IDs identify requests. Reusing an ID with an identical body returns the original operation reference. A different body returns HTTP 409. Refunds reference the checkout UUID and the zero-based allocation line. The refund requires sufficient recipient balance.
+From a separate terminal, run `python3 scripts/smoke.py` and `python3 scripts/acceptance.py`. The smoke suite uses fresh account names. Reusing an operation ID with identical input returns the original reference; conflicting input returns HTTP 409. Refunds reference the checkout UUID and allocation index and require sufficient recipient balance.
+
+See [test infrastructure](../TEST_INFRA.md) for optional HTTP regression tests. The test-classpath simulator is excluded from the production JAR.
