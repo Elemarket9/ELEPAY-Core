@@ -1461,7 +1461,8 @@ interface RevenueSweepPreview {
   trustHeadroomPesewas: number;
   maxSweepablePesewas: number;
   safeguardingSatisfied: boolean;
-  outflowFrozen: boolean;
+  outflowFrozen?: boolean;
+  blockReason?: string | null;
 }
 
 interface OperatingAccountRow {
@@ -1570,6 +1571,9 @@ function PlatformRevenueSweepPanel({ canManageFinance, onSwept }: { canManageFin
             <dd className="mono"><strong>{formatMoney(preview.maxSweepablePesewas)}</strong></dd>
           </div>
         </dl>
+      )}
+      {preview?.blockReason && (
+        <p className="notice warn" style={{ marginTop: "0.6rem" }}>{preview.blockReason}</p>
       )}
       {canManageFinance && (
         <form onSubmit={(e) => void submitSweep(e)} style={{ marginTop: "0.75rem" }}>
