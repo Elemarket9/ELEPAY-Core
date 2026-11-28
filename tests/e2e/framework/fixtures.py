@@ -48,9 +48,3 @@ def unique_id(prefix: str = "") -> str:
 def unique_uuid() -> str:
     """Generate a standard UUID string."""
     return str(uuid.uuid4())
-
-
-def random_minor_amount(min_val: int = 1000, max_val: int = 100000, seed: Optional[int] = None) -> int:
-    """Return an integer minor unit amount (pesewas/cents) within the given range."""
-    rng = random.Random(seed) if seed is not None else random
-    return rng.randint(min_val, max_val)
