@@ -1470,6 +1470,21 @@ function CustodianConfigEditor({ config, onUpdated }: { config: TrustAccountConf
     setOutflowFrozen(config.outflowFrozen);
   }, [config]);
 
+  async function connectCustodian() {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const result = await api<Record<string, unknown>>("/v1/ops/custodian/connect", { method: "POST" });
+      setMsg(formatDualControlOutcome(result, "Custodian account connected."));
+      await onUpdated();
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
@@ -1515,6 +1530,11 @@ function CustodianConfigEditor({ config, onUpdated }: { config: TrustAccountConf
 
   return (
     <div style={{ marginTop: "0.9rem" }}>
+      {!config.bankCode && (
+        <button type="button" className="secondary small" disabled={busy} onClick={() => void connectCustodian()}>
+          Connect custodian via API
+        </button>
+      )}
       <button type="button" className="secondary small" onClick={() => setOpen(!open)}>
         {open ? "Hide Config Editor" : "Edit Caps / Reconciled Bank Balance"}
       </button>

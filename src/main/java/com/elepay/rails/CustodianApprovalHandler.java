@@ -8,7 +8,10 @@ import org.springframework.stereotype.Component;
 class CustodianApprovalHandler implements ApprovedActionHandler {
     private final CustodianBankBackstopService custodian;
 
-    CustodianApprovalHandler(CustodianBankBackstopService custodian) {
+    private final CustodianConnection connection;
+
+    CustodianApprovalHandler(CustodianBankBackstopService custodian, CustodianConnection connection) {
+        this.connection = connection;
         this.custodian = custodian;
     }
 
@@ -20,6 +23,10 @@ class CustodianApprovalHandler implements ApprovedActionHandler {
     @Override
     public void execute(MakerCheckerService.Proposal proposal) {
         var payload = proposal.payload();
+        if ("connect".equals(payload.get("operation"))) {
+            connection.approve((String) payload.get("accountFingerprint"), proposal.reviewedBy());
+            return;
+        }
         custodian.updateConfig(num(payload.get("dailyOutflowCapPesewas")), num(payload.get("perPayoutCapPesewas")),
                 num(payload.get("minReserveFloorPesewas")), num(payload.get("lastReconciledBankBalancePesewas")),
                 bool(payload.get("outflowFrozen")), proposal.reviewedBy());
