@@ -328,6 +328,16 @@ public class PlatformRevenueSweepService {
                 .filter(a -> "active".equals(a.status()) && cur.equals(a.currency().trim()))
                 .orElseThrow(() -> ApiException.notFound("Active operating account not found for currency " + cur));
 
+        // Separation of duties: the approver of a dual-controlled revenue sweep cannot be the same
+        // actor who registered the destination operating account.
+        if (proposalId != null && approvedBy != null && approvedBy.equals(dest.verifiedBy())) {
+            throw new ApiException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "operating_account_approver_conflict",
+                    "Revenue sweep approver cannot be the same administrator who registered the operating account"
+            );
+        }
+
         // Lock custodian_trust_account FOR UPDATE to serialize against concurrent config changes or sweeps
         db.sql("SELECT id FROM custodian_trust_account WHERE account_code = :code FOR UPDATE")
                 .param("code", CustodianBankBackstopService.PRIMARY_TRUST_CODE)

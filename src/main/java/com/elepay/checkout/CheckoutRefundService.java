@@ -129,10 +129,22 @@ class CheckoutRefundService {
     @Transactional
     void onRefundRail(RailEvents.Succeeded event) {
         if (!event.purpose().equals("refund")) return;
-        var refund = db.sql("SELECT reference, amount FROM refund WHERE id = :id AND status = 'pending' FOR UPDATE")
-                .param("id", event.purposeId()).query((rs, i) -> new Object[]{rs.getString(1), rs.getLong(2)}).optional();
-        if (refund.isEmpty()) return;
-        long amount = (long) refund.get()[1];
+        var refundOpt = db.sql("SELECT reference, amount, status, rail_tx FROM refund WHERE id = :id FOR UPDATE")
+                .param("id", event.purposeId())
+                .query((rs, i) -> new Object[]{rs.getString(1), rs.getLong(2), rs.getString(3), rs.getObject(4, UUID.class)})
+                .optional();
+        if (refundOpt.isEmpty()) return;
+        String reference = (String) refundOpt.get()[0];
+        long amount = (long) refundOpt.get()[1];
+        String status = (String) refundOpt.get()[2];
+        UUID currentRailTx = (UUID) refundOpt.get()[3];
+        if (currentRailTx != null && !currentRailTx.equals(event.railTxId())) {
+            ops.raise("refund_stale_rail_event", "high", "refund:" + reference, Map.of(
+                    "event", "succeeded", "eventRailTx", event.railTxId().toString(),
+                    "currentRailTx", currentRailTx.toString(), "status", status));
+            return;
+        }
+        if (!"pending".equals(status)) return;
         String clearing = ledger.openStripedSystem(Ledger.clearing(event.rail()), "clearing", Ledger.GHS, true, event.purposeId());
         var posted = ledger.post(Ledger.Posting.of("refund-completion", event.railTxId().toString(), "refund_completion",
                 List.of(Leg.debit(Ledger.REFUNDS_IN_FLIGHT, amount), Leg.credit(clearing, amount))));
@@ -145,8 +157,22 @@ class CheckoutRefundService {
     @Transactional
     void onRefundRailFailed(RailEvents.Failed event) {
         if (!event.purpose().equals("refund")) return;
-        int failed = db.sql("UPDATE refund SET status = 'failed' WHERE id = :id AND status = 'pending'")
-                .param("id", event.purposeId()).update();
+        var refundOpt = db.sql("SELECT reference, status, rail_tx FROM refund WHERE id = :id FOR UPDATE")
+                .param("id", event.purposeId())
+                .query((rs, i) -> new Object[]{rs.getString(1), rs.getString(2), rs.getObject(3, UUID.class)})
+                .optional();
+        if (refundOpt.isEmpty()) return;
+        String reference = (String) refundOpt.get()[0];
+        String status = (String) refundOpt.get()[1];
+        UUID currentRailTx = (UUID) refundOpt.get()[2];
+        if (currentRailTx != null && !currentRailTx.equals(event.railTxId())) {
+            ops.raise("refund_stale_rail_event", "high", "refund:" + reference, Map.of(
+                    "event", "failed", "eventRailTx", event.railTxId().toString(),
+                    "currentRailTx", currentRailTx.toString(), "status", status));
+            return;
+        }
+        int failed = db.sql("UPDATE refund SET status = 'failed' WHERE id = :id AND status = 'pending' AND rail_tx = :rtx")
+                .param("id", event.purposeId()).param("rtx", event.railTxId()).update();
         if (failed == 1) regulatory.refund(event.purposeId());
         ops.raise("refund_delivery_failed", "high", "refund:" + event.purposeId(), Map.of(
                 "amount", event.amount(), "reason", String.valueOf(event.reason()),
@@ -162,14 +188,21 @@ class CheckoutRefundService {
     @Transactional
     void onRefundRailReturned(RailEvents.Returned event) {
         if (!event.purpose().equals("refund")) return;
-        var refundOpt = db.sql("SELECT reference, amount, status FROM refund WHERE id = :id FOR UPDATE")
+        var refundOpt = db.sql("SELECT reference, amount, status, rail_tx FROM refund WHERE id = :id FOR UPDATE")
                 .param("id", event.purposeId())
-                .query((rs, i) -> new Object[]{rs.getString(1), rs.getLong(2), rs.getString(3)})
+                .query((rs, i) -> new Object[]{rs.getString(1), rs.getLong(2), rs.getString(3), rs.getObject(4, UUID.class)})
                 .optional();
         if (refundOpt.isEmpty()) return;
         String reference = (String) refundOpt.get()[0];
         long amount = (long) refundOpt.get()[1];
         String status = (String) refundOpt.get()[2];
+        UUID currentRailTx = (UUID) refundOpt.get()[3];
+        if (currentRailTx != null && !currentRailTx.equals(event.railTxId())) {
+            ops.raise("refund_stale_rail_event", "high", "refund:" + reference, Map.of(
+                    "event", "returned", "eventRailTx", event.railTxId().toString(),
+                    "currentRailTx", currentRailTx.toString(), "status", status));
+            return;
+        }
         if (!"completed".equals(status)) {
             ops.raise("refund_return_unexpected", "high", "refund:" + reference, Map.of("status", status));
             return;
