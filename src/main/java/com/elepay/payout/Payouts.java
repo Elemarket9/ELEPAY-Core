@@ -319,12 +319,13 @@ public class Payouts {
     // ---- rail outcomes ----------------------------------------------------------------------
 
     private record Locked(UUID id, String reference, String ownerType, UUID owner, long amount, String status,
-                          UUID batch) {}
+                          UUID batch, OffsetDateTime createdAt) {}
 
     private Optional<Locked> lock(UUID id) {
-        return db.sql("SELECT id, reference, owner_type, owner_id, amount, status, batch_id FROM payout WHERE id = :id FOR UPDATE")
+        return db.sql("SELECT id, reference, owner_type, owner_id, amount, status, batch_id, created_at FROM payout WHERE id = :id FOR UPDATE")
                 .param("id", id).query((rs, i) -> new Locked(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
-                        rs.getObject(4, UUID.class), rs.getLong(5), rs.getString(6), rs.getObject(7, UUID.class))).optional();
+                        rs.getObject(4, UUID.class), rs.getLong(5), rs.getString(6), rs.getObject(7, UUID.class),
+                        rs.getObject(8, OffsetDateTime.class))).optional();
     }
 
     @EventListener
@@ -354,6 +355,9 @@ public class Payouts {
                 Leg.credit(bucket(p.ownerType(), p.owner(), "available"), p.amount()))).describedAs(p.reference()));
         db.sql("UPDATE payout SET status = 'failed', completion_tx = :tx, completed_at = now(), failure_reason = :r WHERE id = :id")
                 .param("tx", posted.transactionId()).param("r", event.reason()).param("id", p.id()).update();
+        if (velocityService != null) {
+            velocityService.releaseOutflow(p.amount(), p.createdAt());
+        }
         publish(p, "payout.failed", event.reason());
         regulatory.payout(p.id());
     }
@@ -373,6 +377,9 @@ public class Payouts {
                 Leg.credit(bucket(p.ownerType(), p.owner(), "available"), p.amount()))).describedAs(p.reference()));
         db.sql("UPDATE payout SET status = 'returned', return_tx = :tx, failure_reason = :r WHERE id = :id")
                 .param("tx", posted.transactionId()).param("r", event.reason()).param("id", p.id()).update();
+        if (velocityService != null) {
+            velocityService.releaseOutflow(p.amount(), p.createdAt());
+        }
         ops.raise("payout_returned", "medium", "payout:" + p.reference(), Map.of("amount", p.amount(),
                 "reason", String.valueOf(event.reason()), "note", "Funds are back in the owner's available balance"));
         publish(p, "payout.returned", event.reason());

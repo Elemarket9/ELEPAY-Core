@@ -85,7 +85,7 @@ public class EnterpriseTreasuryService {
         String ref = reference != null ? reference : "DEP-" + UUID.randomUUID();
 
         setupEnterpriseTreasury(enterpriseId, cur);
-        EnterpriseTreasuryAccount prefundingAcc = getTreasuryAccount(enterpriseId, TreasuryAccountType.PREFUNDING, cur);
+        EnterpriseTreasuryAccount prefundingAcc = getTreasuryAccountForUpdate(enterpriseId, TreasuryAccountType.PREFUNDING, cur);
 
         // Double-entry posting: Debit clearing / source of funds, Credit enterprise prefunding holding
         String sourceClearing = ledger.openSystem("system:clearing:prefunding:" + cur, "clearing", cur, true);
@@ -111,7 +111,7 @@ public class EnterpriseTreasuryService {
                 .param("id", prefundingAcc.id())
                 .update();
 
-        long balanceAfter = prefundingAcc.balancePesewas() + amountPesewas;
+        long balanceAfter = Math.addExact(prefundingAcc.balancePesewas(), amountPesewas);
 
         // Record in append-only prefunding ledger
         UUID entryId = UUID.randomUUID();
@@ -157,7 +157,7 @@ public class EnterpriseTreasuryService {
         String cur = currency != null ? currency.toUpperCase(Locale.ROOT) : GHS;
         setupEnterpriseTreasury(enterpriseId, cur);
 
-        EnterpriseTreasuryAccount recvAcc = getTreasuryAccount(enterpriseId, TreasuryAccountType.EXTERNAL_RECEIVABLES, cur);
+        EnterpriseTreasuryAccount recvAcc = getTreasuryAccountForUpdate(enterpriseId, TreasuryAccountType.EXTERNAL_RECEIVABLES, cur);
 
         db.sql("""
                 UPDATE enterprise_treasury_account
@@ -168,7 +168,7 @@ public class EnterpriseTreasuryService {
                 .param("id", recvAcc.id())
                 .update();
 
-        long balanceAfter = recvAcc.balancePesewas() + amountPesewas;
+        long balanceAfter = Math.addExact(recvAcc.balancePesewas(), amountPesewas);
         String ref = "RCV-" + orderReference;
         UUID entryId = UUID.randomUUID();
 
@@ -200,14 +200,38 @@ public class EnterpriseTreasuryService {
     }
 
     /**
-     * Marks an external receivable as settled when the partner reconciles and transfers funds.
+     * Marks an external receivable as settled when the partner reconciles and transfers funds,
+     * posting a balanced double-entry journal entry to keep {@code enterprise_treasury_account}
+     * synchronized with the authoritative {@link Ledger}.
      */
     @Transactional
     public PrefundingLedgerEntry settleReceivable(UUID enterpriseId, String orderReference,
                                                   long amountPesewas, String currency) {
+        if (amountPesewas <= 0) {
+            throw ApiException.badRequest("invalid_amount", "Settlement amount must be positive");
+        }
         String cur = currency != null ? currency.toUpperCase(Locale.ROOT) : GHS;
-        EnterpriseTreasuryAccount recvAcc = getTreasuryAccount(enterpriseId, TreasuryAccountType.EXTERNAL_RECEIVABLES, cur);
-        EnterpriseTreasuryAccount settleAcc = getTreasuryAccount(enterpriseId, TreasuryAccountType.SAFEGUARDED_SETTLEMENT, cur);
+        setupEnterpriseTreasury(enterpriseId, cur);
+
+        EnterpriseTreasuryAccount recvAcc = getTreasuryAccountForUpdate(enterpriseId, TreasuryAccountType.EXTERNAL_RECEIVABLES, cur);
+        EnterpriseTreasuryAccount settleAcc = getTreasuryAccountForUpdate(enterpriseId, TreasuryAccountType.SAFEGUARDED_SETTLEMENT, cur);
+        if (recvAcc.balancePesewas() < amountPesewas) {
+            throw ApiException.conflict("receivable_exceeded",
+                    "Settlement amount (" + amountPesewas + ") exceeds outstanding receivable (" + recvAcc.balancePesewas() + ")");
+        }
+
+        String ref = "STL-" + orderReference;
+        String receivablesClearing = ledger.openSystem("system:receivables:" + enterpriseId + ":" + cur, "clearing", cur, true);
+        String enterpriseAvailable = ledger.open("enterprise", enterpriseId, "available", cur);
+        var posted = ledger.post(Posting.of(
+                "treasury:receivable-settle",
+                ref,
+                "receivable:settled",
+                List.of(
+                        Leg.debit(receivablesClearing, amountPesewas),
+                        Leg.credit(enterpriseAvailable, amountPesewas)
+                )
+        ).describedAs("Receivable settled for order " + orderReference));
 
         db.sql("""
                 UPDATE enterprise_treasury_account
@@ -228,16 +252,15 @@ public class EnterpriseTreasuryService {
                 .update();
 
         long balanceAfter = recvAcc.balancePesewas() - amountPesewas;
-        String ref = "STL-" + orderReference;
         UUID entryId = UUID.randomUUID();
 
         db.sql("""
                 INSERT INTO enterprise_prefunding_ledger (
                     id, enterprise_id, treasury_account_id, transaction_reference,
-                    entry_type, amount_pesewas, balance_after_pesewas, currency, description
+                    entry_type, amount_pesewas, balance_after_pesewas, currency, ledger_tx_id, description
                 ) VALUES (
                     :id, :enterpriseId, :accId, :ref,
-                    :entryType, :amt, :balanceAfter, :currency, :desc
+                    :entryType, :amt, :balanceAfter, :currency, :txId, :desc
                 )
                 """)
                 .param("id", entryId)
@@ -248,13 +271,14 @@ public class EnterpriseTreasuryService {
                 .param("amt", amountPesewas)
                 .param("balanceAfter", balanceAfter)
                 .param("currency", cur)
+                .param("txId", posted.transactionId())
                 .param("desc", "Receivable settled for order " + orderReference)
                 .update();
 
         return new PrefundingLedgerEntry(
                 entryId, enterpriseId, recvAcc.id(), ref,
                 PrefundingEntryType.RECEIVABLE_SETTLED, amountPesewas, balanceAfter, cur,
-                null, "Receivable settled for order " + orderReference, OffsetDateTime.now()
+                posted.transactionId(), "Receivable settled for order " + orderReference, OffsetDateTime.now()
         );
     }
 
@@ -269,10 +293,10 @@ public class EnterpriseTreasuryService {
         String cur = currency != null ? currency.toUpperCase(Locale.ROOT) : GHS;
         setupEnterpriseTreasury(enterpriseId, cur);
 
-        EnterpriseTreasuryAccount prefunding = getTreasuryAccount(enterpriseId, TreasuryAccountType.PREFUNDING, cur);
-        EnterpriseTreasuryAccount safeguarded = getTreasuryAccount(enterpriseId, TreasuryAccountType.SAFEGUARDED_SETTLEMENT, cur);
+        EnterpriseTreasuryAccount prefunding = getTreasuryAccountForUpdate(enterpriseId, TreasuryAccountType.PREFUNDING, cur);
+        EnterpriseTreasuryAccount safeguarded = getTreasuryAccountForUpdate(enterpriseId, TreasuryAccountType.SAFEGUARDED_SETTLEMENT, cur);
 
-        long availableFunding = prefunding.availablePesewas() + safeguarded.availablePesewas();
+        long availableFunding = Math.addExact(prefunding.availablePesewas(), safeguarded.availablePesewas());
 
         if (availableFunding < requiredPesewas) {
             long shortfall = requiredPesewas - availableFunding;

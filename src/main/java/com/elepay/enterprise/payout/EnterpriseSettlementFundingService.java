@@ -32,16 +32,9 @@ public class EnterpriseSettlementFundingService {
         String curr = currency != null ? currency.toUpperCase() : "GHS";
         String availableAccount = Ledger.code("merchant", enterpriseId, "available", curr);
 
+        // Only the merchant available bucket is debitable by Payouts.create; never overstate
+        // withdrawable liquidity using unallocated clearing accounts.
         long balance = ledger.balance(availableAccount);
-
-        // If available bucket balance is zero or less, check enterprise clearing account
-        if (balance < requiredPesewas) {
-            String clearingAccount = EnterpriseManagedAccountService.enterpriseClearingCode(enterpriseId, curr);
-            long clearingBal = ledger.balance(clearingAccount);
-            if (clearingBal > 0) {
-                balance = Math.addExact(balance, clearingBal);
-            }
-        }
 
         if (balance >= requiredPesewas) {
             return EnterpriseFundingCheckResult.ok(balance, requiredPesewas);

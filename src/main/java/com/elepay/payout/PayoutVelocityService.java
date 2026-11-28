@@ -187,6 +187,34 @@ public class PayoutVelocityService {
                 .param("amt", totalBatchPesewas).param("cnt", itemCount).param("ws", dayStart).update();
     }
 
+    /**
+     * Releases previously recorded outflow from the hourly and daily velocity windows when a
+     * payout fails before disbursement or is returned by the receiving rail.
+     */
+    public void releaseOutflow(long amountPesewas, OffsetDateTime createdAt) {
+        if (amountPesewas <= 0) return;
+        OffsetDateTime ts = (createdAt != null ? createdAt : OffsetDateTime.now(ZoneOffset.UTC))
+                .withOffsetSameInstant(ZoneOffset.UTC);
+        OffsetDateTime hourStart = ts.truncatedTo(ChronoUnit.HOURS);
+        OffsetDateTime dayStart = ts.truncatedTo(ChronoUnit.DAYS);
+
+        db.sql("""
+                UPDATE payout_global_velocity_window
+                SET total_outflow_pesewas = GREATEST(0, total_outflow_pesewas - :amt),
+                    payout_count = GREATEST(0, payout_count - 1),
+                    updated_at = now()
+                WHERE window_type = 'HOURLY' AND window_start = :ws""")
+                .param("amt", amountPesewas).param("ws", hourStart).update();
+
+        db.sql("""
+                UPDATE payout_global_velocity_window
+                SET total_outflow_pesewas = GREATEST(0, total_outflow_pesewas - :amt),
+                    payout_count = GREATEST(0, payout_count - 1),
+                    updated_at = now()
+                WHERE window_type = 'DAILY' AND window_start = :ws""")
+                .param("amt", amountPesewas).param("ws", dayStart).update();
+    }
+
     private void ensureWindowExists(String windowType, OffsetDateTime windowStart) {
         db.sql("""
                 INSERT INTO payout_global_velocity_window (window_type, window_start, total_outflow_pesewas, payout_count, updated_at)

@@ -42,6 +42,7 @@ class CustodianPullLifecycleIT extends PostgresTestBase {
 
     @BeforeEach
     void setUp() {
+        db.sql("UPDATE rail_transaction SET status = 'failed' WHERE status IN ('created', 'pending', 'unknown')").update();
         custodianBackstop.resetForTesting();
         killSwitch.resetForTesting();
         api = new TestApi(port);
