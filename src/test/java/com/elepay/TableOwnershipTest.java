@@ -58,25 +58,29 @@ class TableOwnershipTest {
     }
 
     @Test
-    void coreNeverImportsMerchantTools() throws IOException {
+    void optionalProductModulesAreStrictlyIsolated() throws IOException {
+        Set<String> optionalModules = Set.of(
+                "merchanttools", "lending", "credit", "ussd", "growth", "bills", "agents");
         List<String> violations = new ArrayList<>();
         try (Stream<Path> files = Files.walk(SOURCES)) {
             for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
                 Path rel = SOURCES.relativize(file);
-                if (rel.getNameCount() > 1 && "merchanttools".equals(rel.getName(0).toString())) {
-                    continue;
+                String relStr = rel.toString().replace('\\', '/');
+                if ("SandboxApplication.java".equals(relStr) || "common/DormantModules.java".equals(relStr)) {
+                    continue; // Module bootstrap wiring & dormant package registry only
                 }
-                if ("SandboxApplication.java".equals(rel.toString())) {
-                    continue; // Conditional module bootstrap wiring only
-                }
+                String ownerModule = rel.getNameCount() > 1 ? rel.getName(0).toString() : "app";
                 String code = Files.readString(file);
-                if (code.contains("com.elepay.merchanttools")) {
-                    violations.add(rel + " must not depend on com.elepay.merchanttools");
+                for (String opt : optionalModules) {
+                    if (opt.equals(ownerModule)) continue;
+                    if (code.contains("com.elepay." + opt + ".")) {
+                        violations.add(relStr + " must not depend on optional module com.elepay." + opt);
+                    }
                 }
             }
         }
         assertThat(violations)
-                .as("ELEPAY Core must remain decoupled from com.elepay.merchanttools")
+                .as("ELEPAY Core and optional product modules must not couple to each other; communicate through Core APIs/events")
                 .isEmpty();
     }
 
