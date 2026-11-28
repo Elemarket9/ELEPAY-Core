@@ -46,21 +46,26 @@ class CustodianBankHostToHostIT extends PostgresTestBase {
     }
 
     @Test
-    void productionBaseEnforcesHttpsAndAllowlistedCustodianHosts() {
-        assertThat(CustodianBankHostToHostClient.productionBase("https://custodian.gcb.com.gh"))
-                .isEqualTo(URI.create("https://custodian.gcb.com.gh"));
-        assertThat(CustodianBankHostToHostClient.productionBase("https://custodian.ecobank.com.gh"))
-                .isEqualTo(URI.create("https://custodian.ecobank.com.gh"));
-        assertThat(CustodianBankHostToHostClient.productionBase("https://custodian.stanbic.com.gh"))
-                .isEqualTo(URI.create("https://custodian.stanbic.com.gh"));
+    void productionBaseEnforcesHttpsAndConfiguredCustodianHosts() {
+        var configured = CustodianBankHostToHostClient.parseAllowedHosts("custodian.contracted-bank.com.gh");
+        assertThat(CustodianBankHostToHostClient.productionBase("https://custodian.contracted-bank.com.gh", configured))
+                .isEqualTo(URI.create("https://custodian.contracted-bank.com.gh"));
 
-        assertThatThrownBy(() -> CustodianBankHostToHostClient.productionBase("http://custodian.gcb.com.gh"))
+        // Fails closed if allowed-hosts is not configured
+        assertThatThrownBy(() -> CustodianBankHostToHostClient.productionBase(
+                "https://custodian.contracted-bank.com.gh", java.util.Set.of()))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> CustodianBankHostToHostClient.productionBase("https://evil.example.com"))
+        assertThatThrownBy(() -> CustodianBankHostToHostClient.productionBase(
+                "http://custodian.contracted-bank.com.gh", configured))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> CustodianBankHostToHostClient.productionBase("https://user:pass@custodian.gcb.com.gh"))
+        assertThatThrownBy(() -> CustodianBankHostToHostClient.productionBase(
+                "https://evil.example.com", configured))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> CustodianBankHostToHostClient.productionBase("https://custodian.gcb.com.gh?x=1"))
+        assertThatThrownBy(() -> CustodianBankHostToHostClient.productionBase(
+                "https://user:pass@custodian.contracted-bank.com.gh", configured))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> CustodianBankHostToHostClient.productionBase(
+                "https://custodian.contracted-bank.com.gh?x=1", configured))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

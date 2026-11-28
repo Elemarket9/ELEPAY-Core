@@ -28,11 +28,12 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Production host-to-host HTTP adapter for ELEPAY's Custodian Bank Trust Account.
+ * Production host-to-host HTTP adapter for ELEPAY's contracted Custodian Bank Trust Account.
  *
  * <p>Opt-in only via {@code elepay.custodian.h2h.enabled=true}. Enforces:
  * <ul>
- *   <li>Strict HTTPS production host allowlist (GCB, Ecobank, Stanbic custodian endpoints).</li>
+ *   <li>Strict HTTPS host allowlist configured explicitly via {@code elepay.custodian.h2h.allowed-hosts}
+ *       (no commercial bank host is assumed or hardcoded by default).</li>
  *   <li>Zero hardcoded credentials — all secrets come from environment variables.</li>
  *   <li>HMAC-SHA256 request signing ({@code X-Custodian-Signature}) with timestamp binding.</li>
  *   <li>Fail-closed timeout/5xx semantics: ambiguous network outcomes always return
@@ -45,12 +46,6 @@ import tools.jackson.databind.ObjectMapper;
 public class CustodianBankHostToHostClient implements CustodianBankGateway {
 
     private static final Logger log = LoggerFactory.getLogger(CustodianBankHostToHostClient.class);
-
-    public static final Set<String> ALLOWED_PRODUCTION_HOSTS = Set.of(
-            "custodian.gcb.com.gh",
-            "custodian.ecobank.com.gh",
-            "custodian.stanbic.com.gh"
-    );
 
     public record Credentials(
             String institutionCode,
@@ -84,6 +79,7 @@ public class CustodianBankHostToHostClient implements CustodianBankGateway {
     public CustodianBankHostToHostClient(
             ObjectMapper json,
             @Value("${elepay.custodian.h2h.base-url:}") String baseUrl,
+            @Value("${elepay.custodian.h2h.allowed-hosts:}") String allowedHostsCsv,
             @Value("${elepay.custodian.h2h.institution-code:}") String institutionCode,
             @Value("${elepay.custodian.h2h.trust-account-number:}") String trustAccountNumber,
             @Value("${elepay.custodian.h2h.api-key:}") String apiKey,
@@ -91,7 +87,7 @@ public class CustodianBankHostToHostClient implements CustodianBankGateway {
     ) {
         this(
                 json,
-                productionBase(baseUrl),
+                productionBase(baseUrl, parseAllowedHosts(allowedHostsCsv)),
                 new Credentials(institutionCode, trustAccountNumber, apiKey, signingSecret),
                 HttpClient.newBuilder()
                         .connectTimeout(Duration.ofSeconds(5))
@@ -117,11 +113,30 @@ public class CustodianBankHostToHostClient implements CustodianBankGateway {
                         .build();
     }
 
+    public static Set<String> parseAllowedHosts(String csv) {
+        if (csv == null || csv.isBlank()) {
+            return Set.of();
+        }
+        java.util.Set<String> hosts = new java.util.LinkedHashSet<>();
+        for (String part : csv.split(",")) {
+            String trimmed = part.trim().toLowerCase(Locale.ROOT);
+            if (!trimmed.isEmpty()) {
+                hosts.add(trimmed);
+            }
+        }
+        return Set.copyOf(hosts);
+    }
+
     /**
-     * Validates that the configured Custodian Bank URL is HTTPS, targets an allowlisted
-     * Ghanaian custodian bank host, and carries no userinfo, query string, or fragment.
+     * Validates that the configured Custodian Bank URL is HTTPS, targets an explicitly configured
+     * custodian host in {@code allowedHosts}, and carries no userinfo, query string, or fragment.
+     * Fails closed if {@code allowedHosts} is empty.
      */
-    public static URI productionBase(String url) {
+    public static URI productionBase(String url, Set<String> allowedHosts) {
+        if (allowedHosts == null || allowedHosts.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "elepay.custodian.h2h.allowed-hosts must be configured with your contracted Custodian Bank host(s)");
+        }
         if (url == null || url.isBlank()) {
             throw new IllegalArgumentException(
                     "elepay.custodian.h2h.base-url is required when elepay.custodian.h2h.enabled=true");
@@ -129,13 +144,13 @@ public class CustodianBankHostToHostClient implements CustodianBankGateway {
         URI u = URI.create(url.trim());
         if (!"https".equalsIgnoreCase(u.getScheme())
                 || u.getHost() == null
-                || !ALLOWED_PRODUCTION_HOSTS.contains(u.getHost().toLowerCase(Locale.ROOT))
+                || !allowedHosts.contains(u.getHost().toLowerCase(Locale.ROOT))
                 || u.getUserInfo() != null
                 || u.getQuery() != null
                 || u.getFragment() != null) {
             throw new IllegalArgumentException(
                     "Custodian Bank base URL must be HTTPS to an allowlisted custodian host "
-                            + ALLOWED_PRODUCTION_HOSTS + ", got: " + url);
+                            + allowedHosts + ", got: " + url);
         }
         return u;
     }

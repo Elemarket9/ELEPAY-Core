@@ -4,13 +4,12 @@ import java.time.Instant;
 import java.util.Objects;
 
 /**
- * Host-to-host gateway contract between ELEPAY and its Custodian Bank Trust Account
- * (e.g., GCB Bank, Ecobank Ghana, Stanbic Bank Ghana).
+ * Host-to-host gateway contract between ELEPAY and its contracted Custodian Bank Trust Account.
  *
  * <p>All real money sits in ELEPAY's single Bank of Ghana regulated Custodian Trust Account.
  * Implementations must be strictly idempotent, fail-closed on ambiguous network outcomes
  * (returning {@link DisbursementStatus#UNKNOWN} rather than {@link DisbursementStatus#REJECTED}),
- * and never hardcode bank credentials.
+ * and never hardcode bank hosts or credentials.
  */
 public interface CustodianBankGateway {
 
