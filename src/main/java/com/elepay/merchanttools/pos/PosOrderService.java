@@ -868,16 +868,10 @@ public class PosOrderService {
         if (req.tenderType().isDirectPosTender()) {
             String normalizedRef = req.reference() == null ? null : req.reference().trim();
             if (req.tenderType().isExternalRecorded()) {
-                String label = req.tenderType().displayLabel();
-                if (normalizedRef == null || normalizedRef.isBlank()) {
-                    throw ApiException.badRequest("reference_required", label + " reference is required");
-                }
-                if (normalizedRef.length() > 128) {
-                    throw ApiException.badRequest("reference_too_long", label + " reference must be 128 characters or fewer");
-                }
+                validateExternalReference(order.merchantId(), req.tenderType(), normalizedRef);
                 if (amount > effectiveRemaining) {
                     throw ApiException.badRequest("amount_exceeds_balance",
-                            label + " amount cannot exceed remaining balance");
+                            req.tenderType().displayLabel() + " amount cannot exceed remaining balance");
                 }
             }
             // Prevent double-capturing the same split or over-capturing the order across concurrent splits.
@@ -910,6 +904,10 @@ public class PosOrderService {
                 return new TenderResult(orderId, order.status(), req.tenderType(), linkRecord.amount(),
                         linkRecord.id(), linkRecord.checkoutRef(), null, "paid",
                         checkout.payUrl(linkRecord.checkoutRef()), null, null, "Tender already applied", order);
+            }
+            if (linkRecord.amount() != amount) {
+                throw ApiException.conflict("open_checkout_amount_mismatch",
+                        "An open digital checkout exists for a different amount; cancel it before changing tender amount");
             }
         } else {
             long openLinkedAmount = openDigitalCheckoutAmount(orderId);
@@ -1037,6 +1035,12 @@ public class PosOrderService {
 
     @Transactional
     public PosOrder addTenderPayment(UUID orderId, TenderType tenderType, long amountPesewas, String reference, String splitKey) {
+        if (tenderType == null) {
+            throw ApiException.badRequest("tender_type_required", "Tender type is required");
+        }
+        if (amountPesewas <= 0) {
+            throw ApiException.badRequest("invalid_amount", "Payment amount must be positive");
+        }
         if (!tenderType.isDirectPosTender())
             throw ApiException.unprocessable("digital_payment_unverified", "Use the linked ELEPAY checkout");
         PosOrder order = lockOrder(orderId);
@@ -1060,15 +1064,10 @@ public class PosOrderService {
         }
         String normalizedRef = reference == null ? null : reference.trim();
         if (tenderType.isExternalRecorded()) {
-            String label = tenderType.displayLabel();
-            if (normalizedRef == null || normalizedRef.isBlank()) {
-                throw ApiException.badRequest("reference_required", label + " reference is required");
-            }
-            if (normalizedRef.length() > 128) {
-                throw ApiException.badRequest("reference_too_long", label + " reference must be 128 characters or fewer");
-            }
+            validateExternalReference(order.merchantId(), tenderType, normalizedRef);
             if (amountPesewas > effectiveRemaining) {
-                throw ApiException.badRequest("amount_exceeds_balance", label + " amount cannot exceed remaining balance");
+                throw ApiException.badRequest("amount_exceeds_balance",
+                        tenderType.displayLabel() + " amount cannot exceed remaining balance");
             }
         }
         if (hasOpenDigitalCheckoutForSplit(orderId, normalizedSplit)) {
@@ -1081,8 +1080,39 @@ public class PosOrderService {
         return recordTender(order, tenderType, amountPesewas, normalizedRef, normalizedSplit);
     }
 
+    private void validateExternalReference(UUID merchantId, TenderType tenderType, String normalizedRef) {
+        String label = tenderType.displayLabel();
+        if (normalizedRef == null || normalizedRef.isBlank()) {
+            throw ApiException.badRequest("reference_required", label + " reference is required");
+        }
+        if (normalizedRef.length() < 4) {
+            throw ApiException.badRequest("reference_too_short", label + " reference must be at least 4 characters");
+        }
+        if (normalizedRef.length() > 128) {
+            throw ApiException.badRequest("reference_too_long", label + " reference must be 128 characters or fewer");
+        }
+        boolean duplicate = Boolean.TRUE.equals(db.sql("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pos_tender_payment
+                    WHERE merchant_id = :merchantId
+                      AND tender_type = :tenderType
+                      AND status = 'SUCCESS'
+                      AND lower(trim(reference)) = lower(:ref)
+                )
+                """)
+                .param("merchantId", merchantId)
+                .param("tenderType", tenderType.name())
+                .param("ref", normalizedRef)
+                .query(Boolean.class)
+                .single());
+        if (duplicate) {
+            throw ApiException.conflict("duplicate_external_reference",
+                    label + " reference '" + normalizedRef + "' has already been recorded for this merchant");
+        }
+    }
+
     private PosOrder recordTender(PosOrder order, TenderType tenderType, long amountPesewas, String reference, String splitKey) {
-        if (amountPesewas <= 0) throw new IllegalArgumentException("Payment amount must be positive");
+        if (amountPesewas <= 0) throw ApiException.badRequest("invalid_amount", "Payment amount must be positive");
         UUID orderId = order.id();
         requirePayable(order);
 
@@ -1103,19 +1133,28 @@ public class PosOrderService {
         if (applied <= 0) throw ApiException.conflict("order_paid", "Order is already fully paid");
 
         UUID paymentId = UUID.randomUUID();
-        db.sql("""
-            INSERT INTO pos_tender_payment (id, order_id, tender_type, amount_pesewas, reference, status, created_at, split_key)
-            VALUES (:id, :orderId, :tenderType, :amount, :reference, 'SUCCESS', now(), :splitKey)
-            """)
-            .param("id", paymentId)
-            .param("orderId", orderId)
-            .param("tenderType", tenderType.name())
-            .param("amount", applied)
-            .param("reference", reference)
-            .param("splitKey", splitKey)
-            .update();
+        try {
+            db.sql("""
+                INSERT INTO pos_tender_payment (id, order_id, merchant_id, tender_type, amount_pesewas, reference, status, created_at, split_key)
+                VALUES (:id, :orderId, :merchantId, :tenderType, :amount, :reference, 'SUCCESS', now(), :splitKey)
+                """)
+                .param("id", paymentId)
+                .param("orderId", orderId)
+                .param("merchantId", order.merchantId())
+                .param("tenderType", tenderType.name())
+                .param("amount", applied)
+                .param("reference", reference)
+                .param("splitKey", splitKey)
+                .update();
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            if (tenderType.isExternalRecorded()) {
+                throw ApiException.conflict("duplicate_external_reference",
+                        tenderType.displayLabel() + " reference '" + reference + "' has already been recorded for this merchant");
+            }
+            throw e;
+        }
 
-        // Update active shift ONLY for CASH (BANK_TRANSFER is excluded from shift cash drawer)
+        // Update active shift ONLY for CASH (external tenders are excluded from shift cash drawer)
         if (tenderType == TenderType.CASH && order.terminalId() != null) {
             cashierService.getActiveShift(order.terminalId())
                     .ifPresent(shift -> cashierService.recordCashTender(shift.id(), applied));
@@ -1144,7 +1183,7 @@ public class PosOrderService {
 
         db.sql("""
             UPDATE pos_order
-            SET paid_pesewas = :newPaid, change_pesewas = :change, status = :status
+            SET paid_pesewas = :newPaid, change_pesewas = change_pesewas + :change, status = :status
             WHERE id = :id
             """)
             .param("newPaid", newPaid)

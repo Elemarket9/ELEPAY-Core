@@ -103,72 +103,106 @@ public class Audit {
         return new Entry(nextId, actor, action, subject, canonicalPayload, createdAt, prevHash, entryHash);
     }
 
+    private static final int VERIFY_BATCH_SIZE = 5_000;
+
     /**
-     * Iterates through the entire audit trail in sequence and validates cryptographic integrity of the hash chain.
-     * Throws {@link AuditTamperedException} if any corruption, gap, or hash mismatch is detected.
+     * Streams the entire audit trail in bounded keyset batches and validates cryptographic integrity
+     * of the hash chain in constant memory. Prevents {@code version=1} SHA-256 downgrade once a
+     * keyed {@code version=2} HMAC chain is active.
+     * Throws {@link AuditTamperedException} if any corruption, gap, downgrade, or hash mismatch is detected.
      */
     @Transactional(readOnly = true)
     public VerificationResult verifyChain() {
         record Row(long id, String actor, String action, String subject, String details,
                    OffsetDateTime createdAt, String prevHash, String entryHash, int version, String keyId) {}
 
-        List<Row> entries = db.sql("""
-                SELECT id, actor, action, subject, details::text, created_at, prev_hash, entry_hash,
-                       hash_version, hash_key_id
-                FROM audit_log
-                ORDER BY id ASC""")
-                .query((rs, i) -> new Row(
-                        rs.getLong("id"),
-                        rs.getString("actor"),
-                        rs.getString("action"),
-                        rs.getString("subject"),
-                        rs.getString("details"),
-                        rs.getObject("created_at", OffsetDateTime.class),
-                        rs.getString("prev_hash"),
-                        rs.getString("entry_hash"),
-                        rs.getInt("hash_version"),
-                        rs.getString("hash_key_id")
-                )).list();
-
         String expectedPrevHash = GENESIS_HASH;
         long verified = 0;
-        for (Row entry : entries) {
-            if (entry.entryHash() == null) {
-                throw new AuditTamperedException(String.format(
-                        "Audit chain broken at entry id %d: null entry_hash detected", entry.id()));
+        long lastId = Long.MIN_VALUE;
+        boolean seenV2 = false;
+
+        while (true) {
+            List<Row> batch = db.sql("""
+                    SELECT id, actor, action, subject, details::text, created_at, prev_hash, entry_hash,
+                           hash_version, hash_key_id
+                    FROM audit_log
+                    WHERE id > :lastId
+                    ORDER BY id ASC
+                    LIMIT :limit""")
+                    .param("lastId", lastId)
+                    .param("limit", VERIFY_BATCH_SIZE)
+                    .query((rs, i) -> new Row(
+                            rs.getLong("id"),
+                            rs.getString("actor"),
+                            rs.getString("action"),
+                            rs.getString("subject"),
+                            rs.getString("details"),
+                            rs.getObject("created_at", OffsetDateTime.class),
+                            rs.getString("prev_hash"),
+                            rs.getString("entry_hash"),
+                            rs.getInt("hash_version"),
+                            rs.getString("hash_key_id")
+                    )).list();
+
+            if (batch.isEmpty()) {
+                break;
             }
 
-            if (verified > 0 && entry.prevHash() == null) {
-                throw new AuditTamperedException(String.format(
-                        "Audit chain broken at entry id %d: null prev_hash detected after genesis", entry.id()));
+            for (Row entry : batch) {
+                if (entry.entryHash() == null) {
+                    throw new AuditTamperedException(String.format(
+                            "Audit chain broken at entry id %d: null entry_hash detected", entry.id()));
+                }
+
+                if (verified > 0 && entry.prevHash() == null) {
+                    throw new AuditTamperedException(String.format(
+                            "Audit chain broken at entry id %d: null prev_hash detected after genesis", entry.id()));
+                }
+
+                if (entry.version() < 1 || entry.version() > HASH_VERSION) {
+                    throw new AuditTamperedException(String.format(
+                            "Audit entry at id %d has unsupported hash_version %d", entry.id(), entry.version()));
+                }
+
+                if (seenV2 && entry.version() < 2) {
+                    throw new AuditTamperedException(String.format(
+                            "Audit hash version downgrade detected at id %d (version %d after v2 HMAC chain)",
+                            entry.id(), entry.version()));
+                }
+
+                String actualPrevHash = entry.prevHash() != null ? entry.prevHash() : GENESIS_HASH;
+                if (!MessageDigest.isEqual(actualPrevHash.getBytes(StandardCharsets.UTF_8),
+                                          expectedPrevHash.getBytes(StandardCharsets.UTF_8))) {
+                    throw new AuditTamperedException(String.format(
+                            "Audit chain broken at entry id %d: expected prev_hash %s but found %s",
+                            entry.id(), expectedPrevHash, entry.prevHash()));
+                }
+
+                String timestampStr = entry.createdAt().toString();
+                boolean intact;
+                if (entry.version() >= 2) {
+                    seenV2 = true;
+                    intact = keys.verifyMac(entry.keyId(), canonicalV2(entry.prevHash(), entry.id(), entry.action(),
+                            entry.actor(), entry.subject(), entry.details(), timestampStr), entry.entryHash());
+                } else {
+                    String computed = computeHash(entry.prevHash(), entry.id(), entry.action(),
+                            entry.actor(), entry.details(), timestampStr);
+                    intact = MessageDigest.isEqual(entry.entryHash().getBytes(StandardCharsets.UTF_8),
+                            computed.getBytes(StandardCharsets.UTF_8));
+                }
+                if (!intact) {
+                    throw new AuditTamperedException(String.format(
+                            "Audit entry tampered at id %d (hash version %d)", entry.id(), entry.version()));
+                }
+
+                expectedPrevHash = entry.entryHash();
+                lastId = entry.id();
+                verified++;
             }
 
-            String actualPrevHash = entry.prevHash() != null ? entry.prevHash() : GENESIS_HASH;
-            if (!MessageDigest.isEqual(actualPrevHash.getBytes(StandardCharsets.UTF_8),
-                                      expectedPrevHash.getBytes(StandardCharsets.UTF_8))) {
-                throw new AuditTamperedException(String.format(
-                        "Audit chain broken at entry id %d: expected prev_hash %s but found %s",
-                        entry.id(), expectedPrevHash, entry.prevHash()));
+            if (batch.size() < VERIFY_BATCH_SIZE) {
+                break;
             }
-
-            String timestampStr = entry.createdAt().toString();
-            boolean intact;
-            if (entry.version() >= 2) {
-                intact = keys.verifyMac(entry.keyId(), canonicalV2(entry.prevHash(), entry.id(), entry.action(),
-                        entry.actor(), entry.subject(), entry.details(), timestampStr), entry.entryHash());
-            } else {
-                String computed = computeHash(entry.prevHash(), entry.id(), entry.action(),
-                        entry.actor(), entry.details(), timestampStr);
-                intact = MessageDigest.isEqual(entry.entryHash().getBytes(StandardCharsets.UTF_8),
-                        computed.getBytes(StandardCharsets.UTF_8));
-            }
-            if (!intact) {
-                throw new AuditTamperedException(String.format(
-                        "Audit entry tampered at id %d (hash version %d)", entry.id(), entry.version()));
-            }
-
-            expectedPrevHash = entry.entryHash();
-            verified++;
         }
 
         return new VerificationResult(true, verified, expectedPrevHash);

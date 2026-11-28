@@ -68,30 +68,49 @@ public class BulkAirtimeBatchEngine {
 
         UUID batchId = UUID.randomUUID();
         String batchRef = (batchReference != null && !batchReference.isBlank())
-                ? batchReference
+                ? batchReference.trim()
                 : "AIRTIME-BATCH-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
-        long totalAmountPesewas = items.stream().mapToLong(AirtimeBatchItem::amountPesewas).sum();
+        long totalAmountPesewas = 0L;
+        long validAmountPesewas = 0L;
+        List<Boolean> itemValidFlags = new ArrayList<>(items.size());
+        for (var item : items) {
+            if (item == null) {
+                throw new IllegalArgumentException("Batch item cannot be null");
+            }
+            if (item.amountPesewas() <= 0) {
+                throw new IllegalArgumentException("Each airtime item amount must be positive: " + item.amountPesewas());
+            }
+            totalAmountPesewas = Math.addExact(totalAmountPesewas, item.amountPesewas());
+            boolean validPhone = item.recipientPhone() != null
+                    && item.recipientPhone().replaceAll("[^0-9]", "").length() >= 9;
+            itemValidFlags.add(validPhone);
+            if (validPhone) {
+                validAmountPesewas = Math.addExact(validAmountPesewas, item.amountPesewas());
+            }
+        }
         if (totalAmountPesewas <= 0) {
             throw new IllegalArgumentException("Total batch amount must be positive");
         }
 
-        // 1. Post total batch funding in Double-Entry Ledger
-        String sponsorAccount = "customer:" + sponsorCustomerId + ":available:GHS";
-        ledger.openSystem(sponsorAccount, "available", "GHS", true);
-        ledger.openSystem(AIRTIME_CLEARING_ACCOUNT, "clearing", "GHS", true);
+        // 1. Post funding ONLY for valid items using non-negative customer wallet account (never allow_negative=true)
+        String sponsorAccount = ledger.open("customer", sponsorCustomerId, "available", Ledger.GHS);
+        ledger.openSystem(AIRTIME_CLEARING_ACCOUNT, "clearing", Ledger.GHS, true);
 
-        var posting = Ledger.Posting.of(
-                "bill_bulk_airtime",
-                "BATCH-" + batchRef,
-                "BULK_AIRTIME_DISBURSEMENT",
-                List.of(
-                        Ledger.Leg.debit(sponsorAccount, totalAmountPesewas),
-                        Ledger.Leg.credit(AIRTIME_CLEARING_ACCOUNT, totalAmountPesewas)
-                )
-        ).describedAs("Bulk airtime batch " + batchRef + " for " + items.size() + " recipients");
+        UUID ledgerTxId = null;
+        if (validAmountPesewas > 0) {
+            var posting = Ledger.Posting.of(
+                    "bill_bulk_airtime",
+                    "BATCH-" + batchRef,
+                    "BULK_AIRTIME_DISBURSEMENT",
+                    List.of(
+                            Ledger.Leg.debit(sponsorAccount, validAmountPesewas),
+                            Ledger.Leg.credit(AIRTIME_CLEARING_ACCOUNT, validAmountPesewas)
+                    )
+            ).describedAs("Bulk airtime batch " + batchRef + " for " + items.size() + " recipients");
 
-        UUID ledgerTxId = ledger.post(posting).transactionId();
+            ledgerTxId = ledger.post(posting).transactionId();
+        }
 
         // 2. Process and record individual items
         List<BatchItemOutcome> outcomes = new ArrayList<>();
@@ -99,15 +118,15 @@ public class BulkAirtimeBatchEngine {
         int failureCount = 0;
         OffsetDateTime now = OffsetDateTime.now();
 
-        for (var item : items) {
+        for (int idx = 0; idx < items.size(); idx++) {
+            var item = items.get(idx);
+            boolean validPhone = itemValidFlags.get(idx);
             UUID txnId = UUID.randomUUID();
             String itemRef = (item.itemReference() != null && !item.itemReference().isBlank())
-                    ? item.itemReference()
+                    ? item.itemReference().trim()
                     : "AIR-" + UUID.randomUUID().toString().substring(0, 10).toUpperCase();
 
-            boolean validPhone = item.recipientPhone() != null && item.recipientPhone().replaceAll("[^0-9]", "").length() >= 9;
             String status = validPhone ? "COMPLETED" : "FAILED";
-
             if (validPhone) {
                 successCount++;
             } else {
@@ -115,6 +134,9 @@ public class BulkAirtimeBatchEngine {
             }
 
             String dbRef = batchRef + "_" + itemRef;
+            String safeMeta = "{\"batchReference\":\"" + escapeJson(batchRef)
+                    + "\",\"batchJournalTx\":" + (ledgerTxId == null ? "null" : "\"" + ledgerTxId + "\"")
+                    + ",\"itemReference\":\"" + escapeJson(itemRef) + "\"}";
 
             db.sql("""
                 INSERT INTO bill_payment_transaction (
@@ -134,9 +156,9 @@ public class BulkAirtimeBatchEngine {
                     .param("amt", item.amountPesewas())
                     .param("ref", dbRef)
                     .param("status", status)
-                    .param("meta", "{\"batchReference\": \"" + batchRef + "\", \"batchJournalTx\": \"" + ledgerTxId + "\", \"itemReference\": \"" + itemRef + "\"}")
+                    .param("meta", safeMeta)
                     .param("now", now)
-                    .param("journalTx", outcomes.isEmpty() ? ledgerTxId : null)
+                    .param("journalTx", (validPhone && successCount == 1) ? ledgerTxId : null)
                     .update();
 
             outcomes.add(new BatchItemOutcome(
@@ -146,7 +168,12 @@ public class BulkAirtimeBatchEngine {
 
         return new BulkBatchResult(
                 batchId, batchRef, sponsorCustomerId, items.size(),
-                successCount, failureCount, totalAmountPesewas, ledgerTxId, outcomes, now
+                successCount, failureCount, validAmountPesewas, ledgerTxId, outcomes, now
         );
+    }
+
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }

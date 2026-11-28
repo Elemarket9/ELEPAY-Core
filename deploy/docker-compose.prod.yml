@@ -83,16 +83,24 @@ services:
       ELEPAY_INTEGRITY_MAC_KEY: ${ELEPAY_INTEGRITY_MAC_KEY:?set me}
       ELEPAY_INTEGRITY_ED25519_KEY: ${ELEPAY_INTEGRITY_ED25519_KEY:?set me}
       ELEPAY_INTEGRITY_MLDSA65_KEY: ${ELEPAY_INTEGRITY_MLDSA65_KEY:?set me}
-      ELEPAY_POS_DUKPT_BDK: ${ELEPAY_POS_DUKPT_BDK:?set me}
+      # Required when ELEPAY_MERCHANTTOOLS_ENABLED=true; optional for pure payments-core prod boot.
+      ELEPAY_POS_DUKPT_BDK: ${ELEPAY_POS_DUKPT_BDK:-}
       ELEPAY_TRUSTED_PROXIES: ${ELEPAY_TRUSTED_PROXIES:?set me}
-      # Scoped partner egress allowlist (optional override; prod default lives in application-prod.properties).
-      ELEPAY_PARTNER_EGRESS_HOSTS: ${ELEPAY_PARTNER_EGRESS_HOSTS:-}
+      # Scoped partner egress allowlist (defaults to the application-prod.properties allowlist so unset
+      # host env vars never wipe it to "" and block ProductionSafetyCheck).
+      ELEPAY_PARTNER_EGRESS_HOSTS: ${ELEPAY_PARTNER_EGRESS_HOSTS:-custodian.gcb.com.gh,custodian.ecobank.com.gh,custodian.stanbic.com.gh,proxy.momoapi.mtn.com,momoapi.momo.africa,api.telecelcash.com.gh,openapi.telecel.com.gh,api.airteltigomoney.com.gh,openapi.at.com.gh,gip.ghipss.com,api.ghipss.com,switch.ghipss.com}
+      # Read-write split toggle: unify ELEPAY_DB_READ_WRITE_SPLIT_ENABLED (application-prod.properties)
+      # and ELEPAY_READ_WRITE_SPLIT_ENABLED (application.properties) so either env var works consistently.
+      ELEPAY_DB_READ_WRITE_SPLIT_ENABLED: ${ELEPAY_DB_READ_WRITE_SPLIT_ENABLED:-${ELEPAY_READ_WRITE_SPLIT_ENABLED:-false}}
+      ELEPAY_READ_WRITE_SPLIT_ENABLED: ${ELEPAY_DB_READ_WRITE_SPLIT_ENABLED:-${ELEPAY_READ_WRITE_SPLIT_ENABLED:-false}}
       # Optional mobile TLS pins (empty = no-op). Format documented in application.properties.
       ELEPAY_MOBILE_CERT_PINS: ${ELEPAY_MOBILE_CERT_PINS:-}
       # Management port (:9090) binds to loopback (127.0.0.1) by default so only the container-local
       # HEALTHCHECK can reach it. Never publish :9090 in `ports:`; only override to an internal
       # interface if an in-stack Prometheus scraper on `internal_backend` requires it.
       ELEPAY_MANAGEMENT_ADDRESS: ${ELEPAY_MANAGEMENT_ADDRESS:-127.0.0.1}
+    # Allow Spring Boot graceful HTTP drain (30s) and ingestion drain (15s) to complete before SIGKILL.
+    stop_grace_period: 45s
     ports:
       # Public API only. Management port 9090 is never published externally.
       - "8080:8080"

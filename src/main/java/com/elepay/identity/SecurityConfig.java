@@ -137,6 +137,7 @@ class SecurityConfig {
                             Stage1KillSwitchFilter stage1KillSwitchFilter,
                             RateLimitFilter rateLimitFilter,
                             RequestSigningFilter requestSigningFilter,
+                            @Autowired(required = false) DistributedSessionService sessionService,
                             @Qualifier("cellRoutingFilter") @Autowired(required = false) OncePerRequestFilter cellRoutingFilter,
                             Environment env,
                             @Value("${management.server.port:0}") int managementPort,
@@ -201,16 +202,30 @@ class SecurityConfig {
                                     "/kitchen", "/kitchen/**", "/kitchen-sw.js", "/kitchen.webmanifest").permitAll()
                             .anyRequest().authenticated();
                 })
-                .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter())))
+                .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesConverter(sessionService))))
                 .addFilterBefore(preAuthFilters, BearerTokenAuthenticationFilter.class)
                 .addFilterAfter(requestSigningFilter, BearerTokenAuthenticationFilter.class);
         return http.build();
     }
 
-    /** Maps the OIDC {@code roles} claim (and realm roles from Keycloak) to authorities. */
+    /** Maps the OIDC {@code roles} claim (and realm roles from Keycloak) to authorities, rejecting revoked JWTs. */
     static final class RolesConverter implements Converter<Jwt, AbstractAuthenticationToken> {
+        private final DistributedSessionService sessionService;
+
+        RolesConverter() {
+            this(null);
+        }
+
+        RolesConverter(DistributedSessionService sessionService) {
+            this.sessionService = sessionService;
+        }
+
         @Override
         public AbstractAuthenticationToken convert(Jwt jwt) {
+            if (sessionService != null && sessionService.isTokenRevoked(
+                    jwt.getId(), jwt.getClaimAsString("uid"), jwt.getSubject(), jwt.getIssuedAt())) {
+                throw new org.springframework.security.oauth2.server.resource.InvalidBearerTokenException("The token has been revoked");
+            }
             Collection<GrantedAuthority> authorities = new ArrayList<>();
             List<String> roles = jwt.getClaimAsStringList("roles");
             if (roles == null && jwt.getClaim("realm_access") instanceof java.util.Map<?, ?> realm

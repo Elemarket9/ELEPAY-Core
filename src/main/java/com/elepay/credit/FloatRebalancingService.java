@@ -70,11 +70,16 @@ public class FloatRebalancingService {
                 .filter(a -> a.currentBalancePesewas() > a.maxTargetPesewas())
                 .toList();
 
+        java.util.Map<String, Long> remainingExcessByRail = new java.util.HashMap<>();
+        for (FloatStatus surplus : surpluses) {
+            remainingExcessByRail.put(surplus.rail(), surplus.currentBalancePesewas() - surplus.maxTargetPesewas());
+        }
+
         for (FloatStatus deficit : deficits) {
             long needed = deficit.minTargetPesewas() - deficit.currentBalancePesewas();
 
             for (FloatStatus surplus : surpluses) {
-                long availableExcess = surplus.currentBalancePesewas() - surplus.maxTargetPesewas();
+                long availableExcess = remainingExcessByRail.getOrDefault(surplus.rail(), 0L);
                 if (availableExcess <= 0) continue;
 
                 long transferAmount = Math.min(needed, availableExcess);
@@ -93,6 +98,7 @@ public class FloatRebalancingService {
                     .update();
 
                     recommendations.add(new RebalanceRecommendation(id, surplus.rail(), deficit.rail(), transferAmount, urgency, reason, "RECOMMENDED"));
+                    remainingExcessByRail.put(surplus.rail(), availableExcess - transferAmount);
                     needed -= transferAmount;
                     if (needed <= 0) break;
                 }
@@ -103,7 +109,12 @@ public class FloatRebalancingService {
 
     @Transactional
     public void executeRebalance(UUID recommendationId, UUID operatorId) {
-        RebalanceRecommendation rec = db.sql("SELECT id, source_rail, target_rail, recommended_amount_pesewas, urgency, reason, status FROM float_rebalance_recommendation WHERE id = ?")
+        RebalanceRecommendation rec = db.sql("""
+                SELECT id, source_rail, target_rail, recommended_amount_pesewas, urgency, reason, status
+                FROM float_rebalance_recommendation
+                WHERE id = ?
+                FOR UPDATE
+                """)
                 .param(recommendationId)
                 .query((rs, rowNum) -> new RebalanceRecommendation(
                         rs.getObject("id", UUID.class),
@@ -118,6 +129,46 @@ public class FloatRebalancingService {
         if (!"RECOMMENDED".equals(rec.status())) {
             throw new IllegalStateException("Recommendation is already " + rec.status());
         }
+        if (rec.recommendedAmountPesewas() <= 0) {
+            throw new IllegalArgumentException("Rebalance amount must be positive");
+        }
+
+        // Lock source and target float accounts in deterministic alphabetical order to avoid AB-BA deadlocks
+        List<String> rails = java.util.stream.Stream.of(rec.sourceRail(), rec.targetRail()).distinct().sorted().toList();
+        java.util.Map<String, FloatStatus> locked = new java.util.HashMap<>();
+        for (String rail : rails) {
+            FloatStatus fs = db.sql("""
+                    SELECT rail, current_balance_pesewas, min_target_pesewas, max_target_pesewas
+                    FROM float_account
+                    WHERE rail = ?
+                    FOR UPDATE
+                    """)
+                    .param(rail)
+                    .query((rs, rowNum) -> new FloatStatus(
+                            rs.getString("rail"),
+                            rs.getLong("current_balance_pesewas"),
+                            rs.getLong("min_target_pesewas"),
+                            rs.getLong("max_target_pesewas")
+                    )).single();
+            locked.put(rail, fs);
+        }
+
+        FloatStatus source = locked.get(rec.sourceRail());
+        if (source.currentBalancePesewas() - rec.recommendedAmountPesewas() < source.minTargetPesewas()) {
+            throw new IllegalStateException("Insufficient surplus on source rail " + rec.sourceRail()
+                    + " (balance=" + source.currentBalancePesewas() + ", minTarget=" + source.minTargetPesewas()
+                    + ", requested=" + rec.recommendedAmountPesewas() + ")");
+        }
+
+        int updated = db.sql("""
+                UPDATE float_rebalance_recommendation
+                SET status = 'EXECUTED', executed_by = ?, executed_at = now()
+                WHERE id = ? AND status = 'RECOMMENDED'
+                """)
+                .params(operatorId, recommendationId).update();
+        if (updated != 1) {
+            throw new IllegalStateException("Recommendation was concurrently executed");
+        }
 
         // Apply transfer to float accounts
         db.sql("UPDATE float_account SET current_balance_pesewas = current_balance_pesewas - ?, updated_at = now() WHERE rail = ?")
@@ -125,8 +176,5 @@ public class FloatRebalancingService {
 
         db.sql("UPDATE float_account SET current_balance_pesewas = current_balance_pesewas + ?, updated_at = now() WHERE rail = ?")
                 .params(rec.recommendedAmountPesewas(), rec.targetRail()).update();
-
-        db.sql("UPDATE float_rebalance_recommendation SET status = 'EXECUTED', executed_by = ?, executed_at = now() WHERE id = ?")
-                .params(operatorId, recommendationId).update();
     }
 }

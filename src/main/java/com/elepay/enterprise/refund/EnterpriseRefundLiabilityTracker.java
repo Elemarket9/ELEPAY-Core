@@ -36,21 +36,21 @@ public class EnterpriseRefundLiabilityTracker {
         OffsetDateTime now = OffsetDateTime.now();
 
         if (db != null) {
-            try {
-                db.sql("""
-                    INSERT INTO enterprise_refund_liability (id, enterprise_id, merchant_id, refund_id, amount_pesewas, settled, created_at)
-                    VALUES (:id, :eid, :mid, :rid, :amt, false, :now)
-                    """)
-                    .param("id", id)
-                    .param("eid", enterpriseId)
-                    .param("mid", merchantId)
-                    .param("rid", refundId)
-                    .param("amt", amountPesewas)
-                    .param("now", now)
-                    .update();
-            } catch (Exception ignored) {
-                // Allows running with mocked or offline db in standalone tests
-            }
+            db.sql("""
+                INSERT INTO enterprise_refund_liability (id, enterprise_id, merchant_id, refund_id, amount_pesewas, settled, created_at)
+                VALUES (:id, :eid, :mid, :rid, :amt, false, :now)
+                """)
+                .param("id", id)
+                .param("eid", enterpriseId)
+                .param("mid", merchantId)
+                .param("rid", refundId)
+                .param("amt", amountPesewas)
+                .param("now", now)
+                .update();
+
+            return new RefundLiabilityRecord(
+                    id, enterpriseId, merchantId, refundId, amountPesewas, false, now, null
+            );
         }
 
         RefundLiabilityRecord record = new RefundLiabilityRecord(
@@ -75,18 +75,16 @@ public class EnterpriseRefundLiabilityTracker {
      */
     public long getOutstandingLiability(UUID enterpriseId, UUID merchantId) {
         if (db != null) {
-            try {
-                Long total = db.sql("""
-                    SELECT coalesce(sum(amount_pesewas), 0)
-                    FROM enterprise_refund_liability
-                    WHERE enterprise_id = :eid AND merchant_id = :mid AND settled = false
-                    """)
-                    .param("eid", enterpriseId)
-                    .param("mid", merchantId)
-                    .query(Long.class)
-                    .single();
-                if (total != null) return total;
-            } catch (Exception ignored) {}
+            Long total = db.sql("""
+                SELECT coalesce(sum(amount_pesewas), 0)
+                FROM enterprise_refund_liability
+                WHERE enterprise_id = :eid AND merchant_id = :mid AND settled = false
+                """)
+                .param("eid", enterpriseId)
+                .param("mid", merchantId)
+                .query(Long.class)
+                .single();
+            return total != null ? total : 0L;
         }
 
         String key = cacheKey(enterpriseId, merchantId);
@@ -97,17 +95,54 @@ public class EnterpriseRefundLiabilityTracker {
             return records.stream()
                     .filter(r -> !r.settled())
                     .mapToLong(RefundLiabilityRecord::amountPesewas)
-                    .sum();
+                    .reduce(0L, Math::addExact);
         }
     }
 
     /**
-     * Offsets and marks unsettled liabilities as settled up to a given maximum amount.
-     * Returns the total amount settled.
+     * Offsets and marks unsettled liabilities as settled up to a given maximum cumulative amount.
+     * Returns the exact total amount settled.
      */
     @Transactional
     public long settleLiabilities(UUID enterpriseId, UUID merchantId, long maxAmountToSettle) {
         if (maxAmountToSettle <= 0) return 0L;
+
+        if (db != null) {
+            record PendingRow(UUID id, long amountPesewas) {}
+            List<PendingRow> rows = db.sql("""
+                SELECT id, amount_pesewas
+                FROM enterprise_refund_liability
+                WHERE enterprise_id = :eid AND merchant_id = :mid AND settled = false
+                ORDER BY created_at ASC, id ASC
+                FOR UPDATE
+                """)
+                .param("eid", enterpriseId)
+                .param("mid", merchantId)
+                .query((rs, i) -> new PendingRow(rs.getObject("id", UUID.class), rs.getLong("amount_pesewas")))
+                .list();
+
+            long remaining = maxAmountToSettle;
+            long totalSettled = 0L;
+            List<UUID> selectedIds = new ArrayList<>();
+            for (PendingRow row : rows) {
+                if (row.amountPesewas() > 0 && row.amountPesewas() <= remaining) {
+                    selectedIds.add(row.id());
+                    remaining -= row.amountPesewas();
+                    totalSettled = Math.addExact(totalSettled, row.amountPesewas());
+                    if (remaining == 0) break;
+                }
+            }
+            for (UUID id : selectedIds) {
+                db.sql("""
+                    UPDATE enterprise_refund_liability
+                    SET settled = true, settled_at = now()
+                    WHERE id = :id AND settled = false
+                    """)
+                    .param("id", id)
+                    .update();
+            }
+            return totalSettled;
+        }
 
         long remaining = maxAmountToSettle;
         long totalSettled = 0L;
@@ -130,25 +165,10 @@ public class EnterpriseRefundLiabilityTracker {
                                 OffsetDateTime.now()
                         ));
                         remaining -= rec.amountPesewas();
-                        totalSettled += rec.amountPesewas();
+                        totalSettled = Math.addExact(totalSettled, rec.amountPesewas());
                     }
                 }
             }
-        }
-
-        if (db != null) {
-            try {
-                db.sql("""
-                    UPDATE enterprise_refund_liability
-                    SET settled = true, settled_at = now()
-                    WHERE enterprise_id = :eid AND merchant_id = :mid AND settled = false
-                      AND amount_pesewas <= :max
-                    """)
-                    .param("eid", enterpriseId)
-                    .param("mid", merchantId)
-                    .param("max", maxAmountToSettle)
-                    .update();
-            } catch (Exception ignored) {}
         }
 
         return totalSettled;

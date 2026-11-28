@@ -18,6 +18,8 @@ import java.time.Instant;
 public class HmacWebhookVerifier {
 
     public static final long DEFAULT_TOLERANCE_SECONDS = 300L; // 5 minutes
+    /** Must cover the full [-DEFAULT_TOLERANCE_SECONDS, +DEFAULT_TOLERANCE_SECONDS] window plus 1s margin. */
+    public static final long NONCE_TTL_SECONDS = DEFAULT_TOLERANCE_SECONDS * 2 + 1;
 
     // Fleet-wide replay dedupe. A per-JVM map would let a captured (timestamp,nonce,signature) replay
     // against any instance that had not individually seen the nonce; the shared store makes dedupe global.
@@ -60,16 +62,23 @@ public class HmacWebhookVerifier {
             WebhookSignatureVerificationRequest request,
             PartnerAuthCredentials credentials
     ) {
+        if (request == null) {
+            return WebhookSignatureVerificationResult.invalid(null, "Missing verification request");
+        }
         if (credentials == null || !credentials.active()) {
             return WebhookSignatureVerificationResult.invalid(
                     request.partnerId(), "Partner credentials not found or inactive"
             );
         }
 
-        // 1. Validate timestamp
+        // 1. Validate timestamp (null-safe)
+        String rawTimestamp = request.timestampHeader();
+        if (rawTimestamp == null || rawTimestamp.isBlank()) {
+            return WebhookSignatureVerificationResult.invalid(request.partnerId(), "Missing timestamp header");
+        }
         long timestampSeconds;
         try {
-            timestampSeconds = Long.parseLong(request.timestampHeader().trim());
+            timestampSeconds = Long.parseLong(rawTimestamp.trim());
         } catch (NumberFormatException e) {
             return WebhookSignatureVerificationResult.invalid(request.partnerId(), "Invalid timestamp header format");
         }
@@ -81,18 +90,27 @@ public class HmacWebhookVerifier {
             );
         }
 
-        // 2. Validate nonce presence
-        String nonce = request.nonceHeader().trim();
-        if (nonce.isEmpty()) {
+        // 2. Validate nonce presence and format (null-safe; reject '.' to prevent canonicalization ambiguity)
+        String rawNonce = request.nonceHeader();
+        if (rawNonce == null || rawNonce.isBlank()) {
             return WebhookSignatureVerificationResult.invalid(request.partnerId(), "Missing nonce header");
         }
+        String nonce = rawNonce.trim();
+        if (nonce.length() > 128 || nonce.indexOf('.') >= 0) {
+            return WebhookSignatureVerificationResult.invalid(request.partnerId(), "Invalid nonce header format");
+        }
 
-        // 3. Canonicalize payload
+        // 3. Validate signature presence (null-safe) & canonicalize payload
+        String rawSignature = request.signatureHeader();
+        if (rawSignature == null || rawSignature.isBlank()) {
+            return WebhookSignatureVerificationResult.invalid(request.partnerId(), "Missing signature header");
+        }
         String canonical = canonicalize(timestampSeconds, nonce, request.rawBody());
-        String providedSignature = request.signatureHeader().trim().toLowerCase();
+        String providedSignature = rawSignature.trim().toLowerCase();
 
         // 4. Verify against active signing key, then (during rotation) the previous key.
-        boolean signatureValid = constantTimeVerify(credentials.activeSigningKey(), canonical, providedSignature)
+        boolean signatureValid = (credentials.activeSigningKey() != null && !credentials.activeSigningKey().isBlank()
+                        && constantTimeVerify(credentials.activeSigningKey(), canonical, providedSignature))
                 || (credentials.previousSigningKey() != null && !credentials.previousSigningKey().isBlank()
                         && constantTimeVerify(credentials.previousSigningKey(), canonical, providedSignature));
         if (!signatureValid) {
@@ -101,9 +119,9 @@ public class HmacWebhookVerifier {
 
         // 5. Replay protection via the shared, cross-instance nonce store. Done only after the signature
         //    is confirmed valid so an unauthenticated caller cannot poison the fleet-wide store. Keyed by
-        //    partner + nonce (nonces are only unique per partner) with TTL = the replay tolerance window.
+        //    partner + nonce with TTL = full +/- tolerance window + 1s (601s).
         String nonceKey = request.partnerId() + ":" + nonce;
-        if (!nonceStore.recordNonceIfAbsent(nonceKey, Duration.ofSeconds(DEFAULT_TOLERANCE_SECONDS))) {
+        if (!nonceStore.recordNonceIfAbsent(nonceKey, Duration.ofSeconds(NONCE_TTL_SECONDS))) {
             return WebhookSignatureVerificationResult.invalid(request.partnerId(), "Replay attack detected: duplicate nonce");
         }
 
@@ -111,7 +129,7 @@ public class HmacWebhookVerifier {
     }
 
     private boolean constantTimeVerify(String secret, String canonical, String providedSignatureHex) {
-        if (secret == null || canonical == null || providedSignatureHex == null) return false;
+        if (secret == null || secret.isBlank() || canonical == null || providedSignatureHex == null) return false;
         String expected = HmacVerification.computeHex(secret, canonical);
         // Comparing hex strings may return early on a length mismatch (leaks length only, not content);
         // negligible for fixed-width SHA-256 hex, so left as-is.

@@ -1,6 +1,8 @@
 package com.elepay.common;
 
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -11,7 +13,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
@@ -72,7 +77,13 @@ public class VerificationDelivery {
             @Value("${elepay.notifications.email.api-url:}") String emailApiUrl,
             @Value("${elepay.notifications.email.api-key:}") String emailApiKey,
             @Value("${elepay.notifications.email.from:no-reply@elepay.gh}") String emailFrom) {
-        this.http = restClientBuilder.build();
+        HttpClient jdkClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(jdkClient);
+        requestFactory.setReadTimeout(Duration.ofSeconds(10));
+        this.http = restClientBuilder.requestFactory(requestFactory).build();
         this.env = env;
         this.smsProvider = normalize(smsProvider, "log");
         this.smsApiUrl = smsApiUrl == null ? "" : smsApiUrl.trim();
@@ -130,6 +141,27 @@ public class VerificationDelivery {
             log.info("Verification email dispatched (non-prod log mode) to {} for {}", maskEmail(email), purposeLabel);
             return;
         }
+        runOutsideTransaction("email", () -> dispatchEmailHttp(email, subject, purposeLabel, body, code));
+    }
+
+    private void runOutsideTransaction(String channel, Runnable action) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        action.run();
+                    } catch (RuntimeException e) {
+                        log.error("Post-commit {} verification delivery failed: {}", channel, e.getMessage());
+                    }
+                }
+            });
+        } else {
+            action.run();
+        }
+    }
+
+    private void dispatchEmailHttp(String email, String subject, String purposeLabel, String body, String code) {
         switch (emailProvider) {
             case "resend" -> {
                 String url = emailApiUrl.isBlank() ? "https://api.resend.com/emails" : emailApiUrl;
@@ -186,6 +218,10 @@ public class VerificationDelivery {
             log.info("Verification SMS dispatched (non-prod log mode) to {} for {}", maskPhone(phone), purposeLabel);
             return;
         }
+        runOutsideTransaction("sms", () -> dispatchSmsHttp(phone, purposeLabel, text));
+    }
+
+    private void dispatchSmsHttp(String phone, String purposeLabel, String text) {
         switch (smsProvider) {
             case "arkesel" -> {
                 String url = smsApiUrl.isBlank() ? "https://sms.arkesel.com/api/v2/sms/send" : smsApiUrl;

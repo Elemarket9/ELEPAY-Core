@@ -1,5 +1,6 @@
 package com.elepay.rails;
 
+import com.elepay.common.CallbackAuthenticity;
 import com.elepay.ingestion.IngestionHandler;
 import com.elepay.ingestion.IngestionRecord;
 import java.util.Map;
@@ -32,7 +33,8 @@ class AsyncRailCallbackHandler implements IngestionHandler {
         RailCallbacks.QueuedCallbackPayload payload =
                 json.readValue(record.payloadJson(), RailCallbacks.QueuedCallbackPayload.class);
         Map<String, String> headers = payload.headers() != null ? payload.headers() : Map.of();
-        RailTransactions.CallbackOutcome outcome = rails.handleCallback(payload.rail(), headers, payload.body());
+        RailTransactions.CallbackOutcome outcome = CallbackAuthenticity.runForAlreadyVerifiedAsyncCallback(
+                () -> rails.handleCallback(payload.rail(), headers, payload.body()));
         return json.writeValueAsString(Map.of(
                 "status", outcome.duplicate() ? "duplicate" : "accepted",
                 "outcome", outcome.outcome()));

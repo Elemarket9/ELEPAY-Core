@@ -34,6 +34,13 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
                 || roles.contains(FINANCE_OPS)
                 || roles.contains(RISK_COMPLIANCE);
     }
+    /** Privileged operational roles (excludes frontline support_agent and onboarding_officer). */
+    public boolean isPrivilegedOps() {
+        return roles.contains(OPS)
+                || roles.contains(OPS_ADMIN)
+                || roles.contains(FINANCE_OPS)
+                || roles.contains(RISK_COMPLIANCE);
+    }
     public boolean isOpsAdmin() { return roles.contains(OPS_ADMIN); }
     public boolean canManageSupport() { return roles.contains(SUPPORT_AGENT) || roles.contains(RISK_COMPLIANCE) || roles.contains(OPS) || isOpsAdmin(); }
     public boolean canOnboardMerchants() { return roles.contains(ONBOARDING_OFFICER) || roles.contains(RISK_COMPLIANCE) || roles.contains(OPS) || isOpsAdmin(); }
@@ -101,6 +108,10 @@ public record Actor(String subject, Set<String> roles, UUID apiKeyMerchant, Set<
 
     public void requireOps() {
         if (!isOps()) throw ApiException.forbidden("Operations role required");
+    }
+
+    public void requirePrivilegedOps() {
+        if (!isPrivilegedOps()) throw ApiException.forbidden("Privileged operations role required");
     }
 
     public void requireOpsAdmin() {

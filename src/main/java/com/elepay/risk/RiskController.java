@@ -16,7 +16,7 @@ public class RiskController {
 
     private static Actor ops() {
         Actor actor = Actor.current();
-        actor.requireOps();
+        actor.requireFreezeRisk();
         return actor;
     }
 

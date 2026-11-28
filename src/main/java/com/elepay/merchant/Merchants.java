@@ -314,7 +314,10 @@ class Merchants {
     @Transactional
     public MemberView putMember(@PathVariable UUID id, @PathVariable String subject, @Valid @RequestBody Member request) {
         var a = access.require(id, MANAGE);
-        if (request.role().equals("owner") && !a.role().equals("owner")) throw ApiException.forbidden("Only an owner can add owners");
+        boolean callerCanManageOwner = "owner".equals(a.role()) || a.actor().isOpsAdmin();
+        if ("owner".equals(request.role()) && !callerCanManageOwner) {
+            throw ApiException.forbidden("Only an owner or platform admin can add owners");
+        }
         if ((request.role().equals("cashier") || request.role().equals("waiter")) == (request.branchId() == null)) {
             throw ApiException.badRequest("branch_required", "Cashiers and waiters need a branch; other roles cannot be branch-scoped");
         }
@@ -322,6 +325,26 @@ class Merchants {
             throw ApiException.badRequest("unknown_branch", "Branch not found");
         }
         if (subject.equals(a.actor().subject())) throw ApiException.badRequest("self_change", "You cannot change your own role");
+
+        db.sql("SELECT id FROM merchant WHERE id = :m FOR UPDATE")
+                .param("m", id).query(UUID.class).optional()
+                .orElseThrow(() -> ApiException.notFound("Merchant not found"));
+        String existingRole = db.sql("SELECT role FROM merchant_member WHERE merchant_id = :m AND subject = :s FOR UPDATE")
+                .param("m", id).param("s", subject)
+                .query(String.class).optional().orElse(null);
+        if ("owner".equals(existingRole)) {
+            if (!callerCanManageOwner) {
+                throw ApiException.forbidden("Only an owner or platform admin can modify an owner's role");
+            }
+            if (!"owner".equals(request.role())) {
+                Long ownerCount = db.sql("SELECT COUNT(*) FROM merchant_member WHERE merchant_id = :m AND role = 'owner'")
+                        .param("m", id).query(Long.class).single();
+                if (ownerCount != null && ownerCount <= 1) {
+                    throw ApiException.conflict("last_owner", "Cannot demote the last owner of a merchant");
+                }
+            }
+        }
+
         db.sql("""
                 INSERT INTO merchant_member (merchant_id, subject, role, branch_id) VALUES (:m, :s, :r, :b)
                 ON CONFLICT (merchant_id, subject) DO UPDATE SET role = EXCLUDED.role, branch_id = EXCLUDED.branch_id""")
@@ -336,8 +359,28 @@ class Merchants {
     public Map<String, String> removeMember(@PathVariable UUID id, @PathVariable String subject) {
         var a = access.require(id, MANAGE);
         if (subject.equals(a.actor().subject())) throw ApiException.badRequest("self_change", "You cannot remove yourself");
-        db.sql("DELETE FROM merchant_member WHERE merchant_id = :m AND subject = :s AND role <> 'owner'")
-                .param("m", id).param("s", subject).update();
+        db.sql("SELECT id FROM merchant WHERE id = :m FOR UPDATE")
+                .param("m", id).query(UUID.class).optional()
+                .orElseThrow(() -> ApiException.notFound("Merchant not found"));
+        String existingRole = db.sql("SELECT role FROM merchant_member WHERE merchant_id = :m AND subject = :s FOR UPDATE")
+                .param("m", id).param("s", subject)
+                .query(String.class).optional().orElse(null);
+        if ("owner".equals(existingRole)) {
+            boolean callerCanManageOwner = "owner".equals(a.role()) || a.actor().isOpsAdmin();
+            if (!callerCanManageOwner) {
+                throw ApiException.forbidden("Only an owner or platform admin can remove an owner");
+            }
+            Long ownerCount = db.sql("SELECT COUNT(*) FROM merchant_member WHERE merchant_id = :m AND role = 'owner'")
+                    .param("m", id).query(Long.class).single();
+            if (ownerCount != null && ownerCount <= 1) {
+                throw ApiException.conflict("last_owner", "Cannot remove the last owner of a merchant");
+            }
+            db.sql("DELETE FROM merchant_member WHERE merchant_id = :m AND subject = :s")
+                    .param("m", id).param("s", subject).update();
+        } else {
+            db.sql("DELETE FROM merchant_member WHERE merchant_id = :m AND subject = :s AND role <> 'owner'")
+                    .param("m", id).param("s", subject).update();
+        }
         audit.record(a.actor().subject(), "merchant.member_removed", "merchant:" + id, Map.of("member", subject));
         return Map.of("status", "removed");
     }

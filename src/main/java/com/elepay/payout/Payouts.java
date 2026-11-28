@@ -9,6 +9,7 @@ import com.elepay.ledger.Ledger.Leg;
 import com.elepay.operations.EmtechCapture;
 import com.elepay.outbox.Outbox;
 import com.elepay.rails.NameVerifications;
+import com.elepay.rails.PayoutMerchantResolver;
 import com.elepay.rails.RailEvents;
 import com.elepay.rails.RailTransactions;
 import java.time.OffsetDateTime;
@@ -30,7 +31,7 @@ import tools.jackson.databind.ObjectMapper;
  * be created once, so a recipient is never paid twice for the same item.
  */
 @Service
-public class Payouts {
+public class Payouts implements PayoutMerchantResolver {
     private static final Set<String> MOMO = Set.of("mtn", "telecel", "airteltigo");
     public static final int MAX_BATCH = 500;
 
@@ -46,6 +47,7 @@ public class Payouts {
     private final PayoutVelocityService velocityService;
     private com.elepay.common.SanctionsScreener sanctionsScreening;
     private com.elepay.risk.RiskEngineService riskEngine;
+    private com.elepay.merchant.MerchantAccess merchantAccess;
 
     private final org.springframework.context.ApplicationEventPublisher events;
     private final EmtechCapture regulatory;
@@ -58,6 +60,11 @@ public class Payouts {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setRiskEngine(com.elepay.risk.RiskEngineService riskEngine) {
         this.riskEngine = riskEngine;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setMerchantAccess(com.elepay.merchant.MerchantAccess merchantAccess) {
+        this.merchantAccess = merchantAccess;
     }
 
     Payouts(JdbcClient db, Ledger ledger, RailTransactions rails, NameVerifications verifications, Outbox outbox,
@@ -140,6 +147,7 @@ public class Payouts {
             }
             total = Math.addExact(total, item.amount());
         }
+        requireActiveMerchant(ownerType, owner);
         if (killSwitchService != null) {
             killSwitchService.requirePayoutsAllowed("merchant".equalsIgnoreCase(ownerType) ? owner : null);
         }
@@ -184,9 +192,9 @@ public class Payouts {
         }
         String verification;
         String verifiedName = null;
-        if (item.confirmedName() != null) {
+        if (item.confirmedName() != null && !item.confirmedName().isBlank()) {
             verification = "confirmed";
-            verifiedName = item.confirmedName();
+            verifiedName = item.confirmedName().trim();
         } else {
             var v = verifications.verify(d.type(), d.network(), d.accountNumber());
             verification = switch (v.outcome()) {
@@ -195,6 +203,11 @@ public class Payouts {
                 case UNAVAILABLE -> "unverified";
             };
             verifiedName = v.name();
+        }
+        if (sanctionsScreening != null && verifiedName != null && !verifiedName.isBlank()
+                && sanctionsScreening.isSanctionedName(verifiedName)) {
+            throw ApiException.conflict("sanctions_match",
+                    "Verified payout beneficiary failed sanctions screening: " + verifiedName);
         }
         UUID id = UUID.randomUUID();
         String reference = References.next("PO");
@@ -297,6 +310,7 @@ public class Payouts {
         long already = db.sql("SELECT count(*) FROM payout WHERE retry_of = :id").param("id", original[0])
                 .query(Long.class).single();
         if (already > 0) throw ApiException.conflict("already_retried", "This payout was already retried");
+        requireActiveMerchant(ownerType, owner);
         if (killSwitchService != null) {
             killSwitchService.requirePayoutsAllowed("merchant".equalsIgnoreCase(ownerType) ? owner : null);
         }
@@ -314,6 +328,16 @@ public class Payouts {
         }
         audit.record(actor, "payout.retried", ownerType + ":" + owner, Map.of("original", reference));
         return batch(batchId);
+    }
+
+    private void requireActiveMerchant(String ownerType, UUID owner) {
+        if ("merchant".equalsIgnoreCase(ownerType) && merchantAccess != null) {
+            var merchantOpt = merchantAccess.find(owner);
+            if (merchantOpt.isPresent() && !"active".equalsIgnoreCase(merchantOpt.get().status())) {
+                throw ApiException.conflict("merchant_not_active",
+                        "The merchant account is " + merchantOpt.get().status());
+            }
+        }
     }
 
     // ---- rail outcomes ----------------------------------------------------------------------
@@ -446,6 +470,7 @@ public class Payouts {
                 .param("id", payoutId).query(String.class).optional();
     }
 
+    @Override
     public Optional<UUID> findMerchantOwner(UUID payoutId) {
         if (payoutId == null) return Optional.empty();
         return db.sql("SELECT owner_id FROM payout WHERE id = :id AND owner_type = 'merchant'")

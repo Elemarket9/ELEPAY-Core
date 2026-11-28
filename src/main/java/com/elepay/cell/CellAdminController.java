@@ -27,11 +27,7 @@ public class CellAdminController {
 
     private static final Set<String> OPS_AUTHORITIES = Set.of(
             "ROLE_ops",
-            "ROLE_ops_admin",
-            "ROLE_support_agent",
-            "ROLE_onboarding_officer",
-            "ROLE_finance_ops",
-            "ROLE_risk_compliance"
+            "ROLE_ops_admin"
     );
 
     private final CellRegistryService cellRegistryService;

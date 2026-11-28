@@ -16,10 +16,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class PosOfflineSyncService {
     private final JdbcClient db;
     private final PosOrderService orderService;
+    private final PosVoidDiscountService voidDiscountService;
 
-    public PosOfflineSyncService(JdbcClient db, PosOrderService orderService) {
+    public PosOfflineSyncService(JdbcClient db, PosOrderService orderService, PosVoidDiscountService voidDiscountService) {
         this.db = db;
         this.orderService = orderService;
+        this.voidDiscountService = voidDiscountService;
     }
 
     public record OfflineSyncLog(
@@ -49,8 +51,32 @@ public class PosOfflineSyncService {
             long tipPesewas,
             long totalPesewas,
             List<OfflinePayment> payments,
-            String conflictStrategy // ACCEPT_LOCAL_FORCE, SERVER_ADJUSTED, REJECT_FLAGGED
-    ) {}
+            String conflictStrategy, // ACCEPT_LOCAL_FORCE, SERVER_ADJUSTED, REJECT_FLAGGED
+            String discountReason,
+            String managerBadgeNumber,
+            String managerPin
+    ) {
+        public OfflineOrderPayload(
+                String offlineTxId,
+                String idempotencyKey,
+                UUID merchantId,
+                UUID branchId,
+                UUID terminalId,
+                UUID cashierId,
+                UUID customerId,
+                List<PosOrderService.OrderItemInput> items,
+                long discountPesewas,
+                long taxPesewas,
+                long tipPesewas,
+                long totalPesewas,
+                List<OfflinePayment> payments,
+                String conflictStrategy
+        ) {
+            this(offlineTxId, idempotencyKey, merchantId, branchId, terminalId, cashierId, customerId,
+                    items, discountPesewas, taxPesewas, tipPesewas, totalPesewas, payments, conflictStrategy,
+                    null, null, null);
+        }
+    }
 
     public record OfflinePayment(
             TenderType tenderType,
@@ -202,7 +228,7 @@ public class PosOfflineSyncService {
             }
         }
 
-        // 3. Create Server Order
+        // 3. Create Server Order & enforce manager PIN discount controls
         PosOrderService.PosOrder order = orderService.createOrder(
                 payload.merchantId(),
                 payload.branchId(),
@@ -216,14 +242,42 @@ public class PosOfflineSyncService {
                 "OFFLINE_SYNC"
         );
 
-        // 4. Apply payments
+        boolean hasDiscount = payload.discountPesewas() > 0
+                || payload.items().stream().anyMatch(i -> i.discountPesewas() > 0);
+        if (hasDiscount) {
+            String actor = "offline-sync:" + payload.terminalId();
+            voidDiscountService.validateAndLogInitialDiscounts(
+                    order,
+                    payload.discountPesewas(),
+                    payload.items(),
+                    payload.discountReason(),
+                    payload.managerBadgeNumber(),
+                    payload.managerPin(),
+                    actor
+            );
+        }
+
+        // 4. Apply payments (offline sync is strictly CASH-only; external tenders cannot fabricate OFFLINE: refs)
         if (payload.payments() != null) {
             for (OfflinePayment payment : payload.payments()) {
+                if (payment == null || payment.tenderType() == null) {
+                    throw ApiException.badRequest("invalid_payment", "Offline payment tenderType is required");
+                }
+                if (payment.amountPesewas() <= 0) {
+                    throw ApiException.badRequest("invalid_amount", "Offline payment amount must be positive");
+                }
+                if (payment.tenderType() != TenderType.CASH) {
+                    throw ApiException.badRequest("offline_cash_only",
+                            "Only CASH tenders are supported in offline sync; external and digital tenders require online verification");
+                }
+                String ref = (payment.reference() == null || payment.reference().isBlank())
+                        ? "OFFLINE:" + payload.offlineTxId()
+                        : payment.reference().trim();
                 orderService.addTenderPayment(
                         order.id(),
                         payment.tenderType(),
                         payment.amountPesewas(),
-                        payment.reference() == null ? "OFFLINE:" + payload.offlineTxId() : payment.reference()
+                        ref
                 );
             }
         }

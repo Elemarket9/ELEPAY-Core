@@ -35,12 +35,17 @@ public class PosReceiptService {
 
     public static String generateReceiptNumber() {
         String date = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
-        int rand = ThreadLocalRandom.current().nextInt(100000, 999999);
+        String rand = UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
         return "REC-" + date + "-" + rand;
     }
 
     @Transactional
     public PosReceipt generateReceipt(UUID orderId) {
+        db.sql("SELECT id FROM pos_order WHERE id = :id FOR UPDATE")
+                .param("id", orderId)
+                .query(UUID.class)
+                .optional()
+                .orElseThrow();
         PosOrderService.PosOrder order = orderService.getOrder(orderId).orElseThrow();
         if (!"PAID".equals(order.status())) throw com.elepay.common.ApiException.conflict("order_unpaid", "Payment is not complete");
         Optional<PosReceipt> existing = findByOrderId(orderId);
@@ -48,7 +53,9 @@ public class PosReceiptService {
             return existing.get();
         }
         List<PosOrderService.PosOrderItem> items = orderService.listOrderItems(orderId);
-        List<PosOrderService.TenderPayment> payments = orderService.listTenderPayments(orderId);
+        List<PosOrderService.TenderPayment> payments = orderService.listTenderPayments(orderId).stream()
+                .filter(p -> "SUCCESS".equals(p.status()))
+                .toList();
 
         String receiptNumber = generateReceiptNumber();
         UUID receiptId = UUID.randomUUID();
@@ -92,7 +99,8 @@ public class PosReceiptService {
 
         sb.append("PAYMENTS:\n");
         for (PosOrderService.TenderPayment p : payments) {
-            sb.append(String.format(" - %-10s %10s GHS (%s)\n", p.tenderType(), formatMinorUnits(p.amountPesewas()), p.reference() == null ? "OK" : p.reference()));
+            String label = formatTenderLabel(p.tenderType());
+            sb.append(String.format(" - %-13s %10s GHS (%s)\n", label, formatMinorUnits(p.amountPesewas()), p.reference() == null ? "OK" : p.reference()));
         }
         if (order.changePesewas() > 0) {
             sb.append(String.format("%-25s %12s GHS\n", "CHANGE GIVEN:", formatMinorUnits(order.changePesewas())));
@@ -150,6 +158,15 @@ public class PosReceiptService {
             .param("orderId", orderId)
             .query(PosReceipt.class)
             .optional();
+    }
+
+    private static String formatTenderLabel(String tenderTypeName) {
+        if (tenderTypeName == null) return "Payment";
+        try {
+            return TenderType.valueOf(tenderTypeName).displayLabel();
+        } catch (IllegalArgumentException e) {
+            return tenderTypeName;
+        }
     }
 
     private static String formatMinorUnits(long pesewas) {

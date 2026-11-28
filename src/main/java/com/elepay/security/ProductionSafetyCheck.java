@@ -131,9 +131,11 @@ public class ProductionSafetyCheck {
         if (!env.getProperty("elepay.wallet.topup-own-msisdn-only", Boolean.class, true)) {
             p.add("elepay.wallet.topup-own-msisdn-only must be true");
         }
-        String bdk = env.getProperty("elepay.pos.dukpt.bdk-hex", "");
-        if (bdk.isBlank() || bdk.equalsIgnoreCase("0123456789ABCDEFFEDCBA9876543210")) {
-            p.add("elepay.pos.dukpt.bdk-hex must be a KMS or HSM key and must not be the public ANSI test key");
+        if (env.getProperty("elepay.modules.merchanttools.enabled", Boolean.class, true)) {
+            String bdk = env.getProperty("elepay.pos.dukpt.bdk-hex", "");
+            if (bdk.isBlank() || bdk.equalsIgnoreCase("0123456789ABCDEFFEDCBA9876543210")) {
+                p.add("elepay.pos.dukpt.bdk-hex must be a KMS or HSM key and must not be the public ANSI test key");
+            }
         }
         if (!env.getProperty("spring.flyway.clean-disabled", Boolean.class, true)) {
             p.add("spring.flyway.clean-disabled must be true in production");

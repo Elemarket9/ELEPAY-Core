@@ -184,9 +184,18 @@ public class GhQrDynamicService {
 
         Long amountPesewas = null;
         if (amtStr != null) {
+            if (!amtStr.matches("^\\d{1,12}(\\.\\d{1,2})?$")) {
+                return new QrValidationResult(false, null, null, null, null, "Invalid transaction amount format");
+            }
             try {
-                amountPesewas = new BigDecimal(amtStr).multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP).longValue();
-            } catch (Exception ignored) {}
+                long parsed = new BigDecimal(amtStr).movePointRight(2).longValueExact();
+                if (parsed <= 0) {
+                    return new QrValidationResult(false, null, null, null, null, "Transaction amount must be positive");
+                }
+                amountPesewas = parsed;
+            } catch (ArithmeticException | NumberFormatException e) {
+                return new QrValidationResult(false, null, null, null, null, "Invalid transaction amount");
+            }
         }
 
         return new QrValidationResult(true, ref, amountPesewas, curr, name, null);

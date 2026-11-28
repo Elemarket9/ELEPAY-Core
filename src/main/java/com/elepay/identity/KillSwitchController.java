@@ -171,6 +171,10 @@ public class KillSwitchController {
             // Re-enabling a killed module is an ops_admin action regardless of dual-control mode,
             // matching global/merchant unfreeze.
             actor.requireOpsAdmin();
+            if (!killSwitchService.isModuleLoadedForKillSwitch(moduleKey)) {
+                throw ApiException.conflict("module_not_loaded",
+                        "Module '" + moduleKey + "' is not loaded in this deployment's application context and cannot be enabled at runtime");
+            }
             String disabler = killSwitchService.moduleDisabledBy(moduleKey);
             if (disabler != null && disabler.equals(actor.subject())) {
                 throw new ApiException(org.springframework.http.HttpStatus.FORBIDDEN,

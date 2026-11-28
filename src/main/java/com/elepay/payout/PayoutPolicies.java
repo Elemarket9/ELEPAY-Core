@@ -11,6 +11,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -50,6 +51,7 @@ public class PayoutPolicies {
         this.audit = audit;
         this.ops = ops;
         this.tx = new TransactionTemplate(tm);
+        this.tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.autoEnabled = autoEnabled;
     }
 
@@ -261,6 +263,7 @@ public class PayoutPolicies {
                 });
             } catch (ApiException e) {
                 if (e.code().equals("insufficient_funds")
+                        || e.code().equals("merchant_not_active")
                         || e.code().equals("GLOBAL_KILL_SWITCH_ACTIVE")
                         || e.code().equals("MERCHANT_KILL_SWITCH_ACTIVE")
                         || e.code().equals("payout_velocity_ceiling_exceeded")) {

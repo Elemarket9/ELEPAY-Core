@@ -77,6 +77,7 @@ class RateLimitFilter extends OncePerRequestFilter {
                 new Rule("POST", "/v1/auth/", "auth", TokenBucketRateLimiter.perMinute(20.0 * m, 20.0 * m, redis)),
                 new Rule("POST", "/v1/rails/card/tokens", "card-tokenize", TokenBucketRateLimiter.perMinute(10.0 * m, 10.0 * m, redis)),
                 new Rule(null, "/v1/wallet/recipients/lookup", "recipient-lookup", TokenBucketRateLimiter.perMinute(20.0 * m, 20.0 * m, redis)),
+                new Rule("PUT", "/v1/wallet/ussd-pin", "ussd-pin", TokenBucketRateLimiter.perMinute(5.0 * m, 5.0 * m, redis)),
                 new Rule(null, "/v1/public/", "public", TokenBucketRateLimiter.perMinute(120.0 * m, 120.0 * m, redis)),
                 new Rule("POST", "/v1/ussd/", "ussd", TokenBucketRateLimiter.perMinute(300.0 * m, 300.0 * m, redis)));
         // Capacity == per-minute allowance * burstMultiplier, so a client may burst up to its configured

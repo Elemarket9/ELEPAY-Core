@@ -101,6 +101,11 @@ public class EnterpriseTreasuryService {
                 )
         ).describedAs("Enterprise prefunding deposit: " + description));
 
+        if (posted.replay()) {
+            return findPrefundingEntryByTx(enterpriseId, posted.transactionId(), prefundingAcc.id(), ref,
+                    PrefundingEntryType.DEPOSIT, amountPesewas, prefundingAcc.balancePesewas(), cur, description);
+        }
+
         // Update database balance atomically
         db.sql("""
                 UPDATE enterprise_treasury_account
@@ -233,6 +238,12 @@ public class EnterpriseTreasuryService {
                 )
         ).describedAs("Receivable settled for order " + orderReference));
 
+        if (posted.replay()) {
+            return findPrefundingEntryByTx(enterpriseId, posted.transactionId(), recvAcc.id(), ref,
+                    PrefundingEntryType.RECEIVABLE_SETTLED, amountPesewas, recvAcc.balancePesewas(), cur,
+                    "Receivable settled for order " + orderReference);
+        }
+
         db.sql("""
                 UPDATE enterprise_treasury_account
                 SET balance_pesewas = balance_pesewas - :amt, updated_at = now()
@@ -328,7 +339,8 @@ public class EnterpriseTreasuryService {
                     shortfall,
                     shortfallId
             );
-        } else if (availableFunding < (requiredPesewas * 12) / 10) { // < 120% buffer
+        } else if (java.math.BigInteger.valueOf(availableFunding).compareTo(
+                java.math.BigInteger.valueOf(requiredPesewas).multiply(java.math.BigInteger.valueOf(12)).divide(java.math.BigInteger.TEN)) < 0) { // < 120% buffer
             return new ShortfallEvaluation(
                     ShortfallStatus.WARNING,
                     ShortfallAction.ALERT_DISPATCHED,
@@ -381,22 +393,73 @@ public class EnterpriseTreasuryService {
      */
     @Transactional
     public void releaseReservedFunding(UUID enterpriseId, long amountPesewas, String currency, boolean consumed) {
+        if (amountPesewas <= 0) {
+            throw ApiException.badRequest("invalid_amount", "Release amount must be positive");
+        }
         String cur = currency != null ? currency.toUpperCase(Locale.ROOT) : GHS;
         EnterpriseTreasuryAccount prefunding = getTreasuryAccountForUpdate(enterpriseId, TreasuryAccountType.PREFUNDING, cur);
 
+        if (prefunding.reservedPesewas() < amountPesewas) {
+            throw ApiException.conflict("insufficient_reserved_funding",
+                    "Cannot release " + amountPesewas + " pesewas when only " + prefunding.reservedPesewas() + " pesewas are reserved");
+        }
         long balanceDeduction = consumed ? amountPesewas : 0L;
+        if (consumed && prefunding.balancePesewas() < balanceDeduction) {
+            throw ApiException.conflict("insufficient_prefunding_balance",
+                    "Cannot consume " + balanceDeduction + " pesewas when balance is " + prefunding.balancePesewas());
+        }
 
-        db.sql("""
+        int updated = db.sql("""
                 UPDATE enterprise_treasury_account
-                SET reserved_pesewas = GREATEST(0, reserved_pesewas - :resAmt),
-                    balance_pesewas = GREATEST(0, balance_pesewas - :balAmt),
+                SET reserved_pesewas = reserved_pesewas - :resAmt,
+                    balance_pesewas = balance_pesewas - :balAmt,
                     updated_at = now()
                 WHERE id = :id
+                  AND reserved_pesewas >= :resAmt
+                  AND balance_pesewas >= :balAmt
                 """)
                 .param("resAmt", amountPesewas)
                 .param("balAmt", balanceDeduction)
                 .param("id", prefunding.id())
                 .update();
+        if (updated != 1) {
+            throw ApiException.conflict("insufficient_reserved_funding", "Reserved funding release failed concurrency check");
+        }
+    }
+
+    private PrefundingLedgerEntry findPrefundingEntryByTx(
+            UUID enterpriseId, UUID ledgerTxId, UUID accId, String ref,
+            PrefundingEntryType entryType, long amountPesewas, long fallbackBalanceAfter, String cur, String description) {
+        return db.sql("""
+                SELECT id, enterprise_id, treasury_account_id, transaction_reference,
+                       entry_type, amount_pesewas, balance_after_pesewas, currency,
+                       ledger_tx_id, description, created_at
+                FROM enterprise_prefunding_ledger
+                WHERE enterprise_id = :enterpriseId AND ledger_tx_id = :txId
+                ORDER BY created_at ASC
+                LIMIT 1
+                """)
+                .param("enterpriseId", enterpriseId)
+                .param("txId", ledgerTxId)
+                .query((rs, i) -> new PrefundingLedgerEntry(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("enterprise_id", UUID.class),
+                        rs.getObject("treasury_account_id", UUID.class),
+                        rs.getString("transaction_reference"),
+                        PrefundingEntryType.valueOf(rs.getString("entry_type")),
+                        rs.getLong("amount_pesewas"),
+                        rs.getLong("balance_after_pesewas"),
+                        rs.getString("currency"),
+                        rs.getObject("ledger_tx_id", UUID.class),
+                        rs.getString("description"),
+                        rs.getObject("created_at", OffsetDateTime.class)
+                ))
+                .optional()
+                .orElseGet(() -> new PrefundingLedgerEntry(
+                        UUID.randomUUID(), enterpriseId, accId, ref,
+                        entryType, amountPesewas, fallbackBalanceAfter, cur,
+                        ledgerTxId, description, OffsetDateTime.now()
+                ));
     }
 
     private EnterpriseTreasuryAccount getTreasuryAccountForUpdate(UUID enterpriseId, TreasuryAccountType type, String currency) {

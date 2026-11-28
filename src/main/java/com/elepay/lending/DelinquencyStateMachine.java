@@ -33,6 +33,16 @@ public class DelinquencyStateMachine {
 
     @Transactional
     public DelinquencyAssessment evaluateContract(UUID contractId, LocalDate asOfDate) {
+        if (asOfDate == null) {
+            throw new IllegalArgumentException("asOfDate is required");
+        }
+        // Lock contract row to serialize concurrent delinquency evaluations
+        db.sql("SELECT id FROM loan_contract WHERE id = ? FOR UPDATE")
+                .param(contractId)
+                .query(UUID.class)
+                .optional()
+                .orElseThrow(() -> new IllegalArgumentException("Contract not found: " + contractId));
+
         var contract = contractService.getContract(contractId)
                 .orElseThrow(() -> new IllegalArgumentException("Contract not found: " + contractId));
 
@@ -57,7 +67,7 @@ public class DelinquencyStateMachine {
                 }
                 long unpaidPrincipal = inst.principalDuePesewas() - inst.principalPaidPesewas();
                 if (unpaidPrincipal > 0) {
-                    overduePrincipal += unpaidPrincipal;
+                    overduePrincipal = Math.addExact(overduePrincipal, unpaidPrincipal);
                 }
             }
         }
@@ -73,32 +83,46 @@ public class DelinquencyStateMachine {
             newState = "DEFAULT";
         }
 
-        // Apply penalty fee if overdue and penalty rate > 0
+        // Apply penalty fee idempotently once per (contractId, asOfDate)
         long accruedPenalty = 0L;
         if (maxDpd > 7 && overduePrincipal > 0) {
-            var product = productService.getProductById(contract.productId()).orElseThrow();
-            if (product.penaltyRateBps() > 0) {
-                accruedPenalty = BigInteger.valueOf(overduePrincipal)
-                        .multiply(BigInteger.valueOf(product.penaltyRateBps()))
-                        .multiply(BigInteger.valueOf(maxDpd))
-                        .divide(BigInteger.valueOf(3650000L)).longValueExact();
-                if (accruedPenalty > 0) {
-                    long newPenalties = contract.outstandingPenaltiesPesewas() + accruedPenalty;
-                    db.sql("""
-                        UPDATE loan_contract
-                        SET outstanding_penalties_pesewas = ?, updated_at = now()
-                        WHERE id = ?
-                    """).params(newPenalties, contractId).update();
+            String penaltyRef = "TXN-PEN-" + contractId.toString().substring(0, 8) + "-" + asOfDate;
+            boolean alreadyAccrued = Boolean.TRUE.equals(db.sql("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM loan_transaction
+                        WHERE contract_id = ? AND transaction_type = 'PENALTY_ACCRUAL' AND reference = ?
+                    )
+                    """)
+                    .params(contractId, penaltyRef)
+                    .query(Boolean.class)
+                    .single());
+            if (!alreadyAccrued) {
+                var product = productService.getProductById(contract.productId()).orElseThrow();
+                if (product.penaltyRateBps() > 0) {
+                    int priorDays = Math.max(0, contract.daysPastDue());
+                    int incrementalDays = priorDays > 7 ? Math.max(1, maxDpd - priorDays) : maxDpd;
+                    accruedPenalty = BigInteger.valueOf(overduePrincipal)
+                            .multiply(BigInteger.valueOf(product.penaltyRateBps()))
+                            .multiply(BigInteger.valueOf(incrementalDays))
+                            .divide(BigInteger.valueOf(3650000L)).longValueExact();
+                    if (accruedPenalty > 0) {
+                        long newPenalties = Math.addExact(contract.outstandingPenaltiesPesewas(), accruedPenalty);
+                        db.sql("""
+                            UPDATE loan_contract
+                            SET outstanding_penalties_pesewas = ?, updated_at = now()
+                            WHERE id = ?
+                        """).params(newPenalties, contractId).update();
 
-                    UUID txnId = UUID.randomUUID();
-                    db.sql("""
-                        INSERT INTO loan_transaction
-                        (id, contract_id, transaction_type, amount_pesewas, penalty_component_pesewas, reference, notes)
-                        VALUES (?, ?, 'PENALTY_ACCRUAL', ?, ?, ?, ?)
-                    """).params(txnId, contractId, accruedPenalty, accruedPenalty,
-                            "TXN-PEN-" + txnId.toString().substring(0, 8),
-                            "Penalty accrued for " + maxDpd + " DPD on overdue principal " + overduePrincipal)
-                    .update();
+                        UUID txnId = UUID.randomUUID();
+                        db.sql("""
+                            INSERT INTO loan_transaction
+                            (id, contract_id, transaction_type, amount_pesewas, penalty_component_pesewas, reference, notes)
+                            VALUES (?, ?, 'PENALTY_ACCRUAL', ?, ?, ?, ?)
+                        """).params(txnId, contractId, accruedPenalty, accruedPenalty,
+                                penaltyRef,
+                                "Penalty accrued for " + incrementalDays + " incremental DPD (total " + maxDpd + ") on overdue principal " + overduePrincipal)
+                        .update();
+                    }
                 }
             }
         }

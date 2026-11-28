@@ -7,9 +7,14 @@ import org.springframework.stereotype.Component;
 @Component
 class CustodianApprovalHandler implements ApprovedActionHandler {
     private final CustodianBankBackstopService custodian;
+    private final OperatingAccountApprovalHandler operatingAccountHandler;
 
-    CustodianApprovalHandler(CustodianBankBackstopService custodian) {
+    CustodianApprovalHandler(
+            CustodianBankBackstopService custodian,
+            OperatingAccountApprovalHandler operatingAccountHandler
+    ) {
         this.custodian = custodian;
+        this.operatingAccountHandler = operatingAccountHandler;
     }
 
     @Override
@@ -20,6 +25,10 @@ class CustodianApprovalHandler implements ApprovedActionHandler {
     @Override
     public void execute(MakerCheckerService.Proposal proposal) {
         var payload = proposal.payload();
+        if (payload != null && "REGISTER_OPERATING_ACCOUNT".equals(String.valueOf(payload.get("operation")))) {
+            operatingAccountHandler.execute(proposal);
+            return;
+        }
         custodian.updateConfig(num(payload.get("dailyOutflowCapPesewas")), num(payload.get("perPayoutCapPesewas")),
                 num(payload.get("minReserveFloorPesewas")), num(payload.get("lastReconciledBankBalancePesewas")),
                 bool(payload.get("outflowFrozen")), proposal.reviewedBy());

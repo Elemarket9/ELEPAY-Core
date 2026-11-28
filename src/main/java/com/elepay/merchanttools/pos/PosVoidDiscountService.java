@@ -90,6 +90,7 @@ public class PosVoidDiscountService {
             UUID id,
             String tenderType,
             long amountPesewas,
+            String reference,
             String status
     ) {}
 
@@ -302,13 +303,14 @@ public class PosVoidDiscountService {
                 .list();
 
         boolean isPartial = "PARTIAL".equals(order.status()) || order.paidPesewas() > 0;
+        List<String> manualExternalReversals = new java.util.ArrayList<>();
         if (isPartial) {
             if (!refundPayments) {
                 throw ApiException.conflict("partial_order_requires_refund",
                         "Partially paid order cannot be voided without refunding existing payments");
             }
             List<TenderRow> payments = db.sql("""
-                    SELECT id, tender_type, amount_pesewas, status
+                    SELECT id, tender_type, amount_pesewas, reference, status
                     FROM pos_tender_payment
                     WHERE order_id = :id AND status = 'SUCCESS'
                     FOR UPDATE
@@ -317,9 +319,20 @@ public class PosVoidDiscountService {
                     .query(TenderRow.class)
                     .list();
             for (TenderRow payment : payments) {
-                db.sql("UPDATE pos_tender_payment SET status = 'REFUNDED' WHERE id = :id")
+                boolean isExternal = false;
+                try {
+                    isExternal = TenderType.valueOf(payment.tenderType()).isExternalRecorded();
+                } catch (IllegalArgumentException ignored) {}
+
+                String newPaymentStatus = isExternal ? "EXTERNAL_REFUND_REQUIRED" : "REFUNDED";
+                db.sql("UPDATE pos_tender_payment SET status = :st WHERE id = :id")
+                        .param("st", newPaymentStatus)
                         .param("id", payment.id())
                         .update();
+                if (isExternal) {
+                    manualExternalReversals.add(payment.tenderType() + " " + payment.amountPesewas()
+                            + "p" + (payment.reference() != null ? " ref=" + payment.reference() : ""));
+                }
                 if ("CASH".equals(payment.tenderType()) && order.terminalId() != null) {
                     cashierService.getActiveShift(order.terminalId())
                             .ifPresent(shift -> cashierService.recordCashTender(shift.id(), -payment.amountPesewas()));
@@ -355,6 +368,17 @@ public class PosVoidDiscountService {
             }
         }
 
+        // Reset any split sub-bills so pos_order_split stays consistent with VOIDED order state
+        db.sql("""
+                UPDATE pos_order_split
+                SET paid_pesewas = 0,
+                    status = 'OPEN',
+                    paid_at = NULL
+                WHERE order_id = :id
+                """)
+                .param("id", orderId)
+                .update();
+
         db.sql("""
                 UPDATE pos_order
                 SET status = 'VOIDED',
@@ -386,6 +410,9 @@ public class PosVoidDiscountService {
                 WHERE merchant_id = :m AND order_id = :orderId
                 """).param("m", order.merchantId()).param("orderId", orderId).query(Long.class).single() > 0;
 
+        String loggedReason = manualExternalReversals.isEmpty()
+                ? trimmedReason
+                : trimmedReason + " [MANUAL EXTERNAL REVERSAL REQUIRED: " + String.join(", ", manualExternalReversals) + "]";
         db.sql("""
                 INSERT INTO pos_void_log (
                     id, merchant_id, branch_id, order_id, order_item_id, void_scope,
@@ -403,7 +430,7 @@ public class PosVoidDiscountService {
                 .param("orderId", orderId)
                 .param("amount", order.totalPesewas())
                 .param("wasFired", wasFired)
-                .param("reason", trimmedReason)
+                .param("reason", loggedReason)
                 .param("voidedBy", actor == null || actor.isBlank() ? "system" : actor)
                 .param("approvedBy", manager.id())
                 .param("approvedByName", manager.name())

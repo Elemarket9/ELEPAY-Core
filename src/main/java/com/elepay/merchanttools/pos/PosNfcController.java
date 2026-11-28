@@ -19,14 +19,17 @@ public class PosNfcController {
     private final MerchantToolAccess access;
     private final PosDukptKeyManagementService dukptService;
     private final PosNfcPaymentService nfcPaymentService;
+    private final PosOrderService orderService;
 
     public PosNfcController(
             MerchantToolAccess access,
             PosDukptKeyManagementService dukptService,
-            PosNfcPaymentService nfcPaymentService) {
+            PosNfcPaymentService nfcPaymentService,
+            PosOrderService orderService) {
         this.access = access;
         this.dukptService = dukptService;
         this.nfcPaymentService = nfcPaymentService;
+        this.orderService = orderService;
     }
 
     public record ProvisionDukptRequest(String bdkId) {}
@@ -46,6 +49,14 @@ public class PosNfcController {
             @RequestBody PosNfcPaymentService.NfcTapRequest req) {
         var caller = access.operateAccess(ORDER, orderId);
         access.requireOrderBranch(caller, orderId);
+        if (req != null && req.terminalId() != null) {
+            access.requireTerminal(caller, req.terminalId());
+        }
+        orderService.getOrder(orderId).ifPresent(order -> {
+            if (order.terminalId() != null) {
+                access.requireTerminal(caller, order.terminalId());
+            }
+        });
         return nfcPaymentService.processNfcTap(orderId, idempotencyKey, req, Actor.current().subject());
     }
 }

@@ -136,9 +136,20 @@ public class GhipssInstantPayRail implements PaymentRail {
 
     @Override
     public boolean supports(String direction, String channel, String network) {
-        return Set.of("charge", "payout").contains(direction)
-                && ("bank".equalsIgnoreCase(channel) || "ghqr".equalsIgnoreCase(channel))
-                && (network == null || "ghipss".equalsIgnoreCase(network) || "bank".equalsIgnoreCase(network));
+        if (!Set.of("charge", "payout").contains(direction)) {
+            return false;
+        }
+        if ("ghqr".equalsIgnoreCase(channel)) {
+            return network == null || "ghipss".equalsIgnoreCase(network) || "bank".equalsIgnoreCase(network);
+        }
+        if ("bank".equalsIgnoreCase(channel)) {
+            return network == null
+                    || network.isBlank()
+                    || "ghipss".equalsIgnoreCase(network)
+                    || "bank".equalsIgnoreCase(network)
+                    || network.trim().toUpperCase(Locale.ROOT).matches("^[A-Z0-9]{2,20}$");
+        }
+        return false;
     }
 
     public static UUID sessionId(String direction, String reference) {

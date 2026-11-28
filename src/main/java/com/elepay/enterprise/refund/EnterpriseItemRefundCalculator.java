@@ -45,6 +45,7 @@ public class EnterpriseItemRefundCalculator {
         long platformFeeReversal;
         long reserveReversal;
         long merchantReversal;
+        final int maxPlatformFeeBps = 1000; // Hard cap: platform fee clawback cannot exceed 10% of item gross
 
         if (item.customMerchantReversalPesewas() != null && item.customCommissionReversalPesewas() != null) {
             commissionReversal = item.customCommissionReversalPesewas();
@@ -54,6 +55,21 @@ public class EnterpriseItemRefundCalculator {
 
             if (merchantReversal < 0 || commissionReversal < 0 || platformFeeReversal < 0 || reserveReversal < 0) {
                 throw new IllegalArgumentException("Custom refund reversal components cannot be negative");
+            }
+
+            int allowedBps = item.platformFeeBps() != null
+                    ? Math.min(item.platformFeeBps(), maxPlatformFeeBps)
+                    : maxPlatformFeeBps;
+            if (allowedBps < 0) {
+                throw new IllegalArgumentException("Platform fee basis points cannot be negative");
+            }
+            long maxAllowedPlatformFee = java.math.BigInteger.valueOf(gross)
+                    .multiply(java.math.BigInteger.valueOf(allowedBps))
+                    .divide(java.math.BigInteger.valueOf(10_000L))
+                    .longValueExact();
+            if (platformFeeReversal > maxAllowedPlatformFee) {
+                throw new IllegalArgumentException("Custom platform fee reversal (" + platformFeeReversal
+                        + ") exceeds maximum allowed (" + maxAllowedPlatformFee + ")");
             }
 
             long sum = Math.addExact(
@@ -69,8 +85,8 @@ public class EnterpriseItemRefundCalculator {
             int platBps = item.platformFeeBps() != null ? item.platformFeeBps() : 0;
             int resBps = item.reserveBps() != null ? item.reserveBps() : 0;
 
-            if (commBps < 0 || commBps > 10000 || platBps < 0 || platBps > 10000 || resBps < 0 || resBps > 10000) {
-                throw new IllegalArgumentException("Basis points must be between 0 and 10000");
+            if (commBps < 0 || commBps > 10000 || platBps < 0 || platBps > maxPlatformFeeBps || resBps < 0 || resBps > 10000) {
+                throw new IllegalArgumentException("Basis points out of allowed bounds (platformFeeBps max " + maxPlatformFeeBps + ")");
             }
 
             java.math.BigInteger grossBig = java.math.BigInteger.valueOf(gross);

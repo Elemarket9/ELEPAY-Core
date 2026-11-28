@@ -54,6 +54,9 @@ public class PosDailyReportService {
             long taxPesewas,
             long tipsPesewas,
             long totalCollectedPesewas,
+            long elepaySettledPesewas,
+            long cashCollectedPesewas,
+            long externalProcessorPesewas,
             int orderCount,
             int paidOrderCount,
             int openOrderCount,
@@ -62,6 +65,7 @@ public class PosDailyReportService {
 
     public record TenderBreakdown(
             String tenderType,
+            String settlementChannel,
             int count,
             long amountPesewas
     ) {}
@@ -149,7 +153,19 @@ public class PosDailyReportService {
         List<VoidEntry> voids = queryVoids(merchantId, branchId, dayStart, dayEnd);
         ShiftCashSummary shiftCash = queryShiftCash(merchantId, branchId, dayStart, dayEnd);
 
-        long totalCollectedPesewas = tenderMix.stream().mapToLong(TenderBreakdown::amountPesewas).sum();
+        long elepaySettledPesewas = 0L;
+        long cashCollectedPesewas = 0L;
+        long externalProcessorPesewas = 0L;
+        for (TenderBreakdown tb : tenderMix) {
+            switch (tb.settlementChannel()) {
+                case "CASH" -> cashCollectedPesewas = Math.addExact(cashCollectedPesewas, tb.amountPesewas());
+                case "EXTERNAL" -> externalProcessorPesewas = Math.addExact(externalProcessorPesewas, tb.amountPesewas());
+                default -> elepaySettledPesewas = Math.addExact(elepaySettledPesewas, tb.amountPesewas());
+            }
+        }
+        long totalCollectedPesewas = Math.addExact(
+                Math.addExact(elepaySettledPesewas, cashCollectedPesewas),
+                externalProcessorPesewas);
         long voidsPesewas = voids.stream().mapToLong(VoidEntry::amountPesewas).sum();
         long netSalesPesewas = rawSales.grossSalesPesewas() - rawSales.discountsPesewas();
 
@@ -161,6 +177,9 @@ public class PosDailyReportService {
                 rawSales.taxPesewas(),
                 rawSales.tipsPesewas(),
                 totalCollectedPesewas,
+                elepaySettledPesewas,
+                cashCollectedPesewas,
+                externalProcessorPesewas,
                 rawSales.orderCount(),
                 rawSales.paidOrderCount(),
                 rawSales.openOrderCount(),
@@ -255,11 +274,27 @@ public class PosDailyReportService {
         if (branchId != null) {
             query = query.param("branchId", branchId);
         }
-        return query.query((rs, i) -> new TenderBreakdown(
-                rs.getString("tender_type"),
-                rs.getInt("cnt"),
-                rs.getLong("amt")
-        )).list();
+        return query.query((rs, i) -> {
+            String tt = rs.getString("tender_type");
+            return new TenderBreakdown(
+                    tt,
+                    classifySettlementChannel(tt),
+                    rs.getInt("cnt"),
+                    rs.getLong("amt")
+            );
+        }).list();
+    }
+
+    static String classifySettlementChannel(String tenderTypeName) {
+        if (tenderTypeName == null) return "ELEPAY";
+        try {
+            TenderType tt = TenderType.valueOf(tenderTypeName);
+            if (tt == TenderType.CASH) return "CASH";
+            if (tt.isExternalRecorded()) return "EXTERNAL";
+            return "ELEPAY";
+        } catch (IllegalArgumentException e) {
+            return "ELEPAY";
+        }
     }
 
     private List<OrderTypeBreakdown> queryOrderTypes(UUID merchantId, UUID branchId, OffsetDateTime dayStart, OffsetDateTime dayEnd) {

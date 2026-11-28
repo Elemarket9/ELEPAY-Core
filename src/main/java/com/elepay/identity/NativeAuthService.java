@@ -1,6 +1,7 @@
 package com.elepay.identity;
 
 import com.elepay.common.ApiException;
+import com.elepay.common.Audit;
 import com.elepay.common.Idempotency;
 import com.elepay.common.References;
 import com.elepay.common.VerificationDelivery;
@@ -11,14 +12,17 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
@@ -75,24 +79,37 @@ public class NativeAuthService {
     private final JdbcClient db;
     private final VerificationDelivery verificationDelivery;
     private final Environment env;
+    private final Audit audit;
+    private final DistributedSessionService sessionService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final String jwtSigningSecret;
     private final long jwtTtlSeconds;
     private final long resendCooldownSeconds;
+    private final String jwtIssuer;
+    private final String jwtAudience;
 
+    @Autowired
     public NativeAuthService(
             JdbcClient db,
             VerificationDelivery verificationDelivery,
             Environment env,
+            @Autowired(required = false) Audit audit,
+            @Autowired(required = false) DistributedSessionService sessionService,
             @Value("${elepay.auth.jwt-signing-secret:}") String jwtSigningSecret,
             @Value("${elepay.auth.jwt-ttl-seconds:3600}") long jwtTtlSeconds,
-            @Value("${elepay.auth.resend-cooldown-seconds:30}") long resendCooldownSeconds) {
+            @Value("${elepay.auth.resend-cooldown-seconds:30}") long resendCooldownSeconds,
+            @Value("${elepay.auth.jwt-issuer:" + NativeJwtDecoderConfig.DEFAULT_NATIVE_ISSUER + "}") String jwtIssuer,
+            @Value("${elepay.auth.jwt-audience:" + NativeJwtDecoderConfig.DEFAULT_NATIVE_AUDIENCE + "}") String jwtAudience) {
         this.db = db;
         this.verificationDelivery = verificationDelivery;
         this.env = env;
+        this.audit = audit;
+        this.sessionService = sessionService;
         this.jwtSigningSecret = jwtSigningSecret == null ? "" : jwtSigningSecret.trim();
         this.jwtTtlSeconds = Math.max(300, jwtTtlSeconds);
         this.resendCooldownSeconds = Math.max(0, resendCooldownSeconds);
+        this.jwtIssuer = (jwtIssuer == null || jwtIssuer.isBlank()) ? NativeJwtDecoderConfig.DEFAULT_NATIVE_ISSUER : jwtIssuer.trim();
+        this.jwtAudience = (jwtAudience == null || jwtAudience.isBlank()) ? NativeJwtDecoderConfig.DEFAULT_NATIVE_AUDIENCE : jwtAudience.trim();
     }
 
     @Transactional
@@ -136,7 +153,7 @@ public class NativeAuthService {
         AccountRow account = findByIdentifier(rawIdentifier)
                 .orElseThrow(() -> ApiException.unauthorized("Invalid email/phone or password"));
 
-        if ("suspended".equalsIgnoreCase(account.status())) {
+        if (isAccountBlocked(account.status())) {
             throw ApiException.forbidden("This account is suspended. Contact ELEPAY support.");
         }
         OffsetDateTime now = OffsetDateTime.now();
@@ -232,17 +249,23 @@ public class NativeAuthService {
                     null, null, 0, null);
         }
 
-        AccountRow account = findById(ch.accountId());
-        db.sql("""
+        AccountRow account = findByIdForUpdate(ch.accountId());
+        if (isAccountBlocked(account.status())) {
+            throw ApiException.forbidden("This account is suspended. Contact ELEPAY support.");
+        }
+        int updated = db.sql("""
                 UPDATE auth_account
                 SET email_verified_at = COALESCE(email_verified_at, :now),
                     phone_verified_at = COALESCE(phone_verified_at, :now),
                     status = 'active',
                     updated_at = now()
-                WHERE id = :id""")
+                WHERE id = :id AND status NOT IN ('suspended', 'disabled', 'closed')""")
                 .param("now", now)
                 .param("id", account.id())
                 .update();
+        if (updated != 1) {
+            throw ApiException.forbidden("This account is suspended. Contact ELEPAY support.");
+        }
 
         List<String> roles = parseRoles(account.roles());
         String token = mintJwt(account, roles);
@@ -280,6 +303,9 @@ public class NativeAuthService {
         }
 
         AccountRow account = findById(ch.accountId());
+        if (isAccountBlocked(account.status())) {
+            throw ApiException.forbidden("This account is suspended. Contact ELEPAY support.");
+        }
         String emailCode = References.digits(6);
         String smsCode = References.digits(6);
         OffsetDateTime expiresAt = now.plusMinutes(CHALLENGE_TTL_MINUTES);
@@ -330,6 +356,11 @@ public class NativeAuthService {
                     "***", "****", CHALLENGE_TTL_MINUTES * 60, false, false);
         }
         AccountRow account = opt.get();
+        if (isAccountBlocked(account.status())) {
+            return new ChallengeResponse(
+                    UUID.randomUUID(), "reset_password", List.of("email", "sms"),
+                    "***", "****", CHALLENGE_TTL_MINUTES * 60, false, false);
+        }
         return createAndDispatchChallenge(account.id(), account.email(), account.phone(), "reset_password",
                 "ELEPAY Password Reset Codes", "password reset");
     }
@@ -340,6 +371,10 @@ public class NativeAuthService {
         ChallengeRow ch = loadChallengeForUpdate(challengeId);
         if (!"reset_password".equals(ch.purpose())) {
             throw ApiException.badRequest("invalid_challenge", "Invalid password reset challenge");
+        }
+        AccountRow account = findById(ch.accountId());
+        if (isAccountBlocked(account.status())) {
+            throw ApiException.forbidden("This account is suspended. Contact ELEPAY support.");
         }
         OffsetDateTime now = OffsetDateTime.now();
         if (ch.consumedAt() != null || ch.expiresAt().isBefore(now) || ch.attempts() >= ch.maxAttempts()) {
@@ -363,6 +398,17 @@ public class NativeAuthService {
                 SET email_verified_at = :now, sms_verified_at = :now, consumed_at = :now
                 WHERE id = :id""")
                 .param("now", now).param("id", challengeId).update();
+        if (sessionService != null) {
+            sessionService.revokeAllForUser(account.id().toString(), account.email());
+        }
+    }
+
+    /** Revokes a specific JWT session on explicit logout. */
+    @Transactional
+    public void logout(String jti) {
+        if (sessionService != null && jti != null && !jti.isBlank()) {
+            sessionService.revokeToken(jti, Duration.ofSeconds(jwtTtlSeconds));
+        }
     }
 
     public static final java.util.Set<String> ALLOWED_ROLES = java.util.Set.of(
@@ -457,6 +503,9 @@ public class NativeAuthService {
             }
         }
 
+        List<String> beforeRoles = parseRoles(target.roles());
+        String beforeStatus = target.status();
+
         db.sql("""
                 UPDATE auth_account
                 SET roles = :roles, status = :status, updated_at = now()
@@ -465,6 +514,21 @@ public class NativeAuthService {
                 .param("status", nextStatus)
                 .param("id", accountId)
                 .update();
+
+        if (audit != null) {
+            audit.record(actor.subject(), "auth.account_roles_status_updated", "auth_account:" + accountId,
+                    Map.of("email", target.email(),
+                            "beforeRoles", beforeRoles,
+                            "afterRoles", cleanRoles,
+                            "beforeStatus", beforeStatus,
+                            "afterStatus", nextStatus));
+        }
+
+        boolean statusChanged = !beforeStatus.equalsIgnoreCase(nextStatus);
+        boolean rolesChanged = !beforeRoles.equals(cleanRoles);
+        if (sessionService != null && ("suspended".equalsIgnoreCase(nextStatus) || statusChanged || rolesChanged)) {
+            sessionService.revokeAllForUser(target.id().toString(), target.email());
+        }
 
         return db.sql("""
                 SELECT id, full_name, email, phone, roles, email_verified_at, phone_verified_at
@@ -521,7 +585,20 @@ public class NativeAuthService {
         byte[] secret = resolveSigningSecret();
         try {
             Instant now = Instant.now();
+            String jti;
+            if (sessionService != null) {
+                var session = sessionService.createSession(
+                        account.id().toString(),
+                        Map.of("email", account.email()),
+                        Duration.ofSeconds(jwtTtlSeconds));
+                jti = session.sessionId();
+            } else {
+                jti = UUID.randomUUID().toString();
+            }
             var claims = new JWTClaimsSet.Builder()
+                    .issuer(jwtIssuer)
+                    .audience(jwtAudience)
+                    .jwtID(jti)
                     .subject(account.email())
                     .claim("uid", account.id().toString())
                     .claim("name", account.fullName())
@@ -540,6 +617,12 @@ public class NativeAuthService {
         } catch (Exception e) {
             throw new IllegalStateException("Failed to sign authentication token", e);
         }
+    }
+
+    private static boolean isAccountBlocked(String status) {
+        return "suspended".equalsIgnoreCase(status)
+                || "disabled".equalsIgnoreCase(status)
+                || "closed".equalsIgnoreCase(status);
     }
 
     private byte[] resolveSigningSecret() {
@@ -581,6 +664,13 @@ public class NativeAuthService {
         return db.sql("""
                 SELECT id, email, phone, full_name, password_hash, roles, failed_login_attempts, locked_until, status
                 FROM auth_account WHERE id = :id""")
+                .param("id", id).query(this::mapAccount).single();
+    }
+
+    private AccountRow findByIdForUpdate(UUID id) {
+        return db.sql("""
+                SELECT id, email, phone, full_name, password_hash, roles, failed_login_attempts, locked_until, status
+                FROM auth_account WHERE id = :id FOR UPDATE""")
                 .param("id", id).query(this::mapAccount).single();
     }
 

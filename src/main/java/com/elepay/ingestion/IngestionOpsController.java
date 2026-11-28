@@ -27,14 +27,14 @@ class IngestionOpsController {
 
     @GetMapping("/dead")
     public List<IngestionStatus> listDead(@RequestParam(defaultValue = "50") int limit) {
-        Actor.current().requireOps();
+        Actor.current().requireFinance();
         int clampedLimit = Math.max(1, Math.min(limit, MAX_DEAD_LIMIT));
         return ingestionQueue.listDead(clampedLimit);
     }
 
     @PostMapping("/{ingestionId}/replay")
     public IngestionStatus replay(@PathVariable UUID ingestionId) {
-        Actor.current().requireOps();
+        Actor.current().requireFinance();
         return ingestionQueue.replay(ingestionId);
     }
 }

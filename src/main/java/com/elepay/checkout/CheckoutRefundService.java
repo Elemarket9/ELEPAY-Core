@@ -71,21 +71,37 @@ class CheckoutRefundService {
         }
         if (!c.status().equals("paid")) throw ApiException.conflict("not_paid", "Only paid checkouts can be refunded");
         if (amount <= 0) throw ApiException.badRequest("invalid_amount", "Refund amount must be positive");
+        UUID id = UUID.randomUUID();
+        String ledgerKey = (idempotencyKey != null && !idempotencyKey.isBlank())
+                ? Idempotency.sha256(access.merchantId() + ":" + reference + ":" + line + ":" + idempotencyKey)
+                : id.toString();
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            Optional<UUID> existingTx = ledger.findTransactionByIdempotency("refund", ledgerKey);
+            if (existingTx.isPresent()) {
+                Optional<Refund> existingRefund = findRefundByJournalTx(existingTx.get());
+                if (existingRefund.isPresent()) {
+                    Refund prev = existingRefund.get();
+                    if (prev.amount() != amount || prev.line() != line || !prev.checkout().equals(c.reference())) {
+                        throw ApiException.idempotencyConflict();
+                    }
+                    return prev;
+                }
+            }
+        }
         if (Math.addExact(Math.addExact(a.refunded(), a.disputed()), amount) > a.amount()) {
             throw ApiException.conflict("refund_exceeds_allocation", "Refund exceeds the remaining allocation");
         }
         Take t = CheckoutService.take(a, amount);
-        UUID id = UUID.randomUUID();
         String refundRef = References.next("RF");
-        String ledgerKey = (idempotencyKey != null && !idempotencyKey.isBlank())
-                ? Idempotency.sha256(access.merchantId() + ":" + reference + ":" + line + ":" + idempotencyKey)
-                : id.toString();
         boolean toWallet = c.paymentMethod().equals("wallet");
         List<Leg> legs = CheckoutStore.takeLegs(ledger, c, a, t);
         legs.add(Leg.credit(toWallet ? CustomerDirectory.available(c.customerId()) : Ledger.REFUNDS_IN_FLIGHT, amount));
         var posted = ledger.post(Ledger.Posting.of("refund", ledgerKey, "refund", legs)
                 .relatedTo(c.journalTx()).describedAs(refundRef)
                 .withMetadata(Map.of("checkout", c.reference(), "line", String.valueOf(line))));
+        if (posted.replay()) {
+            return findRefundByJournalTx(posted.transactionId()).orElseThrow();
+        }
         db.sql("""
                 UPDATE checkout_allocation SET refunded = refunded + :amount, refunded_fee = refunded_fee + :fee,
                        refunded_platform_fee = refunded_platform_fee + :platform,
@@ -119,6 +135,21 @@ class CheckoutRefundService {
         if (toWallet) regulatory.refund(id);
         return new Refund(id, refundRef, c.reference(), line, amount, t.fee(), t.platform(),
                 toWallet ? "wallet" : "rail", toWallet ? "completed" : "pending", posted.transactionId());
+    }
+
+    private Optional<Refund> findRefundByJournalTx(UUID journalTx) {
+        return db.sql("""
+                SELECT r.id, r.reference, c.reference, r.line, r.amount, r.fee_returned,
+                       r.platform_fee_returned, r.destination, r.status, r.journal_tx
+                FROM refund r
+                JOIN checkout c ON c.id = r.checkout_id
+                WHERE r.journal_tx = :tx""")
+                .param("tx", journalTx)
+                .query((rs, i) -> new Refund(
+                        rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
+                        rs.getInt(4), rs.getLong(5), rs.getLong(6), rs.getLong(7),
+                        rs.getString(8), rs.getString(9), rs.getObject(10, UUID.class)))
+                .optional();
     }
 
     UUID pendingRefundRailTx(UUID refundId) {

@@ -1,8 +1,10 @@
 package com.elepay.merchanttools;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.TypeExcludeFilter;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.FilterType;
 
 /**
  * Self-contained module boundary for Merchant Tools (POS, Restaurant/KDS, Inventory,
@@ -19,6 +21,9 @@ import org.springframework.context.annotation.Configuration;
         havingValue = "true",
         matchIfMissing = true
 )
-@ComponentScan("com.elepay.merchanttools")
+@ComponentScan(
+        basePackages = "com.elepay.merchanttools",
+        excludeFilters = @ComponentScan.Filter(type = FilterType.CUSTOM, classes = TypeExcludeFilter.class)
+)
 public class MerchantToolsModuleConfiguration {
 }

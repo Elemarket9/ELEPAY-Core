@@ -59,13 +59,16 @@ public class LoanOriginationEngine {
             UUID applicationId,
             AmortizationScheduleEngine.AmortizationMethod method
     ) {
-        // 1. Generate contract
+        com.elepay.identity.Actor.current().requireOps();
+        configService.assertPermitted(false);
+
+        // 1. Generate contract (validates approved application)
         LoanContractService.LoanContract contract = contractService.generateContract(applicationId);
 
         var product = productService.getProductById(contract.productId())
                 .orElseThrow(() -> new IllegalArgumentException("Product not found: " + contract.productId()));
 
-        int tenorMonths = Math.max(1, contract.tenorDays() / 30);
+        int tenorMonths = Math.max(1, (contract.tenorDays() + 29) / 30);
         LocalDate startDate = (contract.startDate() != null) ? contract.startDate() : LocalDate.now();
 
         // 2. Compute Amortization Schedule
@@ -77,10 +80,15 @@ public class LoanOriginationEngine {
                 method != null ? method : AmortizationScheduleEngine.AmortizationMethod.EQUAL_INSTALLMENT_FRENCH
         );
 
-        // 3. Clear any placeholder installments and insert exact calculated installments
+        long originationFee = Math.max(0L, contract.originationFeePesewas());
+        long totalRepaymentWithFees = Math.addExact(schedule.totalRepaymentPesewas(), originationFee);
+
+        // 3. Clear any placeholder installments and insert exact calculated installments (attach origination fee to installment 1)
         db.sql("DELETE FROM loan_repayment_schedule WHERE contract_id = ?").param(contract.id()).update();
 
-        for (var item : schedule.installments()) {
+        for (int i = 0; i < schedule.installments().size(); i++) {
+            var item = schedule.installments().get(i);
+            long feeDue = (i == 0) ? originationFee : 0L;
             UUID installmentId = UUID.randomUUID();
             db.sql("""
                 INSERT INTO loan_repayment_schedule (
@@ -90,7 +98,7 @@ public class LoanOriginationEngine {
                     penalty_paid_pesewas, status
                 ) VALUES (
                     :id, :contractId, :num, :dueDate,
-                    :principal, :interest, 0,
+                    :principal, :interest, :fees,
                     0, 0, 0,
                     0, 'PENDING'
                 )
@@ -101,30 +109,39 @@ public class LoanOriginationEngine {
                     .param("dueDate", item.dueDate())
                     .param("principal", item.principalDuePesewas())
                     .param("interest", item.interestDuePesewas())
+                    .param("fees", feeDue)
                     .update();
         }
 
-        // 4. Update contract totals
+        // 4. Update contract totals & set ACTIVE so RepaymentSweepService can sweep repayments
         db.sql("""
             UPDATE loan_contract
             SET total_interest_pesewas = :interest,
                 total_repayment_pesewas = :total,
                 outstanding_principal_pesewas = :principal,
                 outstanding_interest_pesewas = :interest,
-                status = 'DISBURSED',
+                outstanding_fees_pesewas = :fees,
+                status = 'ACTIVE',
                 disbursed_at = now(),
                 updated_at = now()
             WHERE id = :id
         """)
                 .param("interest", schedule.totalInterestPesewas())
-                .param("total", schedule.totalRepaymentPesewas())
+                .param("total", totalRepaymentWithFees)
                 .param("principal", contract.principalPesewas())
+                .param("fees", originationFee)
                 .param("id", contract.id())
                 .update();
 
-        // 5. Post disbursement in Double-Entry Ledger
-        ledger.openSystem(LENDING_FUNDING_ACCOUNT, "clearing", "GHS", true);
-        String borrowerAccount = ledger.open("customer", contract.borrowerId(), "available", "GHS");
+        // 5. Post disbursement in Double-Entry Ledger (strictly prefunded: allowNegative = false)
+        ledger.openSystem(LENDING_FUNDING_ACCOUNT, "clearing", Ledger.GHS, false);
+        String applicantType = db.sql("SELECT applicant_type FROM loan_application WHERE id = ?")
+                .param(applicationId)
+                .query(String.class)
+                .optional()
+                .orElse("CUSTOMER");
+        String ownerType = "MERCHANT".equalsIgnoreCase(applicantType) ? "merchant" : "customer";
+        String borrowerAccount = ledger.open(ownerType, contract.borrowerId(), "available", Ledger.GHS);
 
         var posting = Ledger.Posting.of(
                 "lending_disbursement",
@@ -164,10 +181,10 @@ public class LoanOriginationEngine {
                 contract.contractReference(),
                 contract.borrowerId(),
                 contract.principalPesewas(),
-                schedule.totalRepaymentPesewas(),
+                totalRepaymentWithFees,
                 schedule.installments().size(),
                 journalTxId,
-                "DISBURSED"
+                "ACTIVE"
         );
     }
 }

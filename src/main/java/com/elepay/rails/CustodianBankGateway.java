@@ -72,10 +72,16 @@ public interface CustodianBankGateway {
     record DisbursementResponse(
             DisbursementStatus status,
             String bankReference,
-            String message
+            String message,
+            Long amountPesewas,
+            String currency
     ) {
         public DisbursementResponse {
             Objects.requireNonNull(status, "status is required");
+        }
+
+        public DisbursementResponse(DisbursementStatus status, String bankReference, String message) {
+            this(status, bankReference, message, null, null);
         }
     }
 

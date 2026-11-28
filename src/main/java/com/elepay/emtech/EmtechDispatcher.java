@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClientException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -65,7 +66,7 @@ public class EmtechDispatcher {
         EmtechClient.SendResult result;
         try {
             result = client.submit(row.resource(), payload);
-        } catch (ApiException | IllegalStateException e) {
+        } catch (ApiException | IllegalStateException | RestClientException e) {
             releaseClaim(row, e);
             return false;
         }

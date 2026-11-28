@@ -11,6 +11,9 @@ import java.util.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -41,6 +44,7 @@ public class MakerCheckerService {
             "VELOCITY_CEILING_CHANGE",
             "PHONE_CHANGE",
             "CUSTODIAN_CONFIG",
+            "OPERATING_ACCOUNT_REGISTER",
             "MODULE_ENABLE",
             "MERCHANT_UNFREEZE",
             "REVENUE_SWEEP"
@@ -126,10 +130,12 @@ public class MakerCheckerService {
             throw ApiException.badRequest("missing_proposer", "Proposer subject is required");
         }
         String normalizedType = actionType.toUpperCase(Locale.ROOT);
-        Map<String, Object> safePayload = payload != null ? payload : Map.of();
-        validateProposalPayload(normalizedType, resourceId, merchantId, safePayload);
+        Map<String, Object> rawPayload = payload != null ? payload : Map.of();
+        validateProposalPayload(normalizedType, resourceId, merchantId, rawPayload);
+        Map<String, Object> enrichedPayload = new LinkedHashMap<>(rawPayload);
+        enrichWithProposerIdentity(normalizedType, proposerSubject, enrichedPayload);
         UUID id = UUID.randomUUID();
-        String payloadJson = json.writeValueAsString(safePayload);
+        String payloadJson = json.writeValueAsString(enrichedPayload);
 
         db.sql("""
                 INSERT INTO maker_checker_proposal (
@@ -172,8 +178,11 @@ public class MakerCheckerService {
             throw ApiException.conflict("proposal_expired", "Maker-checker proposal has expired");
         }
 
-        // Core Invariant: proposed_by != approved_by
-        if (existing.proposedBy().equals(approverSubject)) {
+        // Core Invariant: canonical proposer identities must be disjoint from canonical approver identities
+        // across issuers (e.g. OIDC RS256 sub=UUID + email vs NativeAuth HS256 sub=email) and case/whitespace.
+        Set<String> proposerIds = extractProposerIdentities(existing);
+        Set<String> approverIds = currentActorIdentityTokens(approverSubject);
+        if (identitiesOverlap(proposerIds, approverIds)) {
             runInNewTransaction(() -> recordSelfApprovalAttempt(proposalId, existing, approverSubject));
             throw new ApiException(HttpStatus.FORBIDDEN,
                     "maker_checker_self_approval",
@@ -493,6 +502,100 @@ public class MakerCheckerService {
             return UUID.fromString(subject);
         } catch (IllegalArgumentException e) {
             return UUID.nameUUIDFromBytes(subject.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    /**
+     * Records the proposer's canonical identity identifiers (subject + active JWT {@code sub},
+     * {@code email}, {@code preferred_username}, {@code uid}) on the proposal payload, overwriting
+     * any caller-supplied metadata keys so dual-control checks cannot be bypassed across issuers.
+     */
+    private static void enrichWithProposerIdentity(
+            String normalizedType,
+            String proposerSubject,
+            Map<String, Object> payload
+    ) {
+        payload.remove("_proposerIdentities");
+        payload.remove("_proposerEmail");
+        payload.remove("_proposerUid");
+        Set<String> tokens = currentActorIdentityTokens(proposerSubject);
+        payload.put("_proposerIdentities", List.copyOf(tokens));
+        String jwtEmail = currentJwtClaim("email");
+        String jwtUid = currentJwtClaim("uid");
+        if (jwtEmail != null) {
+            payload.put("_proposerEmail", jwtEmail);
+        }
+        if (jwtUid != null) {
+            payload.put("_proposerUid", jwtUid);
+        }
+        if ("REVENUE_SWEEP".equals(normalizedType)) {
+            if (jwtEmail != null) payload.put("proposedByEmail", jwtEmail);
+            if (jwtUid != null) payload.put("proposedByUid", jwtUid);
+        } else if ("OPERATING_ACCOUNT_REGISTER".equals(normalizedType)
+                || ("CUSTODIAN_CONFIG".equals(normalizedType)
+                        && "REGISTER_OPERATING_ACCOUNT".equals(String.valueOf(payload.get("operation"))))) {
+            if (jwtEmail != null) payload.put("verifiedByEmail", jwtEmail);
+            if (jwtUid != null) payload.put("verifiedByUid", jwtUid);
+        }
+    }
+
+    public static Set<String> extractProposerIdentities(Proposal proposal) {
+        Set<String> tokens = new LinkedHashSet<>();
+        if (proposal == null) return tokens;
+        addNormalized(tokens, proposal.proposedBy());
+        Map<String, Object> payload = proposal.payload();
+        if (payload != null) {
+            Object rawList = payload.get("_proposerIdentities");
+            if (rawList instanceof Collection<?> col) {
+                for (Object item : col) {
+                    if (item != null) addNormalized(tokens, String.valueOf(item));
+                }
+            }
+            for (String key : List.of("_proposerEmail", "_proposerUid",
+                    "proposedByEmail", "proposedByUid", "verifiedByEmail", "verifiedByUid")) {
+                Object v = payload.get(key);
+                if (v != null) addNormalized(tokens, String.valueOf(v));
+            }
+        }
+        return tokens;
+    }
+
+    public static Set<String> currentActorIdentityTokens(String explicitSubject) {
+        Set<String> tokens = new LinkedHashSet<>();
+        addNormalized(tokens, explicitSubject);
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth instanceof JwtAuthenticationToken jwt) {
+            var token = jwt.getToken();
+            addNormalized(tokens, token.getSubject());
+            addNormalized(tokens, token.getClaimAsString("email"));
+            addNormalized(tokens, token.getClaimAsString("preferred_username"));
+            addNormalized(tokens, token.getClaimAsString("uid"));
+        }
+        return tokens;
+    }
+
+    public static boolean identitiesOverlap(Set<String> a, Set<String> b) {
+        if (a == null || b == null || a.isEmpty() || b.isEmpty()) return false;
+        for (String token : a) {
+            if (b.contains(token)) return true;
+        }
+        return false;
+    }
+
+    private static String currentJwtClaim(String claimName) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth instanceof JwtAuthenticationToken jwt) {
+            String value = jwt.getToken().getClaimAsString(claimName);
+            if (value != null && !value.isBlank()) {
+                return value.trim().toLowerCase(Locale.ROOT);
+            }
+        }
+        return null;
+    }
+
+    private static void addNormalized(Set<String> out, String value) {
+        if (value != null && !value.isBlank()) {
+            out.add(value.trim().toLowerCase(Locale.ROOT));
         }
     }
 }

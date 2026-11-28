@@ -55,7 +55,7 @@ public class WalletChannel {
 
     /** Sets or changes the USSD PIN from a signed-in web or app session. */
     @PutMapping("/v1/wallet/ussd-pin")
-    @Transactional
+    @Transactional(noRollbackFor = ApiException.class)
     public Map<String, String> setPin(@Valid @RequestBody PinRequest request) {
         if (request.pin() == null || !request.pin().matches("[0-9]{4,6}")) {
             throw ApiException.badRequest("invalid_pin", "Use 4 to 6 digits");
@@ -65,14 +65,23 @@ public class WalletChannel {
         }
         Actor actor = Actor.current();
         UUID customer = wallets.customer(actor);
-        var existing = db.sql("SELECT ussd_pin_hash, ussd_pin_hard_locked FROM customer WHERE id = :id")
+        var existing = db.sql("SELECT ussd_pin_hash, ussd_locked_until, ussd_pin_hard_locked FROM customer WHERE id = :id FOR UPDATE")
                 .param("id", customer)
-                .query((rs, i) -> new Object[]{rs.getString(1), rs.getBoolean(2)}).single();
-        if (Boolean.TRUE.equals(existing[1])) {
+                .query((rs, i) -> new Object[]{rs.getString(1), rs.getObject(2, OffsetDateTime.class), rs.getBoolean(3)}).single();
+        if (Boolean.TRUE.equals(existing[2])) {
             throw ApiException.forbidden("The USSD PIN is locked. Contact support to reset it.");
         }
-        if (existing[0] != null && (request.currentPin() == null || !encoder.matches(request.currentPin(), (String) existing[0]))) {
-            throw ApiException.forbidden("Enter the current PIN to change it");
+        if (existing[1] != null && ((OffsetDateTime) existing[1]).isAfter(OffsetDateTime.now())) {
+            throw ApiException.forbidden("The USSD PIN is temporarily locked. Try again later.");
+        }
+        if (existing[0] != null) {
+            PinCheck check = checkPin(customer, request.currentPin());
+            if (check == PinCheck.LOCKED) {
+                throw ApiException.forbidden("The USSD PIN is locked due to too many failed attempts.");
+            }
+            if (check != PinCheck.OK) {
+                throw ApiException.forbidden("Enter the current PIN to change it");
+            }
         }
         db.sql("UPDATE customer SET ussd_pin_hash = :h, ussd_pin_failures = 0, ussd_pin_total_failures = 0, ussd_locked_until = NULL WHERE id = :id")
                 .param("h", encoder.encode(request.pin())).param("id", customer).update();
@@ -165,16 +174,21 @@ public class WalletChannel {
             db.sql("UPDATE customer SET ussd_pin_failures = 0, ussd_locked_until = NULL WHERE id = :id").param("id", customer).update();
             return PinCheck.OK;
         }
+        boolean expiredTempLock = row[1] != null;
         int failures = db.sql("""
-                UPDATE customer SET ussd_pin_failures = ussd_pin_failures + 1,
+                UPDATE customer SET ussd_pin_failures = CASE WHEN :expiredLock THEN 1 ELSE ussd_pin_failures + 1 END,
                        ussd_pin_total_failures = ussd_pin_total_failures + 1,
                        ussd_pin_hard_locked = ussd_pin_total_failures + 1 >= 10,
                        ussd_locked_until = CASE
                            WHEN ussd_pin_total_failures + 1 >= 10 THEN now() + interval '100 years'
-                           WHEN ussd_pin_failures + 1 >= :max THEN now() + interval '30 minutes'
+                           WHEN (CASE WHEN :expiredLock THEN 1 ELSE ussd_pin_failures + 1 END) >= :max THEN now() + interval '30 minutes'
+                           ELSE NULL
                        END
                 WHERE id = :id RETURNING ussd_pin_failures""")
-                .param("max", MAX_PIN_FAILURES).param("id", customer).query(Integer.class).single();
+                .param("expiredLock", expiredTempLock)
+                .param("max", MAX_PIN_FAILURES)
+                .param("id", customer)
+                .query(Integer.class).single();
         audit.record("ussd", "customer.ussd_pin_failed", "customer:" + customer, Map.of("failures", failures));
         if (failures >= MAX_PIN_FAILURES) return PinCheck.LOCKED;
         return PinCheck.WRONG;

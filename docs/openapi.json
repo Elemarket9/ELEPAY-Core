@@ -4640,7 +4640,7 @@
             "type" : "string"
           },
           "tenderType" : {
-            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR", "BANK_TRANSFER" ],
+            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR", "BANK_TRANSFER", "EXTERNAL_MOMO", "EXTERNAL_CARD", "EXTERNAL_POS" ],
             "type" : "string"
           }
         },
@@ -4722,6 +4722,37 @@
           },
           "terminalId" : {
             "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "OperatingAccount" : {
+        "properties" : {
+          "accountName" : {
+            "type" : "string"
+          },
+          "accountNumber" : {
+            "type" : "string"
+          },
+          "bankCode" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "verifiedBy" : {
             "type" : "string"
           }
         },
@@ -6581,6 +6612,27 @@
         "required" : [ "cellId", "displayName" ],
         "type" : "object"
       },
+      "RegisterOperatingAccountRequest" : {
+        "properties" : {
+          "accountName" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "accountNumber" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "bankCode" : {
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          }
+        },
+        "required" : [ "accountName", "accountNumber", "bankCode" ],
+        "type" : "object"
+      },
       "RegisterRequest" : {
         "properties" : {
           "email" : {
@@ -6954,6 +7006,77 @@
           },
           "tableNumber" : {
             "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "RevenueSweep" : {
+        "properties" : {
+          "amountPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "approvedBy" : {
+            "type" : "string"
+          },
+          "completedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "completionTx" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "failureReason" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "operatingAccountId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "proposalId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "railTx" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "reference" : {
+            "type" : "string"
+          },
+          "requestedBy" : {
+            "type" : "string"
+          },
+          "reservationTx" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "returnTx" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "revenueBufferPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "trustHeadroomPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
           }
         },
         "type" : "object"
@@ -7886,6 +8009,85 @@
         "required" : [ "action", "id", "targetAccount" ],
         "type" : "object"
       },
+      "SweepPreview" : {
+        "properties" : {
+          "blockReason" : {
+            "type" : "string"
+          },
+          "clawbackBufferPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "deferredRevenuePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "earnedRevenuePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "inFlightRevenueSweepPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "maxByRevenuePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "maxSweepablePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "minReserveFloorPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "reconciledTrustBalancePesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "safeguardingSatisfied" : {
+            "type" : "boolean"
+          },
+          "todayCustodianOutflowPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "totalSafeguardedLiabilitiesPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "trustHeadroomPesewas" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "SweepRequest" : {
+        "properties" : {
+          "amountPesewas" : {
+            "exclusiveMinimum" : 0,
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "operatingAccountId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          }
+        },
+        "required" : [ "operatingAccountId" ],
+        "type" : "object"
+      },
       "SyncResult" : {
         "properties" : {
           "idempotencyKey" : {
@@ -7957,7 +8159,7 @@
             "type" : "string"
           },
           "tenderType" : {
-            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR", "BANK_TRANSFER" ],
+            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR", "BANK_TRANSFER", "EXTERNAL_MOMO", "EXTERNAL_CARD", "EXTERNAL_POS" ],
             "type" : "string"
           }
         },
@@ -7985,7 +8187,7 @@
             "type" : "string"
           },
           "tenderType" : {
-            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR", "BANK_TRANSFER" ],
+            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR", "BANK_TRANSFER", "EXTERNAL_MOMO", "EXTERNAL_CARD", "EXTERNAL_POS" ],
             "type" : "string"
           }
         },
@@ -8034,7 +8236,7 @@
             "type" : "string"
           },
           "tenderType" : {
-            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR", "BANK_TRANSFER" ],
+            "enum" : [ "CASH", "MOMO", "CARD", "WALLET", "GHQR", "BANK_TRANSFER", "EXTERNAL_MOMO", "EXTERNAL_CARD", "EXTERNAL_POS" ],
             "type" : "string"
           }
         },
@@ -9769,7 +9971,7 @@
     },
     "/v1/customers/merchant/{merchantId}" : {
       "get" : {
-        "operationId" : "list_4",
+        "operationId" : "list_5",
         "parameters" : [ {
           "in" : "path",
           "name" : "merchantId",
@@ -13369,7 +13571,7 @@
     },
     "/v1/merchants/{merchantId}/payouts" : {
       "get" : {
-        "operationId" : "list_3",
+        "operationId" : "list_4",
         "parameters" : [ {
           "in" : "path",
           "name" : "merchantId",
@@ -13540,6 +13742,49 @@
                     "type" : "object"
                   },
                   "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "checkouts" ]
+      }
+    },
+    "/v1/merchants/{merchantId}/refunds/{refundId}/retry" : {
+      "post" : {
+        "operationId" : "retryRefund",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "merchantId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "path",
+          "name" : "refundId",
+          "required" : true,
+          "schema" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        }, {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "additionalProperties" : { },
+                  "type" : "object"
                 }
               }
             },
@@ -14573,7 +14818,7 @@
     },
     "/v1/ops/emtech/submissions" : {
       "get" : {
-        "operationId" : "list_2",
+        "operationId" : "list_3",
         "parameters" : [ {
           "in" : "query",
           "name" : "status",
@@ -15163,7 +15408,7 @@
     },
     "/v1/ops/maker-checker/proposals" : {
       "get" : {
-        "operationId" : "list",
+        "operationId" : "list_1",
         "parameters" : [ {
           "in" : "query",
           "name" : "status",
@@ -15670,7 +15915,7 @@
     },
     "/v1/ops/queue" : {
       "get" : {
-        "operationId" : "list_1",
+        "operationId" : "list_2",
         "parameters" : [ {
           "in" : "query",
           "name" : "status",
@@ -15883,6 +16128,154 @@
           }
         },
         "tags" : [ "reconciliation-service" ]
+      }
+    },
+    "/v1/ops/revenue-sweeps" : {
+      "get" : {
+        "operationId" : "list",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "limit",
+          "required" : false,
+          "schema" : {
+            "default" : 50,
+            "format" : "int32",
+            "type" : "integer"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/RevenueSweep"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "revenue-sweep-endpoints" ]
+      },
+      "post" : {
+        "operationId" : "sweep",
+        "parameters" : [ {
+          "in" : "header",
+          "name" : "Idempotency-Key",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SweepRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RevenueSweep"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "revenue-sweep-endpoints" ]
+      }
+    },
+    "/v1/ops/revenue-sweeps/operating-accounts" : {
+      "get" : {
+        "operationId" : "listOperatingAccounts",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "currency",
+          "required" : false,
+          "schema" : {
+            "default" : "GHS",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "items" : {
+                    "$ref" : "#/components/schemas/OperatingAccount"
+                  },
+                  "type" : "array"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "revenue-sweep-endpoints" ]
+      },
+      "post" : {
+        "operationId" : "registerOperatingAccount",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegisterOperatingAccountRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/OperatingAccount"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "revenue-sweep-endpoints" ]
+      }
+    },
+    "/v1/ops/revenue-sweeps/preview" : {
+      "get" : {
+        "operationId" : "preview_1",
+        "parameters" : [ {
+          "in" : "query",
+          "name" : "currency",
+          "required" : false,
+          "schema" : {
+            "default" : "GHS",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SweepPreview"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "revenue-sweep-endpoints" ]
       }
     },
     "/v1/ops/settlements/run" : {

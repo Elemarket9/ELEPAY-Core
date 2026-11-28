@@ -34,7 +34,7 @@ public class MakerCheckerController {
     @PostMapping("/proposals")
     public MakerCheckerService.Proposal propose(@Valid @RequestBody ProposeRequest request) {
         Actor actor = Actor.current();
-        actor.requireOps();
+        requireMakerRole(actor, request.actionType());
         return service.propose(
                 request.actionType(),
                 request.resourceType(),
@@ -44,6 +44,19 @@ public class MakerCheckerController {
                 request.reason(),
                 actor.subject()
         );
+    }
+
+    private static void requireMakerRole(Actor actor, String rawActionType) {
+        String actionType = rawActionType == null ? "" : rawActionType.trim().toUpperCase(java.util.Locale.ROOT);
+        switch (actionType) {
+            case "REVENUE_SWEEP", "LARGE_PAYOUT", "CUSTODIAN_CONFIG", "OPERATING_ACCOUNT_REGISTER",
+                    "VELOCITY_CEILING_CHANGE", "FORCE_SETTLEMENT",
+                    "DISPUTE_RESOLUTION", "ESCROW_RELEASE",
+                    "SETTLEMENT_RULE_CHANGE", "FEE_SCHEDULE_CHANGE" -> actor.requireFinance();
+            case "KILL_SWITCH_CHANGE", "MODULE_ENABLE", "MERCHANT_UNFREEZE" -> actor.requireOpsAdmin();
+            case "DESTINATION_OPS_VERIFY", "PHONE_CHANGE" -> actor.requireOnboarding();
+            default -> actor.requireOpsAdmin();
+        }
     }
 
     @GetMapping("/proposals")

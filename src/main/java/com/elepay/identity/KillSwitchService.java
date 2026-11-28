@@ -10,10 +10,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.context.annotation.DependsOn;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -64,11 +65,22 @@ public class KillSwitchService {
         return key == null || isModuleEnabled(key);
     }
 
+    public static final Map<String, String> OPTIONAL_MODULE_CONFIG_BEANS = Map.of(
+            "merchanttools", "MerchantToolsModuleConfiguration",
+            "lending", "LendingModuleConfiguration",
+            "credit", "CreditModuleConfiguration",
+            "ussd", "UssdModuleConfiguration",
+            "growth", "GrowthModuleConfiguration",
+            "bills", "BillsModuleConfiguration",
+            "agents", "AgentsModuleConfiguration"
+    );
+
     private final JdbcClient db;
     private final Audit audit;
     private final OpsQueue ops;
     private final StringRedisTemplate redis;
     private final RedisBreaker redisBreaker;
+    private volatile ApplicationContext applicationContext;
 
     private final AtomicBoolean globalFrozen = new AtomicBoolean(false);
     private volatile String globalFreezeReason = null;
@@ -81,6 +93,58 @@ public class KillSwitchService {
     private final Map<String, String> moduleDisabledBy = new ConcurrentHashMap<>();
     private volatile boolean controlsUnreadable = false;
     private volatile boolean redisObservedHealthy = false;
+
+    @Autowired(required = false)
+    public void setApplicationContext(ApplicationContext applicationContext) {
+        this.applicationContext = applicationContext;
+    }
+
+    /** Returns true if the given optional product module's Spring configuration is loaded in the context. */
+    public boolean isOptionalModuleLoaded(String optionalModule) {
+        if (optionalModule == null) return true;
+        String key = optionalModule.toLowerCase(Locale.ROOT);
+        String simpleClassName = OPTIONAL_MODULE_CONFIG_BEANS.get(key);
+        if (simpleClassName == null) return true;
+        ApplicationContext ctx = this.applicationContext;
+        if (ctx == null) return true;
+        String shortBeanName = Character.toLowerCase(simpleClassName.charAt(0)) + simpleClassName.substring(1);
+        String fqnBeanName = "com.elepay." + key + "." + simpleClassName;
+        return ctx.containsBean(fqnBeanName) || ctx.containsBean(shortBeanName);
+    }
+
+    /** Returns true if the kill-switch module key maps to a loaded module (or core module). */
+    public boolean isModuleLoadedForKillSwitch(String moduleKey) {
+        if (moduleKey == null) return false;
+        String optionalModule = switch (moduleKey.toLowerCase(Locale.ROOT)) {
+            case "pos", "restaurant", "merchanttools" -> "merchanttools";
+            case "lending" -> "lending";
+            case "credit" -> "credit";
+            case "ussd" -> "ussd";
+            case "growth" -> "growth";
+            case "bill-payments", "bills" -> "bills";
+            case "agent-banking", "agents" -> "agents";
+            default -> null;
+        };
+        return optionalModule == null || isOptionalModuleLoaded(optionalModule);
+    }
+
+    /** Returns true if the optional product module is both loaded in Spring context and enabled via kill switches. */
+    public boolean isOptionalModuleActive(String optionalModule) {
+        String key = optionalModule.toLowerCase(Locale.ROOT);
+        if (!isOptionalModuleLoaded(key)) {
+            return false;
+        }
+        return switch (key) {
+            case "merchanttools" -> isModuleEnabled("merchanttools") && isModuleEnabled("pos");
+            case "lending" -> isModuleEnabled("lending");
+            case "credit" -> isModuleEnabled("lending") && isModuleEnabled("credit");
+            case "ussd" -> isModuleEnabled("ussd") && isConsumerWalletEnabled();
+            case "growth" -> isConsumerWalletEnabled();
+            case "bills" -> isModuleEnabled("bill-payments");
+            case "agents" -> isModuleEnabled("agent-banking");
+            default -> true;
+        };
+    }
 
     public KillSwitchService(
             JdbcClient db,
@@ -128,6 +192,7 @@ public class KillSwitchService {
 
         // Runtime-togglable modules
         defaults.put("pos", posEnabled);
+        defaults.put("merchanttools", posEnabled);
         defaults.put("fx", fxEnabled);
         defaults.put("consumer-wallet", consumerWalletEnabled);
         defaults.put("consumer-w2w", consumerWalletEnabled);
@@ -320,9 +385,12 @@ public class KillSwitchService {
         if (path == null) return null;
 
         // 1. Lending & Credit
-        if (path.startsWith("/v1/lending") || path.startsWith("/v1/loans") || path.startsWith("/v1/credit")
-                || path.startsWith("/v1/ops/lending") || path.startsWith("/v1/ops/credit")) {
-            return isModuleEnabled("lending") ? null : "lending";
+        if (path.startsWith("/v1/credit") || path.startsWith("/v1/ops/credit")) {
+            return (isOptionalModuleLoaded("credit") && isModuleEnabled("lending")) ? null : "lending";
+        }
+        if (path.startsWith("/v1/lending") || path.startsWith("/v1/loans")
+                || path.startsWith("/v1/ops/lending")) {
+            return (isOptionalModuleLoaded("lending") && isModuleEnabled("lending")) ? null : "lending";
         }
         // 2. Virtual Cards & Card Issuing (Note: /v1/rails/card/** acquiring tokenization remains ON)
         if (path.startsWith("/v1/cards") || path.startsWith("/v1/virtual-cards") || path.startsWith("/v1/ops/cards")) {
@@ -331,11 +399,11 @@ public class KillSwitchService {
         // 3. Bill Payments, Airtime & Utilities
         if (path.startsWith("/v1/bills") || path.startsWith("/v1/bill-payments")
                 || path.startsWith("/v1/airtime") || path.startsWith("/v1/utilities")) {
-            return isModuleEnabled("bill-payments") ? null : "bill-payments";
+            return (isOptionalModuleLoaded("bills") && isModuleEnabled("bill-payments")) ? null : "bill-payments";
         }
         // 4. Agent Banking
         if (path.startsWith("/v1/agents") || path.startsWith("/v1/agent-banking") || path.startsWith("/v1/ops/agents")) {
-            return isModuleEnabled("agent-banking") ? null : "agent-banking";
+            return (isOptionalModuleLoaded("agents") && isModuleEnabled("agent-banking")) ? null : "agent-banking";
         }
         // 5. FX Trading (explicitly disabled route prefix /v1/fx-trading/**, plus /v1/fx/** when fx or fx-trading off)
         if (path.startsWith("/v1/fx-trading")) {
@@ -346,7 +414,7 @@ public class KillSwitchService {
         }
         // 6. Physical POS Terminals
         if (path.startsWith("/v1/pos")) {
-            return isModuleEnabled("pos") ? null : "pos";
+            return (isOptionalModuleLoaded("merchanttools") && isModuleEnabled("pos")) ? null : "pos";
         }
         // 6a. Card payments: new card tokenisation (charges are also stopped at the rail by isRailAllowed)
         if (path.startsWith("/v1/rails/card/tokens")) {
@@ -364,21 +432,32 @@ public class KillSwitchService {
             }
         }
         // 6c. Restaurant ordering and kitchen screens (waiter orders also respect the POS kill switch)
-        if (path.startsWith("/v1/restaurant/waiter/") && !isModuleEnabled("pos")) {
+        if (path.startsWith("/v1/restaurant/waiter/") && (!isOptionalModuleLoaded("merchanttools") || !isModuleEnabled("pos"))) {
             return "pos";
         }
         if (path.startsWith("/v1/restaurant") || path.startsWith("/v1/public/kitchen")) {
-            return isModuleEnabled(RESTAURANT) ? null : RESTAURANT;
+            return (isOptionalModuleLoaded("merchanttools") && isModuleEnabled(RESTAURANT)) ? null : RESTAURANT;
+        }
+        // 6d. MerchantTools sub-modules: Inventory, Invoicing, Accounting, Payroll, CRM Customers (excluding /v1/customers/mandates)
+        if (path.startsWith("/v1/inventory")
+                || path.startsWith("/v1/invoicing")
+                || path.startsWith("/v1/accounting")
+                || path.startsWith("/v1/payroll")
+                || (path.startsWith("/v1/customers") && !path.startsWith("/v1/customers/mandates"))) {
+            return (isOptionalModuleLoaded("merchanttools") && isModuleEnabled("merchanttools") && isModuleEnabled("pos"))
+                    ? null : "merchanttools";
         }
         // 7. Consumer Wallet / W2W / Growth
+        if (path.startsWith("/v1/growth") || path.startsWith("/v1/savings")) {
+            return (isOptionalModuleLoaded("growth") && isConsumerWalletEnabled()) ? null : "consumer-w2w";
+        }
         if (path.startsWith("/v1/wallet") || path.startsWith("/v1/ops/customers")
-                || path.startsWith("/v1/growth") || path.startsWith("/v1/savings")
                 || (path.startsWith("/v1/checkouts/") && path.endsWith("/pay/wallet"))) {
             return isConsumerWalletEnabled() ? null : "consumer-w2w";
         }
         // 8. Consumer USSD
         if (path.startsWith("/v1/ussd")) {
-            return (isModuleEnabled("ussd") && isConsumerWalletEnabled()) ? null : "ussd";
+            return (isOptionalModuleLoaded("ussd") && isModuleEnabled("ussd") && isConsumerWalletEnabled()) ? null : "ussd";
         }
         // 9. Consumer Recurring Mandates
         if (path.startsWith("/v1/customers/mandates")

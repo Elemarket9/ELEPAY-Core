@@ -385,14 +385,14 @@ public class MandateService {
                         VALUES (:id, :cid, 1, :maxSteps, :backoff, 'active', :now, :next)""")
                         .param("id", scheduleId).param("cid", chargeId).param("maxSteps", maxSteps)
                         .param("backoff", backoffHours).param("now", now).param("next", nextRetry).update();
-            });
 
-            audit.record("merchant:" + merchantId, "mandate.charge_failed", "charge:" + chargeId,
-                    Map.of("mandate", mandateId, "reason", "insufficient_funds"));
-            outbox.publish("dunning", chargeId, "mandate.charge_failed",
-                    Map.of("chargeId", chargeId.toString(), "mandateId", mandateId.toString(), "step", 1,
-                            "nextRetryAt", nextRetry.toString()),
-                    Set.of(merchantId));
+                audit.record("merchant:" + merchantId, "mandate.charge_failed", "charge:" + chargeId,
+                        Map.of("mandate", mandateId, "reason", "insufficient_funds"));
+                outbox.publish("dunning", chargeId, "mandate.charge_failed",
+                        Map.of("chargeId", chargeId.toString(), "mandateId", mandateId.toString(), "step", 1,
+                                "nextRetryAt", nextRetry.toString()),
+                        Set.of(merchantId));
+            });
 
             throw ApiException.conflict("insufficient_funds", "Customer wallet has insufficient funds for recurring charge");
         }

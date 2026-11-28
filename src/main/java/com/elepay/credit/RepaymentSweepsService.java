@@ -43,6 +43,12 @@ public class RepaymentSweepsService {
 
     @Transactional
     public SweepPlan createPlan(UUID mcaOfferId, UUID merchantId, long targetAmountPesewas, int sweepPercentageBps) {
+        if (targetAmountPesewas <= 0) {
+            throw new IllegalArgumentException("targetAmountPesewas must be positive");
+        }
+        if (sweepPercentageBps <= 0 || sweepPercentageBps > 10000) {
+            throw new IllegalArgumentException("sweepPercentageBps must be between 1 and 10000");
+        }
         UUID id = UUID.randomUUID();
         db.sql("""
             INSERT INTO repayment_sweep_plan
@@ -56,6 +62,9 @@ public class RepaymentSweepsService {
 
     @Transactional
     public SweepExecutionResult executeSweep(UUID planId, UUID settlementBatchId, long settlementAmountPesewas) {
+        if (settlementAmountPesewas <= 0) {
+            throw new IllegalArgumentException("settlementAmountPesewas must be positive");
+        }
         SweepPlan plan = db.sql("SELECT id, mca_offer_id, merchant_id, target_amount_pesewas, collected_amount_pesewas, sweep_percentage_bps, status FROM repayment_sweep_plan WHERE id = ? FOR UPDATE")
                 .param(planId)
                 .query((rs, rowNum) -> new SweepPlan(
@@ -72,15 +81,18 @@ public class RepaymentSweepsService {
             return new SweepExecutionResult(null, planId, settlementBatchId, settlementAmountPesewas, 0L, 0L, "SKIPPED_PLAN_NOT_ACTIVE");
         }
 
-        long remaining = plan.targetAmountPesewas() - plan.collectedAmountPesewas();
+        long remaining = Math.subtractExact(plan.targetAmountPesewas(), plan.collectedAmountPesewas());
         if (remaining <= 0) {
             db.sql("UPDATE repayment_sweep_plan SET status = 'COMPLETED', completion_date = CURRENT_DATE WHERE id = ?")
                     .param(planId).update();
             return new SweepExecutionResult(null, planId, settlementBatchId, settlementAmountPesewas, 0L, 0L, "COMPLETED");
         }
 
-        // Calculate sweep amount: min(remaining, settlement * sweepBps / 10000)
-        long calculatedSweep = Math.round(settlementAmountPesewas * (plan.sweepPercentageBps() / 10000.0));
+        // Exact integer math: min(remaining, settlement * sweepBps / 10000)
+        long calculatedSweep = java.math.BigInteger.valueOf(settlementAmountPesewas)
+                .multiply(java.math.BigInteger.valueOf(plan.sweepPercentageBps()))
+                .divide(java.math.BigInteger.valueOf(10_000L))
+                .longValueExact();
         long actualSweep = Math.min(remaining, calculatedSweep);
 
         UUID executionId = UUID.randomUUID();
@@ -91,8 +103,8 @@ public class RepaymentSweepsService {
         """).params(executionId, planId, settlementBatchId, settlementAmountPesewas, actualSweep)
         .update();
 
-        long newCollected = plan.collectedAmountPesewas() + actualSweep;
-        long newRemaining = plan.targetAmountPesewas() - newCollected;
+        long newCollected = Math.addExact(plan.collectedAmountPesewas(), actualSweep);
+        long newRemaining = Math.subtractExact(plan.targetAmountPesewas(), newCollected);
         String newStatus = newRemaining == 0 ? "COMPLETED" : "ACTIVE";
 
         db.sql("""

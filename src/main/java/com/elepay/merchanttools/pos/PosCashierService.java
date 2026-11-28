@@ -218,30 +218,44 @@ public class PosCashierService {
                 WHERE merchant_id = :m
                   AND is_active = true
                   AND (is_manager = true OR role = 'MANAGER')
-                  AND (pin_locked_until IS NULL OR pin_locked_until <= now())
                 ORDER BY id ASC
                 FOR UPDATE
                 """)
                 .param("m", merchantId)
                 .query(Cashier.class)
                 .list();
-        for (Cashier candidate : managers) {
-            if (candidate.pinHash() != null && encoder.matches(managerPin, candidate.pinHash())) {
-                db.sql("UPDATE pos_cashier SET pin_failures = 0, pin_locked_until = NULL WHERE id = :id")
-                        .param("id", candidate.id()).update();
-                return candidate.withoutSecret();
-            }
+        if (managers.size() > 1) {
+            throw ApiException.badRequest("manager_badge_required",
+                    "Manager badge number is required when multiple managers are active");
         }
-        for (Cashier candidate : managers) {
-            if (candidate.pinHash() == null) continue;
+        if (managers.isEmpty()) {
+            throw ApiException.forbidden("manager_pin_invalid", "Invalid manager PIN");
+        }
+        Cashier soleManager = managers.getFirst();
+        Object[] lock = db.sql("SELECT pin_failures, pin_locked_until FROM pos_cashier WHERE id = :id")
+                .param("id", soleManager.id())
+                .query((rs, i) -> new Object[]{rs.getInt(1), rs.getObject(2, OffsetDateTime.class)})
+                .single();
+        OffsetDateTime lockedUntil = (OffsetDateTime) lock[1];
+        if (lockedUntil != null && lockedUntil.isAfter(OffsetDateTime.now())) {
+            throw ApiException.forbidden("manager_pin_locked", "Manager PIN is temporarily locked");
+        }
+        if (soleManager.pinHash() != null && encoder.matches(managerPin, soleManager.pinHash())) {
+            db.sql("UPDATE pos_cashier SET pin_failures = 0, pin_locked_until = NULL WHERE id = :id")
+                    .param("id", soleManager.id()).update();
+            return soleManager.withoutSecret();
+        }
+        if (soleManager.pinHash() != null) {
+            int failures = (Integer) lock[0] + 1;
             db.sql("""
                     UPDATE pos_cashier
-                    SET pin_failures = pin_failures + 1,
-                        pin_locked_until = CASE WHEN pin_failures + 1 >= :max THEN now() + interval '15 minutes' ELSE pin_locked_until END
+                    SET pin_failures = :f,
+                        pin_locked_until = CASE WHEN :f >= :max THEN now() + interval '15 minutes' ELSE pin_locked_until END
                     WHERE id = :id
                     """)
+                    .param("f", failures)
                     .param("max", MAX_ATTEMPTS)
-                    .param("id", candidate.id())
+                    .param("id", soleManager.id())
                     .update();
         }
         throw ApiException.forbidden("manager_pin_invalid", "Invalid manager PIN");

@@ -346,11 +346,8 @@ public class CardAcquiringRail implements PaymentRail {
     }
 
     private Result interpretAcquirerResponse(int statusCode, String body, Long expectedAmount, String expectedCurrency) {
-        if (statusCode == 503 || statusCode == 502 || statusCode == 504) {
-            return Result.unavailable("Card acquirer temporarily unavailable (" + statusCode + ")");
-        }
-        if (statusCode >= 500) {
-            return Result.unknown("Card acquirer returned HTTP " + statusCode);
+        if (statusCode >= 500 || statusCode == 408 || statusCode == 409 || statusCode == 429) {
+            return Result.unknown("Card acquirer returned ambiguous HTTP " + statusCode);
         }
         if (statusCode == 400 || statusCode == 422) {
             return new Result(Status.FAILED, null, null, null, null, null, "Card acquirer rejected request (" + statusCode + ")");

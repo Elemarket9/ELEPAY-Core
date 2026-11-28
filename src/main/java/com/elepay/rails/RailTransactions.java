@@ -60,7 +60,7 @@ public class RailTransactions {
     private final CustodianBankBackstopService custodianBackstop;
     private final KillSwitchService killSwitch;
     private com.elepay.common.ScheduledJobLock jobLock;
-    private com.elepay.payout.Payouts payouts;
+    private PayoutMerchantResolver payouts;
 
     @Autowired(required = false)
     void setJobLock(com.elepay.common.ScheduledJobLock jobLock) {
@@ -68,7 +68,7 @@ public class RailTransactions {
     }
 
     @Autowired(required = false)
-    void setPayouts(@org.springframework.context.annotation.Lazy com.elepay.payout.Payouts payouts) {
+    void setPayouts(@org.springframework.context.annotation.Lazy PayoutMerchantResolver payouts) {
         this.payouts = payouts;
     }
 
@@ -293,16 +293,19 @@ public class RailTransactions {
                         || result.currency() == null || !result.currency().equalsIgnoreCase(t.currency())
                         || result.railReference() == null || result.railReference().isBlank()
                         || (result.fee() != null && result.fee() < 0)) {
+                    String mismatchReason = "Rail reported " + result.amount() + " " + result.currency();
                     db.sql("""
                             UPDATE rail_transaction SET status = 'mismatch', updated_at = now(), completed_at = now(),
                                    rail_reference = coalesce(:pref, rail_reference),
                                    failure_reason = :reason WHERE id = :id""")
                             .param("id", id).param("pref", result.railReference())
-                            .param("reason", "Rail reported " + result.amount() + " " + result.currency()).update();
+                            .param("reason", mismatchReason).update();
                     ops.raise("rail_amount_mismatch", "high", "rail_tx:" + t.reference(), Map.of(
                             "expected", t.amount(), "reported", String.valueOf(result.amount()),
                             "currency", String.valueOf(result.currency()), "rail", t.rail(),
                             "direction", t.direction()));
+                    events.publishEvent(new RailEvents.Mismatch(id, t.rail(), t.direction(), t.purpose(),
+                            t.purposeId(), t.amount(), result.amount(), result.currency(), mismatchReason));
                     return;
                 }
                 long fee = result.fee() == null ? 0 : result.fee();

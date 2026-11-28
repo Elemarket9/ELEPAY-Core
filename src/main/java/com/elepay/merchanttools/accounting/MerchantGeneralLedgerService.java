@@ -189,16 +189,69 @@ public class MerchantGeneralLedgerService {
      */
     @Transactional
     public JournalEntryResult postJournalEntry(PostJournalEntryCommand command) {
+        if (command == null || command.merchantId() == null) {
+            throw new IllegalArgumentException("Merchant ID is required");
+        }
         if (command.lines() == null || command.lines().size() < 2) {
             throw new IllegalArgumentException("Journal entry must contain at least 2 lines for double-entry");
         }
 
-        long totalDebit = command.lines().stream().mapToLong(JournalLineCommand::debitPesewas).sum();
-        long totalCredit = command.lines().stream().mapToLong(JournalLineCommand::creditPesewas).sum();
+        String entryCurrency = command.currency() != null ? command.currency().trim().toUpperCase() : "GHS";
+        long totalDebit = 0L;
+        long totalCredit = 0L;
+        for (JournalLineCommand line : command.lines()) {
+            if (line == null || line.accountId() == null) {
+                throw new IllegalArgumentException("Journal line and accountId are required");
+            }
+            if (line.debitPesewas() < 0 || line.creditPesewas() < 0) {
+                throw new IllegalArgumentException("Journal line amounts cannot be negative");
+            }
+            if ((line.debitPesewas() == 0 && line.creditPesewas() == 0)
+                    || (line.debitPesewas() > 0 && line.creditPesewas() > 0)) {
+                throw new IllegalArgumentException("Each journal line must have either a positive debit or a positive credit");
+            }
+            totalDebit = Math.addExact(totalDebit, line.debitPesewas());
+            totalCredit = Math.addExact(totalCredit, line.creditPesewas());
+        }
 
-        if (totalDebit != totalCredit) {
+        if (totalDebit <= 0 || totalDebit != totalCredit) {
             throw new IllegalArgumentException("Journal entry out of balance: total debits (" +
                     totalDebit + ") != total credits (" + totalCredit + ")");
+        }
+
+        // Pre-lock all distinct GL accounts in deterministic UUID order, enforcing tenant ownership & currency match
+        List<UUID> sortedAccountIds = command.lines().stream()
+                .map(JournalLineCommand::accountId)
+                .distinct()
+                .sorted()
+                .toList();
+
+        Map<UUID, GlAccount> lockedAccounts = new HashMap<>(sortedAccountIds.size());
+        for (UUID accountId : sortedAccountIds) {
+            GlAccount acc = db.sql("""
+                    SELECT id, merchant_id, normal_balance, balance_pesewas, currency
+                    FROM merchant_gl_account
+                    WHERE id = ? AND merchant_id = ?
+                    FOR UPDATE
+                    """)
+                    .params(accountId, command.merchantId())
+                    .query((rs, rowNum) -> new GlAccount(
+                            rs.getObject("id", UUID.class),
+                            rs.getObject("merchant_id", UUID.class),
+                            null, null, null, null,
+                            NormalBalance.valueOf(rs.getString("normal_balance")),
+                            rs.getLong("balance_pesewas"),
+                            rs.getString("currency"),
+                            true
+                    ))
+                    .optional()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "GL account " + accountId + " does not belong to merchant " + command.merchantId()));
+            if (acc.currency() != null && !entryCurrency.equalsIgnoreCase(acc.currency())) {
+                throw new IllegalArgumentException("GL account " + accountId + " currency (" + acc.currency()
+                        + ") does not match journal entry currency (" + entryCurrency + ")");
+            }
+            lockedAccounts.put(accountId, acc);
         }
 
         UUID entryId = UUID.randomUUID();
@@ -209,8 +262,7 @@ public class MerchantGeneralLedgerService {
             (id, merchant_id, entry_number, entry_date, description, reference_type, reference_id, currency, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'POSTED')
         """).params(entryId, command.merchantId(), entryNumber, command.entryDate(),
-                command.description(), command.referenceType(), command.referenceId(),
-                command.currency() != null ? command.currency() : "GHS")
+                command.description(), command.referenceType(), command.referenceId(), entryCurrency)
         .update();
 
         for (JournalLineCommand line : command.lines()) {
@@ -222,21 +274,13 @@ public class MerchantGeneralLedgerService {
             """).params(lineId, entryId, line.accountId(), line.debitPesewas(), line.creditPesewas(), line.description())
             .update();
 
-            // Lock and update account balance according to normal balance convention
-            GlAccount acc = db.sql("SELECT normal_balance, balance_pesewas FROM merchant_gl_account WHERE id = ? FOR UPDATE")
-                    .param(line.accountId())
-                    .query((rs, rowNum) -> new GlAccount(
-                            line.accountId(), command.merchantId(), null, null, null, null,
-                            NormalBalance.valueOf(rs.getString("normal_balance")),
-                            rs.getLong("balance_pesewas"), null, true
-                    )).single();
-
+            GlAccount acc = lockedAccounts.get(line.accountId());
             long delta = (acc.normalBalance() == NormalBalance.DEBIT)
-                    ? (line.debitPesewas() - line.creditPesewas())
-                    : (line.creditPesewas() - line.debitPesewas());
+                    ? Math.subtractExact(line.debitPesewas(), line.creditPesewas())
+                    : Math.subtractExact(line.creditPesewas(), line.debitPesewas());
 
-            db.sql("UPDATE merchant_gl_account SET balance_pesewas = balance_pesewas + ? WHERE id = ?")
-                    .params(delta, line.accountId())
+            db.sql("UPDATE merchant_gl_account SET balance_pesewas = balance_pesewas + ? WHERE id = ? AND merchant_id = ?")
+                    .params(delta, line.accountId(), command.merchantId())
                     .update();
         }
 
@@ -250,13 +294,20 @@ public class MerchantGeneralLedgerService {
     @Transactional
     public JournalEntryResult reverseJournalEntry(UUID merchantId, UUID originalEntryId, String reason) {
         var original = db.sql("""
-            SELECT id, entry_number, currency FROM merchant_gl_journal_entry
+            SELECT id, entry_number, currency, reference_type FROM merchant_gl_journal_entry
             WHERE id = ? AND merchant_id = ? AND status = 'POSTED' FOR UPDATE
         """).params(originalEntryId, merchantId)
-        .query((rs, rowNum) -> Map.of(
-                "entry_number", rs.getString("entry_number"),
-                "currency", rs.getString("currency")
-        )).single();
+        .query((rs, rowNum) -> {
+            Map<String, String> row = new HashMap<>();
+            row.put("entry_number", rs.getString("entry_number"));
+            row.put("currency", rs.getString("currency"));
+            row.put("reference_type", rs.getString("reference_type"));
+            return row;
+        }).single();
+
+        if ("REVERSAL".equalsIgnoreCase(original.get("reference_type"))) {
+            throw new IllegalStateException("Cannot reverse a reversal journal entry");
+        }
 
         var lines = db.sql("""
             SELECT account_id, debit_pesewas, credit_pesewas, description
@@ -270,8 +321,8 @@ public class MerchantGeneralLedgerService {
                 "Reversal of " + original.get("entry_number") + ": " + reason
         )).list();
 
-        db.sql("UPDATE merchant_gl_journal_entry SET status = 'REVERSED' WHERE id = ?")
-                .param(originalEntryId).update();
+        db.sql("UPDATE merchant_gl_journal_entry SET status = 'REVERSED' WHERE id = ? AND merchant_id = ?")
+                .params(originalEntryId, merchantId).update();
 
         String reversalNumber = "REV-" + original.get("entry_number");
         return postJournalEntry(new PostJournalEntryCommand(

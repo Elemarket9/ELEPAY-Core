@@ -70,11 +70,14 @@ public class PersonalizedLimitService implements TransferLimits.PersonalizedLimi
             FROM personalized_limit_profile
             WHERE customer_id = ? AND status = 'ACTIVE'
         """).param(customerId)
-        .query((rs, i) -> new ActiveLimit(
-                rs.getLong("max_daily_pesewas"),
-                rs.getLong("max_transaction_pesewas"),
-                rs.getLong("policy_ceiling_daily_pesewas")
-        )).optional();
+        .query((rs, i) -> {
+            long ceiling = rs.getLong("policy_ceiling_daily_pesewas");
+            long clampedDaily = ceiling > 0
+                    ? Math.min(rs.getLong("max_daily_pesewas"), ceiling)
+                    : rs.getLong("max_daily_pesewas");
+            long clampedTxn = Math.min(rs.getLong("max_transaction_pesewas"), clampedDaily);
+            return new ActiveLimit(clampedDaily, clampedTxn, ceiling);
+        }).optional();
     }
 
     @Override
@@ -129,8 +132,10 @@ public class PersonalizedLimitService implements TransferLimits.PersonalizedLimi
                 tier_multiplier = EXCLUDED.tier_multiplier,
                 max_daily_pesewas = EXCLUDED.max_daily_pesewas,
                 max_transaction_pesewas = EXCLUDED.max_transaction_pesewas,
+                policy_ceiling_daily_pesewas = EXCLUDED.policy_ceiling_daily_pesewas,
                 risk_score = EXCLUDED.risk_score,
                 reason = EXCLUDED.reason,
+                status = 'ACTIVE',
                 updated_at = now()
         """).params(id, customerId, kycTier,
                 multiplierDecimal,

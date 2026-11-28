@@ -18,4 +18,8 @@ public final class RailEvents {
     /** A previously succeeded payout or refund came back from the receiving network. */
     public record Returned(UUID railTxId, String rail, String direction, String purpose, UUID purposeId,
                            long amount, String reason) {}
+
+    /** A rail reported SUCCEEDED with mismatched amount, currency, or missing rail reference. */
+    public record Mismatch(UUID railTxId, String rail, String direction, String purpose, UUID purposeId,
+                           long expectedAmount, Long reportedAmount, String reportedCurrency, String reason) {}
 }

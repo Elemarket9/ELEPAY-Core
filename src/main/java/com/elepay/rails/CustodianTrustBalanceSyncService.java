@@ -62,7 +62,11 @@ public class CustodianTrustBalanceSyncService {
         CustodianBankGateway.TrustBalanceSnapshot snapshot =
                 gateway.fetchTrustBalance(CustodianBankBackstopService.PRIMARY_TRUST_CODE, Ledger.GHS);
 
-        backstop.updateConfig(null, null, null, snapshot.availableBalancePesewas(), null, effectiveActor);
+        backstop.recordReconciledBalance(
+                snapshot.availableBalancePesewas(),
+                snapshot.bankStatementReference(),
+                effectiveActor
+        );
         CustodianBankBackstopService.CustodianSafeguardReport report = backstop.verifyTrustSafeguarding(Ledger.GHS);
 
         if (!report.safeguardingSatisfied()) {

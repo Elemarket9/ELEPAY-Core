@@ -94,6 +94,20 @@ public class Ledger {
     public record Account(long id, String code, String ownerType, UUID ownerId, String bucket,
                           String currency, boolean allowNegative, long balance) {}
 
+    /** Looks up a previously posted journal transaction by its idempotency scope and key. */
+    public Optional<UUID> findTransactionByIdempotency(String scope, String key) {
+        if (scope == null || scope.isBlank() || key == null || key.isBlank()) {
+            return Optional.empty();
+        }
+        return db.sql("""
+                SELECT id FROM journal_transaction
+                WHERE idempotency_scope = :scope AND idempotency_key = :key""")
+                .param("scope", scope)
+                .param("key", key)
+                .query(UUID.class)
+                .optional();
+    }
+
     @Transactional
     public Posted post(Posting posting) {
         return write(posting, null);

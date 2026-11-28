@@ -8,12 +8,20 @@ import com.elepay.common.References;
 import com.elepay.identity.KillSwitchService;
 import com.elepay.ledger.Ledger;
 import com.elepay.ledger.Ledger.Leg;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +50,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  */
 @Service
 public class PlatformRevenueSweepService {
+    private static final Logger log = LoggerFactory.getLogger(PlatformRevenueSweepService.class);
+    private static final ZoneId ACCRA_ZONE = ZoneId.of("Africa/Accra");
 
     private final JdbcClient db;
     private final Ledger ledger;
@@ -88,7 +98,12 @@ public class PlatformRevenueSweepService {
         if (clawbackBufferPesewas < 0) {
             throw ApiException.badRequest("invalid_buffer", "Clawback buffer cannot be negative");
         }
+        long previous = this.clawbackBufferPesewas;
         this.clawbackBufferPesewas = clawbackBufferPesewas;
+        if (audit != null && previous != clawbackBufferPesewas) {
+            audit.record("system:revenue-sweep", "revenue_sweep.clawback_buffer_updated", "platform_revenue:GHS",
+                    Map.of("previousBufferPesewas", previous, "newBufferPesewas", clawbackBufferPesewas));
+        }
     }
 
     public record OperatingAccount(
@@ -99,8 +114,23 @@ public class PlatformRevenueSweepService {
             String currency,
             String status,
             String verifiedBy,
-            OffsetDateTime createdAt
-    ) {}
+            OffsetDateTime createdAt,
+            String verifiedByEmail,
+            String approvedBy
+    ) {
+        public OperatingAccount(
+                UUID id,
+                String bankCode,
+                String accountNumber,
+                String accountName,
+                String currency,
+                String status,
+                String verifiedBy,
+                OffsetDateTime createdAt
+        ) {
+            this(id, bankCode, accountNumber, accountName, currency, status, verifiedBy, createdAt, null, null);
+        }
+    }
 
     public record SweepPreview(
             String currency,
@@ -140,6 +170,83 @@ public class PlatformRevenueSweepService {
             OffsetDateTime completedAt
     ) {}
 
+    static void validateOperatingAccountInput(
+            String bankCode,
+            String accountNumber,
+            String accountName,
+            String currency
+    ) {
+        normalizeCurrency(currency);
+        if (bankCode == null || !bankCode.trim().matches("^[A-Z0-9]{2,20}$")) {
+            throw ApiException.badRequest("invalid_bank_code", "Bank code must be 2-20 uppercase alphanumeric characters");
+        }
+        if (accountNumber == null || !accountNumber.trim().matches("^[0-9]{6,34}$")) {
+            throw ApiException.badRequest("invalid_account_number", "Account number must be 6-34 digits");
+        }
+        if (accountName == null || accountName.isBlank()) {
+            throw ApiException.badRequest("invalid_account_name", "Account name is required");
+        }
+    }
+
+    /**
+     * Extracts normalized (trimmed, lowercase) identity tokens from explicit strings to compare
+     * operators across NativeAuth HS256 ({@code sub=email}) and OIDC RS256 ({@code sub=UUID}).
+     */
+    static Set<String> canonicalIdentityTokens(String... rawValues) {
+        Set<String> tokens = new LinkedHashSet<>();
+        if (rawValues != null) {
+            for (String v : rawValues) {
+                if (v != null && !v.isBlank()) {
+                    tokens.add(v.trim().toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        return tokens;
+    }
+
+    /**
+     * Collects all normalized identity tokens for the current approver, combining the explicit
+     * {@code approverSubject} with {@code sub}, {@code email}, {@code preferred_username}, and
+     * {@code uid} claims from the active JWT in {@link SecurityContextHolder}.
+     */
+    static Set<String> currentApproverIdentityTokens(String approverSubject) {
+        Set<String> tokens = canonicalIdentityTokens(approverSubject);
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth instanceof JwtAuthenticationToken jwt) {
+            var token = jwt.getToken();
+            addNormalized(tokens, token.getSubject());
+            addNormalized(tokens, token.getClaimAsString("email"));
+            addNormalized(tokens, token.getClaimAsString("preferred_username"));
+            addNormalized(tokens, token.getClaimAsString("uid"));
+        }
+        return tokens;
+    }
+
+    static String currentJwtClaim(String claimName) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth instanceof JwtAuthenticationToken jwt) {
+            String value = jwt.getToken().getClaimAsString(claimName);
+            if (value != null && !value.isBlank()) {
+                return value.trim().toLowerCase(Locale.ROOT);
+            }
+        }
+        return null;
+    }
+
+    static boolean identitiesOverlap(Set<String> a, Set<String> b) {
+        if (a == null || b == null || a.isEmpty() || b.isEmpty()) return false;
+        for (String token : a) {
+            if (b.contains(token)) return true;
+        }
+        return false;
+    }
+
+    private static void addNormalized(Set<String> out, String value) {
+        if (value != null && !value.isBlank()) {
+            out.add(value.trim().toLowerCase(Locale.ROOT));
+        }
+    }
+
     @Transactional
     public OperatingAccount registerOperatingAccount(
             String bankCode,
@@ -148,46 +255,64 @@ public class PlatformRevenueSweepService {
             String currency,
             String verifiedBy
     ) {
+        return registerOperatingAccount(bankCode, accountNumber, accountName, currency, verifiedBy, null, null);
+    }
+
+    @Transactional
+    public OperatingAccount registerOperatingAccount(
+            String bankCode,
+            String accountNumber,
+            String accountName,
+            String currency,
+            String verifiedBy,
+            String verifiedByEmail,
+            String approvedBy
+    ) {
         String cur = normalizeCurrency(currency);
-        if (bankCode == null || !bankCode.matches("^[A-Z0-9]{2,20}$")) {
-            throw ApiException.badRequest("invalid_bank_code", "Bank code must be 2-20 uppercase alphanumeric characters");
-        }
-        if (accountNumber == null || !accountNumber.matches("^[0-9]{6,34}$")) {
-            throw ApiException.badRequest("invalid_account_number", "Account number must be 6-34 digits");
-        }
-        if (accountName == null || accountName.isBlank()) {
-            throw ApiException.badRequest("invalid_account_name", "Account name is required");
-        }
+        validateOperatingAccountInput(bankCode, accountNumber, accountName, cur);
+        String cleanBank = bankCode.trim();
+        String cleanNum = accountNumber.trim();
+        String cleanEmail = (verifiedByEmail != null && !verifiedByEmail.isBlank())
+                ? verifiedByEmail.trim().toLowerCase(Locale.ROOT) : null;
         UUID id = UUID.randomUUID();
         try {
             db.sql("""
                     INSERT INTO platform_operating_account
-                        (id, bank_code, account_number, account_name, currency, status, verified_by)
-                    VALUES (:id, :bank, :num, :name, :cur, 'active', :by)""")
+                        (id, bank_code, account_number, account_name, currency, status, verified_by, verified_by_email, approved_by)
+                    VALUES (:id, :bank, :num, :name, :cur, 'active', :by, :byEmail, :appBy)""")
                     .param("id", id)
-                    .param("bank", bankCode)
-                    .param("num", accountNumber)
+                    .param("bank", cleanBank)
+                    .param("num", cleanNum)
                     .param("name", accountName.trim())
                     .param("cur", cur)
                     .param("by", verifiedBy != null ? verifiedBy : "system")
+                    .param("byEmail", cleanEmail)
+                    .param("appBy", approvedBy)
                     .update();
         } catch (org.springframework.dao.DuplicateKeyException dup) {
             throw ApiException.conflict("operating_account_exists",
-                    "Operating account " + bankCode + "/" + accountNumber + " (" + cur + ") is already registered");
+                    "Operating account " + cleanBank + "/" + cleanNum + " (" + cur + ") is already registered");
         }
         if (audit != null) {
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("bankCode", cleanBank);
+            details.put("currency", cur);
+            if (approvedBy != null) details.put("approvedBy", approvedBy);
             audit.record(verifiedBy != null ? verifiedBy : "system",
                     "revenue_sweep.operating_account_registered",
                     "operating_account:" + id,
-                    Map.of("bankCode", bankCode, "currency", cur));
+                    details);
         }
         return findOperatingAccount(id).orElseThrow();
     }
 
+    private static final String SELECT_OPERATING_ACCOUNT = """
+            SELECT id, bank_code, account_number, account_name, currency, status, verified_by, created_at,
+                   verified_by_email, approved_by
+            FROM platform_operating_account""";
+
     public Optional<OperatingAccount> findOperatingAccount(UUID id) {
-        return db.sql("""
-                SELECT id, bank_code, account_number, account_name, currency, status, verified_by, created_at
-                FROM platform_operating_account WHERE id = :id""")
+        return db.sql(SELECT_OPERATING_ACCOUNT + " WHERE id = :id")
                 .param("id", id)
                 .query(PlatformRevenueSweepService::mapOperatingAccount)
                 .optional();
@@ -195,11 +320,7 @@ public class PlatformRevenueSweepService {
 
     public List<OperatingAccount> listOperatingAccounts(String currency) {
         String cur = normalizeCurrency(currency);
-        return db.sql("""
-                SELECT id, bank_code, account_number, account_name, currency, status, verified_by, created_at
-                FROM platform_operating_account
-                WHERE currency = :cur
-                ORDER BY created_at DESC""")
+        return db.sql(SELECT_OPERATING_ACCOUNT + " WHERE currency = :cur ORDER BY created_at DESC")
                 .param("cur", cur)
                 .query(PlatformRevenueSweepService::mapOperatingAccount)
                 .list();
@@ -211,7 +332,7 @@ public class PlatformRevenueSweepService {
                 FROM platform_revenue_sweep s
                 JOIN rail_transaction rt ON rt.id = s.rail_tx
                 WHERE s.currency = :cur
-                  AND s.status = 'reserved'
+                  AND s.status IN ('reserved', 'submitted')
                   AND rt.reservation_date IS NULL""")
                 .param("cur", cur)
                 .query(Long.class)
@@ -239,11 +360,14 @@ public class PlatformRevenueSweepService {
             blockReason = "Custodian Bank trust account outflow is frozen";
         } else if (report.reconciledBankBalancePesewas() == null) {
             blockReason = "Custodian Bank trust balance has not been reconciled";
+        } else if (!custodianBackstop.isBalanceFresh(config)) {
+            blockReason = "Custodian Bank trust balance is stale and must be re-reconciled";
         } else if (!report.safeguardingSatisfied()) {
             blockReason = "Custodian Bank safeguarding check is not satisfied";
         } else {
+            long unreconciledOutflows = custodianBackstop.unreconciledOutflowsPesewas(config, cur);
             long committed = Math.addExact(
-                    Math.addExact(report.totalSafeguardedLiabilitiesPesewas(), report.todayTotalOutflowPesewas()),
+                    Math.addExact(report.totalSafeguardedLiabilitiesPesewas(), unreconciledOutflows),
                     Math.addExact(config.minReserveFloorPesewas(), unsubmittedSweep));
             trustHeadroom = Math.max(0L, report.reconciledBankBalancePesewas() - committed);
             if (trustHeadroom == 0L) {
@@ -328,14 +452,27 @@ public class PlatformRevenueSweepService {
                 .filter(a -> "active".equals(a.status()) && cur.equals(a.currency().trim()))
                 .orElseThrow(() -> ApiException.notFound("Active operating account not found for currency " + cur));
 
-        // Separation of duties: the approver of a dual-controlled revenue sweep cannot be the same
-        // actor who registered the destination operating account.
-        if (proposalId != null && approvedBy != null && approvedBy.equals(dest.verifiedBy())) {
-            throw new ApiException(
-                    org.springframework.http.HttpStatus.FORBIDDEN,
-                    "operating_account_approver_conflict",
-                    "Revenue sweep approver cannot be the same administrator who registered the operating account"
-            );
+        // Separation of duties (case-insensitive & cross-issuer NativeAuth HS256 vs OIDC RS256):
+        // the approver of a dual-controlled revenue sweep cannot be the same canonical operator
+        // who proposed the sweep or registered the destination operating account.
+        if (proposalId != null) {
+            Set<String> approverIds = currentApproverIdentityTokens(approvedBy);
+            Set<String> requesterIds = canonicalIdentityTokens(requestedBy);
+            if (identitiesOverlap(requesterIds, approverIds)) {
+                throw new ApiException(
+                        HttpStatus.FORBIDDEN,
+                        "dual_control_identity_conflict",
+                        "Revenue sweep approver cannot be the same canonical administrator who proposed the sweep"
+                );
+            }
+            Set<String> destCreatorIds = canonicalIdentityTokens(dest.verifiedBy(), dest.verifiedByEmail());
+            if (identitiesOverlap(destCreatorIds, approverIds)) {
+                throw new ApiException(
+                        HttpStatus.FORBIDDEN,
+                        "operating_account_approver_conflict",
+                        "Revenue sweep approver cannot be the same administrator who registered the operating account"
+                );
+            }
         }
 
         // Lock custodian_trust_account FOR UPDATE to serialize against concurrent config changes or sweeps
@@ -354,6 +491,10 @@ public class PlatformRevenueSweepService {
             throw ApiException.conflict("custodian_trust_balance_unreconciled",
                     "Custodian Bank trust balance must be reconciled before sweeping platform revenue");
         }
+        if (!custodianBackstop.isBalanceFresh(config)) {
+            throw ApiException.conflict("custodian_trust_balance_stale",
+                    "Custodian Bank trust balance is stale and must be re-reconciled before sweeping platform revenue");
+        }
         if (!report.safeguardingSatisfied()) {
             throw ApiException.conflict("custodian_safeguarding_unsatisfied",
                     "Custodian Bank safeguarding invariants are not satisfied; revenue sweep blocked");
@@ -371,9 +512,10 @@ public class PlatformRevenueSweepService {
         }
 
         long unsubmittedSweep = unsubmittedRevenueSweepPesewas(cur);
+        long unreconciledOutflows = custodianBackstop.unreconciledOutflowsPesewas(config, cur);
 
         long committed = Math.addExact(
-                Math.addExact(report.totalSafeguardedLiabilitiesPesewas(), report.todayTotalOutflowPesewas()),
+                Math.addExact(report.totalSafeguardedLiabilitiesPesewas(), unreconciledOutflows),
                 Math.addExact(config.minReserveFloorPesewas(), unsubmittedSweep));
         long trustHeadroom = Math.max(0L, report.reconciledBankBalancePesewas() - committed);
         if (amountPesewas > trustHeadroom) {
@@ -454,13 +596,18 @@ public class PlatformRevenueSweepService {
 
     private void submitAfterCommit(UUID sweepId, UUID railTxId) {
         Runnable submit = () -> {
-            if (rails.find(railTxId).map(t -> "created".equals(t.status())).orElse(false)) {
-                rails.submit(railTxId);
-            }
-            boolean sent = rails.find(railTxId).map(t -> !"created".equals(t.status())).orElse(false);
-            if (sent) {
-                db.sql("UPDATE platform_revenue_sweep SET status = 'submitted' WHERE id = :id AND status = 'reserved'")
-                        .param("id", sweepId).update();
+            try {
+                if (rails.find(railTxId).map(t -> "created".equals(t.status())).orElse(false)) {
+                    rails.submit(railTxId);
+                }
+                boolean sent = rails.find(railTxId).map(t -> !"created".equals(t.status())).orElse(false);
+                if (sent) {
+                    db.sql("UPDATE platform_revenue_sweep SET status = 'submitted' WHERE id = :id AND status = 'reserved'")
+                            .param("id", sweepId).update();
+                }
+            } catch (RuntimeException e) {
+                log.error("Post-commit rail submission failed for revenue sweep {} (rail_tx {}); recovery will retry: {}",
+                        sweepId, railTxId, e.getMessage());
             }
         };
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
@@ -532,6 +679,10 @@ public class PlatformRevenueSweepService {
                 .param("reason", event.reason())
                 .param("id", s.id())
                 .update();
+        if (audit != null) {
+            audit.record("system:revenue-sweep", "revenue_sweep.failed", "revenue_sweep:" + s.reference(),
+                    Map.of("amount", s.amountPesewas(), "reason", String.valueOf(event.reason())));
+        }
     }
 
     @EventListener
@@ -566,10 +717,129 @@ public class PlatformRevenueSweepService {
                 .param("reason", event.reason())
                 .param("id", s.id())
                 .update();
+        if (audit != null) {
+            audit.record("system:revenue-sweep", "revenue_sweep.returned", "revenue_sweep:" + s.reference(),
+                    Map.of("amount", s.amountPesewas(), "reason", String.valueOf(event.reason())));
+        }
         ops.raise("revenue_sweep_returned", "high", "revenue_sweep:" + s.reference(), Map.of(
                 "amount", s.amountPesewas(),
                 "reason", String.valueOf(event.reason()),
                 "note", "Returned platform revenue restored to system:revenue:GHS"));
+    }
+
+    @EventListener
+    @Transactional
+    void onMismatch(RailEvents.Mismatch event) {
+        if (!"revenue_sweep".equals(event.purpose())) return;
+        var sweepOpt = lockSweep(event.purposeId());
+        if (sweepOpt.isEmpty()) return;
+        var s = sweepOpt.get();
+        if (!Set.of("reserved", "submitted").contains(s.status())) return;
+
+        db.sql("""
+                UPDATE platform_revenue_sweep
+                SET status = 'mismatch', failure_reason = :reason
+                WHERE id = :id""")
+                .param("reason", event.reason())
+                .param("id", s.id())
+                .update();
+        if (audit != null) {
+            audit.record("system:revenue-sweep", "revenue_sweep.mismatch", "revenue_sweep:" + s.reference(),
+                    Map.of("amount", s.amountPesewas(), "reason", String.valueOf(event.reason())));
+        }
+        ops.raise("revenue_sweep_mismatch", "high", "revenue_sweep:" + s.reference(), Map.of(
+                "sweepId", s.id().toString(),
+                "expectedAmount", s.amountPesewas(),
+                "reportedAmount", String.valueOf(event.reportedAmount()),
+                "reason", String.valueOf(event.reason()),
+                "note", "Call POST /v1/ops/revenue-sweeps/" + s.id() + "/reconcile-mismatch with resolution=release or settle"));
+    }
+
+    /**
+     * Operator-controlled reconciliation for a revenue sweep stuck in terminal rail {@code mismatch}.
+     * Prevents {@code system:revenue_sweep_reserved:GHS} and custodian daily outflow reservations from
+     * being permanently stranded.
+     *
+     * @param resolution {@code "release"} to return reserved revenue to {@code system:revenue:GHS} and
+     *                   release the custodian outflow reservation, or {@code "settle"} if bank statements
+     *                   confirm full settlement.
+     */
+    @Transactional
+    public RevenueSweep reconcileMismatch(UUID sweepId, String resolution, String actor, String reason) {
+        if (resolution == null || (!"release".equalsIgnoreCase(resolution.trim()) && !"settle".equalsIgnoreCase(resolution.trim()))) {
+            throw ApiException.badRequest("invalid_resolution", "Resolution must be 'release' or 'settle'");
+        }
+        if (reason == null || reason.isBlank()) {
+            throw ApiException.badRequest("missing_reason", "Reconciliation reason is required");
+        }
+        var s = lockSweep(sweepId).orElseThrow(() -> ApiException.notFound("Revenue sweep not found"));
+        if (!"mismatch".equals(s.status())) {
+            throw ApiException.conflict("sweep_not_in_mismatch",
+                    "Only revenue sweeps in 'mismatch' status can be reconciled (current: " + s.status() + ")");
+        }
+        String effectiveActor = (actor != null && !actor.isBlank()) ? actor : "system:ops";
+        LocalDate fallbackDate = s.createdAt() != null
+                ? s.createdAt().atZoneSameInstant(ACCRA_ZONE).toLocalDate()
+                : LocalDate.now(ACCRA_ZONE);
+
+        if ("release".equalsIgnoreCase(resolution.trim())) {
+            var posted = ledger.post(Ledger.Posting.of(
+                    "revenue-sweep-release",
+                    s.id().toString(),
+                    "revenue_sweep_mismatch_release",
+                    List.of(
+                            Leg.debit(Ledger.REVENUE_SWEEP_RESERVED, s.amountPesewas()),
+                            Leg.credit(Ledger.REVENUE, s.amountPesewas())
+                    )
+            ).describedAs(s.reference() + " mismatch release: " + reason));
+            custodianBackstop.onOutboundReleased(s.railTx(), s.amountPesewas(), s.currency(), fallbackDate);
+            db.sql("""
+                    UPDATE platform_revenue_sweep
+                    SET status = 'failed', completion_tx = :tx, completed_at = now(), failure_reason = :reason
+                    WHERE id = :id""")
+                    .param("tx", posted.transactionId())
+                    .param("reason", "Ops mismatch release: " + reason)
+                    .param("id", s.id())
+                    .update();
+            if (audit != null) {
+                audit.record(effectiveActor, "revenue_sweep.mismatch_released", "revenue_sweep:" + s.reference(),
+                        Map.of("amount", s.amountPesewas(), "reason", reason));
+            }
+        } else {
+            String railName = rails.find(s.railTx()).map(RailTransactions.RailTx::rail).orElse("custodian");
+            String clearing = ledger.openStripedSystem(Ledger.clearing(railName), "clearing", Ledger.GHS, true, s.id());
+            var posted = ledger.post(Ledger.Posting.of(
+                    "revenue-sweep-complete",
+                    s.id().toString(),
+                    "revenue_sweep_mismatch_settlement",
+                    List.of(
+                            Leg.debit(Ledger.REVENUE_SWEEP_RESERVED, s.amountPesewas()),
+                            Leg.credit(clearing, s.amountPesewas())
+                    )
+            ).describedAs(s.reference() + " mismatch settle: " + reason));
+            custodianBackstop.onOutboundSucceeded(s.railTx(), s.amountPesewas(), s.currency(), fallbackDate);
+            if (s.railTx() != null) {
+                db.sql("""
+                        UPDATE rail_transaction
+                        SET status = 'succeeded', updated_at = now(), completed_at = now()
+                        WHERE id = :id AND status = 'mismatch'""")
+                        .param("id", s.railTx())
+                        .update();
+            }
+            db.sql("""
+                    UPDATE platform_revenue_sweep
+                    SET status = 'succeeded', completion_tx = :tx, completed_at = now(), failure_reason = :reason
+                    WHERE id = :id""")
+                    .param("tx", posted.transactionId())
+                    .param("reason", "Ops mismatch settled: " + reason)
+                    .param("id", s.id())
+                    .update();
+            if (audit != null) {
+                audit.record(effectiveActor, "revenue_sweep.mismatch_settled", "revenue_sweep:" + s.reference(),
+                        Map.of("amount", s.amountPesewas(), "reason", reason));
+            }
+        }
+        return findSweep(s.id()).orElseThrow();
     }
 
     // ---- Reads -------------------------------------------------------------------------------
@@ -636,7 +906,9 @@ public class PlatformRevenueSweepService {
                 rs.getString("currency").trim(),
                 rs.getString("status"),
                 rs.getString("verified_by"),
-                rs.getObject("created_at", OffsetDateTime.class)
+                rs.getObject("created_at", OffsetDateTime.class),
+                rs.getString("verified_by_email"),
+                rs.getString("approved_by")
         );
     }
 

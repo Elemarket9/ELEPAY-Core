@@ -55,8 +55,8 @@ class UssdMenu {
         String msisdn = References.msisdn(request.msisdn());
         Map<String, String> state = load(request, msisdn);
         Optional<WalletChannel.Customer> customer = wallet.activeCustomerByPhone(msisdn);
-        if (customer.isEmpty()) return finish(request, Response.done("This number has no active ELEPAY wallet. Register in the ELEPAY app."));
-        if (!customer.get().hasPin()) return finish(request, Response.done("Set your USSD PIN in the ELEPAY app first."));
+        if (customer.isEmpty()) return finish(request, msisdn, Response.done("This number has no active ELEPAY wallet. Register in the ELEPAY app."));
+        if (!customer.get().hasPin()) return finish(request, msisdn, Response.done("Set your USSD PIN in the ELEPAY app first."));
         String input = request.input() == null ? "" : request.input().trim();
         Response response;
         try {
@@ -65,9 +65,27 @@ class UssdMenu {
             state.clear();
             response = Response.done(e.getMessage());
         }
-        if (response.end()) return finish(request, response);
-        save(request, msisdn, state);
+        if (response.end()) return finish(request, msisdn, response);
+        if (!save(request, msisdn, state)) {
+            return Response.done("Session conflict. Please dial again.");
+        }
         return response;
+    }
+
+    /** Deletes an active session on explicit gateway end notification, scoped to the caller MSISDN. */
+    void end(String gateway, String sessionId, String rawMsisdn) {
+        if (sessionId == null || sessionId.isBlank() || rawMsisdn == null || rawMsisdn.isBlank()) {
+            return;
+        }
+        try {
+            String msisdn = References.msisdn(rawMsisdn);
+            db.sql("DELETE FROM ussd_session WHERE session_id = :id AND msisdn = :m")
+                    .param("id", gateway + ":" + sessionId)
+                    .param("m", msisdn)
+                    .update();
+        } catch (ApiException ignored) {
+            // Invalid MSISDN format on end event; nothing to delete
+        }
     }
 
     private Response step(WalletChannel.Customer c, Map<String, String> s, String input, String sessionId) {
@@ -164,6 +182,10 @@ class UssdMenu {
     }
 
     static String money(long pesewas) {
+        if (pesewas < 0) {
+            long abs = Math.abs(pesewas);
+            return "-GHS %d.%02d".formatted(abs / 100, abs % 100);
+        }
         return "GHS %d.%02d".formatted(pesewas / 100, pesewas % 100);
     }
 
@@ -177,17 +199,34 @@ class UssdMenu {
                 }).optional().orElseGet(HashMap::new);
     }
 
-    private void save(Request request, String msisdn, Map<String, String> state) {
-        db.sql("""
+    /**
+     * Persists session state while enforcing strict MSISDN ownership:
+     * only overwrites an existing session row if it belongs to the same MSISDN
+     * or has expired past {@link #SESSION_IDLE_SECONDS}.
+     */
+    private boolean save(Request request, String msisdn, Map<String, String> state) {
+        int updated = db.sql("""
                 INSERT INTO ussd_session (session_id, msisdn, state, gateway, updated_at)
                 VALUES (:id, :m, CAST(:s AS jsonb), :g, now())
-                ON CONFLICT (session_id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()""")
-                .param("id", request.gateway() + ":" + request.sessionId()).param("m", msisdn)
-                .param("s", json.writeValueAsString(state)).param("g", request.gateway()).update();
+                ON CONFLICT (session_id) DO UPDATE
+                SET msisdn = EXCLUDED.msisdn,
+                    state = EXCLUDED.state,
+                    updated_at = now()
+                WHERE ussd_session.msisdn = EXCLUDED.msisdn
+                   OR ussd_session.updated_at < now() - interval '300 seconds'""")
+                .param("id", request.gateway() + ":" + request.sessionId())
+                .param("m", msisdn)
+                .param("s", json.writeValueAsString(state))
+                .param("g", request.gateway())
+                .update();
+        return updated > 0;
     }
 
-    private Response finish(Request request, Response response) {
-        db.sql("DELETE FROM ussd_session WHERE session_id = :id").param("id", request.gateway() + ":" + request.sessionId()).update();
+    private Response finish(Request request, String msisdn, Response response) {
+        db.sql("DELETE FROM ussd_session WHERE session_id = :id AND msisdn = :m")
+                .param("id", request.gateway() + ":" + request.sessionId())
+                .param("m", msisdn)
+                .update();
         return response;
     }
 }

@@ -126,8 +126,9 @@ public class TransferLimits {
                     "transfer_rate_limit", "Too many recent transfers. Wait a minute and try again.");
         }
 
-        // Check sender daily limit (personalized if present, constrained by BoG statutory tier ceiling & perDay)
-        long dailyBaseline = personalized.map(PersonalizedLimitProvider.Limit::maxDailyPesewas).orElse(tierLimit.dailyLimit());
+        // Check sender daily limit (personalized if present, strictly clamped to BoG statutory tier ceiling & perDay)
+        long personalizedDaily = personalized.map(PersonalizedLimitProvider.Limit::maxDailyPesewas).orElse(tierLimit.dailyLimit());
+        long dailyBaseline = Math.min(tierLimit.dailyLimit(), personalizedDaily);
         long effectiveDailyLimit = perDay > 0 ? Math.min(perDay, dailyBaseline) : dailyBaseline;
         if (usage.daily().add(BigDecimal.valueOf(amount)).compareTo(BigDecimal.valueOf(effectiveDailyLimit)) > 0) {
             throw ApiException.conflict("daily_transfer_limit",
@@ -151,14 +152,18 @@ public class TransferLimits {
 
         check(sender, amount);
 
-        record RecipientInfo(int kycTier, long balance) {}
+        record RecipientInfo(boolean active, int kycTier, long balance) {}
         RecipientInfo rec = db.sql("""
-                SELECT kyc_tier FROM customer WHERE id = :recipient FOR UPDATE
+                SELECT status = 'active', kyc_tier FROM customer WHERE id = :recipient FOR UPDATE
                 """)
                 .param("recipient", recipient)
-                .query((rs, i) -> new RecipientInfo(rs.getInt(1), ledger.balance(CustomerDirectory.available(recipient))))
+                .query((rs, i) -> new RecipientInfo(rs.getBoolean(1), rs.getInt(2), ledger.balance(CustomerDirectory.available(recipient))))
                 .optional()
                 .orElseThrow(() -> ApiException.conflict("wallet_unavailable", "Recipient wallet is unavailable"));
+
+        if (!rec.active()) {
+            throw ApiException.conflict("wallet_unavailable", "Recipient wallet is unavailable");
+        }
 
         TierLimit recLimit = TierLimit.forTier(rec.kycTier());
         long newBalance = Math.addExact(rec.balance(), amount);
@@ -169,15 +174,18 @@ public class TransferLimits {
         }
     }
 
-    /** Tier maximum balance applies to every credit, including top-ups. */
+    /** Tier maximum balance and active-wallet status apply to every credit, including top-ups. */
     @Transactional(propagation = Propagation.REQUIRED, noRollbackFor = ApiException.class)
     public void checkCredit(UUID customer, long amount) {
         if (amount <= 0) throw ApiException.badRequest("invalid_amount", "Amount must be positive");
-        record CustomerStatus(int kycTier) {}
-        CustomerStatus status = db.sql("SELECT kyc_tier FROM customer WHERE id = :id FOR UPDATE")
+        record CustomerStatus(boolean active, int kycTier) {}
+        CustomerStatus status = db.sql("SELECT status = 'active', kyc_tier FROM customer WHERE id = :id FOR UPDATE")
                 .param("id", customer)
-                .query((rs, i) -> new CustomerStatus(rs.getInt(1)))
-                .optional().orElseThrow(() -> ApiException.conflict("wallet_unavailable", "The wallet is unavailable"));
+                .query((rs, i) -> new CustomerStatus(rs.getBoolean(1), rs.getInt(2)))
+                .optional().orElse(null);
+        if (status == null || !status.active()) {
+            throw ApiException.conflict("wallet_unavailable", "The wallet is unavailable");
+        }
         TierLimit tier = TierLimit.forTier(status.kycTier());
         if (amount > tier.maxBalance()) {
             throw ApiException.conflict("tier_balance_limit",

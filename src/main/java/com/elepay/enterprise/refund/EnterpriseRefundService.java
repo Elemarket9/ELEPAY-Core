@@ -249,11 +249,11 @@ public class EnterpriseRefundService {
         // 3. Calculate Item Reversals and Financial Conservation
         List<CalculatedItemRefund> calculatedItems = refundCalculator.calculate(request.items());
 
-        long sumItemsGross = calculatedItems.stream().mapToLong(CalculatedItemRefund::grossRefundPesewas).sum();
-        long totalMerchantDebit = calculatedItems.stream().mapToLong(CalculatedItemRefund::merchantReversalPesewas).sum();
-        long totalCommissionClawback = calculatedItems.stream().mapToLong(CalculatedItemRefund::commissionReversalPesewas).sum();
-        long totalPlatformFeeClawback = calculatedItems.stream().mapToLong(CalculatedItemRefund::platformFeeReversalPesewas).sum();
-        long totalReserveRelease = calculatedItems.stream().mapToLong(CalculatedItemRefund::reserveReversalPesewas).sum();
+        long sumItemsGross = calculatedItems.stream().mapToLong(CalculatedItemRefund::grossRefundPesewas).reduce(0L, Math::addExact);
+        long totalMerchantDebit = calculatedItems.stream().mapToLong(CalculatedItemRefund::merchantReversalPesewas).reduce(0L, Math::addExact);
+        long totalCommissionClawback = calculatedItems.stream().mapToLong(CalculatedItemRefund::commissionReversalPesewas).reduce(0L, Math::addExact);
+        long totalPlatformFeeClawback = calculatedItems.stream().mapToLong(CalculatedItemRefund::platformFeeReversalPesewas).reduce(0L, Math::addExact);
+        long totalReserveRelease = calculatedItems.stream().mapToLong(CalculatedItemRefund::reserveReversalPesewas).reduce(0L, Math::addExact);
 
         long deliveryReversal = 0L;
         if (request.deliveryAdjustment() != null) {
@@ -273,7 +273,7 @@ public class EnterpriseRefundService {
         String currency = request.currency();
         List<Leg> legs = new ArrayList<>();
 
-        // Debits from sub-merchants (pending or reserve)
+        // Debits from sub-merchants (pending, reserve, and tax reversal)
         for (CalculatedItemRefund item : calculatedItems) {
             ledger.open("merchant", item.merchantId(), "pending", currency);
             if (item.merchantReversalPesewas() > 0) {
@@ -282,6 +282,9 @@ public class EnterpriseRefundService {
             if (item.reserveReversalPesewas() > 0) {
                 ledger.open("merchant", item.merchantId(), "reserved", currency);
                 legs.add(Leg.debit(Ledger.code("merchant", item.merchantId(), "reserved", currency), item.reserveReversalPesewas()));
+            }
+            if (item.taxReversalPesewas() > 0) {
+                legs.add(Leg.debit(Ledger.code("merchant", item.merchantId(), "pending", currency), item.taxReversalPesewas()));
             }
         }
 
@@ -354,7 +357,7 @@ public class EnterpriseRefundService {
         meta.put("totalRefundPesewas", String.valueOf(totalRefundRequested));
 
         Ledger.Posting posting = Ledger.Posting.of(
-                "enterprise-refund",
+                "enterprise-refund:" + request.enterpriseId(),
                 request.idempotencyKey(),
                 "enterprise_item_refund",
                 legs
@@ -419,29 +422,11 @@ public class EnterpriseRefundService {
             }
         }
 
-        // 7. Record Refund Liabilities for Sub-Merchants (skip on ledger replay to prevent double-recording)
         UUID refundId = UUID.randomUUID();
-        if (!posted.replay()) {
-            for (CalculatedItemRefund cItem : calculatedItems) {
-                if (cItem.merchantReversalPesewas() > 0) {
-                    liabilityTracker.recordLiability(
-                            request.enterpriseId(),
-                            cItem.merchantId(),
-                            refundId,
-                            cItem.merchantReversalPesewas()
-                    );
-                }
-            }
-
-            // 8. Update Order Cumulative Refund State
-            long newCumulative = Math.addExact(currentCumulative, totalRefundRequested);
-            updateCumulativeRefund(request.enterpriseId(), request.orderReference(), originalGross, newCumulative);
-        }
-
-        // 9. Persist to Database if available
         String refundRef = "ERF-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
+        // 7. Persist refund header & items before recording liability rows (FK: enterprise_refund_liability.refund_id -> enterprise_refund.id)
         if (db != null) {
             db.sql("""
                 INSERT INTO enterprise_refund
@@ -491,6 +476,24 @@ public class EnterpriseRefundService {
                     .param("now", now)
                     .update();
             }
+        }
+
+        // 8. Record Refund Liabilities for Sub-Merchants (skip on ledger replay to prevent double-recording)
+        if (!posted.replay()) {
+            for (CalculatedItemRefund cItem : calculatedItems) {
+                if (cItem.merchantReversalPesewas() > 0) {
+                    liabilityTracker.recordLiability(
+                            request.enterpriseId(),
+                            cItem.merchantId(),
+                            refundId,
+                            cItem.merchantReversalPesewas()
+                    );
+                }
+            }
+
+            // 9. Update Order Cumulative Refund State
+            long newCumulative = Math.addExact(currentCumulative, totalRefundRequested);
+            updateCumulativeRefund(request.enterpriseId(), request.orderReference(), originalGross, newCumulative);
         }
 
         EnterpriseRefundResult result = new EnterpriseRefundResult(

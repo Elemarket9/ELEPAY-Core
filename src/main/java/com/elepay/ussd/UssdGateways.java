@@ -62,10 +62,18 @@ class UssdGateways {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "replayed_callback", "This gateway request was already used");
         }
         JsonNode node = json.readTree(body);
+        String sessionId = node.path("sessionId").asString("").trim();
+        if (sessionId.isEmpty()) {
+            throw ApiException.badRequest("session_id_required", "USSD sessionId is required");
+        }
+        String msisdn = node.path("msisdn").asString("");
         String type = node.path("type").asString("continue");
-        if (type.equals("end")) return Map.of("message", "", "end", true);
-        var response = menu.handle(new UssdMenu.Request("generic", node.path("sessionId").asString(),
-                node.path("msisdn").asString(), node.path("input").asString(""), type.equals("start")));
+        if (type.equals("end")) {
+            menu.end("generic", sessionId, msisdn);
+            return Map.of("message", "", "end", true);
+        }
+        var response = menu.handle(new UssdMenu.Request("generic", sessionId,
+                msisdn, node.path("input").asString(""), type.equals("start")));
         return Map.of("message", response.message(), "end", response.end());
     }
 

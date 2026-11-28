@@ -33,7 +33,9 @@ public class RailRegistry {
         if ("sandbox".equals(defaultName)) return "sandbox"; // Only a test-classpath bean can supply this name.
         String name = switch (channel == null ? "" : channel.toLowerCase(java.util.Locale.ROOT)) {
             case "momo" -> network == null ? "" : network.toLowerCase(java.util.Locale.ROOT);
-            case "bank" -> "ghipss";
+            case "bank" -> ("payout".equalsIgnoreCase(direction) && rails.containsKey(CustodianBankPaymentRail.RAIL_NAME))
+                    ? CustodianBankPaymentRail.RAIL_NAME
+                    : "ghipss";
             case "card" -> "card";
             default -> "";
         };

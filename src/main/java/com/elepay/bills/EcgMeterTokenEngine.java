@@ -123,10 +123,9 @@ public class EcgMeterTokenEngine {
         String ref = "ECG-STS-" + System.currentTimeMillis() + "-" + txnId.toString().substring(0, 6).toUpperCase();
         OffsetDateTime now = OffsetDateTime.now();
 
-        // 1. Post to Double-Entry Ledger
-        String customerAccount = "customer:" + customerId + ":available:GHS";
-        ledger.openSystem(customerAccount, "available", "GHS", true);
-        ledger.openSystem(ECG_CLEARING_ACCOUNT, "clearing", "GHS", true);
+        // 1. Post to Double-Entry Ledger using non-negative customer wallet account (never allow_negative=true)
+        String customerAccount = ledger.open("customer", customerId, "available", Ledger.GHS);
+        ledger.openSystem(ECG_CLEARING_ACCOUNT, "clearing", Ledger.GHS, true);
 
         var posting = Ledger.Posting.of(
                 "bill_ecg",
