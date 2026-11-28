@@ -246,4 +246,131 @@ class RailTransactionsRemediationIT extends PostgresTestBase {
         // Verifies upgradeOnStartup() executes FOR UPDATE SKIP LOCKED inside a real transaction without error
         cardTokenVault.upgradeOnStartup();
     }
+
+    @Test
+    void returnedPayoutDecrementsSettledOutflowWithoutStealingOtherInFlightReservation() {
+        PaymentRail rail = baseMockRail("mtn");
+        when(rail.payout(any()))
+                .thenReturn(new PaymentRail.Result(
+                        PaymentRail.Status.SUCCEEDED, "MTN-A-OK", 10_000L, "GHS", 0L, null, "Paid"))
+                .thenReturn(PaymentRail.Result.unknown("Payout B in-flight"));
+
+        List<Object> events = new java.util.ArrayList<>();
+        RailTransactions rt = railTxWith(rail, events);
+
+        // Payout A (10,000) succeeds -> settled = 10,000, reserved = 0
+        var txA = tx.execute(s -> rt.create("mtn", "payout", "payout", UUID.randomUUID(), 10_000L,
+                RailTransactions.Request.momo("0241234567", "mtn", "Payout A")));
+        rt.submit(txA.id());
+        assertThat(rt.find(txA.id()).orElseThrow().status()).isEqualTo("succeeded");
+
+        // Payout B (7,000) submitted and remains in-flight -> reserved = 7,000, settled = 10,000
+        var txB = tx.execute(s -> rt.create("mtn", "payout", "payout", UUID.randomUUID(), 7_000L,
+                RailTransactions.Request.momo("0247654321", "mtn", "Payout B")));
+        rt.submit(txB.id());
+        assertThat(rt.find(txB.id()).orElseThrow().status()).isEqualTo("unknown");
+
+        // Payout A is returned (reversed) by receiving rail
+        rt.apply(txA.id(), new PaymentRail.Result(
+                PaymentRail.Status.RETURNED, "MTN-A-RET", 10_000L, "GHS", 0L, null, "Recipient closed"), "callback");
+        assertThat(rt.find(txA.id()).orElseThrow().status()).isEqualTo("returned");
+
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Accra"));
+        var snapshot = db.sql("""
+                SELECT reserved_outflow_pesewas, settled_outflow_pesewas FROM custodian_daily_outflow
+                WHERE trust_account_code = :code AND business_date = :d""")
+                .param("code", CustodianBankBackstopService.PRIMARY_TRUST_CODE).param("d", today)
+                .query((rs, i) -> new long[]{rs.getLong(1), rs.getLong(2)}).single();
+        // Settled outflow drops to 0; Payout B's in-flight 7,000 reservation is completely untouched!
+        assertThat(snapshot[0]).isEqualTo(7_000L);
+        assertThat(snapshot[1]).isZero();
+    }
+
+    @Test
+    void custodianConfigRejectsPartialInconsistentCapsAndAuthorizeIsIdempotentPerTxId() {
+        // Default perPayoutCapPesewas is 10,000,000,000; partial update setting dailyCap = 1,000 must fail
+        assertThatThrownBy(() -> custodianBackstop.updateConfig(1_000L, null, null, null, null, "ops"))
+                .isInstanceOf(com.elepay.common.ApiException.class)
+                .hasMessageContaining("Per-payout cap cannot exceed the daily outflow cap");
+
+        // Non-positive outbound disbursement is blocked
+        var zeroDec = custodianBackstop.authorizeOutboundDisbursement(
+                UUID.randomUUID(), "REF-ZERO", "mtn", "payout", 0L, "GHS");
+        assertThat(zeroDec.allowed()).isFalse();
+        assertThat(zeroDec.reasonCode()).isEqualTo("custodian_invalid_amount");
+
+        // Repeated authorizeOutboundDisbursement on the same rail_transaction id reserves only once
+        PaymentRail rail = baseMockRail("mtn");
+        RailTransactions rt = railTxWith(rail, new java.util.ArrayList<>());
+        var created = tx.execute(s -> rt.create("mtn", "payout", "payout", UUID.randomUUID(), 4_500L,
+                RailTransactions.Request.momo("0241234567", "mtn", "Idem auth")));
+
+        assertThat(custodianBackstop.authorizeOutboundDisbursement(
+                created.id(), created.reference(), "mtn", "payout", 4_500L, "GHS").allowed()).isTrue();
+        assertThat(custodianBackstop.authorizeOutboundDisbursement(
+                created.id(), created.reference(), "mtn", "payout", 4_500L, "GHS").allowed()).isTrue();
+
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Accra"));
+        Long reserved = db.sql("""
+                SELECT reserved_outflow_pesewas FROM custodian_daily_outflow
+                WHERE trust_account_code = :code AND business_date = :d""")
+                .param("code", CustodianBankBackstopService.PRIMARY_TRUST_CODE).param("d", today)
+                .query(Long.class).single();
+        assertThat(reserved).isEqualTo(4_500L);
+    }
+
+    @Test
+    void verifyTrustSafeguardingIncludesCustomerWalletLiabilities() {
+        long liabilitiesBefore = custodianBackstop.verifyTrustSafeguarding("GHS").totalSafeguardedLiabilitiesPesewas();
+        UUID customerId = UUID.randomUUID();
+        String custAcct = ledger.open("customer", customerId, "available", Ledger.GHS);
+        ledger.post(Ledger.Posting.of("cust-safeguard-test", UUID.randomUUID().toString(), "topup", List.of(
+                Ledger.Leg.debit(Ledger.clearing("sandbox"), 25_000L),
+                Ledger.Leg.credit(custAcct, 25_000L))));
+
+        long liabilitiesAfter = custodianBackstop.verifyTrustSafeguarding("GHS").totalSafeguardedLiabilitiesPesewas();
+        assertThat(liabilitiesAfter).isEqualTo(liabilitiesBefore + 25_000L);
+
+        // Trust balance 1 pesewa short fails safeguarding; exact match satisfies safeguarding
+        custodianBackstop.updateConfig(null, null, null, liabilitiesAfter - 1L, false, "ops");
+        assertThat(custodianBackstop.verifyTrustSafeguarding("GHS").safeguardingSatisfied()).isFalse();
+
+        custodianBackstop.updateConfig(null, null, null, liabilitiesAfter, false, "ops");
+        assertThat(custodianBackstop.verifyTrustSafeguarding("GHS").safeguardingSatisfied()).isTrue();
+    }
+
+    @Test
+    void recoverSkipsCreatedPayoutWhenPerMerchantKillSwitchActive() {
+        PaymentRail rail = baseMockRail("mtn");
+        List<Object> events = new java.util.ArrayList<>();
+        RailTransactions rt = railTxWith(rail, events);
+
+        UUID merchantId = UUID.randomUUID();
+        UUID payoutId = UUID.randomUUID();
+        var created = tx.execute(s -> {
+            var railTx = rt.create("mtn", "payout", "payout", payoutId, 3_000L,
+                    RailTransactions.Request.momo("0241234567", "mtn", "Merchant kill switch payout"));
+            UUID resTx = ledger.post(Ledger.Posting.of("ks-res", payoutId.toString(), "payout_reservation", List.of(
+                    Ledger.Leg.debit(Ledger.clearing("sandbox"), 3_000L),
+                    Ledger.Leg.credit(ledger.open("merchant", merchantId, "reserved", Ledger.GHS), 3_000L)))).transactionId();
+            db.sql("""
+                    INSERT INTO payout (id, reference, owner_type, owner_id, destination, amount, rail, status,
+                                        reservation_tx, rail_tx, requested_by, verification)
+                    VALUES (:id, :ref, 'merchant', :m, '{}'::jsonb, 3000, 'mtn', 'reserved', :rtx, :railtx, 'test', 'verified')""")
+                    .param("id", payoutId).param("ref", "PO-KS-" + payoutId.toString().substring(0, 8))
+                    .param("m", merchantId).param("rtx", resTx).param("railtx", railTx.id()).update();
+            return railTx;
+        });
+
+        // Global kill switch is OFF, only this specific merchant is frozen
+        killSwitch.setGlobalFrozen(false, "global-open", "ops");
+        killSwitch.setMerchantFrozen(merchantId, true, "Compromised merchant", "ops");
+        try {
+            rt.recover(50, true);
+            assertThat(rt.find(created.id()).orElseThrow().status()).isEqualTo("created");
+            org.mockito.Mockito.verify(rail, org.mockito.Mockito.never()).payout(any());
+        } finally {
+            killSwitch.setMerchantFrozen(merchantId, false, "test-cleanup", "ops");
+        }
+    }
 }

@@ -255,13 +255,8 @@ public class CardAcquiringRail implements PaymentRail {
         if (refund == null || refund.amount() <= 0 || refund.reference() == null || refund.reference().isBlank()) {
             return new Result(Status.FAILED, null, null, null, null, null, "Invalid card refund request");
         }
-        if (custodianBackstop != null) {
-            var decision = custodianBackstop.authorizeOutboundDisbursement(
-                    null, refund.reference(), name(), "refund", refund.amount(), refund.currency());
-            if (!decision.allowed()) {
-                return Result.unavailable(decision.reason());
-            }
-        }
+        // Custodian Bank outflow authorization is enforced once at the RailTransactions.send() boundary
+        // for all outbound disbursements (payouts and refunds), avoiding double-reservation leaks.
         if (!isConfigured()) {
             return Result.unavailable("Card acquirer is not configured for refund in " + mode.name().toLowerCase(Locale.ROOT) + " mode");
         }

@@ -330,8 +330,11 @@ public class EnterpriseTreasuryService {
      */
     @Transactional
     public void reserveFunding(UUID enterpriseId, long amountPesewas, String currency) {
+        if (amountPesewas <= 0) {
+            throw ApiException.badRequest("invalid_amount", "Reservation amount must be positive");
+        }
         String cur = currency != null ? currency.toUpperCase(Locale.ROOT) : GHS;
-        EnterpriseTreasuryAccount prefunding = getTreasuryAccount(enterpriseId, TreasuryAccountType.PREFUNDING, cur);
+        EnterpriseTreasuryAccount prefunding = getTreasuryAccountForUpdate(enterpriseId, TreasuryAccountType.PREFUNDING, cur);
 
         if (prefunding.availablePesewas() < amountPesewas) {
             throw ApiException.badRequest("insufficient_prefunding",
@@ -355,7 +358,7 @@ public class EnterpriseTreasuryService {
     @Transactional
     public void releaseReservedFunding(UUID enterpriseId, long amountPesewas, String currency, boolean consumed) {
         String cur = currency != null ? currency.toUpperCase(Locale.ROOT) : GHS;
-        EnterpriseTreasuryAccount prefunding = getTreasuryAccount(enterpriseId, TreasuryAccountType.PREFUNDING, cur);
+        EnterpriseTreasuryAccount prefunding = getTreasuryAccountForUpdate(enterpriseId, TreasuryAccountType.PREFUNDING, cur);
 
         long balanceDeduction = consumed ? amountPesewas : 0L;
 
@@ -370,6 +373,24 @@ public class EnterpriseTreasuryService {
                 .param("balAmt", balanceDeduction)
                 .param("id", prefunding.id())
                 .update();
+    }
+
+    private EnterpriseTreasuryAccount getTreasuryAccountForUpdate(UUID enterpriseId, TreasuryAccountType type, String currency) {
+        String cur = currency != null ? currency.toUpperCase(Locale.ROOT) : GHS;
+        setupEnterpriseTreasury(enterpriseId, cur);
+        return db.sql("""
+                SELECT id, enterprise_id, account_type, account_code, currency,
+                       balance_pesewas, reserved_pesewas, status, strict_segregation,
+                       created_at, updated_at
+                FROM enterprise_treasury_account
+                WHERE enterprise_id = :enterpriseId AND account_type = :type AND currency = :cur
+                FOR UPDATE
+                """)
+                .param("enterpriseId", enterpriseId)
+                .param("type", type.name())
+                .param("cur", cur)
+                .query(this::mapTreasuryAccount)
+                .single();
     }
 
     /**

@@ -134,7 +134,7 @@ class CheckoutRefundService {
         if (refund.isEmpty()) return;
         long amount = (long) refund.get()[1];
         String clearing = ledger.openStripedSystem(Ledger.clearing(event.rail()), "clearing", Ledger.GHS, true, event.purposeId());
-        var posted = ledger.post(Ledger.Posting.of("refund-completion", event.purposeId().toString(), "refund_completion",
+        var posted = ledger.post(Ledger.Posting.of("refund-completion", event.railTxId().toString(), "refund_completion",
                 List.of(Leg.debit(Ledger.REFUNDS_IN_FLIGHT, amount), Leg.credit(clearing, amount))));
         db.sql("UPDATE refund SET status = 'completed', completion_tx = :tx WHERE id = :id")
                 .param("tx", posted.transactionId()).param("id", event.purposeId()).update();
@@ -151,5 +151,71 @@ class CheckoutRefundService {
         ops.raise("refund_delivery_failed", "high", "refund:" + event.purposeId(), Map.of(
                 "amount", event.amount(), "reason", String.valueOf(event.reason()),
                 "note", "Funds are held in refunds_in_flight; retry or credit the customer's wallet"));
+    }
+
+    /**
+     * Handles a rail-level return (reversal) of a previously completed customer refund.
+     * Moves the returned funds from clearing back into {@code system:refunds_in_flight:GHS}
+     * and transitions the refund to {@code failed} so it can be safely retried from the Custodian.
+     */
+    @EventListener
+    @Transactional
+    void onRefundRailReturned(RailEvents.Returned event) {
+        if (!event.purpose().equals("refund")) return;
+        var refundOpt = db.sql("SELECT reference, amount, status FROM refund WHERE id = :id FOR UPDATE")
+                .param("id", event.purposeId())
+                .query((rs, i) -> new Object[]{rs.getString(1), rs.getLong(2), rs.getString(3)})
+                .optional();
+        if (refundOpt.isEmpty()) return;
+        String reference = (String) refundOpt.get()[0];
+        long amount = (long) refundOpt.get()[1];
+        String status = (String) refundOpt.get()[2];
+        if (!"completed".equals(status)) {
+            ops.raise("refund_return_unexpected", "high", "refund:" + reference, Map.of("status", status));
+            return;
+        }
+        String clearing = ledger.openStripedSystem(Ledger.clearing(event.rail()), "clearing", Ledger.GHS, true, event.purposeId());
+        ledger.post(Ledger.Posting.of("refund-return", event.railTxId().toString(), "refund_return",
+                List.of(Leg.debit(clearing, amount), Leg.credit(Ledger.REFUNDS_IN_FLIGHT, amount)))
+                .describedAs("Returned refund " + reference));
+        db.sql("UPDATE refund SET status = 'failed', completion_tx = NULL WHERE id = :id")
+                .param("id", event.purposeId()).update();
+        ops.raise("refund_returned_by_rail", "high", "refund:" + reference, Map.of(
+                "amount", amount,
+                "reason", String.valueOf(event.reason()),
+                "note", "Returned refund funds restored to refunds_in_flight; retry from Custodian or credit customer wallet"));
+        regulatory.refund(event.purposeId());
+    }
+
+    /**
+     * Retries a failed or returned rail refund using the funds already safeguarded in
+     * {@code system:refunds_in_flight:GHS}, creating a new rail transaction to pull from the Custodian.
+     * Must be submitted to {@code RailTransactions.submit(railTxId)} after this transaction commits.
+     */
+    @Transactional
+    UUID retryFailedRailRefund(UUID refundId, String actor) {
+        if (killSwitch != null) killSwitch.requirePayoutsAllowed(null);
+        record RefundRow(UUID id, String reference, UUID checkoutId, long amount, String destination, String status) {}
+        RefundRow row = db.sql("""
+                SELECT id, reference, checkout_id, amount, destination, status
+                FROM refund WHERE id = :id FOR UPDATE""")
+                .param("id", refundId)
+                .query((rs, i) -> new RefundRow(
+                        rs.getObject(1, UUID.class), rs.getString(2), rs.getObject(3, UUID.class),
+                        rs.getLong(4), rs.getString(5), rs.getString(6)))
+                .optional()
+                .orElseThrow(() -> ApiException.notFound("Refund not found"));
+        if (!"rail".equals(row.destination()) || !"failed".equals(row.status())) {
+            throw ApiException.conflict("refund_not_retryable",
+                    "Only failed rail refunds can be retried (current destination=" + row.destination()
+                            + ", status=" + row.status() + ")");
+        }
+        Checkout c = store.load(row.checkoutId(), false);
+        UUID newRailTx = store.railRefund(c, row.id(), row.amount());
+        db.sql("UPDATE refund SET status = 'pending', rail_tx = :rail WHERE id = :id")
+                .param("rail", newRailTx).param("id", row.id()).update();
+        audit.record(actor != null ? actor : "system", "refund.retried", "refund:" + row.reference(),
+                Map.of("refundId", row.id().toString(), "amount", row.amount(), "railTx", newRailTx.toString()));
+        return newRailTx;
     }
 }

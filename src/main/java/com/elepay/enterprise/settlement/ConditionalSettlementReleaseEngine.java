@@ -200,11 +200,14 @@ public class ConditionalSettlementReleaseEngine {
             );
         }
 
-        long totalGross = eligibleItems.stream().mapToLong(DeliveryEscrowRecord::grossAmountPesewas).sum();
-        long totalNet = eligibleItems.stream().mapToLong(DeliveryEscrowRecord::netPayablePesewas).sum();
-        long totalCommission = eligibleItems.stream().mapToLong(DeliveryEscrowRecord::commissionPesewas).sum();
+        long totalGross = 0L;
+        long totalNet = 0L;
+        long totalCommission = 0L;
         Set<UUID> uniqueMerchants = new HashSet<>();
         for (DeliveryEscrowRecord r : eligibleItems) {
+            totalGross = Math.addExact(totalGross, r.grossAmountPesewas());
+            totalNet = Math.addExact(totalNet, r.netPayablePesewas());
+            totalCommission = Math.addExact(totalCommission, r.commissionPesewas());
             uniqueMerchants.add(r.merchantId());
         }
 
@@ -258,7 +261,7 @@ public class ConditionalSettlementReleaseEngine {
         Map<UUID, Long> merchantNetTotals = new HashMap<>();
 
         for (DeliveryEscrowRecord item : eligibleItems) {
-            merchantNetTotals.merge(item.merchantId(), item.netPayablePesewas(), Long::sum);
+            merchantNetTotals.merge(item.merchantId(), item.netPayablePesewas(), Math::addExact);
         }
 
         for (Map.Entry<UUID, Long> entry : merchantNetTotals.entrySet()) {
@@ -355,24 +358,66 @@ public class ConditionalSettlementReleaseEngine {
 
     /**
      * Executes payout batch for released merchant balances to their designated destination accounts.
+     *
+     * <p>Strictly verifies that every target merchant belongs to {@code enterpriseId} and locks each
+     * merchant's {@code available} ledger account {@code FOR UPDATE} in deterministic order before
+     * reserving funds, preventing cross-enterprise fund access and concurrent TOCTOU races.
      */
     @Transactional
     public UUID executeMerchantPayoutBatch(UUID enterpriseId, List<UUID> merchantIds, String currency) {
+        Objects.requireNonNull(enterpriseId, "enterpriseId cannot be null");
+        if (merchantIds == null || merchantIds.isEmpty()) {
+            throw ApiException.badRequest("invalid_merchants", "At least one merchantId is required");
+        }
         String cur = currency != null ? currency.toUpperCase(Locale.ROOT) : GHS;
         UUID batchId = UUID.randomUUID();
 
-        // Check each merchant's available balance and initiate payout
-        for (UUID mId : merchantIds) {
-            long avail = ledger.balance(Ledger.code("merchant", mId, "available", cur));
+        // Deduplicate and sort merchant IDs deterministically to prevent AB-BA deadlocks
+        List<UUID> sortedMerchants = merchantIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .sorted()
+                .toList();
+
+        // Enforce enterprise-to-merchant boundary: reject any merchant not associated with this enterprise
+        for (UUID mId : sortedMerchants) {
+            boolean belongsToEnterprise = Boolean.TRUE.equals(db.sql("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM enterprise_delivery_escrow
+                        WHERE enterprise_id = :eid AND merchant_id = :mid
+                    ) OR EXISTS (
+                        SELECT 1 FROM enterprise_settlement_batch_item i
+                        JOIN enterprise_settlement_batch b ON b.id = i.batch_id
+                        WHERE b.enterprise_id = :eid AND i.merchant_id = :mid
+                    )""")
+                    .param("eid", enterpriseId)
+                    .param("mid", mId)
+                    .query(Boolean.class)
+                    .single());
+            if (!belongsToEnterprise) {
+                throw new ApiException(
+                        org.springframework.http.HttpStatus.FORBIDDEN,
+                        "merchant_not_in_enterprise",
+                        "Merchant " + mId + " is not associated with enterprise " + enterpriseId
+                );
+            }
+        }
+
+        // Lock each merchant's available account FOR UPDATE and reserve only its own committed balance
+        for (UUID mId : sortedMerchants) {
+            String availAcc = Ledger.code("merchant", mId, "available", cur);
+            long avail = db.sql("SELECT balance FROM ledger_account WHERE code = :code FOR UPDATE")
+                    .param("code", availAcc)
+                    .query(Long.class)
+                    .optional()
+                    .orElse(0L);
             if (avail > 0) {
-                // Reserve available balance for payout
-                String availAcc = Ledger.code("merchant", mId, "available", cur);
                 String reservedAcc = Ledger.code("merchant", mId, "reserved", cur);
                 ledger.open("merchant", mId, "reserved", cur);
 
                 ledger.post(Posting.of(
                         "merchant:payout",
-                        "PAYOUT-" + UUID.randomUUID(),
+                        "PAYOUT-" + batchId + "-" + mId,
                         "payout:reserve",
                         List.of(
                                 Leg.debit(availAcc, avail),

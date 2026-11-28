@@ -314,6 +314,31 @@ class Checkouts {
         return refund;
     }
 
+    @PostMapping("/refunds/{refundId}/retry")
+    public Map<String, Object> retryRefund(@PathVariable UUID merchantId, @PathVariable UUID refundId,
+                                           @RequestHeader("Idempotency-Key") String key) {
+        var a = access.require(merchantId, REFUND);
+        boolean belongsToMerchant = Boolean.TRUE.equals(db.sql("""
+                SELECT EXISTS (
+                    SELECT 1 FROM refund r
+                    JOIN checkout c ON c.id = r.checkout_id
+                    JOIN checkout_allocation al ON al.checkout_id = r.checkout_id AND al.line = r.line
+                    WHERE r.id = :rid AND (al.merchant_id = :m OR c.collector_id = :m)
+                )""")
+                .param("rid", refundId).param("m", merchantId).query(Boolean.class).single());
+        if (!belongsToMerchant) {
+            throw ApiException.notFound("Refund not found");
+        }
+        UUID railTx = txRetry.execute(() -> idempotency.execute("refund-retry:" + merchantId, key,
+                Map.of("refundId", refundId.toString()), UUID.class,
+                () -> checkouts.retryFailedRailRefund(refundId, a.actor().subject())));
+        if (railTx != null) {
+            rails.submit(railTx);
+        }
+        String status = db.sql("SELECT status FROM refund WHERE id = :id").param("id", refundId).query(String.class).single();
+        return Map.of("refundId", refundId.toString(), "railTxId", String.valueOf(railTx), "status", status);
+    }
+
     @GetMapping("/refunds")
     @Transactional(readOnly = true)
     public List<Map<String, Object>> refunds(@PathVariable UUID merchantId) {

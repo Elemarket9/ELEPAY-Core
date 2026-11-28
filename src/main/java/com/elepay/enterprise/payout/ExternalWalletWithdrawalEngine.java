@@ -190,6 +190,24 @@ public class ExternalWalletWithdrawalEngine {
                         withdrawalId, withdrawalRef, request, railType, finalNetwork, finalDestAccount,
                         item, authoritativeKycTier, now);
             }
+        } catch (org.springframework.dao.DuplicateKeyException dup) {
+            complianceService.releaseReservation(request.enterpriseId(), request.externalCustomerId(), request.amountPesewas());
+            if (db != null) {
+                var committed = findByIdempotencyInDb(request.enterpriseId(), request.idempotencyKey());
+                if (committed.isPresent()) {
+                    EnterpriseWithdrawalResult prev = committed.get();
+                    if (!prev.externalCustomerId().equals(request.externalCustomerId())
+                            || prev.amountPesewas() != request.amountPesewas()
+                            || !prev.destinationAccount().equals(destinationAccount)) {
+                        throw ApiException.conflict("idempotency_conflict",
+                                "Idempotency conflict for key: " + request.idempotencyKey());
+                    }
+                    withdrawalsByIdempotency.put(scopedIdempotencyKey, prev);
+                    return prev;
+                }
+            }
+            throw ApiException.conflict("idempotency_conflict",
+                    "Idempotency conflict for key: " + request.idempotencyKey());
         } catch (Exception e) {
             complianceService.releaseReservation(request.enterpriseId(), request.externalCustomerId(), request.amountPesewas());
             throw e;
@@ -350,13 +368,27 @@ public class ExternalWalletWithdrawalEngine {
             throw ApiException.badRequest("invalid_idempotency_key", "New idempotency key is required");
         }
 
-        EnterpriseWithdrawalResult original = withdrawalsByRef.get(originalWithdrawalRef);
-        if (original == null) {
-            throw ApiException.notFound("Withdrawal not found: " + originalWithdrawalRef);
+        EnterpriseWithdrawalResult original = findWithdrawalByReference(originalWithdrawalRef)
+                .orElseThrow(() -> ApiException.notFound("Withdrawal not found: " + originalWithdrawalRef));
+
+        // Idempotent replay check for newIdempotencyKey
+        String retryScopeKey = idempotencyScopeKey(original.enterpriseId(), newIdempotencyKey);
+        EnterpriseWithdrawalResult existingRetry = withdrawalsByIdempotency.get(retryScopeKey);
+        if (existingRetry == null && db != null) {
+            existingRetry = findByIdempotencyInDb(original.enterpriseId(), newIdempotencyKey).orElse(null);
+        }
+        if (existingRetry != null) {
+            if (!original.withdrawalId().equals(existingRetry.retryOf())) {
+                throw ApiException.conflict("idempotency_conflict",
+                        "Idempotency conflict for key: " + newIdempotencyKey);
+            }
+            return existingRetry;
         }
 
-        // Verify payout eligibility in Payouts engine
-        if (!payouts.isRetryEligible(original.withdrawalReference())) {
+        String payoutReference = resolvePayoutReference(original);
+
+        // Verify payout eligibility in Payouts engine using the real payout.reference (PO-...)
+        if (!payouts.isRetryEligible(payoutReference)) {
             throw ApiException.conflict("not_retry_eligible",
                     "Withdrawal " + originalWithdrawalRef + " is not eligible for retry. Current status: " + original.status());
         }
@@ -366,8 +398,8 @@ public class ExternalWalletWithdrawalEngine {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
         Batch retriedBatch = tx != null
-                ? tx.execute(status -> createAndPersistRetry(original, newWithdrawalId, newWithdrawalRef, newIdempotencyKey, now))
-                : createAndPersistRetry(original, newWithdrawalId, newWithdrawalRef, newIdempotencyKey, now);
+                ? tx.execute(status -> createAndPersistRetry(original, payoutReference, newWithdrawalId, newWithdrawalRef, newIdempotencyKey, now))
+                : createAndPersistRetry(original, payoutReference, newWithdrawalId, newWithdrawalRef, newIdempotencyKey, now);
 
         payouts.submit(retriedBatch.id());
         if (db != null) {
@@ -401,14 +433,26 @@ public class ExternalWalletWithdrawalEngine {
         );
 
         withdrawalsById.put(newWithdrawalId, result);
-        withdrawalsByIdempotency.put(idempotencyScopeKey(original.enterpriseId(), newIdempotencyKey), result);
+        withdrawalsByIdempotency.put(retryScopeKey, result);
         withdrawalsByRef.put(newWithdrawalRef, result);
 
         return result;
     }
 
+    private String resolvePayoutReference(EnterpriseWithdrawalResult original) {
+        if (db != null && original.payoutId() != null) {
+            return db.sql("SELECT reference FROM payout WHERE id = :id")
+                    .param("id", original.payoutId())
+                    .query(String.class)
+                    .optional()
+                    .orElse(original.withdrawalReference());
+        }
+        return original.withdrawalReference();
+    }
+
     private Batch createAndPersistRetry(
             EnterpriseWithdrawalResult original,
+            String payoutReference,
             UUID newWithdrawalId,
             String newWithdrawalRef,
             String newIdempotencyKey,
@@ -417,7 +461,7 @@ public class ExternalWalletWithdrawalEngine {
         Batch retriedBatch = payouts.retry(
                 "merchant",
                 original.enterpriseId(),
-                original.withdrawalReference(),
+                payoutReference,
                 "enterprise"
         );
         UUID newPayoutId = retriedBatch.items().isEmpty() ? null : retriedBatch.items().get(0).id();
@@ -452,10 +496,80 @@ public class ExternalWalletWithdrawalEngine {
     }
 
     public Optional<EnterpriseWithdrawalResult> findWithdrawalById(UUID withdrawalId) {
-        return Optional.ofNullable(withdrawalsById.get(withdrawalId));
+        EnterpriseWithdrawalResult cached = withdrawalsById.get(withdrawalId);
+        if (cached != null || db == null) {
+            return Optional.ofNullable(cached);
+        }
+        return db.sql("""
+                SELECT id, withdrawal_reference, idempotency_key, enterprise_id, external_customer_id,
+                       customer_name, amount_pesewas, currency, destination_rail, destination_network,
+                       destination_account, status, payout_batch_id, payout_id, compliance_checked,
+                       failure_reason, retry_of, created_at, completed_at
+                FROM enterprise_wallet_withdrawal
+                WHERE id = :id""")
+                .param("id", withdrawalId)
+                .query((rs, i) -> new EnterpriseWithdrawalResult(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("withdrawal_reference"),
+                        rs.getString("idempotency_key"),
+                        rs.getObject("enterprise_id", UUID.class),
+                        rs.getString("external_customer_id"),
+                        rs.getString("customer_name"),
+                        rs.getLong("amount_pesewas"),
+                        rs.getString("currency"),
+                        "momo".equalsIgnoreCase(rs.getString("destination_rail"))
+                                ? WithdrawalDestinationType.MOMO : WithdrawalDestinationType.BANK,
+                        rs.getString("destination_network"),
+                        rs.getString("destination_account"),
+                        WithdrawalStatus.valueOf(rs.getString("status")),
+                        rs.getObject("payout_batch_id", UUID.class),
+                        rs.getObject("payout_id", UUID.class),
+                        rs.getBoolean("compliance_checked"),
+                        rs.getString("failure_reason"),
+                        rs.getObject("retry_of", UUID.class),
+                        false,
+                        rs.getObject("created_at", OffsetDateTime.class),
+                        rs.getObject("completed_at", OffsetDateTime.class)
+                ))
+                .optional();
     }
 
     public Optional<EnterpriseWithdrawalResult> findWithdrawalByReference(String reference) {
-        return Optional.ofNullable(withdrawalsByRef.get(reference));
+        EnterpriseWithdrawalResult cached = withdrawalsByRef.get(reference);
+        if (cached != null || db == null) {
+            return Optional.ofNullable(cached);
+        }
+        return db.sql("""
+                SELECT id, withdrawal_reference, idempotency_key, enterprise_id, external_customer_id,
+                       customer_name, amount_pesewas, currency, destination_rail, destination_network,
+                       destination_account, status, payout_batch_id, payout_id, compliance_checked,
+                       failure_reason, retry_of, created_at, completed_at
+                FROM enterprise_wallet_withdrawal
+                WHERE withdrawal_reference = :ref""")
+                .param("ref", reference)
+                .query((rs, i) -> new EnterpriseWithdrawalResult(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("withdrawal_reference"),
+                        rs.getString("idempotency_key"),
+                        rs.getObject("enterprise_id", UUID.class),
+                        rs.getString("external_customer_id"),
+                        rs.getString("customer_name"),
+                        rs.getLong("amount_pesewas"),
+                        rs.getString("currency"),
+                        "momo".equalsIgnoreCase(rs.getString("destination_rail"))
+                                ? WithdrawalDestinationType.MOMO : WithdrawalDestinationType.BANK,
+                        rs.getString("destination_network"),
+                        rs.getString("destination_account"),
+                        WithdrawalStatus.valueOf(rs.getString("status")),
+                        rs.getObject("payout_batch_id", UUID.class),
+                        rs.getObject("payout_id", UUID.class),
+                        rs.getBoolean("compliance_checked"),
+                        rs.getString("failure_reason"),
+                        rs.getObject("retry_of", UUID.class),
+                        false,
+                        rs.getObject("created_at", OffsetDateTime.class),
+                        rs.getObject("completed_at", OffsetDateTime.class)
+                ))
+                .optional();
     }
 }

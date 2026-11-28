@@ -264,6 +264,10 @@ class CheckoutService {
         return refunds.pendingRefundRailTx(refundId);
     }
 
+    public UUID retryFailedRailRefund(UUID refundId, String actor) {
+        return refunds.retryFailedRailRefund(refundId, actor);
+    }
+
     // ---- delivery, settlement & reserves ----------------------------------------------------
 
     Checkout confirmDelivery(UUID collector, String reference, List<Integer> lines, String actor) {

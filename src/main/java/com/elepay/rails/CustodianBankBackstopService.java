@@ -134,7 +134,30 @@ public class CustodianBankBackstopService {
             String actor
     ) {
         ensurePrimaryTrustAccount();
-        var current = getPrimaryConfig();
+        TrustAccountConfig current = db.sql("""
+                SELECT id, account_code, bank_code, bank_account_number, currency,
+                       daily_outflow_cap_pesewas, per_payout_cap_pesewas, min_reserve_floor_pesewas,
+                       last_reconciled_bank_balance_pesewas, outflow_frozen, updated_at
+                FROM custodian_trust_account
+                WHERE account_code = :code FOR UPDATE""")
+                .param("code", PRIMARY_TRUST_CODE)
+                .query(CustodianBankBackstopService::mapConfig)
+                .single();
+        long effectiveDailyCap = dailyOutflowCapPesewas != null ? dailyOutflowCapPesewas : current.dailyOutflowCapPesewas();
+        long effectivePerPayoutCap = perPayoutCapPesewas != null ? perPayoutCapPesewas : current.perPayoutCapPesewas();
+        long effectiveFloor = minReserveFloorPesewas != null ? minReserveFloorPesewas : current.minReserveFloorPesewas();
+        Long effectiveBankBal = lastReconciledBankBalancePesewas != null
+                ? lastReconciledBankBalancePesewas : current.lastReconciledBankBalancePesewas();
+        boolean effectiveFrozen = outflowFrozen != null ? outflowFrozen : current.outflowFrozen();
+        if (effectiveDailyCap < 0 || effectivePerPayoutCap < 0 || effectiveFloor < 0
+                || (effectiveBankBal != null && effectiveBankBal < 0)) {
+            throw com.elepay.common.ApiException.badRequest(
+                    "invalid_custodian_config", "Caps, floors and balances cannot be negative");
+        }
+        if (effectivePerPayoutCap > effectiveDailyCap) {
+            throw com.elepay.common.ApiException.badRequest(
+                    "invalid_custodian_config", "Per-payout cap cannot exceed the daily outflow cap");
+        }
         db.sql("""
                 UPDATE custodian_trust_account
                 SET daily_outflow_cap_pesewas = :dailyCap,
@@ -145,19 +168,19 @@ public class CustodianBankBackstopService {
                     updated_by = :by,
                     updated_at = now()
                 WHERE account_code = :code""")
-                .param("dailyCap", dailyOutflowCapPesewas != null ? dailyOutflowCapPesewas : current.dailyOutflowCapPesewas())
-                .param("perCap", perPayoutCapPesewas != null ? perPayoutCapPesewas : current.perPayoutCapPesewas())
-                .param("floor", minReserveFloorPesewas != null ? minReserveFloorPesewas : current.minReserveFloorPesewas())
-                .param("bankBal", lastReconciledBankBalancePesewas != null ? lastReconciledBankBalancePesewas : current.lastReconciledBankBalancePesewas())
-                .param("frozen", outflowFrozen != null ? outflowFrozen : current.outflowFrozen())
+                .param("dailyCap", effectiveDailyCap)
+                .param("perCap", effectivePerPayoutCap)
+                .param("floor", effectiveFloor)
+                .param("bankBal", effectiveBankBal)
+                .param("frozen", effectiveFrozen)
                 .param("by", actor != null ? actor : "system")
                 .param("code", PRIMARY_TRUST_CODE)
                 .update();
         if (audit != null && actor != null) {
             audit.record(actor, "custodian.backstop_config_updated", "custodian:" + PRIMARY_TRUST_CODE,
-                    Map.of("dailyCap", String.valueOf(dailyOutflowCapPesewas),
-                            "perPayoutCap", String.valueOf(perPayoutCapPesewas),
-                            "outflowFrozen", String.valueOf(outflowFrozen)));
+                    Map.of("dailyCap", String.valueOf(effectiveDailyCap),
+                            "perPayoutCap", String.valueOf(effectivePerPayoutCap),
+                            "outflowFrozen", String.valueOf(effectiveFrozen)));
         }
         return getPrimaryConfig();
     }
@@ -201,10 +224,24 @@ public class CustodianBankBackstopService {
         if (!"payout".equalsIgnoreCase(direction) && !"refund".equalsIgnoreCase(direction)) {
             return BackstopDecision.permit();
         }
+        if (amountPesewas <= 0) {
+            return BackstopDecision.blocked("custodian_invalid_amount",
+                    "Outbound disbursement amount must be strictly positive, got: " + amountPesewas);
+        }
         String cur = (currency == null || currency.isBlank()) ? Ledger.GHS : currency.toUpperCase(Locale.ROOT);
         if (!Ledger.GHS.equals(cur)) {
             return BackstopDecision.blocked("custodian_unsupported_currency",
                     "Custodian Bank primary trust account only supports GHS, got: " + cur);
+        }
+        if (txId != null) {
+            boolean alreadyReserved = db.sql("SELECT reservation_date FROM rail_transaction WHERE id = :id FOR UPDATE")
+                    .param("id", txId)
+                    .query((rs, i) -> rs.getObject(1, LocalDate.class) != null)
+                    .optional()
+                    .orElse(false);
+            if (alreadyReserved) {
+                return BackstopDecision.permit();
+            }
         }
         ensurePrimaryTrustAccount();
         LocalDate today = LocalDate.now(ACCRA_ZONE);
@@ -298,6 +335,15 @@ public class CustodianBankBackstopService {
             db.sql("UPDATE rail_transaction SET reservation_date = :d WHERE id = :id")
                     .param("d", today).param("id", txId).update();
         }
+        if (audit != null) {
+            audit.record("system:custodian", "custodian.pull_authorized", "rail_tx:" + reference, Map.of(
+                    "trustAccount", PRIMARY_TRUST_CODE,
+                    "direction", direction,
+                    "rail", rail,
+                    "amount", amountPesewas,
+                    "projectedOutflow", projectedOutflow,
+                    "dailyCap", trust.dailyOutflowCapPesewas()));
+        }
         return BackstopDecision.permit();
     }
 
@@ -308,6 +354,7 @@ public class CustodianBankBackstopService {
 
     @Transactional
     public void onOutboundSucceeded(UUID txId, long amountPesewas, String currency, LocalDate fallbackDate) {
+        if (amountPesewas <= 0) return;
         LocalDate bizDate = resolveReservationDate(txId, fallbackDate);
         ensureTodayAccumulator(bizDate);
         db.sql("""
@@ -326,11 +373,34 @@ public class CustodianBankBackstopService {
 
     @Transactional
     public void onOutboundReleased(UUID txId, long amountPesewas, String currency, LocalDate fallbackDate) {
+        if (amountPesewas <= 0) return;
         LocalDate bizDate = resolveReservationDate(txId, fallbackDate);
         ensureTodayAccumulator(bizDate);
         db.sql("""
                 UPDATE custodian_daily_outflow
                 SET reserved_outflow_pesewas = GREATEST(0, reserved_outflow_pesewas - :amt),
+                    updated_at = now()
+                WHERE trust_account_code = :code AND business_date = :d""")
+                .param("amt", amountPesewas).param("code", PRIMARY_TRUST_CODE).param("d", bizDate).update();
+        if (txId != null) {
+            db.sql("UPDATE rail_transaction SET reservation_date = NULL WHERE id = :id")
+                    .param("id", txId).update();
+        }
+    }
+
+    /**
+     * Reverses a previously settled outbound disbursement (payout/refund returned by the receiving
+     * rail). Decrements {@code settled_outflow_pesewas} without touching {@code reserved_outflow_pesewas}
+     * so other in-flight disbursements are never affected.
+     */
+    @Transactional
+    public void onOutboundReturned(UUID txId, long amountPesewas, String currency, LocalDate fallbackDate) {
+        if (amountPesewas <= 0) return;
+        LocalDate bizDate = resolveReservationDate(txId, fallbackDate);
+        ensureTodayAccumulator(bizDate);
+        db.sql("""
+                UPDATE custodian_daily_outflow
+                SET settled_outflow_pesewas = GREATEST(0, settled_outflow_pesewas - :amt),
                     updated_at = now()
                 WHERE trust_account_code = :code AND business_date = :d""")
                 .param("amt", amountPesewas).param("code", PRIMARY_TRUST_CODE).param("d", bizDate).update();
@@ -352,7 +422,7 @@ public class CustodianBankBackstopService {
 
     /**
      * Verifies Custodian Bank trust assets against all virtual merchant, submerchant,
-     * delivery partner, and escrow ledger liabilities via the {@link Ledger} API.
+     * delivery partner, customer wallet, and escrow ledger liabilities via the {@link Ledger} API.
      */
     public CustodianSafeguardReport verifyTrustSafeguarding(String currency) {
         String cur = (currency == null || currency.isBlank()) ? Ledger.GHS : currency.toUpperCase(Locale.ROOT);
@@ -375,17 +445,29 @@ public class CustodianBankBackstopService {
         long merchantAvailable = sumOwnerBucket("merchant", "available", cur);
         long merchantReserved = sumOwnerBucket("merchant", "reserved", cur);
 
-        long enterpriseHolding = sumOwnerBucket("enterprise", "holding", cur)
-                + sumOwnerBucket("enterprise_managed", "holding", cur)
-                + sumOwnerBucket("enterprise_managed", "operating", cur);
-        long enterpriseAvailable = sumOwnerBucket("enterprise", "available", cur)
-                + sumOwnerBucket("enterprise_managed", "reserved", cur);
+        long customerAvailable = sumOwnerBucket("customer", "available", cur);
+        long customerReserved = sumOwnerBucket("customer", "reserved", cur);
+
+        long enterpriseHolding = Math.addExact(
+                Math.addExact(sumOwnerBucket("enterprise", "holding", cur),
+                        sumOwnerBucket("enterprise_managed", "holding", cur)),
+                sumOwnerBucket("enterprise_managed", "operating", cur));
+        long enterpriseAvailable = Math.addExact(
+                sumOwnerBucket("enterprise", "available", cur),
+                sumOwnerBucket("enterprise_managed", "reserved", cur));
 
         long deferredRevenue = Math.max(0L, ledger.balance(Ledger.DEFERRED_REVENUE));
         long refundsInFlight = Math.max(0L, ledger.balance(Ledger.REFUNDS_IN_FLIGHT));
 
-        long totalLiabilities = merchantPending + merchantAvailable + merchantReserved
-                + enterpriseHolding + enterpriseAvailable + deferredRevenue + refundsInFlight;
+        long totalLiabilities = 0L;
+        for (long component : new long[]{
+                merchantPending, merchantAvailable, merchantReserved,
+                customerAvailable, customerReserved,
+                enterpriseHolding, enterpriseAvailable,
+                deferredRevenue, refundsInFlight
+        }) {
+            totalLiabilities = Math.addExact(totalLiabilities, component);
+        }
 
         // Clearing accounts represent net collected funds settled into the Custodian Bank trust account
         // (in double-entry ledger, collections debit system:clearing:<rail>:GHS, so net clearing inflow is -balance)
@@ -393,7 +475,7 @@ public class CustodianBankBackstopService {
         for (String rail : java.util.List.of("sandbox", "mtn", "telecel", "airteltigo", "ghipss", "card")) {
             long bal = ledger.balance(Ledger.clearing(rail));
             if (bal < 0) {
-                clearingReceivables += (-bal);
+                clearingReceivables = Math.addExact(clearingReceivables, -bal);
             }
         }
 
@@ -421,7 +503,7 @@ public class CustodianBankBackstopService {
                 trust.lastReconciledBankBalancePesewas(),
                 totalTrustAssets,
                 trust.dailyOutflowCapPesewas(),
-                acc.reservedOutflowPesewas() + acc.settledOutflowPesewas(),
+                Math.addExact(acc.reservedOutflowPesewas(), acc.settledOutflowPesewas()),
                 acc.rejectedCount(),
                 trust.outflowFrozen(),
                 satisfied
@@ -429,12 +511,15 @@ public class CustodianBankBackstopService {
     }
 
     private long sumOwnerBucket(String ownerType, String bucket, String currency) {
-        long sum = 0L;
-        for (UUID owner : ledger.ownersWithBalance(ownerType, bucket, currency)) {
-            long b = ledger.balance(Ledger.code(ownerType, owner, bucket, currency));
-            if (b > 0) sum += b;
-        }
-        return sum;
+        return db.sql("""
+                SELECT COALESCE(SUM(balance), 0)::bigint
+                FROM ledger_account
+                WHERE owner_type = :t AND bucket = :b AND currency = :c AND balance > 0""")
+                .param("t", ownerType)
+                .param("b", bucket)
+                .param("c", currency)
+                .query(Long.class)
+                .single();
     }
 
     private void incrementRejected(LocalDate today) {

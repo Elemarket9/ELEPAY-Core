@@ -258,6 +258,25 @@ class CheckoutReserveService {
                 .describedAs("Reserve release for checkout " + reference + " line " + line)
                 .withMetadata(Map.of("checkout", reference, "line", String.valueOf(line), "merchant", a.merchantId().toString())));
 
+        if (posted.replay()) {
+            return db.sql("""
+                    SELECT id, checkout_id, line, merchant_id, amount, journal_tx
+                    FROM settlement_reserve_release
+                    WHERE journal_tx = :tx
+                    LIMIT 1""")
+                    .param("tx", posted.transactionId())
+                    .query((rs, i) -> new ReserveRelease(
+                            rs.getObject(1, UUID.class),
+                            rs.getObject(2, UUID.class),
+                            rs.getInt(3),
+                            rs.getObject(4, UUID.class),
+                            rs.getLong(5),
+                            rs.getObject(6, UUID.class),
+                            a.releaseStatus()))
+                    .optional()
+                    .orElse(new ReserveRelease(releaseId, c.id(), line, a.merchantId(), amount, posted.transactionId(), a.releaseStatus()));
+        }
+
         String releaseStatus = (a.reserveReleased() + amount >= a.reserveAmount()) ? "RELEASED" : "PARTIALLY_RELEASED";
         db.sql("""
                 UPDATE checkout_allocation

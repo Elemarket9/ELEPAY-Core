@@ -257,7 +257,7 @@ public class RailTransactions {
                         UPDATE rail_transaction SET status = 'returned', updated_at = now(), failure_reason = :reason
                         WHERE id = :id""").param("id", id).param("reason", result.message()).update();
                 if (custodianBackstop != null) {
-                    custodianBackstop.onOutboundReleased(t.id(), t.amount(), t.currency(), accraDate(t));
+                    custodianBackstop.onOutboundReturned(t.id(), t.amount(), t.currency(), accraDate(t));
                 }
                 events.publishEvent(new RailEvents.Returned(id, t.rail(), t.direction(), t.purpose(), t.purposeId(),
                         t.amount(), result.message()));
@@ -575,7 +575,14 @@ public class RailTransactions {
                             }
                             if ("payout".equals(t.direction()) && killSwitch != null) {
                                 try {
-                                    killSwitch.requirePayoutsAllowed(null);
+                                    UUID merchantId = ("payout".equals(t.purpose()) && t.purposeId() != null)
+                                            ? db.sql("SELECT owner_id FROM payout WHERE id = :id AND owner_type = 'merchant'")
+                                                    .param("id", t.purposeId())
+                                                    .query(UUID.class)
+                                                    .optional()
+                                                    .orElse(null)
+                                            : null;
+                                    killSwitch.requirePayoutsAllowed(merchantId);
                                 } catch (ApiException blocked) {
                                     log.warn("Skipping recovery resubmission of payout {} due to kill switch: {}",
                                             t.reference(), blocked.getMessage());
