@@ -273,14 +273,6 @@ public class CellMigrationService {
                 .orElseThrow(() -> ApiException.notFound("migration_not_found", "Migration job not found: " + migrationId));
     }
 
-    private UUID findAffinityGroupId(UUID merchantId) {
-        return db.sql("SELECT affinity_group_id FROM merchant_cell_assignment WHERE merchant_id = :merchantId")
-                .param("merchantId", merchantId)
-                .query(UUID.class)
-                .optional()
-                .orElse(null);
-    }
-
     private void reassignMerchantAndAffinityGroup(UUID merchantId, String targetCellId) {
         record AssignmentMeta(UUID affinityGroupId, boolean pinned) {}
         AssignmentMeta meta = db.sql("""

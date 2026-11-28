@@ -26,7 +26,9 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class KdsService {
-    static final List<String> FLOW = List.of("NEW", "PREPARING", "READY", "SERVED");
+    static final List<String> FLOW = List.of(
+            KdsTicketStatus.NEW.name(), KdsTicketStatus.PREPARING.name(),
+            KdsTicketStatus.READY.name(), KdsTicketStatus.SERVED.name());
     /** Rows committed slightly out of sequence order are re-sent within this window; sync is idempotent. */
     static final int SYNC_OVERLAP_SECONDS = 20;
     static final int SYNC_PAGE = 300;
@@ -80,7 +82,7 @@ public class KdsService {
         }
 
         public String urgencyLevel(int warningMinutes, int criticalMinutes) {
-            if ("SERVED".equals(status) || "CANCELLED".equals(status)) {
+            if (KdsTicketStatus.SERVED.name().equals(status) || KdsTicketStatus.CANCELLED.name().equals(status)) {
                 return "COMPLETED";
             }
             long minutes = elapsedSeconds() / 60;
@@ -408,7 +410,7 @@ public class KdsService {
     @Transactional
     public KdsTicket bumpTicket(UUID ticketId) {
         String current = lockStatus(ticketId);
-        if (!FLOW.contains(current) || "SERVED".equals(current))
+        if (!FLOW.contains(current) || KdsTicketStatus.SERVED.name().equals(current))
             throw new IllegalStateException("Ticket cannot be bumped from status: " + current);
         return advanceTicket(ticketId, current, null).view().ticket();
     }
@@ -469,7 +471,7 @@ public class KdsService {
                 .optional();
         if (row.isEmpty()) return;
         String cur = row.get().getValue();
-        if (!FLOW.contains(cur) || "SERVED".equals(cur)) return;
+        if (!FLOW.contains(cur) || KdsTicketStatus.SERVED.name().equals(cur)) return;
         lockStatus(row.get().getKey());
         db.sql("UPDATE restaurant_kds_item SET item_status = :status WHERE id = :id")
                 .param("status", next(cur)).param("id", itemId).update();
