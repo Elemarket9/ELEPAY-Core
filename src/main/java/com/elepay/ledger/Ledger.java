@@ -342,6 +342,7 @@ public class Ledger {
     public static final String REVENUE = "system:revenue:GHS";
     public static final String DEFERRED_REVENUE = "system:deferred_revenue:GHS";
     public static final String REVENUE_EARNED = "system:revenue:earned:GHS";
+    public static final String REVENUE_SWEEP_RESERVED = "system:revenue_sweep_reserved:GHS";
     public static final String SUSPENSE = "system:suspense:GHS";
     public static final String REFUNDS_IN_FLIGHT = "system:refunds_in_flight:GHS";
 

@@ -42,7 +42,8 @@ public class MakerCheckerService {
             "PHONE_CHANGE",
             "CUSTODIAN_CONFIG",
             "MODULE_ENABLE",
-            "MERCHANT_UNFREEZE"
+            "MERCHANT_UNFREEZE",
+            "REVENUE_SWEEP"
     );
 
     private final JdbcClient db;
