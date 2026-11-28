@@ -48,6 +48,13 @@ public class RailTransactions {
     private static final int MAX_UNKNOWN_CHECKS = 8;
     private static final ZoneId ACCRA_ZONE = ZoneId.of("Africa/Accra");
 
+    private SettlementFunding funding;
+
+    @Autowired
+    void setSettlementFunding(SettlementFunding funding) {
+        this.funding = funding;
+    }
+
     private final JdbcClient db;
     private final ObjectMapper json;
     private final RailRegistry rails;
@@ -105,6 +112,14 @@ public class RailTransactions {
         }
     }
 
+    public long bankBackedAvailable(UUID merchant, long available) {
+        if ("sandbox".equals(rails.defaultName())) return available;
+        String key = CustodianConnection.fingerprint(funding.source());
+        long backed = db.sql("SELECT remaining FROM settlement_merchant_funding WHERE merchant_id=:merchant AND source_key=:key")
+                .param("merchant", merchant).param("key", key).query(Long.class).optional().orElse(0L);
+        return Math.min(available, backed);
+    }
+
     public String defaultRail() {
         return rails.defaultName();
     }
@@ -120,7 +135,37 @@ public class RailTransactions {
     @Transactional(propagation = Propagation.MANDATORY)
     public RailTx create(String rail, String direction, String purpose, UUID purposeId, long amount,
                              Request request) {
-        if (!"refund".equals(direction)) rail = rails.select(direction, request.channel(), request.network());
+        rail = "refund".equals(direction) ? rail : rails.select(direction, request.channel(), request.network());
+        if ("checkout".equals(purpose) && "charge".equals(direction) && !"sandbox".equals(rail)) {
+            var account = funding.source();
+            if (!funding.bank().mayCollect(account, rail)) throw ApiException.conflict("collection_not_authorized", "Bank collection mandate required");
+            var collection = insertRail(rail, direction, purpose, purposeId, amount, request);
+            db.sql("INSERT INTO settlement_bank_collection (rail_tx,source_key) VALUES (:id,:key)")
+                    .param("id", collection.id()).param("key", CustodianConnection.fingerprint(account)).update();
+            return collection;
+        }
+        return insertRail(rail, direction, purpose, purposeId, amount, request);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public RailTx createMerchantSettlement(UUID merchant, UUID payout, long amount, Request request) {
+        var account = funding.source();
+        var bank = funding.bank();
+        if (!"bank".equals(request.type()) || !bank.mayPay(account))
+            throw ApiException.conflict("settlement_not_authorized", "An authorized bank settlement destination is required");
+        String key = CustodianConnection.fingerprint(account);
+        int reserved = db.sql("""
+                UPDATE settlement_merchant_funding SET remaining=remaining-:amount
+                WHERE source_key=:key AND merchant_id=:merchant AND remaining>=:amount""")
+                .param("key", key).param("merchant", merchant).param("amount", amount).update();
+        if (reserved != 1) throw ApiException.conflict("insufficient_bank_funding", "Insufficient bank-backed merchant funds");
+        var railTx = insertRail(bank.name(), "payout", "payout", payout, amount, request);
+        db.sql("INSERT INTO settlement_bank_instruction (rail_tx,merchant_id,source_key,amount) VALUES (:id,:merchant,:key,:amount)")
+                .param("id", railTx.id()).param("merchant", merchant).param("key", key).param("amount", amount).update();
+        return railTx;
+    }
+
+    private RailTx insertRail(String rail, String direction, String purpose, UUID purposeId, long amount, Request request) {
         if (killSwitch != null && !killSwitch.isRailAllowed(direction, rail)) {
             // Switched off from the admin dashboard: refuse before anything is recorded or reserved.
             throw ApiException.unprocessable("rail_switched_off",
@@ -207,6 +252,26 @@ public class RailTransactions {
     }
 
     private SendOutcome send(RailTx t) {
+        if ("checkout".equals(t.purpose()) && "charge".equals(t.direction()) && !"sandbox".equals(t.rail())) {
+            try {
+                var source = funding.source();
+                boolean bound = db.sql("SELECT EXISTS(SELECT 1 FROM settlement_bank_collection WHERE rail_tx=:id AND source_key=:key)")
+                        .param("id", t.id()).param("key", CustodianConnection.fingerprint(source)).query(Boolean.class).single();
+                if (!bound || !funding.bank().mayCollect(source, t.rail())) {
+                    return new SendOutcome(Result.unavailable("Collection mandate unavailable"), true);
+                }
+            } catch (RuntimeException unavailable) {
+                return new SendOutcome(Result.unavailable("Settlement bank unavailable"), true);
+            }
+        }
+        if (isLiveMerchantPayout(t)) {
+            try {
+                var source = boundSource(t);
+                if (!funding.bank().mayPay(source)) throw ApiException.conflict("settlement_not_authorized", "Bank mandate is inactive");
+            } catch (RuntimeException unavailable) {
+                return new SendOutcome(Result.unavailable("Bank settlement authority unavailable"), true);
+            }
+        }
         if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))) {
             var decision = custodianBackstop.authorizeOutboundDisbursement(
                     t.id(), t.reference(), t.rail(), t.direction(), t.amount(), t.currency());
@@ -220,13 +285,14 @@ public class RailTransactions {
             Result res = switch (t.direction()) {
                 case "charge" -> rail.charge(new PaymentRail.Charge(t.reference(), t.amount(), t.currency(),
                         r.channel(), r.msisdn(), r.network(), r.email(), r.customerName(), r.description(), r.returnUrl()));
-                case "payout" -> rail.payout(new PaymentRail.Payout(t.reference(), t.amount(), t.currency(),
-                        r.type() == null ? "momo" : r.type(), r.network(), r.accountNumber() != null ? r.accountNumber() : r.msisdn(),
-                        r.accountName(), r.description()));
+                case "payout" -> isLiveMerchantPayout(t)
+                        ? funding.bank().payFrom(boundSource(t), payoutRequest(t, r)) : rail.payout(payoutRequest(t, r));
                 case "refund" -> rail.refund(new PaymentRail.Refund(t.reference(), r.originalReference(),
                         r.originalRailReference(), t.amount(), t.currency(), r.msisdn(), r.network()));
                 default -> throw new IllegalStateException(t.direction());
             };
+            if (rail instanceof SettlementBank && res.status() == Status.UNAVAILABLE)
+                res = Result.unknown("Bank submission outcome requires confirmation");
             return new SendOutcome(res, false);
         } catch (RuntimeException e) {
             log.warn("Rail {} call for {} failed: {}", t.rail(), t.reference(), e.toString());
@@ -318,6 +384,10 @@ public class RailTransactions {
                 }
                 if (custodianBackstop != null && ("payout".equals(t.direction()) || "refund".equals(t.direction()))) {
                     custodianBackstop.onOutboundSucceeded(t.id(), t.amount(), t.currency(), accraDate(t));
+                }
+                if (!"sandbox".equals(t.rail()) && ("checkout".equals(t.purpose()) || isLiveMerchantPayout(t))) {
+                    db.sql("INSERT INTO settlement_statement_work (rail_tx) VALUES (:id) ON CONFLICT DO NOTHING")
+                            .param("id", id).update();
                 }
                 events.publishEvent(new RailEvents.Succeeded(id, t.rail(), t.direction(), t.purpose(),
                         t.purposeId(), t.amount(), fee));
@@ -474,7 +544,7 @@ public class RailTransactions {
         // Perform external HTTP status verification outside the database transaction when the callback
         // is non-authoritative or carries no direct result, avoiding holding DB locks/connections across HTTP I/O.
         Result preQueriedResult = callback.result();
-        if (!rail.callbacksAreAuthoritative() || preQueriedResult == null) {
+        if (rail instanceof SettlementBank || !rail.callbacksAreAuthoritative() || preQueriedResult == null) {
             boolean alreadySeen = db.sql("""
                     SELECT EXISTS (
                         SELECT 1 FROM rail_callback WHERE rail = :rail AND dedupe_key = :key
@@ -519,8 +589,32 @@ public class RailTransactions {
         });
     }
 
+    private boolean isLiveMerchantPayout(RailTx t) {
+        return !"sandbox".equals(t.rail()) && "payout".equals(t.purpose()) && db.sql(
+                "SELECT EXISTS(SELECT 1 FROM payout WHERE id=:id AND owner_type='merchant')")
+                .param("id", t.purposeId()).query(Boolean.class).single();
+    }
+
+    private CustodianAccountProvider.Account boundSource(RailTx t) {
+        var source = funding.source();
+        boolean bound = db.sql("""
+                SELECT EXISTS(SELECT 1 FROM settlement_bank_instruction i JOIN payout p ON p.rail_tx=i.rail_tx
+                WHERE i.rail_tx=:id AND p.id=:payout AND i.merchant_id=p.owner_id AND i.amount=:amount AND i.source_key=:key)""")
+                .param("id", t.id()).param("payout", t.purposeId()).param("amount", t.amount())
+                .param("key", CustodianConnection.fingerprint(source)).query(Boolean.class).single();
+        if (!bound || !funding.bank().name().equals(t.rail())) throw ApiException.conflict("settlement_source_mismatch", "Settlement account binding mismatch");
+        return source;
+    }
+
+    private PaymentRail.Payout payoutRequest(RailTx t, Request r) {
+        return new PaymentRail.Payout(t.reference(), t.amount(), t.currency(), r.type() == null ? "momo" : r.type(),
+                r.network(), r.accountNumber() == null ? r.msisdn() : r.accountNumber(), r.accountName(), r.description());
+    }
+
     private Result safeQuery(PaymentRail rail, RailTx t) {
         try {
+            if (rail instanceof SettlementBank && isLiveMerchantPayout(t)) return funding.bank().queryPayout(boundSource(t),
+                    payoutRequest(t, json.readValue(t.request(), Request.class)), t.railReference());
             return rail.query(t.direction(), t.reference(), t.railReference());
         } catch (RuntimeException e) {
             return Result.unknown(e.getClass().getSimpleName());

@@ -213,6 +213,13 @@ class RailTransactionsRemediationIT extends PostgresTestBase {
         RailTransactions rt = new RailTransactions(
                 db, json, registry, flakyPublisher, ops, ledger, tm, false, custodianBackstop, killSwitch);
 
+        var funding = mock(SettlementFunding.class);
+        var source = new CustodianAccountProvider.Account("TST", "90000001", "GHS");
+        var bank = mock(SettlementBank.class);
+        when(funding.source()).thenReturn(source);
+        when(funding.bank()).thenReturn(bank);
+        when(bank.mayCollect(source, "mtn")).thenReturn(true);
+        rt.setSettlementFunding(funding);
         var first = tx.execute(s -> rt.create("mtn", "charge", "checkout", sharedPurposeId, 30_00L,
                 RailTransactions.Request.momo("0241234567", "mtn", "Attempt 1")));
         var second = tx.execute(s -> rt.create("mtn", "charge", "checkout", sharedPurposeId, 30_00L,

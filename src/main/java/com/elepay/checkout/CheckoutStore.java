@@ -31,6 +31,24 @@ class CheckoutStore {
         this.config = config;
     }
 
+    void adjustBankFunding(UUID checkout, UUID merchant, long amount) {
+        if (amount == 0) return;
+        if (amount < 0) {
+            db.sql("""
+                    UPDATE settlement_merchant_funding f SET remaining=f.remaining+:amount
+                    FROM settlement_funded_checkout c WHERE c.checkout_id=:checkout
+                    AND f.source_key=c.source_key AND f.merchant_id=:merchant""")
+                    .param("merchant", merchant).param("checkout", checkout).param("amount", amount).update();
+            return;
+        }
+        db.sql("""
+                INSERT INTO settlement_merchant_funding (merchant_id, source_key, remaining)
+                SELECT :merchant, source_key, :amount FROM settlement_funded_checkout WHERE checkout_id=:checkout
+                ON CONFLICT (merchant_id, source_key) DO UPDATE
+                SET remaining=settlement_merchant_funding.remaining + excluded.remaining""")
+                .param("merchant", merchant).param("checkout", checkout).param("amount", amount).update();
+    }
+
     Checkout load(String reference, boolean lock) {
         UUID id = db.sql("SELECT id FROM checkout WHERE reference = :r" + (lock ? " FOR UPDATE" : ""))
                 .param("r", reference).query(UUID.class).optional()

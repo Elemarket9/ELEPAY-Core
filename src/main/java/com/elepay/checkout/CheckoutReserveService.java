@@ -103,6 +103,10 @@ class CheckoutReserveService {
                        c.currency
                 FROM checkout_allocation a JOIN checkout c ON c.id = a.checkout_id
                 WHERE c.status = 'paid' AND (a.pending_amount > 0 OR a.platform_pending > 0 OR a.fee_deferred > 0)
+                  AND (EXISTS (SELECT 1 FROM settlement_funded_checkout f WHERE f.checkout_id=c.id)
+                       OR c.payment_method='wallet' OR EXISTS (SELECT 1 FROM payment_attempt pa
+                           JOIN rail_transaction rt ON rt.id=pa.rail_tx WHERE pa.checkout_id=c.id
+                           AND pa.status='succeeded' AND rt.rail='sandbox'))
                   AND (NOT a.hold_until_delivered OR a.delivered_at IS NOT NULL)
                   AND (CAST(:merchant AS uuid) IS NULL OR a.merchant_id = CAST(:merchant AS uuid))
                   AND (CAST(:checkout AS uuid) IS NULL OR a.checkout_id = CAST(:checkout AS uuid))
@@ -196,6 +200,8 @@ class CheckoutReserveService {
             feeTxByKey.put(key, txId);
         }
         for (Due d : due) {
+            store.adjustBankFunding(d.checkout(), d.merchant(), d.pending());
+            store.adjustBankFunding(d.checkout(), d.collector(), d.platform());
             SettlementBatch batch = byBatch.get(new BatchKey(d.pending() > 0 ? d.merchant() : d.collector(), d.currency()));
             FeeStripeKey feeKey = new FeeStripeKey(d.currency(), ledger.stripeIndex(d.checkout()));
             db.sql("""
@@ -258,6 +264,7 @@ class CheckoutReserveService {
                 .describedAs("Reserve release for checkout " + reference + " line " + line)
                 .withMetadata(Map.of("checkout", reference, "line", String.valueOf(line), "merchant", a.merchantId().toString())));
 
+        if (settled && !posted.replay()) store.adjustBankFunding(c.id(), a.merchantId(), amount);
         String releaseStatus = (a.reserveReleased() + amount >= a.reserveAmount()) ? "RELEASED" : "PARTIALLY_RELEASED";
         db.sql("""
                 UPDATE checkout_allocation
