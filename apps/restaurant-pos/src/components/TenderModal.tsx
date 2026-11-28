@@ -35,7 +35,35 @@ import {
 const POLL_INTERVAL_MS = 3000;
 const POLL_MAX_MS = 5 * 60 * 1000;
 
-type ModalTenderMode = TenderMode | "BANK_TRANSFER";
+type ExternalTenderMode = "BANK_TRANSFER" | "EXTERNAL_MOMO" | "EXTERNAL_HUBTEL" | "EXTERNAL_CARD";
+type ModalTenderMode = TenderMode | ExternalTenderMode;
+
+const EXTERNAL_META: Record<ExternalTenderMode, { label: string; placeholder: string; hint: string }> = {
+  BANK_TRANSFER: {
+    label: "Bank transfer",
+    placeholder: "e.g. GIP-20261127-99412",
+    hint: "Record a verified bank transfer (outside the cash drawer; not settled by ELEPAY).",
+  },
+  EXTERNAL_MOMO: {
+    label: "Own MoMo",
+    placeholder: "e.g. MTN-TXN-8841209",
+    hint: "Record payment received on your own MoMo SIM (outside cash drawer; ELEPAY never touches funds).",
+  },
+  EXTERNAL_HUBTEL: {
+    label: "Hubtel",
+    placeholder: "e.g. HUBTEL-POS-441092",
+    hint: "Record payment settled on your own Hubtel terminal (outside cash drawer; ELEPAY never touches funds).",
+  },
+  EXTERNAL_CARD: {
+    label: "External card",
+    placeholder: "e.g. RRN-00492184",
+    hint: "Record payment swiped on your own bank POS card terminal (outside cash drawer; ELEPAY never touches funds).",
+  },
+};
+
+function isExternalMode(m: ModalTenderMode): m is ExternalTenderMode {
+  return m === "BANK_TRANSFER" || m === "EXTERNAL_MOMO" || m === "EXTERNAL_HUBTEL" || m === "EXTERNAL_CARD";
+}
 
 export interface ModalSubBill {
   id?: string;
@@ -549,14 +577,16 @@ export function TenderModal({
         : propSplitAmountPesewas != null
           ? Math.max(0, propSplitAmountPesewas)
           : Math.max(0, ord.totalPesewas - ord.paidPesewas);
+      const extType: ExternalTenderMode = isExternalMode(mode) ? mode : "BANK_TRANSFER";
+      const extLabel = EXTERNAL_META[extType].label;
       if (parsedAmt > duePesewas) {
-        setError(`Bank transfer amount cannot exceed balance due (${formatMoney(duePesewas)}).`);
+        setError(`${extLabel} amount cannot exceed balance due (${formatMoney(duePesewas)}).`);
         return;
       }
       const res = await client.call<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
-        idempotencyKey: keyFor(`bank:${ord.id}:${effectiveSplitKey ?? "full"}:${ord.paidPesewas}:${parsedAmt}:${trimmedRef}`),
+        idempotencyKey: keyFor(`${extType}:${ord.id}:${effectiveSplitKey ?? "full"}:${ord.paidPesewas}:${parsedAmt}:${trimmedRef}`),
         body: {
-          tenderType: "BANK_TRANSFER",
+          tenderType: extType,
           amountPesewas: parsedAmt,
           reference: trimmedRef,
           ...(effectiveSplitKey ? { splitKey: effectiveSplitKey } : {}),
@@ -566,7 +596,7 @@ export function TenderModal({
       const settled = norm.order ?? (await client.call<PosOrder>(`/v1/pos/orders/${ord.id}`));
       await handleSettledOrder(
         settled,
-        `Bank transfer (${trimmedRef}) recorded. Remaining: ${formatMoney(Math.max(0, settled.totalPesewas - settled.paidPesewas))}.`,
+        `${extLabel} (${trimmedRef}) recorded. Remaining: ${formatMoney(Math.max(0, settled.totalPesewas - settled.paidPesewas))}.`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -915,10 +945,13 @@ export function TenderModal({
               {(
                 [
                   ["CASH", "Cash"],
+                  ["EXTERNAL_MOMO", "Own MoMo"],
+                  ["EXTERNAL_HUBTEL", "Hubtel"],
+                  ["EXTERNAL_CARD", "Ext Card"],
                   ["BANK_TRANSFER", "Bank"],
-                  ["MOMO", "MoMo"],
-                  ["GHQR", "GhQR"],
-                  ["CARD", "Card"],
+                  ["MOMO", "ELEPAY MoMo"],
+                  ["GHQR", "ELEPAY GhQR"],
+                  ["CARD", "ELEPAY Card"],
                 ] as const
               ).map(([k, label]) => (
                 <Pressable
@@ -1016,12 +1049,12 @@ export function TenderModal({
                   {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Charge Cash {formatMoney(remainingDue)}</Text>}
                 </Pressable>
               </View>
-            ) : mode === "BANK_TRANSFER" ? (
+            ) : isExternalMode(mode) ? (
               <View>
                 <Text style={styles.mutedText}>
-                  Record a verified bank transfer (outside the shift cash drawer). Reference is required.
+                  {EXTERNAL_META[mode].hint}
                 </Text>
-                <Text style={styles.label}>Transfer Amount (GH₵)</Text>
+                <Text style={styles.label}>{EXTERNAL_META[mode].label} Amount (GH₵)</Text>
                 <TextInput
                   style={styles.amountInput}
                   keyboardType="decimal-pad"
@@ -1035,13 +1068,13 @@ export function TenderModal({
                     <Text style={styles.denomText}>Exact ({formatMoney(remainingDue)})</Text>
                   </Pressable>
                 </View>
-                <Text style={styles.label}>Bank Transfer Reference (required)</Text>
+                <Text style={styles.label}>{EXTERNAL_META[mode].label} Reference (required)</Text>
                 <TextInput
                   style={styles.input}
                   value={bankReference}
                   onChangeText={setBankReference}
                   maxLength={128}
-                  placeholder="e.g. GIP-20261127-99412"
+                  placeholder={EXTERNAL_META[mode].placeholder}
                   placeholderTextColor={colors.subtle}
                 />
                 <Pressable style={styles.primaryBtn} disabled={busy} onPress={() => void payBankTransfer()}>

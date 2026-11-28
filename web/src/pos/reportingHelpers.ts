@@ -220,6 +220,12 @@ export function formatTenderLabel(tenderType: string): string {
       return "Card";
     case "BANK_TRANSFER":
       return "Bank Transfer";
+    case "EXTERNAL_MOMO":
+      return "Own MoMo (External)";
+    case "EXTERNAL_CARD":
+      return "External Card POS";
+    case "EXTERNAL_HUBTEL":
+      return "Hubtel (External)";
     case "GHQR":
       return "GhQR";
     case "WALLET":

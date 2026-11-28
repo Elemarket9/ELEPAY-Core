@@ -58,10 +58,13 @@ type ServerOrderItem = PosOrderItem & OrderItemKdsMeta;
 
 const ALL_TENDERS: { type: TenderType; label: string }[] = [
   { type: "CASH", label: "Cash" },
-  { type: "MOMO", label: "MoMo" },
-  { type: "CARD", label: "Card" },
-  { type: "GHQR", label: "GhQR" },
+  { type: "EXTERNAL_MOMO", label: "Own MoMo" },
+  { type: "EXTERNAL_HUBTEL", label: "Hubtel" },
+  { type: "EXTERNAL_CARD", label: "Ext Card" },
   { type: "BANK_TRANSFER", label: "Bank" },
+  { type: "MOMO", label: "ELEPAY MoMo" },
+  { type: "CARD", label: "ELEPAY Card" },
+  { type: "GHQR", label: "ELEPAY GhQR" },
 ];
 
 interface Props {

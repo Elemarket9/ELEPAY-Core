@@ -20,7 +20,35 @@ import {
   TenderMode,
 } from "./posHelpers";
 
-export type PanelTenderMode = TenderMode | "BANK_TRANSFER";
+export type ExternalTenderMode = "BANK_TRANSFER" | "EXTERNAL_MOMO" | "EXTERNAL_HUBTEL" | "EXTERNAL_CARD";
+export type PanelTenderMode = TenderMode | ExternalTenderMode;
+
+const EXTERNAL_TENDER_META: Record<ExternalTenderMode, { label: string; placeholder: string; hint: string }> = {
+  BANK_TRANSFER: {
+    label: "Bank transfer",
+    placeholder: "e.g. GIP-20261127-99412",
+    hint: "Record a confirmed bank transfer (excluded from shift cash drawer; not settled by ELEPAY).",
+  },
+  EXTERNAL_MOMO: {
+    label: "Own MoMo",
+    placeholder: "e.g. MTN-TXN-8841209",
+    hint: "Record payment received on your own MoMo merchant SIM (excluded from cash drawer; ELEPAY never touches funds).",
+  },
+  EXTERNAL_HUBTEL: {
+    label: "Hubtel",
+    placeholder: "e.g. HUBTEL-POS-441092",
+    hint: "Record payment settled on your own Hubtel terminal/account (excluded from cash drawer; ELEPAY never touches funds).",
+  },
+  EXTERNAL_CARD: {
+    label: "External card",
+    placeholder: "e.g. RRN-00492184",
+    hint: "Record payment swiped on your own bank POS card terminal (excluded from cash drawer; ELEPAY never touches funds).",
+  },
+};
+
+function isExternalMode(m: PanelTenderMode): m is ExternalTenderMode {
+  return m === "BANK_TRANSFER" || m === "EXTERNAL_MOMO" || m === "EXTERNAL_HUBTEL" || m === "EXTERNAL_CARD";
+}
 
 export interface SubBill {
   id?: string;
@@ -429,13 +457,15 @@ export function PosTenderPanel({
         setError(finalCheck.error);
         return;
       }
-      const sig = `bank:${ord.id}:${splitKey ?? "full"}:${ord.paidPesewas}:${finalCheck.amountPesewas}:${finalCheck.reference}`;
+      const extType: ExternalTenderMode = isExternalMode(mode) ? mode : "BANK_TRANSFER";
+      const extLabel = EXTERNAL_TENDER_META[extType].label;
+      const sig = `${extType}:${ord.id}:${splitKey ?? "full"}:${ord.paidPesewas}:${finalCheck.amountPesewas}:${finalCheck.reference}`;
       if (bankKeyRef.current?.sig !== sig) {
         bankKeyRef.current = { sig, key: newKey() };
       }
       const res = await api<TenderInitiation>(`/v1/pos/orders/${ord.id}/tenders`, {
         body: {
-          tenderType: "BANK_TRANSFER",
+          tenderType: extType,
           amountPesewas: finalCheck.amountPesewas,
           reference: finalCheck.reference,
           ...(splitKey ? { splitKey } : {}),
@@ -448,11 +478,11 @@ export function PosTenderPanel({
       const left = Math.max(0, settled.totalPesewas - settled.paidPesewas);
       await handleSettledOrder(
         settled,
-        `Bank transfer (${finalCheck.reference}) recorded. Remaining balance: ${formatMoney(left)}.`,
+        `${extLabel} (${finalCheck.reference}) recorded. Remaining balance: ${formatMoney(left)}.`,
       );
     } catch (err) {
       if (isFeatureNotEnabled(err)) { onModuleDisabled(); return; }
-      setError(`Bank transfer not recorded: ${err instanceof ApiError ? err.message : String(err)}`);
+      setError(`External tender not recorded: ${err instanceof ApiError ? err.message : String(err)}`);
     } finally {
       setBusy(false);
     }
@@ -718,21 +748,33 @@ export function PosTenderPanel({
           <IconBanknote size={17} />
           Cash
         </button>
+        <button type="button" className={mode === "EXTERNAL_MOMO" ? "active" : ""} onClick={() => { setMode("EXTERNAL_MOMO"); setError(null); }}>
+          <IconSmartphone size={17} />
+          Own MoMo
+        </button>
+        <button type="button" className={mode === "EXTERNAL_HUBTEL" ? "active" : ""} onClick={() => { setMode("EXTERNAL_HUBTEL"); setError(null); }}>
+          <IconCreditCard size={17} />
+          Hubtel
+        </button>
+        <button type="button" className={mode === "EXTERNAL_CARD" ? "active" : ""} onClick={() => { setMode("EXTERNAL_CARD"); setError(null); }}>
+          <IconCreditCard size={17} />
+          Ext Card
+        </button>
         <button type="button" className={mode === "BANK_TRANSFER" ? "active" : ""} onClick={() => { setMode("BANK_TRANSFER"); setError(null); }}>
           <IconLandmark size={17} />
           Bank
         </button>
         <button type="button" className={mode === "MOMO" ? "active" : ""} onClick={() => { setMode("MOMO"); setError(null); }}>
           <IconSmartphone size={17} />
-          MoMo
+          ELEPAY MoMo
         </button>
         <button type="button" className={mode === "GHQR" ? "active" : ""} onClick={() => { setMode("GHQR"); setError(null); }}>
           <IconQrCode size={17} />
-          GhQR
+          ELEPAY GhQR
         </button>
         <button type="button" className={mode === "NFC_CARD" ? "active" : ""} onClick={() => { setMode("NFC_CARD"); setError(null); }}>
           <IconCreditCard size={17} />
-          Card / NFC
+          ELEPAY Card
         </button>
       </div>
 
@@ -836,14 +878,14 @@ export function PosTenderPanel({
             </div>
           )}
 
-          {mode === "BANK_TRANSFER" && (
+          {isExternalMode(mode) && (
             <div>
               <p className="small muted" style={{ marginTop: 0 }}>
-                Record a confirmed bank transfer (excluded from shift cash drawer). A transfer reference is required.
+                {EXTERNAL_TENDER_META[mode].hint}
               </p>
               <div className="grid-2">
                 <label style={{ marginTop: 0 }}>
-                  Transfer Amount (GH₵)
+                  {EXTERNAL_TENDER_META[mode].label} Amount (GH₵)
                   <input
                     className="mono"
                     inputMode="decimal"
@@ -853,13 +895,13 @@ export function PosTenderPanel({
                   />
                 </label>
                 <label style={{ marginTop: 0 }}>
-                  Bank Transfer Reference (required)
+                  {EXTERNAL_TENDER_META[mode].label} Reference (required)
                   <input
                     className="mono"
                     value={bankReference}
                     onChange={(e) => setBankReference(e.target.value)}
                     maxLength={128}
-                    placeholder="e.g. GIP-20261127-99412"
+                    placeholder={EXTERNAL_TENDER_META[mode].placeholder}
                     required
                   />
                 </label>

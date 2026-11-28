@@ -74,7 +74,15 @@ export interface FloorPlan {
 
 export type TableStatus = "AVAILABLE" | "OCCUPIED" | "BILL_PRINTED" | "RESERVED" | "DIRTY";
 
-export type TenderType = "CASH" | "MOMO" | "GHQR" | "CARD" | "BANK_TRANSFER";
+export type TenderType =
+  | "CASH"
+  | "MOMO"
+  | "GHQR"
+  | "CARD"
+  | "BANK_TRANSFER"
+  | "EXTERNAL_MOMO"
+  | "EXTERNAL_CARD"
+  | "EXTERNAL_HUBTEL";
 
 export interface OrderItemKdsMeta {
   kdsRound?: number | null;

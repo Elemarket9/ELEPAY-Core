@@ -865,18 +865,19 @@ public class PosOrderService {
             throw ApiException.badRequest("invalid_amount", "Tender amount must be positive");
         }
 
-        if (req.tenderType() == TenderType.CASH || req.tenderType() == TenderType.BANK_TRANSFER) {
+        if (req.tenderType().isDirectPosTender()) {
             String normalizedRef = req.reference() == null ? null : req.reference().trim();
-            if (req.tenderType() == TenderType.BANK_TRANSFER) {
+            if (req.tenderType().isExternalRecorded()) {
+                String label = req.tenderType().displayLabel();
                 if (normalizedRef == null || normalizedRef.isBlank()) {
-                    throw ApiException.badRequest("reference_required", "Bank transfer reference is required");
+                    throw ApiException.badRequest("reference_required", label + " reference is required");
                 }
                 if (normalizedRef.length() > 128) {
-                    throw ApiException.badRequest("reference_too_long", "Bank transfer reference must be 128 characters or fewer");
+                    throw ApiException.badRequest("reference_too_long", label + " reference must be 128 characters or fewer");
                 }
                 if (amount > effectiveRemaining) {
                     throw ApiException.badRequest("amount_exceeds_balance",
-                            "Bank transfer amount cannot exceed remaining balance");
+                            label + " amount cannot exceed remaining balance");
                 }
             }
             // Prevent double-capturing the same split or over-capturing the order across concurrent splits.
@@ -890,8 +891,8 @@ public class PosOrderService {
                         "Open digital checkouts exceed remaining balance");
             }
             PosOrder updated = recordTender(order, req.tenderType(), amount, normalizedRef, splitKey);
-            String prompt = req.tenderType() == TenderType.BANK_TRANSFER
-                    ? "Bank transfer recorded"
+            String prompt = req.tenderType().isExternalRecorded()
+                    ? req.tenderType().displayLabel() + " recorded (external processor — not settled by ELEPAY)"
                     : "Cash tender recorded";
             return new TenderResult(orderId, updated.status(), req.tenderType(), amount,
                     null, null, null, "paid", null, null, null, prompt, updated);
@@ -967,7 +968,8 @@ public class PosOrderService {
                     linkRecord.id(), linkRecord.checkoutRef(), null, "open",
                     checkout.payUrl(linkRecord.checkoutRef()), null, null,
                     "Confirm wallet payment", order);
-            case CASH, BANK_TRANSFER -> throw new IllegalStateException("Handled above");
+            case CASH, BANK_TRANSFER, EXTERNAL_MOMO, EXTERNAL_CARD, EXTERNAL_HUBTEL ->
+                    throw new IllegalStateException("Handled above");
         };
     }
 
@@ -1035,7 +1037,7 @@ public class PosOrderService {
 
     @Transactional
     public PosOrder addTenderPayment(UUID orderId, TenderType tenderType, long amountPesewas, String reference, String splitKey) {
-        if (tenderType != TenderType.CASH && tenderType != TenderType.BANK_TRANSFER)
+        if (!tenderType.isDirectPosTender())
             throw ApiException.unprocessable("digital_payment_unverified", "Use the linked ELEPAY checkout");
         PosOrder order = lockOrder(orderId);
         requirePayable(order);
@@ -1057,15 +1059,16 @@ public class PosOrderService {
             effectiveRemaining = Math.min(remaining, splitRemaining);
         }
         String normalizedRef = reference == null ? null : reference.trim();
-        if (tenderType == TenderType.BANK_TRANSFER) {
+        if (tenderType.isExternalRecorded()) {
+            String label = tenderType.displayLabel();
             if (normalizedRef == null || normalizedRef.isBlank()) {
-                throw ApiException.badRequest("reference_required", "Bank transfer reference is required");
+                throw ApiException.badRequest("reference_required", label + " reference is required");
             }
             if (normalizedRef.length() > 128) {
-                throw ApiException.badRequest("reference_too_long", "Bank transfer reference must be 128 characters or fewer");
+                throw ApiException.badRequest("reference_too_long", label + " reference must be 128 characters or fewer");
             }
             if (amountPesewas > effectiveRemaining) {
-                throw ApiException.badRequest("amount_exceeds_balance", "Bank transfer amount cannot exceed remaining balance");
+                throw ApiException.badRequest("amount_exceeds_balance", label + " amount cannot exceed remaining balance");
             }
         }
         if (hasOpenDigitalCheckoutForSplit(orderId, normalizedSplit)) {

@@ -419,6 +419,54 @@ class PosSplitBankTransferPhase5Test extends PostgresTestBase {
         assertThat(afterSecond.status()).isEqualTo("PAID");
     }
 
+    @Test
+    @DisplayName("External processor tenders (Own MoMo, Hubtel, External Card) settle POS orders without touching ELEPAY ledger or cash drawer")
+    void externalProcessorTendersNeverTouchElepayLedgerOrCashDrawer() {
+        var order = orderService.createOrder(
+                merchantId, branchA, null, null, null,
+                List.of(item("Jollof & Grilled Chicken", 15_000L, 1)),
+                0L, 0L, 0L, "DINE_IN");
+
+        long journalCountBefore = db.sql("SELECT count(*) FROM journal_transaction").query(Long.class).single();
+        long checkoutCountBefore = db.sql("SELECT count(*) FROM checkout").query(Long.class).single();
+
+        // Missing reference is rejected for external processors
+        assertThatThrownBy(() -> orderService.initiateTender(
+                order.id(),
+                new PosOrderService.TenderRequest(TenderType.EXTERNAL_HUBTEL, 5_000L, null, null, null, null, "   "),
+                "cashier-1"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("reference is required");
+
+        // Split payment across Own MoMo + Hubtel + External Card
+        var t1 = orderService.initiateTender(
+                order.id(),
+                new PosOrderService.TenderRequest(TenderType.EXTERNAL_MOMO, 5_000L, null, null, null, null, "MTN-SIM-1001"),
+                "cashier-1");
+        assertThat(t1.orderStatus()).isEqualTo("PARTIAL");
+        assertThat(t1.checkoutRef()).isNull();
+
+        var t2 = orderService.initiateTender(
+                order.id(),
+                new PosOrderService.TenderRequest(TenderType.EXTERNAL_HUBTEL, 5_000L, null, null, null, null, "HUBTEL-2002"),
+                "cashier-1");
+        assertThat(t2.orderStatus()).isEqualTo("PARTIAL");
+        assertThat(t2.checkoutRef()).isNull();
+
+        var t3 = orderService.initiateTender(
+                order.id(),
+                new PosOrderService.TenderRequest(TenderType.EXTERNAL_CARD, 5_000L, null, null, null, null, "RRN-3003"),
+                "cashier-1");
+        assertThat(t3.orderStatus()).isEqualTo("PAID");
+        assertThat(t3.checkoutRef()).isNull();
+
+        // Zero ELEPAY Core checkouts or journal transactions created — ELEPAY never touched the funds
+        long journalCountAfter = db.sql("SELECT count(*) FROM journal_transaction").query(Long.class).single();
+        long checkoutCountAfter = db.sql("SELECT count(*) FROM checkout").query(Long.class).single();
+        assertThat(journalCountAfter).isEqualTo(journalCountBefore);
+        assertThat(checkoutCountAfter).isEqualTo(checkoutCountBefore);
+    }
+
     private static PosOrderService.OrderItemInput item(String name, long unitPricePesewas, Integer seatNumber) {
         return new PosOrderService.OrderItemInput(
                 null, name, BigDecimal.ONE, unitPricePesewas, 0L, 0L, "[]", seatNumber, "MAIN", null);

@@ -489,9 +489,9 @@ public class PosController {
     public PosOrderService.PosOrder addPayment(@PathVariable UUID orderId,
             @RequestHeader("Idempotency-Key") String key, @RequestBody TenderPaymentRequest req) {
         var order = verifyOrder(orderId);
-        if (req.tenderType() != TenderType.CASH && req.tenderType() != TenderType.BANK_TRANSFER)
+        if (!req.tenderType().isDirectPosTender())
             throw ApiException.unprocessable("digital_payment_use_tenders",
-                    "Use POST /v1/pos/orders/{orderId}/tenders (MoMo/GhQR/Card) or /nfc-tap for digital payments");
+                    "Use POST /v1/pos/orders/{orderId}/tenders (MoMo/GhQR/Card) or /nfc-tap for ELEPAY digital payments");
         return idempotency.execute("pos-cash:" + order.merchantId() + ":" + orderId, key, req,
                 PosOrderService.PosOrder.class,
                 () -> orderService.addTenderPayment(orderId, req.tenderType(), req.amountPesewas(),
