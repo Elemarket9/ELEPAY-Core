@@ -159,17 +159,22 @@ public class PlatformRevenueSweepService {
             throw ApiException.badRequest("invalid_account_name", "Account name is required");
         }
         UUID id = UUID.randomUUID();
-        db.sql("""
-                INSERT INTO platform_operating_account
-                    (id, bank_code, account_number, account_name, currency, status, verified_by)
-                VALUES (:id, :bank, :num, :name, :cur, 'active', :by)""")
-                .param("id", id)
-                .param("bank", bankCode)
-                .param("num", accountNumber)
-                .param("name", accountName.trim())
-                .param("cur", cur)
-                .param("by", verifiedBy != null ? verifiedBy : "system")
-                .update();
+        try {
+            db.sql("""
+                    INSERT INTO platform_operating_account
+                        (id, bank_code, account_number, account_name, currency, status, verified_by)
+                    VALUES (:id, :bank, :num, :name, :cur, 'active', :by)""")
+                    .param("id", id)
+                    .param("bank", bankCode)
+                    .param("num", accountNumber)
+                    .param("name", accountName.trim())
+                    .param("cur", cur)
+                    .param("by", verifiedBy != null ? verifiedBy : "system")
+                    .update();
+        } catch (org.springframework.dao.DuplicateKeyException dup) {
+            throw ApiException.conflict("operating_account_exists",
+                    "Operating account " + bankCode + "/" + accountNumber + " (" + cur + ") is already registered");
+        }
         if (audit != null) {
             audit.record(verifiedBy != null ? verifiedBy : "system",
                     "revenue_sweep.operating_account_registered",
@@ -200,6 +205,19 @@ public class PlatformRevenueSweepService {
                 .list();
     }
 
+    private long unsubmittedRevenueSweepPesewas(String cur) {
+        return db.sql("""
+                SELECT COALESCE(SUM(s.amount_pesewas), 0)::bigint
+                FROM platform_revenue_sweep s
+                JOIN rail_transaction rt ON rt.id = s.rail_tx
+                WHERE s.currency = :cur
+                  AND s.status = 'reserved'
+                  AND rt.reservation_date IS NULL""")
+                .param("cur", cur)
+                .query(Long.class)
+                .single();
+    }
+
     /**
      * Computes the exact sweepable earned-revenue ceiling under current safeguarding & buffer rules.
      */
@@ -211,6 +229,7 @@ public class PlatformRevenueSweepService {
         long earnedRevenue = Math.max(0L, ledger.balance(Ledger.REVENUE));
         long deferredRevenue = Math.max(0L, ledger.balance(Ledger.DEFERRED_REVENUE));
         long inFlightSweep = Math.max(0L, ledger.balance(Ledger.REVENUE_SWEEP_RESERVED));
+        long unsubmittedSweep = unsubmittedRevenueSweepPesewas(cur);
         long buffer = this.clawbackBufferPesewas;
         long maxByRevenue = Math.max(0L, earnedRevenue - buffer);
 
@@ -225,7 +244,7 @@ public class PlatformRevenueSweepService {
         } else {
             long committed = Math.addExact(
                     Math.addExact(report.totalSafeguardedLiabilitiesPesewas(), report.todayTotalOutflowPesewas()),
-                    Math.addExact(config.minReserveFloorPesewas(), inFlightSweep));
+                    Math.addExact(config.minReserveFloorPesewas(), unsubmittedSweep));
             trustHeadroom = Math.max(0L, report.reconciledBankBalancePesewas() - committed);
             if (trustHeadroom == 0L) {
                 blockReason = "No surplus trust headroom above safeguarded liabilities, outflow, and reserve floor";
@@ -352,15 +371,11 @@ public class PlatformRevenueSweepService {
                             + maxByRevenue + ", retaining clawback buffer of " + buffer + ")");
         }
 
-        long inFlightSweep = db.sql("SELECT balance FROM ledger_account WHERE code = :code FOR UPDATE")
-                .param("code", Ledger.REVENUE_SWEEP_RESERVED)
-                .query(Long.class)
-                .optional()
-                .orElse(0L);
+        long unsubmittedSweep = unsubmittedRevenueSweepPesewas(cur);
 
         long committed = Math.addExact(
                 Math.addExact(report.totalSafeguardedLiabilitiesPesewas(), report.todayTotalOutflowPesewas()),
-                Math.addExact(config.minReserveFloorPesewas(), Math.max(0L, inFlightSweep)));
+                Math.addExact(config.minReserveFloorPesewas(), unsubmittedSweep));
         long trustHeadroom = Math.max(0L, report.reconciledBankBalancePesewas() - committed);
         if (amountPesewas > trustHeadroom) {
             throw ApiException.conflict("insufficient_trust_headroom",

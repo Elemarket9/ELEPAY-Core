@@ -91,7 +91,10 @@ public class RevenueSweepEndpoints {
         if (key == null || key.isBlank()) {
             throw ApiException.badRequest("missing_idempotency_key", "Idempotency-Key header is required");
         }
-        String currency = request.currency() != null ? request.currency() : "GHS";
+        String currency = request.currency() != null ? request.currency().trim().toUpperCase() : "GHS";
+        var dest = sweepService.findOperatingAccount(request.operatingAccountId())
+                .filter(a -> "active".equals(a.status()) && currency.equals(a.currency().trim()))
+                .orElseThrow(() -> ApiException.notFound("Active operating account not found for currency " + currency));
         String reason = request.reason() != null && !request.reason().isBlank()
                 ? request.reason()
                 : "ELEPAY earned revenue sweep";
@@ -101,7 +104,10 @@ public class RevenueSweepEndpoints {
                 currency,
                 null,
                 Map.of(
-                        "operatingAccountId", request.operatingAccountId().toString(),
+                        "operatingAccountId", dest.id().toString(),
+                        "bankCode", dest.bankCode(),
+                        "accountNumber", dest.accountNumber(),
+                        "accountName", dest.accountName(),
                         "amountPesewas", request.amountPesewas(),
                         "currency", currency,
                         "idempotencyKey", key
@@ -110,7 +116,7 @@ public class RevenueSweepEndpoints {
                 actor
         );
         return sweepService.executeSweep(
-                request.operatingAccountId(),
+                dest.id(),
                 request.amountPesewas(),
                 currency,
                 key,

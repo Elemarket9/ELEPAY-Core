@@ -31,10 +31,27 @@ class RevenueSweepApprovalHandler implements ApprovedActionHandler {
             throw ApiException.badRequest("invalid_proposal_payload", "REVENUE_SWEEP proposal payload is required");
         }
         Map<String, Object> payload = proposal.payload();
-        UUID operatingAccountId = UUID.fromString(String.valueOf(payload.get("operatingAccountId")));
-        long amountPesewas = payload.get("amountPesewas") instanceof Number n
-                ? n.longValue()
-                : Long.parseLong(String.valueOf(payload.get("amountPesewas")));
+        UUID operatingAccountId;
+        try {
+            Object rawOpId = payload.get("operatingAccountId");
+            if (rawOpId == null || String.valueOf(rawOpId).isBlank()) {
+                throw new IllegalArgumentException("missing");
+            }
+            operatingAccountId = UUID.fromString(String.valueOf(rawOpId).trim());
+        } catch (IllegalArgumentException e) {
+            throw ApiException.badRequest("invalid_proposal_payload",
+                    "REVENUE_SWEEP requires a valid UUID payload.operatingAccountId");
+        }
+        long amountPesewas;
+        try {
+            Object rawAmt = payload.get("amountPesewas");
+            if (rawAmt == null) throw new NumberFormatException("null");
+            amountPesewas = rawAmt instanceof Number n ? n.longValue() : Long.parseLong(String.valueOf(rawAmt).trim());
+            if (amountPesewas <= 0) throw new NumberFormatException("non-positive");
+        } catch (NumberFormatException e) {
+            throw ApiException.badRequest("invalid_proposal_payload",
+                    "REVENUE_SWEEP requires a positive integer payload.amountPesewas");
+        }
         String currency = payload.get("currency") != null ? String.valueOf(payload.get("currency")) : "GHS";
         String idempotencyKey = payload.get("idempotencyKey") != null
                 ? String.valueOf(payload.get("idempotencyKey"))
